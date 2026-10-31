@@ -7,7 +7,7 @@ import { mkdir } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { createServer } from '../../scripts/serve.mjs';
 import { QUESTIONS, belongsTo, topicGroup } from '../../www/js/data/questions.js';
-import { scoreAnswer, summarize } from '../../www/js/engine/score.js';
+import { scoreAnswer, summarize, selectionChance } from '../../www/js/engine/score.js';
 import { targetLevels } from '../../www/js/engine/select.js';
 
 const require = createRequire(import.meta.url);
@@ -149,6 +149,10 @@ async function runInterview(vp, sc, idx) {
   });
   const sum = summarize(items);
   assert.equal(report.summary.overall, sum.overall, `${tag}: summary overall`);
+  const chanceShown = Number((await page.textContent('#chance .chance-top b')).split('/')[0]);
+  assert.equal(chanceShown, report.chance.score, `${tag}: chance on screen`);
+  const rank = { 'java-senior': 3, 'devops-lead': 4 }[sc.position];
+  assert.equal(report.chance.score, selectionChance(items.map((x, k) => ({ ...x, hintUsed: report.items[k].hintUsed, attempts: report.items[k].attempts })), { mode: 'interview', levelRank: rank }).score, `${tag}: chance recomputed`);
   const ringVal = Number((await page.textContent('.ring .val b')).trim());
   assert.equal(ringVal, sum.overall, `${tag}: ring shows ${ringVal}, expected ${sum.overall}`);
   const pills = await page.$$eval('.qa .score-pill', els => els.map(e => Number(e.textContent)));
@@ -178,7 +182,7 @@ async function runInterview(vp, sc, idx) {
 }
 
 let idx = 0;
-for (const vp of VIEWPORTS) {
+for (const vp of (process.env.E2E_EXTRA_ONLY ? [] : VIEWPORTS)) {
   for (const sc of SCENARIOS) {
     idx++;
     try {
@@ -220,6 +224,156 @@ try {
   log('PASS  pause/resume + end early');
   await ctx.close();
 } catch (e) { failures++; log('FAIL  pause/end', e.message); }
+
+
+// Preparation mode + revision list + no repeats between consecutive sessions
+async function startSession(page, { role, style, count = 5, mode = 'technical', source }) {
+  await page.click('[data-nav="home"] >> nth=0');
+  await page.click(`.role-card [data-role="${role}"]`);
+  await page.click(`[data-style="${style}"]`);
+  if (source) await page.click(`[data-source="${source}"]`);
+  await page.click(`[data-count="${count}"]`);
+  await page.click(`[data-mode="${mode}"]`);
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera (is working|unavailable)|Permission denied/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 10000 });
+  await page.click('#start');
+}
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, isMobile: true, hasTouch: true, permissions: ['camera', 'microphone'] });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=501`);
+  await page.waitForSelector('.role-card');
+
+  // 1) Preparation mode: hint, weak answer -> review -> retry with model answer -> next
+  await startSession(page, { role: 'java-backend', style: 'prep', count: 5 });
+  const prepIds = await page.evaluate(() => window.__ip.questions);
+  for (let k = 0; k < prepIds.length; k++) {
+    await page.waitForSelector('#doneBtn:not([disabled])');
+    assert.equal(await page.textContent('#timebar').then(() => page.$eval('#timebar', e => e.hidden)), true, 'prep: no countdown');
+    const q = QUESTIONS.find(x => x.id === prepIds[k]);
+    if (k === 0) {
+      await page.click('#hintBtn');
+      const hint = await page.textContent('#hints');
+      assert.ok(q.keyPoints.every(p => hint.includes(p.label)), 'hint lists key points');
+      await page.fill('#answer', 'I am not sure.');
+      await page.click('#doneBtn');
+      await page.waitForSelector('#review:not([hidden])');
+      assert.ok((await page.textContent('#review')).includes(q.ideal.slice(0, 60)), 'review shows model answer');
+      if (k === 0) await page.screenshot({ path: new URL('prep-review.png', OUT).pathname });
+      await page.click('#retryBtn');
+      await page.waitForSelector('#doneBtn:not([disabled])');
+      await page.fill('#answer', q.ideal);
+      await page.click('#doneBtn');
+      await page.waitForSelector('#review:not([hidden])');
+      assert.match(await page.textContent('.review-head'), /attempt 2/);
+    } else {
+      await page.fill('#answer', k % 2 ? 'No idea, sorry.' : q.ideal);
+      await page.click('#doneBtn');
+      await page.waitForSelector('#review:not([hidden])');
+    }
+    await page.click('#nextBtn');
+  }
+  await page.waitForSelector('#reportHead');
+  assert.match(await page.textContent('#reportHead'), /Preparation report/);
+  assert.match(await page.textContent('#chance'), /practice estimate/);
+  const prepReport = await page.evaluate(() => window.__ip.report);
+  const expectedWeak = prepReport.items.filter(i => i.result.overall < 60).map(i => i.questionId).sort();
+  assert.ok(expectedWeak.length >= 1, 'some weak answers');
+  assert.equal(prepReport.items[0].attempts, 2);
+  assert.equal(prepReport.addedToRevision, expectedWeak.length);
+
+  // 2) Revision list shows exactly the weak questions
+  await page.click('.revision-note [data-nav="revision"]');
+  await page.waitForSelector('#revisionList');
+  const listed = (await page.$$eval('#revisionList details', els => els.map(e => e.dataset.qid))).sort();
+  assert.deepEqual(listed, expectedWeak, 'revision list = weak answers');
+  assert.equal(Number(await page.textContent('.nav-badge')), expectedWeak.length, 'nav badge count');
+  await page.screenshot({ path: new URL('revision.png', OUT).pathname });
+
+  // 3) Practise the revision list, answer one correctly -> it leaves the list
+  await page.click('[data-practice="java-backend"]');
+  await page.waitForFunction(() => /Camera (is working|unavailable)/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start');
+  const revIds = await page.evaluate(() => window.__ip.questions);
+  assert.deepEqual([...revIds].sort(), expectedWeak, 'revision practice uses the weak questions');
+  for (let k = 0; k < revIds.length; k++) {
+    await page.waitForSelector('#doneBtn:not([disabled])');
+    await page.fill('#answer', k === 0 ? QUESTIONS.find(x => x.id === revIds[0]).ideal : 'still not sure');
+    await page.click('#doneBtn');
+    await page.waitForSelector('#review:not([hidden])');
+    await page.click('#nextBtn');
+  }
+  await page.waitForSelector('#reportHead');
+  await page.click('[data-nav="revision"] >> nth=0');
+  await page.waitForSelector('#revisionList');
+  const after = await page.$$eval('#revisionList details', els => els.map(e => e.dataset.qid));
+  assert.ok(!after.includes(revIds[0]), 'correctly answered question cleared');
+  assert.equal(after.length, expectedWeak.length - 1);
+  // mark as learned
+  if (after.length) {
+    await page.click(`details[data-qid="${after[0]}"] summary`);
+    await page.click(`[data-learned="${after[0]}"]`);
+    await page.waitForSelector('#revisionList');
+    assert.equal(await page.$$eval('#revisionList details', els => els.length), after.length - 1, 'mark as learned');
+  }
+
+  // 4) Two consecutive interviews: no repeated questions (intro exempt)
+  const seenBefore = new Set([...prepIds, ...revIds]);
+  await startSession(page, { role: 'java-backend', style: 'interview', count: 8, mode: 'mixed' });
+  const s1 = await page.evaluate(() => window.__ip.questions);
+  // answer every question so they all count as asked
+  for (const until = Date.now() + 120000; Date.now() < until && !(await page.$('#reportHead'));) {
+    if (await page.$('#doneBtn:not([disabled])')) { await page.fill('#answer', 'I would explain the concept and give an example from my project.'); await page.click('#doneBtn'); }
+    await page.waitForTimeout(150);
+  }
+  await page.waitForSelector('#reportHead');
+  await startSession(page, { role: 'java-backend', style: 'interview', count: 8, mode: 'mixed' });
+  const s2 = await page.evaluate(() => window.__ip.questions);
+  const overlap = s2.filter(id => s1.includes(id) && id !== 'hr-001');
+  assert.deepEqual(overlap, [], `consecutive interviews repeated: ${overlap}`);
+  assert.deepEqual(s1.filter(id => seenBefore.has(id)), [], 'interview avoided questions already practised');
+  assert.deepEqual(errors, [], 'console errors');
+  log('PASS  preparation mode, revision list, no repeats between sessions');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  prep/revision/no-repeat', e.message); try { const pg = browser.contexts().at(-1).pages()[0]; await pg.screenshot({ path: new URL('fail-prep.png', OUT).pathname }); log('  screen:', await pg.evaluate(() => window.__ip.screen + ' | ' + (document.querySelector('#qcard')?.textContent || '').slice(0, 120) + ' | review hidden=' + document.querySelector('#review')?.hidden)); } catch {} }
+
+
+// Interviewer interrupts an off-topic answer once, keeps the text, and the report shows it
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, permissions: ['camera', 'microphone'] });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=902`);
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.click('[data-style="interview"]'); await page.click('[data-mode="technical"]'); await page.click('[data-count="5"]');
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start');
+  await page.waitForSelector('#doneBtn:not([disabled])');
+  const chat = 'Well I think the most important thing in my career has been working with great people and learning every day from my mentors who taught me how to be patient and kind and to always keep growing as a person in whatever I do in my life and at home with my family on weekends';
+  await page.fill('#answer', chat);
+  await page.waitForFunction(() => /Sorry to interrupt/.test(document.querySelector('#log')?.textContent || ''), null, { timeout: 15000 });
+  assert.equal(await page.inputValue('#answer'), chat, 'answer text kept after interruption');
+  await page.screenshot({ path: new URL('interruption.png', OUT).pathname });
+  await page.waitForSelector('#doneBtn:not([disabled])');
+  await page.click('#doneBtn');
+  for (const until = Date.now() + 120000; Date.now() < until && !(await page.$('#reportHead'));) {
+    if (await page.$('#doneBtn:not([disabled])')) { await page.fill('#answer', 'short'); await page.click('#doneBtn'); }
+    await page.waitForTimeout(150);
+  }
+  await page.waitForSelector('#reportHead');
+  const rep = await page.evaluate(() => window.__ip.report);
+  assert.equal(rep.items[0].interrupted, true, 'interruption recorded');
+  assert.equal(rep.items.filter(i => i.interrupted).length, 1, 'only off-topic answer interrupted');
+  assert.ok(rep.chance.reasons.some(r => /redirect/.test(r)), 'chance mentions redirect');
+  assert.deepEqual(errors, []);
+  log('PASS  interviewer interrupts off-topic answer');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  interruption', e.message); }
 
 await browser.close();
 server.close();

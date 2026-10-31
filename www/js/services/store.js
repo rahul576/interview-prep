@@ -1,6 +1,8 @@
 // Local persistence (browser storage / app WebView storage). Fails soft.
 const HISTORY = 'interviewpro.history.v1';
 const PREFS = 'interviewpro.prefs.v1';
+const PROGRESS = 'interviewpro.progress.v1';
+const LAST = 'interviewpro.lastsession.v1';
 const MAX = 30;
 
 function read(key, fallback) {
@@ -25,6 +27,12 @@ export const store = {
     for (const s of this.history()) if (s.category === category) for (const it of s.items) ids.push(it.questionId);
     return ids.slice(0, n);
   },
+  progress() { return read(PROGRESS, {}); },
+  saveProgress(p) { return write(PROGRESS, p); },
+  resetProgress() { write(PROGRESS, {}); write(LAST, {}); },
+  /** ids asked in the previous session for a role (never repeated next time if avoidable) */
+  lastSessionIds(role) { return (read(LAST, {})[role]) || []; },
+  setLastSessionIds(role, ids) { const all = read(LAST, {}); all[role] = ids; write(LAST, all); },
   prefs() { return read(PREFS, {}); },
   savePrefs(p) { write(PREFS, { ...this.prefs(), ...p }); },
 };

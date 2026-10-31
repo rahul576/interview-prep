@@ -82,6 +82,20 @@ function pickDiverse(pool, n, rand, preferLevel) {
 }
 
 /**
+ * Order candidates so nothing repeats while unseen questions remain:
+ *   1. never asked  2. asked before, oldest first  3. asked in the previous session (last resort).
+ * Returns at least n candidates when possible (more when there is room, for topic diversity).
+ */
+export function freshFirst(pool, n, seen = {}, lastSession = new Set()) {
+  const never = pool.filter(q => !seen[q.id] && !lastSession.has(q.id));
+  if (never.length >= n) return never;
+  const older = pool.filter(q => seen[q.id] && !lastSession.has(q.id)).sort((a, b) => seen[a.id] - seen[b.id]);
+  const out = [...never, ...older.slice(0, n - never.length)];
+  if (out.length >= n) return out;
+  return [...out, ...pool.filter(q => lastSession.has(q.id)).slice(0, n - out.length)];
+}
+
+/**
  * @param {object} p
  * @param {Array} p.bank
  * @param {string} p.category - role id, e.g. 'java-backend'
@@ -91,34 +105,33 @@ function pickDiverse(pool, n, rand, preferLevel) {
  * @param {'technical'|'mixed'} p.mode
  * @param {string[]|null} [p.topics] - selected categories (null/empty = all)
  * @param {number} [p.seed]
- * @param {string[]} [p.recentIds] - avoided when enough alternatives exist
+ * @param {Object<string,number>} [p.seen] - question id -> last asked timestamp
+ * @param {string[]} [p.recentIds] - ids asked in the previous session (never repeated if avoidable)
  */
-export function selectQuestions({ bank, category, positionLevel, experienceLevel, count = 6, mode = 'mixed', topics = null, seed = Date.now(), recentIds = [] }) {
+export function selectQuestions({ bank, category, positionLevel, experienceLevel, count = 6, mode = 'mixed', topics = null, seed = Date.now(), seen = {}, recentIds = [] }) {
   const rand = mulberry32(seed);
   const levels = targetLevels(positionLevel, experienceLevel);
   const rank = Math.max(...levels.map(l => levelById(l).rank));
   const slots = planSlots(count, mode, rank);
-  const recent = new Set(recentIds);
+  const last = new Set(recentIds);
   const chosen = topics && topics.length ? new Set(topics) : null;
   const overlaps = q => q.levels.some(l => levels.includes(l));
   const inTopics = q => !chosen || chosen.has(topicGroup(q.topic));
+  const unseen = q => !seen[q.id] && !last.has(q.id);
 
-  const preferFresh = (pool, n) => {
-    const fresh = pool.filter(q => !recent.has(q.id));
-    return fresh.length >= n ? fresh : pool;
-  };
-
-  // Technical
+  // Technical: at-level questions first; nearby levels only to avoid repeats or fill gaps.
   const techBase = bank.filter(q => TECH_TYPES.includes(q.type) && belongsTo(q, category) && inTopics(q));
-  let techPool = techBase.filter(overlaps);
-  if (techPool.length < slots.technical) {
-    // widen to adjacent levels, then to any level, inside the chosen categories
-    const ranks = levels.map(l => levelById(l).rank);
-    const lo = Math.min(...ranks) - 1, hi = Math.max(...ranks) + 1;
-    techPool = techBase.filter(q => q.levels.some(l => { const r = levelById(l).rank; return r >= lo && r <= hi; }));
-    if (techPool.length < slots.technical) techPool = techBase;
-  }
-  const technical = pickDiverse(preferFresh(techPool, slots.technical), slots.technical, rand, positionLevel)
+  const atLevel = techBase.filter(overlaps);
+  const ranks = levels.map(l => levelById(l).rank);
+  const lo = Math.min(...ranks) - 1, hi = Math.max(...ranks) + 1;
+  const near = techBase.filter(q => !overlaps(q) && q.levels.some(l => { const r = levelById(l).rank; return r >= lo && r <= hi; }));
+  const far = techBase.filter(q => !overlaps(q) && !near.includes(q));
+  let candidates;
+  const n = slots.technical;
+  if (atLevel.filter(unseen).length >= n) candidates = atLevel.filter(unseen);
+  else if (atLevel.filter(q => !last.has(q.id)).length >= n) candidates = freshFirst(atLevel, n, seen, last);
+  else candidates = freshFirst([...atLevel, ...near, ...far], n, seen, last);
+  const technical = pickDiverse(candidates, n, rand, positionLevel)
     .sort((a, b) => (TYPE_ORDER[a.type] - TYPE_ORDER[b.type]) || (minRank(a) - minRank(b)));
 
   // Intro + behavioural / managerial (managerial preferred for senior and lead)
@@ -126,8 +139,9 @@ export function selectQuestions({ bank, category, positionLevel, experienceLevel
   const intro = slots.intro ? common.filter(q => q.type === 'intro').slice(0, 1) : [];
   let hr = [];
   if (slots.behavioral) {
-    const beh = shuffle(preferFresh(common.filter(q => q.type === 'behavioral'), slots.behavioral), rand);
-    const mgr = shuffle(preferFresh(common.filter(q => q.type === 'managerial'), slots.behavioral), rand);
+    const fresh = (list) => { const f = freshFirst(list, slots.behavioral, seen, last); return [...shuffle(f.filter(unseen), rand), ...f.filter(q => !unseen(q))]; };
+    const beh = fresh(common.filter(q => q.type === 'behavioral'));
+    const mgr = fresh(common.filter(q => q.type === 'managerial'));
     const wantMgr = rank >= 3 ? Math.min(mgr.length, Math.ceil(slots.behavioral / 2) + (rank >= 4 ? 1 : 0)) : 0;
     hr = [...mgr.slice(0, Math.min(wantMgr, slots.behavioral)), ...beh].slice(0, slots.behavioral);
     if (hr.length < slots.behavioral) hr.push(...mgr.slice(wantMgr, wantMgr + slots.behavioral - hr.length));

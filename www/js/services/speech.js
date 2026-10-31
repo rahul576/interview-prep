@@ -14,12 +14,27 @@ function nativePlugin(name) {
   return null;
 }
 
-const FEMALE = ['female', 'woman', 'samantha', 'victoria', 'karen', 'moira', 'tessa', 'veena', 'zira', 'susan', 'hazel', 'serena', 'fiona', 'aria', 'jenny', 'natasha', 'sonia', 'neerja', 'heera', 'libby', 'ava', 'allison', 'kate', 'emma', 'joanna', 'salli', 'kimberly', 'raveena', 'aditi', 'swara', 'kajal', 'michelle', 'sara', 'catherine', 'martha'];
-const MALE = ['male', 'man ', 'daniel', 'alex', 'fred', 'david', 'mark', 'george', 'rishi', 'ravi', 'guy', 'ryan', 'prabhat', 'thomas', 'oliver', 'aaron', 'arthur', 'matthew', 'joey', 'justin', 'brian', 'eric', 'christopher', 'roger', 'steffan', 'william', 'liam', 'madhur', 'hemant'];
-const QUALITY = ['natural', 'neural', 'online', 'enhanced', 'premium', 'google'];
+const FEMALE = ['female', 'woman', 'zoe', 'jenny', 'ava', 'samantha', 'emma', 'neerja', 'libby', 'sonia', 'natasha', 'samantha', 'victoria', 'karen', 'moira', 'tessa', 'veena', 'zira', 'susan', 'hazel', 'serena', 'fiona', 'aria', 'jenny', 'natasha', 'sonia', 'neerja', 'heera', 'libby', 'ava', 'allison', 'kate', 'emma', 'joanna', 'salli', 'kimberly', 'raveena', 'aditi', 'swara', 'kajal', 'michelle', 'sara', 'catherine', 'martha'];
+const MALE = ['male', 'man ', 'evan', 'nathan', 'tom', 'andrew', 'brian', 'prabhat', 'ryan', 'guy', 'daniel', 'alex', 'fred', 'david', 'mark', 'george', 'rishi', 'ravi', 'guy', 'ryan', 'prabhat', 'thomas', 'oliver', 'aaron', 'arthur', 'matthew', 'joey', 'justin', 'brian', 'eric', 'christopher', 'roger', 'steffan', 'william', 'liam', 'madhur', 'hemant'];
+// Voice quality tiers: neural/"natural" voices sound human; novelty and eSpeak voices sound robotic.
+const TOP = ['natural', 'neural', 'premium', 'wavenet', 'studio'];
+const GOOD = ['enhanced', 'siri', 'online'];
+const OK = ['google'];
+const ROBOTIC = ['compact', 'espeak', 'fred', 'albert', 'zarvox', 'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos', 'good news', 'jester', 'organ', 'superstar', 'trinoids', 'whisper', 'wobble', 'junior', 'ralph', 'kathy', 'grandma', 'grandpa', 'eddy', 'flo', 'reed', 'rocko', 'sandy', 'shelley', 'novelty'];
+
+/** How natural a voice is likely to sound (higher is better). */
+export function voiceQuality(v) {
+  const n = ` ${(v.name || '').toLowerCase()} `;
+  if (ROBOTIC.some(w => n.includes(` ${w}`))) return -20;
+  if (TOP.some(w => n.includes(w))) return 14;
+  if (GOOD.some(w => n.includes(w))) return 8;
+  if (OK.some(w => n.includes(w))) return 2;
+  return 0;
+}
 
 /** Pick the best voice for a persona. Pure so it can be unit tested. */
-export function pickVoice(voices, { gender = 'female', lang = 'en-US' } = {}) {
+export function pickVoice(voices, { gender = 'female', lang = 'en-US', preferred = null } = {}) {
+  if (preferred) { const v = voices.find(x => x.name === preferred); if (v) return v; }
   const en = voices.filter(v => /^en([-_]|$)/i.test(v.lang || ''));
   if (!en.length) return voices[0] || null;
   const want = gender === 'male' ? MALE : FEMALE;
@@ -29,13 +44,20 @@ export function pickVoice(voices, { gender = 'female', lang = 'en-US' } = {}) {
     let s = 0;
     if ((v.lang || '').replace('_', '-').toLowerCase() === lang.toLowerCase()) s += 4;
     else if ((v.lang || '').toLowerCase().startsWith(lang.slice(0, 2).toLowerCase())) s += 1;
-    if (want.some(w => n.includes(w))) s += 6;
-    if (avoid.some(w => n.includes(w)) && !want.some(w => n.includes(w))) s -= 8;
-    if (QUALITY.some(q => n.includes(q))) s += 2;
+    const has = (w) => new RegExp(`\\b${w.trim()}\\b`).test(n); // whole words: "female" must not match "male"
+    if (want.some(has)) s += 6;
+    if (avoid.some(has) && !want.some(has)) s -= 8;
+    s += voiceQuality(v);
     if (v.localService) s += 0.5;
     return s;
   };
   return en.slice().sort((a, b) => score(b) - score(a))[0];
+}
+
+/** English voices ranked for display in a picker. */
+export function rankedVoices(voices, { gender = 'female', lang = 'en-US' } = {}) {
+  return voices.filter(v => /^en([-_]|$)/i.test(v.lang || '')).map(v => ({ v, q: voiceQuality(v) }))
+    .sort((a, b) => b.q - a.q || (a.v.lang === lang ? -1 : 1)).map(({ v, q }) => ({ name: v.name, lang: v.lang, natural: q >= 8, robotic: q < 0 }));
 }
 
 /** Split long text into sentence chunks (Chrome cuts utterances off after ~15s). */
@@ -59,7 +81,8 @@ export class SpeechService {
   constructor({ fast = false } = {}) {
     this.fast = fast;
     this.lang = 'en-US';
-    this.rate = 1;
+    this.rate = 0.96; // slightly slower than default sounds more conversational
+    this.voiceName = null; // user-chosen voice (null = best available)
     this.voices = [];
     this.native = isNative();
     this.tts = this.native ? nativePlugin('TextToSpeech') : null;
@@ -87,6 +110,12 @@ export class SpeechService {
     } catch { this.voices = []; }
   }
 
+  /** Is the best voice we would use a natural-sounding one? */
+  hasNaturalVoice(gender = 'female') {
+    const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
+    return !!v && voiceQuality(v) >= 8;
+  }
+
   ttsAvailable() {
     if (this.fast) return false;
     return this.native ? !!this.tts : ('speechSynthesis' in window);
@@ -110,7 +139,7 @@ export class SpeechService {
       await sleep(est);
       return;
     }
-    const chunks = chunkText(text);
+    const chunks = chunkText(text, 140);
     let offset = 0;
     const t0 = Date.now();
     onStart && onStart(est);
@@ -119,6 +148,7 @@ export class SpeechService {
       const base = offset;
       await this._speakChunk(chunk, gender, (i) => onBoundary && onBoundary(base + i));
       offset += chunk.length + 1;
+      if (token === this._speakToken && chunks.length > 1) await sleep(/[?]$/.test(chunk) ? 120 : 220); // breath between sentences
     }
     // If the engine returned almost instantly (no voice installed / muted engine),
     // keep the interviewer "talking" at a natural pace so captions can be read.
@@ -129,7 +159,7 @@ export class SpeechService {
   async _speakChunk(chunk, gender, onBoundary) {
     const fallback = estimateDurationMs(chunk, this.rate) * 1.7 + 2500;
     if (this.native) {
-      const voice = pickVoice(this.voices, { gender, lang: this.lang });
+      const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
       const voiceIndex = voice ? this.voices.indexOf(voice) : undefined;
       let handle;
       try {
@@ -146,7 +176,7 @@ export class SpeechService {
     }
     await new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(chunk);
-      const v = pickVoice(this.voices, { gender, lang: this.lang });
+      const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
       if (v) { u.voice = v; u.lang = v.lang; } else u.lang = this.lang;
       u.rate = this.rate;
       u.pitch = gender === 'male' ? 0.95 : 1.05;

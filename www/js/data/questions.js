@@ -9,8 +9,11 @@ import { DSA } from './questions-dsa.js';
 import { COMMON_QUESTIONS } from './questions-common.js';
 import { MANAGERIAL } from './questions-managerial.js';
 import { JAVA_EXTRA, DEVOPS_EXTRA } from './questions-extra.js';
+import { JAVA_CORE2 } from './questions-java-core2.js';
+import { JAVA_SPRING2 } from './questions-java-spring2.js';
+import { JAVA_ARCH2 } from './questions-java-arch2.js';
 
-export const BANK_VERSION = '1.1.0';
+export const BANK_VERSION = '1.2.0';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -19,6 +22,9 @@ export const QUESTIONS = Object.freeze([
   ...withCat(JAVA_QUESTIONS, 'java-backend'),
   ...withCat(JAVA_MORE, 'java-backend'),
   ...withCat(JAVA_EXTRA, 'java-backend'),
+  ...withCat(JAVA_CORE2, 'java-backend'),
+  ...withCat(JAVA_SPRING2, 'java-backend'),
+  ...withCat(JAVA_ARCH2, 'java-backend'),
   ...withCat(DEVOPS_QUESTIONS, 'devops'),
   ...withCat(DEVOPS_MORE, 'devops'),
   ...withCat(AZURE, 'devops'),
@@ -48,6 +54,7 @@ const GROUPS = {
   'System Design': 'System Design & Architecture', 'Architecture': 'System Design & Architecture',
   'Testing': 'Testing & Observability', 'Observability': 'Testing & Observability',
   'Troubleshooting': 'Troubleshooting',
+  'Low-Level Design': 'System Design & Architecture',
   'DSA: Arrays & Strings': 'DSA', 'DSA: Lists, Stacks & Queues': 'DSA', 'DSA: Trees & Graphs': 'DSA', 'DSA: Algorithms & DP': 'DSA',
   'Azure': 'Azure', 'Azure DevOps & Pipelines': 'Azure', 'Azure Kubernetes (AKS)': 'Azure',
   'DevOps & CI/CD': 'CI/CD & Git', 'CI/CD Tools': 'CI/CD & Git', 'Git': 'CI/CD & Git',

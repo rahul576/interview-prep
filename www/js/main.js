@@ -1,13 +1,15 @@
 // InterviewPro V1 – app shell, screens and interview room.
-import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById, levelFromYears, levelById } from './data/meta.js';
+import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById as builtinInterviewer, levelFromYears, levelById } from './data/meta.js';
 import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
 import { selectQuestions, targetLevels, planSlots, availableCount } from './engine/select.js';
-import { summarize } from './engine/score.js';
+import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession } from './engine/session.js';
-import { InterviewerAvatar } from './ui/avatar.js';
-import { SpeechService, isNative, sleep } from './services/speech.js';
+import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
+import { driftCheck, interruptionLine } from './engine/drift.js';
+import { SpeechService, isNative, sleep, rankedVoices } from './services/speech.js';
 import { MediaService } from './services/media.js';
 import { store } from './services/store.js';
+import { updateProgress, weakQuestions, markLearned, seenMap, progressStats, PASS_SCORE } from './engine/progress.js';
 
 const params = new URLSearchParams(location.search);
 const FAST = params.has('fast');           // test mode: silent speech, short timers
@@ -36,7 +38,32 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 function clearAvatars() { avatars.forEach(a => a.destroy()); avatars.clear(); }
-function mountAvatar(host, persona) { const a = new InterviewerAvatar(host, persona); avatars.add(a); return a; }
+function mountAvatar(host, persona) { const a = persona.photo ? new PhotoAvatar(host, persona) : new InterviewerAvatar(host, persona); avatars.add(a); return a; }
+
+/** Custom interviewer from the user's own photo (stored on this device only). */
+function customInterviewer() {
+  const c = store.prefs().customInterviewer;
+  return c && c.photo ? { id: 'custom', name: c.name || 'My interviewer', title: 'Interviewer', gender: c.gender || 'female', photo: c.photo } : null;
+}
+function interviewerById(id) { return id === 'custom' ? (customInterviewer() || builtinInterviewer('ananya')) : builtinInterviewer(id); }
+function allInterviewers() { const c = customInterviewer(); return c ? [...INTERVIEWERS, c] : INTERVIEWERS; }
+
+/** Resize an uploaded photo to a small JPEG data URL so it fits in local storage. */
+function photoToDataUrl(file, max = 560) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
 
 function toast(msg, ms = 2600) {
   const t = document.createElement('div');
@@ -53,6 +80,9 @@ const state = {
     category: prefs.category || 'java-backend',
     positionId: prefs.positionId || null,
     topics: null, // null = all categories
+    style: prefs.style || 'interview', // 'interview' | 'prep'
+    source: 'new', // prep: 'new' | 'revision'
+    practiceIds: null, // explicit question list (from the revision screen)
     years: prefs.years ?? 3,
     mode: prefs.mode || 'mixed',
     count: prefs.count || 8,
@@ -71,15 +101,18 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.1</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.2</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
+      <button class="navbtn" data-nav="revision" ${active === 'revision' ? 'aria-current="page"' : ''}>Revision${weakCount() ? ` <span class="nav-badge">${weakCount()}</span>` : ''}</button>
       <button class="navbtn" data-nav="history" ${active === 'history' ? 'aria-current="page"' : ''}>History</button>
     </nav>
   </header>
   <main class="page" id="main">${content}</main>`;
 }
+
+function weakCount(role = null) { return weakQuestions(store.progress(), { role }).length; }
 
 function bindNav() {
   $$('[data-nav]').forEach(b => b.addEventListener('click', () => go(b.dataset.nav)));
@@ -90,7 +123,7 @@ function go(screen, data) {
   document.body.classList.toggle('in-room', screen === 'room');
   state.screen = screen;
   window.scrollTo(0, 0);
-  ({ home: renderHome, setup: renderSetup, check: renderCheck, room: renderRoom, report: renderReport, history: renderHistory }[screen])(data);
+  ({ home: renderHome, setup: renderSetup, check: renderCheck, room: renderRoom, report: renderReport, history: renderHistory, revision: renderRevision }[screen])(data);
   window.__ip.screen = screen;
 }
 
@@ -114,6 +147,7 @@ function renderHome() {
       <div class="level-row" aria-label="Questions per level">
         ${LEVELS.map((l, i) => `<div class="level-pill"><b>${counts[i]}</b>${esc(l.label.split(' ')[0])}</div>`).join('')}
       </div>
+      ${(() => { const st = progressStats(store.progress(), c.id, roleQs.map(q => q.id)); return st.seen ? `<p class="muted" style="font-size:13px;margin:0">Practised <b>${st.seen}</b> of ${st.total} questions · <b>${st.weak}</b> to revise</p>` : ''; })()}
       <button class="btn btn-primary" data-role="${c.id}">Practice ${esc(c.short)} interview</button>
     </article>`;
   }).join('');
@@ -161,6 +195,7 @@ function renderHome() {
     state.setup.category = b.dataset.role;
     state.setup.positionId = null;
     state.setup.topics = null;
+    state.setup.practiceIds = null;
     go('setup');
   }));
   const a = mountAvatar($('#heroAvatar'), interviewerById('vikram'));
@@ -193,6 +228,20 @@ function renderSetup() {
     <p class="muted" style="margin:0 0 20px">Set up your session. Questions are tailored to the position and your experience.</p>
     <div class="setup">
       <div class="card">
+        <div class="form-sec">
+          <h3>Mode</h3>
+          <p class="hint">Preparation mode is for learning; Interview mode simulates the real thing.</p>
+          <div class="mode-grid" role="group" aria-label="Mode">
+            <button type="button" class="opt mode-opt" data-style="prep" aria-pressed="${s.style === 'prep'}"><b>Preparation mode</b><small>No time limit · hints · instant feedback and model answer after every question · try again as often as you like</small></button>
+            <button type="button" class="opt mode-opt" data-style="interview" aria-pressed="${s.style === 'interview'}"><b>Interview mode</b><small>Timed answers · follow-up questions · no hints · full report at the end, like a real interview</small></button>
+          </div>
+          <div id="prepSource" ${s.style === 'prep' ? '' : 'hidden'} style="margin-top:12px">
+            <div class="seg" role="group" aria-label="Question source">
+              <button type="button" data-source="new" aria-pressed="${s.source === 'new'}">New questions</button>
+              <button type="button" data-source="revision" aria-pressed="${s.source === 'revision'}">My revision list (${weakCount(s.category)})</button>
+            </div>
+          </div>
+        </div>
         <div class="form-sec">
           <h3><label for="name">Your first name</label></h3>
           <p class="hint">The interviewer will greet you by name (optional).</p>
@@ -242,8 +291,19 @@ function renderSetup() {
           <h3>Interviewer</h3>
           <p class="hint">All interviewers are fictional characters.</p>
           <div class="persona-grid" role="group" aria-label="Interviewer">
-            ${INTERVIEWERS.map(p => `<button class="persona" data-iv="${p.id}" aria-pressed="${p.id === s.interviewerId}"><div class="ph"><div class="avatar-host" data-av="${p.id}"></div></div><div class="pn"><b>${esc(p.name)}</b><span>${esc(p.title)}</span></div></button>`).join('')}
+            ${allInterviewers().map(p => `<button class="persona" data-iv="${p.id}" aria-pressed="${p.id === s.interviewerId}"><div class="ph"><div class="avatar-host" data-av="${p.id}"></div></div><div class="pn"><b>${esc(p.name)}</b><span>${esc(p.title)}</span></div></button>`).join('')}
           </div>
+          <details class="custom-iv" style="margin-top:12px">
+            <summary>Use your own interviewer photo</summary>
+            <p class="hint" style="margin-top:8px">Upload a photo you have the rights to use, for example your own or one licensed from a stock site. It stays on this device. A front-facing head-and-shoulders photo works best.</p>
+            <div class="custom-row">
+              <input id="ivName" class="field" maxlength="30" placeholder="Interviewer name" value="${esc((store.prefs().customInterviewer || {}).name || '')}">
+              <select id="ivGender" class="field"><option value="female">Female voice</option><option value="male" ${(store.prefs().customInterviewer || {}).gender === 'male' ? 'selected' : ''}>Male voice</option></select>
+              <label class="btn" for="ivPhoto">Choose photo</label>
+              <input id="ivPhoto" type="file" accept="image/*" hidden>
+              ${customInterviewer() ? '<button type="button" class="btn btn-ghost" id="ivRemove">Remove</button>' : ''}
+            </div>
+          </details>
         </div>
         <div class="form-sec">
           <h3><label for="lang">Speech accent</label></h3>
@@ -260,7 +320,22 @@ function renderSetup() {
     </div>
   `, 'home');
   bindNav();
-  INTERVIEWERS.forEach(p => { const a = mountAvatar($(`[data-av="${p.id}"]`), p); a.setState('listening'); });
+  allInterviewers().forEach(p => { const a = mountAvatar($(`[data-av="${p.id}"]`), p); a.setState('listening'); });
+  const saveCustom = (patch) => store.savePrefs({ customInterviewer: { ...(store.prefs().customInterviewer || {}), ...patch } });
+  $('#ivPhoto').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try {
+      const photo = await photoToDataUrl(f);
+      saveCustom({ photo, name: $('#ivName').value.trim() || 'My interviewer', gender: $('#ivGender').value });
+      s.interviewerId = 'custom';
+      saveSetup(); go('setup');
+    } catch { toast('Could not read that image.'); }
+  });
+  $('#ivName').addEventListener('change', () => { if (customInterviewer()) saveCustom({ name: $('#ivName').value.trim() || 'My interviewer' }); });
+  $('#ivGender').addEventListener('change', () => { if (customInterviewer()) saveCustom({ gender: $('#ivGender').value }); });
+  const rm = $('#ivRemove');
+  if (rm) rm.addEventListener('click', () => { store.savePrefs({ customInterviewer: null }); if (s.interviewerId === 'custom') s.interviewerId = 'ananya'; saveSetup(); go('setup'); });
 
   const update = () => {
     const pos2 = currentPosition();
@@ -268,15 +343,19 @@ function renderSetup() {
     const lv = targetLevels(pos2.level, exp).map(l => levelById(l).label.split(' ')[0]);
     const rank = Math.max(...targetLevels(pos2.level, exp).map(l => levelById(l).rank));
     const slots = planSlots(s.count, s.mode, rank);
+    const fromRevision = s.style === 'prep' && s.source === 'revision';
+    const weakN = weakCount(s.category);
     const allTopics = topicsFor(s.category).map(t => t.topic);
     const selected = s.topics || allTopics;
     const avail = availableCount({ bank: QUESTIONS, category: s.category, positionLevel: pos2.level, experienceLevel: exp, topics: selected });
     $('#topicHint').textContent = !s.topics ? `All ${allTopics.length} categories selected. Tap a category to include or exclude it.` : `${selected.length} of ${allTopics.length} categories selected · ${avail} matching questions at this level.`;
     $('#yearsVal').innerHTML = `${s.years}${s.years >= 15 ? '+' : ''} year${s.years === 1 ? '' : 's'}<small>${esc(levelById(exp).label)}</small>`;
     $('#summary').innerHTML = `
-      <div class="eyebrow">Session summary</div>
+      <div class="eyebrow">${s.style === 'prep' ? 'Preparation session' : 'Interview session'}</div>
       <h3 style="font-size:18px">${esc(pos2.title)}</h3>
       <dl>
+        <dt>Mode</dt><dd>${s.style === 'prep' ? 'Preparation' : 'Interview'}</dd>
+        ${fromRevision ? `<dt>Source</dt><dd>Revision list (${weakN})</dd>` : ''}
         <dt>Difficulty</dt><dd>${esc(lv.join(' → '))}</dd>
         <dt>Questions</dt><dd>${s.count}</dd>
         <dt>Technical</dt><dd>${slots.technical}</dd>
@@ -286,8 +365,9 @@ function renderSetup() {
         <dt>Estimated time</dt><dd>${Math.round(s.count * 2.6)}–${Math.round(s.count * 3.6)} min</dd>
         <dt>Interviewer</dt><dd>${esc(interviewerById(s.interviewerId).name)}</dd>
       </dl>
+      ${fromRevision && weakN === 0 ? '<p style="color:var(--warn);font-size:13px;margin:0">Your revision list is empty. Questions you answer below 60 will appear there.</p>' : ''}
       ${selected.length === 0 ? '<p style="color:var(--bad);font-size:13px;margin:0">Select at least one topic.</p>' : avail < slots.technical ? `<p style="color:var(--warn);font-size:13px;margin:0">Only ${avail} questions match at this level; nearby levels will be used to fill the interview.</p>` : ''}
-      <button class="btn btn-primary btn-lg" id="toCheck" ${selected.length === 0 ? 'disabled' : ''}>Continue to device check</button>
+      <button class="btn btn-primary btn-lg" id="toCheck" ${selected.length === 0 || (fromRevision && weakN === 0) ? 'disabled' : ''}>Continue to device check</button>
       <p class="muted" style="font-size:12px;margin:0">Tip: answer out loud as you would in a real interview — explain, then give an example.</p>`;
     $('#toCheck').addEventListener('click', () => { saveSetup(); go('check'); });
   };
@@ -296,7 +376,7 @@ function renderSetup() {
     s.lang = $('#lang').value;
     s.followUps = $('#followUps').checked;
     s.record = $('#record').checked;
-    store.savePrefs({ category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
+    store.savePrefs({ style: s.style, category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
   };
   const press = (sel, attr, fn) => $$(sel).forEach(b => b.addEventListener('click', () => {
     $$(sel).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
@@ -304,6 +384,8 @@ function renderSetup() {
   }));
   press('[data-pos]', 'pos', v => { s.positionId = v; });
   press('[data-mode]', 'mode', v => { s.mode = v; });
+  press('[data-style]', 'style', v => { s.style = v; s.practiceIds = null; $('#prepSource').hidden = v !== 'prep'; });
+  press('[data-source]', 'source', v => { s.source = v; s.practiceIds = null; });
   press('[data-count]', 'count', v => { s.count = Number(v); });
   press('[data-iv]', 'iv', v => { s.interviewerId = v; });
   $('#years').addEventListener('input', e => { s.years = Number(e.target.value); update(); });
@@ -349,6 +431,11 @@ async function renderCheck() {
             <button data-am="type" aria-pressed="${s.answerMode === 'type'}">Type</button>
           </div>
         </div>
+        <div id="voiceBox" hidden>
+          <label class="eyebrow" for="voiceSel" style="display:block;margin-bottom:8px">Interviewer voice</label>
+          <select id="voiceSel" class="field"></select>
+          <p class="muted" id="voiceTip" style="font-size:12px;margin:8px 0 0"></p>
+        </div>
         <button class="btn" id="testVoice">${ICONS.play} Test interviewer voice</button>
         <button class="btn btn-primary btn-lg" id="start">Start interview</button>
       </div>
@@ -357,6 +444,16 @@ async function renderCheck() {
   $('#back').addEventListener('click', () => { media.stop(); go('setup'); });
 
   await speech.init();
+  speech.voiceName = store.prefs().voiceName || null;
+  const persona0 = interviewerById(s.interviewerId);
+  const ranked = rankedVoices(speech.voices, { gender: persona0.gender, lang: s.lang });
+  if (ranked.length && !isNative()) {
+    $('#voiceBox').hidden = false;
+    $('#voiceSel').innerHTML = `<option value="">Auto — most natural available</option>` + ranked.map(v => `<option value="${esc(v.name)}" ${v.name === speech.voiceName ? 'selected' : ''}>${v.natural ? '★ ' : ''}${esc(v.name)} (${esc(v.lang)})${v.robotic ? ' — robotic' : ''}</option>`).join('');
+    const tip = () => { $('#voiceTip').innerHTML = speech.hasNaturalVoice(persona0.gender) ? '★ = natural, human-like voice.' : 'Only basic voices were found, so the interviewer may sound robotic. For a human-like voice open this site in <b>Microsoft Edge</b> (free natural voices), or on a Mac add a Premium voice: System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. Ava or Zoe Premium), then reload.'; };
+    tip();
+    $('#voiceSel').addEventListener('change', (e) => { speech.voiceName = e.target.value || null; store.savePrefs({ voiceName: speech.voiceName }); tip(); speech.speak('Hi, this is how I will sound in your interview.', { gender: persona0.gender }); });
+  }
   const sttOk = speech.sttAvailable();
   if (!sttOk) s.answerMode = 'type';
   $$('[data-am]').forEach(b => {
@@ -414,17 +511,27 @@ function renderRoom() {
   const pos = currentPosition();
   const persona = interviewerById(s.interviewerId);
   const seed = Number(params.get('seed')) || Math.floor(Math.random() * 1e9);
-  const questions = selectQuestions({
-    bank: QUESTIONS, category: s.category, positionLevel: pos.level, experienceLevel: levelFromYears(s.years),
-    count: s.count, mode: s.mode, topics: s.topics, seed, recentIds: store.recentQuestionIds(s.category),
-  });
+  const prep = s.style === 'prep';
+  speech.voiceName = store.prefs().voiceName || null;
+  const progressNow = store.progress();
+  let questions;
+  if (prep && (s.practiceIds || s.source === 'revision')) {
+    const ids = s.practiceIds || weakQuestions(progressNow, { role: s.category }).map(w => w.id);
+    questions = ids.map(id => QUESTIONS.find(q => q.id === id)).filter(Boolean).slice(0, s.practiceIds ? 20 : s.count);
+  } else {
+    questions = selectQuestions({
+      bank: QUESTIONS, category: s.category, positionLevel: pos.level, experienceLevel: levelFromYears(s.years),
+      count: s.count, mode: s.mode, topics: s.topics, seed, seen: seenMap(progressNow), recentIds: store.lastSessionIds(s.category),
+    });
+  }
+  window.__ip.questions = questions.map(q => q.id);
   const initials = (s.candidateName || 'You').slice(0, 2).toUpperCase();
 
   app.innerHTML = `
   <div class="room" id="room">
     <div class="room-top">
       <span class="live-dot" aria-hidden="true"></span>
-      <div style="min-width:0"><div class="title">${esc(pos.title)} · Interview</div><div class="sub">with ${esc(persona.name)}, ${esc(persona.title)}</div></div>
+      <div style="min-width:0"><div class="title">${esc(pos.title)} · ${prep ? 'Preparation' : 'Interview'}</div><div class="sub">with ${esc(persona.name)}, ${esc(persona.title)}</div></div>
       <div class="spacer"></div>
       <span class="pill-dark" id="qcount">Q 0/${questions.length}</span>
       <span class="pill-dark" id="elapsed">00:00</span>
@@ -443,16 +550,19 @@ function renderRoom() {
       </section>
       <aside class="panel">
         <div class="qcard" id="qcard"><div class="qmeta"><span class="tag">${esc(cat.short)}</span><span>Waiting for the interviewer…</span></div><div class="qtext">Your interviewer is joining.</div></div>
-        <div class="answer">
+        <div class="hints" id="hints" hidden></div>
+        <div class="review" id="review" hidden></div>
+        <div class="answer" id="answerBox">
           <div class="answer-head">
             <span class="mic-state" id="micState"><span class="dot"></span><span id="micText">Mic idle</span></span>
             <span id="ansTimer" style="font-variant-numeric:tabular-nums">--:--</span>
           </div>
-          <div class="timebar" id="timebar"><i id="timefill"></i></div>
+          <div class="timebar" id="timebar" ${prep ? 'hidden' : ''}><i id="timefill"></i></div>
           <label for="answer" class="sr-only">Your answer</label>
           <textarea id="answer" placeholder="${s.answerMode === 'voice' ? 'Your spoken answer will appear here as you talk. You can edit it.' : 'Type your answer here…'}" disabled></textarea>
           <div class="answer-actions">
             <button class="btn" id="repeatBtn" disabled>${ICONS.repeat} Repeat</button>
+            ${prep ? '<button class="btn" id="hintBtn" disabled>Hint</button>' : ''}
             <button class="btn" id="skipBtn" disabled>Skip</button>
             <button class="btn btn-primary" id="doneBtn" disabled>${ICONS.check} Done</button>
           </div>
@@ -502,8 +612,10 @@ function renderRoom() {
   };
   const setTag = (t) => { ui.stateTag.textContent = t; };
 
+  const EXPR_FOR = { greeting: 'warm', question: 'curious', nudge: 'curious', followup: 'curious', interrupt: 'concerned', closing: 'warm', model: 'warm', repeat: 'curious' };
   const say = async (text, meta = {}) => {
     if (ended && meta.kind !== 'closing') return;
+    if (meta.kind === 'transition') { if (meta.score >= 70) { avatar.setExpression('pleased'); avatar.nod(); } else avatar.setExpression('neutral'); await sleep(FAST ? 10 : 500); }
     while (paused) await sleep(200);
     ui.stage.dataset.speaking = 'true';
     setTag('Speaking');
@@ -514,13 +626,14 @@ function renderRoom() {
       const epoch = pauseEpoch;
       await speech.speak(text, {
         gender: persona.gender,
-        onStart: (ms) => avatar.startSpeech(text, ms),
+        onStart: (ms) => avatar.startSpeech(text, ms, EXPR_FOR[meta.kind] || undefined),
         onBoundary: (i) => avatar.syncToChar(i),
       });
       avatar.endSpeech();
       if (epoch === pauseEpoch || ended) break; // interrupted by pause -> repeat after resume
     }
     avatar.setState('idle');
+    if (meta.kind === 'transition' || meta.kind === 'interrupt') avatar.setExpression('warm');
     ui.stage.dataset.speaking = 'false';
     await sleep(FAST ? 30 : 350);
   };
@@ -540,17 +653,31 @@ function renderRoom() {
     const q = meta.question;
     showQuestion(q, meta.index, meta.kind);
     if (meta.kind !== 'answer') {
-      const prompt = meta.kind === 'nudge' ? 'Add to your previous answer.' : 'Answer the follow-up.';
+      const prompt = meta.kind === 'nudge' ? 'Add to your previous answer.' : meta.kind === 'retry' ? 'Try again: answer the question in full, covering the missed points.' : 'Answer the follow-up.';
       ui.answer.placeholder = prompt;
+    }
+    $('#review').hidden = true; $('#answerBox').hidden = false;
+    let hintUsed = false;
+    const hintBtn = $('#hintBtn');
+    $('#hints').hidden = true;
+    if (hintBtn) {
+      hintBtn.disabled = false;
+      hintBtn.onclick = () => {
+        hintUsed = true;
+        const box = $('#hints');
+        box.innerHTML = `<b>Hint: a strong answer covers</b><ul>${q.keyPoints.map(k => `<li>${esc(k.label)}</li>`).join('')}</ul>`;
+        box.hidden = false;
+        hintBtn.disabled = true;
+      };
     }
     ui.answer.value = '';
     ui.answer.disabled = false;
     [ui.done, ui.skip, ui.repeat].forEach(b => { b.disabled = false; });
-    ui.skip.hidden = meta.kind !== 'answer';
+    ui.skip.hidden = !(meta.kind === 'answer' || meta.kind === 'retry');
     avatar.setState('listening');
     setTag('Listening');
     if (!voice) setTimeout(() => ui.answer.focus(), 50);
-    const limit = meta.kind === 'answer' ? answerSeconds(q) : Math.min(120, answerSeconds(q));
+    const limit = prep ? Infinity : meta.kind === 'answer' ? answerSeconds(q) : Math.min(120, answerSeconds(q));
     let remaining = limit;
     const t0 = performance.now();
     let pauseOffset = pausedTotal;
@@ -577,9 +704,31 @@ function renderRoom() {
     };
     const stopListening = () => { if (ctl) { ctl.stop(); ctl = null; } speech._listen = null; setMic(false, voice ? 'Mic idle' : 'Typing mode'); };
 
+    let interrupted = false, interrupting = false, lastCovered = 0, closed = false;
+    const driftTimer = setInterval(async () => {
+      if (paused || interrupted || interrupting || !(meta.kind === 'answer' || meta.kind === 'retry')) return;
+      const d = driftCheck(q, ui.answer.value);
+      if (!d.drifting) {
+        // live reaction: nod when the candidate hits key points
+        if (d.covered > lastCovered) { avatar.nod(); lastCovered = d.covered; }
+        return;
+      }
+      interrupting = true;
+      interrupted = true;
+      stopListening();
+      avatar.setExpression('concerned');
+      await say(interruptionLine(q), { kind: 'interrupt' });
+      interrupting = false;
+      if (closed) return; // answer already submitted while the interviewer was speaking
+      toast('The interviewer redirected you. Your answer so far is kept; continue on the question.', 4000);
+      avatar.setState('listening');
+      setTag('Listening');
+      startListening();
+    }, FAST ? 300 : 2500);
     const timer = setInterval(() => {
-      if (paused) return;
+      if (paused || interrupting) return;
       const used = (performance.now() - t0 - (pausedTotal - pauseOffset)) / 1000;
+      if (prep) { ui.timer.textContent = fmtTime(used); return; }
       remaining = Math.max(0, limit - used);
       ui.timer.textContent = fmtTime(remaining);
       ui.fill.style.transform = `scaleX(${remaining / limit})`;
@@ -588,10 +737,12 @@ function renderRoom() {
     }, 250);
 
     const finish = (action) => {
+      closed = true;
       clearInterval(timer);
+      clearInterval(driftTimer);
       stopListening();
       document.removeEventListener('keydown', onKey);
-      [ui.done, ui.skip, ui.repeat].forEach(b => { b.disabled = true; b.onclick = null; });
+      [ui.done, ui.skip, ui.repeat, hintBtn].filter(Boolean).forEach(b => { b.disabled = true; b.onclick = null; });
       ui.answer.disabled = true;
       const text = action === 'skip' ? '' : ui.answer.value.trim();
       const durationSec = Math.round((performance.now() - t0 - (pausedTotal - pauseOffset)) / 1000);
@@ -601,7 +752,7 @@ function renderRoom() {
       setTag('Thinking');
       pending = null;
       if (action === 'timeout') toast('Time is up for this question.');
-      resolve({ text, durationSec, action: action === 'timeout' ? 'done' : action });
+      resolve({ text, durationSec, hintUsed, interrupted, action: action === 'timeout' ? 'done' : action });
     };
     const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); finish('done'); } };
     document.addEventListener('keydown', onKey);
@@ -610,7 +761,7 @@ function renderRoom() {
     ui.repeat.onclick = async () => {
       ui.repeat.disabled = true;
       stopListening();
-      const text = meta.kind === 'answer' ? q.q : (meta.kind === 'followup' ? q.followUp : 'Could you elaborate a little more on your previous answer?');
+      const text = (meta.kind === 'answer' || meta.kind === 'retry') ? q.q : (meta.kind === 'followup' ? q.followUp : 'Could you elaborate a little more on your previous answer?');
       await say(text, { kind: 'repeat' });
       avatar.setState('listening'); setTag('Listening');
       ui.repeat.disabled = false;
@@ -618,6 +769,32 @@ function renderRoom() {
     };
     pending = { finish, startListening, stopListening };
     startListening();
+  });
+
+  let reviewPending = null;
+  const review = (item, { isLast }) => new Promise((resolve) => {
+    const q = item.question, r = item.result;
+    $('#answerBox').hidden = true; $('#hints').hidden = true;
+    const box = $('#review');
+    const ok = !item.skipped && r.overall >= PASS_SCORE;
+    box.innerHTML = `
+      <div class="review-head"><span class="score-pill ${tone(r.overall)}">${r.overall}</span>
+        <div><b>${item.skipped ? 'Skipped' : ok ? 'Good answer' : 'Needs work'}</b><br><span>Technical ${r.technical} · Communication ${r.communication}${item.attempts > 1 ? ` · attempt ${item.attempts}` : ''}</span></div></div>
+      <div class="chips">${r.matched.map(m => `<span class="chip ok">✓ ${esc(m.label)}</span>`).join('')}${r.missed.map(m => `<span class="chip bad">✕ ${esc(m.label)}</span>`).join('')}</div>
+      ${r.tips.length ? `<ul class="tips">${r.tips.slice(0, 3).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      <details open><summary>Model answer</summary><p>${esc(q.ideal)}</p></details>
+      <div class="answer-actions">
+        <button class="btn" id="retryBtn">Try again</button>
+        <button class="btn" id="listenBtn">${ICONS.play} Hear it</button>
+        <button class="btn btn-primary" id="nextBtn">${isLast ? 'Finish' : 'Next question'}</button>
+      </div>`;
+    box.hidden = false;
+    avatar.setState('listening'); avatar.setExpression(ok ? 'pleased' : 'thinking'); if (ok) avatar.nod(); setTag(ok ? 'Well done' : 'Review');
+    const done = (v) => { reviewPending = null; speech.stopSpeaking(); resolve(v); };
+    reviewPending = done;
+    $('#retryBtn').onclick = () => done('retry');
+    $('#nextBtn').onclick = () => done('next');
+    $('#listenBtn').onclick = async (e) => { e.currentTarget.disabled = true; await say(q.ideal, { kind: 'model' }); const b = $('#listenBtn'); if (b) b.disabled = false; };
   });
 
   // controls
@@ -660,13 +837,14 @@ function renderRoom() {
     session.end();
     speech.stopSpeaking();
     if (pending) pending.finish('end');
+    if (reviewPending) reviewPending('end');
   });
   const confirmEnd = () => FAST || window.confirm('End the interview now? You will get a report for the questions answered so far.');
 
   const session = new InterviewSession({
     questions,
-    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps, seed },
-    io: { say, getAnswer },
+    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview' },
+    io: { say, getAnswer, review },
   });
   window.__ip.session = session;
 
@@ -690,15 +868,29 @@ function finishInterview({ result, seed, pos, persona, blob, elapsed }) {
   const s = state.setup;
   const items = result.items;
   const summary = summarize(items);
+  const rank = Math.max(...targetLevels(pos.level, levelFromYears(s.years)).map(l => levelById(l).rank));
+  const chance = selectionChance(items, { mode: s.style === 'prep' ? 'prep' : 'interview', levelRank: rank });
   const sessionRecord = {
+    chance,
     id: `s_${Date.now().toString(36)}`,
     date: new Date().toISOString(),
     category: s.category, position: pos.title, positionLevel: pos.level, years: s.years,
-    interviewer: persona.id, mode: s.mode, seed, elapsed, endedEarly: result.endedEarly,
+    interviewer: persona.id, mode: s.mode, style: s.style, seed, elapsed, endedEarly: result.endedEarly,
     summary,
-    items: items.map(i => ({ questionId: i.questionId, answer: i.answer, durationSec: i.durationSec, skipped: i.skipped, result: stripResult(i.result), nudge: i.nudge, followUp: i.followUp })),
+    items: items.map(i => ({ questionId: i.questionId, answer: i.answer, durationSec: i.durationSec, skipped: i.skipped, result: stripResult(i.result), nudge: i.nudge, followUp: i.followUp, attempts: i.attempts, hintUsed: i.hintUsed, firstScore: i.firstScore, interrupted: i.interrupted })),
   };
-  if (items.length) store.saveSession(sessionRecord);
+  if (items.length) {
+    const before = new Set(weakQuestions(store.progress()).map(w => w.id));
+    const progress = updateProgress(store.progress(), { category: s.category, mode: s.style, items: sessionRecord.items });
+    store.saveProgress(progress);
+    const after = weakQuestions(progress);
+    sessionRecord.addedToRevision = after.filter(w => !before.has(w.id)).length;
+    sessionRecord.clearedFromRevision = [...before].filter(id => sessionRecord.items.some(i => i.questionId === id) && !after.some(w => w.id === id)).length;
+    store.saveSession(sessionRecord);
+    // never repeat this session's questions next time (the intro question is exempt)
+    store.setLastSessionIds(s.category, sessionRecord.items.map(i => i.questionId).filter(id => id !== 'hr-001'));
+  }
+  s.practiceIds = null;
   go('report', { session: sessionRecord, videoUrl: blob ? URL.createObjectURL(blob) : null, videoType: blob ? blob.type : null });
 }
 
@@ -732,7 +924,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
     <details class="qa" ${idx === 0 ? 'open' : ''}>
       <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${esc(q.topic)} · ${it.skipped ? 'Skipped' : `${r.wordCount} words${it.durationSec ? ` · ${fmtTime(it.durationSec)}` : ''}`}</small></span><span class="score-pill ${tone(r.overall)}">${r.overall}</span></summary>
       <div class="qa-body">
-        <div class="mini-scores"><span class="chip">Technical ${r.technical}</span><span class="chip">Communication ${r.communication}</span>${r.wpm ? `<span class="chip">${r.wpm} words/min</span>` : ''}${r.fillerCount ? `<span class="chip">${r.fillerCount} filler words</span>` : ''}</div>
+        <div class="mini-scores"><span class="chip">Technical ${r.technical}</span><span class="chip">Communication ${r.communication}</span>${it.attempts > 1 ? `<span class="chip">${it.attempts} attempts (first: ${it.firstScore})</span>` : ''}${it.hintUsed ? '<span class="chip">hint used</span>' : ''}${it.interrupted ? '<span class="chip bad">interviewer redirected you (off-topic)</span>' : ''}${r.wpm ? `<span class="chip">${r.wpm} words/min</span>` : ''}${r.fillerCount ? `<span class="chip">${r.fillerCount} filler words</span>` : ''}</div>
         <div><h4>Your answer</h4><p class="quote">${it.answer ? esc(it.answer) : '<span class="muted">No answer given.</span>'}</p>
           ${it.nudge ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Interviewer: “${esc(it.nudge.prompt)}”</p><p class="quote">${esc(it.nudge.answer || '—')}</p>` : ''}
           ${it.followUp ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Follow-up: “${esc(it.followUp.prompt)}”</p><p class="quote">${esc(it.followUp.answer || '—')}</p>` : ''}
@@ -755,10 +947,12 @@ function renderReport({ session, videoUrl, videoType } = {}) {
       ${ring(sum.overall)}
       <div>
         <div class="eyebrow">${esc(cat.title)} · ${esc(session.position)}</div>
-        <h1 style="font-size:26px;margin:4px 0 8px">Interview report</h1>
+        <h1 style="font-size:26px;margin:4px 0 8px">${session.style === 'prep' ? 'Preparation report' : 'Interview report'}</h1>
         <span class="verdict ${sum.verdict.tone}" id="verdict">${esc(sum.verdict.label)}</span>
+        ${session.chance ? `<div class="chance" id="chance"><div class="chance-top"><span>Selection chance${session.style === 'prep' ? ' (practice estimate)' : ''}</span><b class="${session.chance.tone}">${session.chance.score}/100</b></div><div class="chance-bar"><i class="${session.chance.tone}" style="width:${session.chance.score}%"></i></div><div class="chance-label">${esc(session.chance.label)}</div>${session.chance.reasons.length ? `<details><summary>Why this score?</summary><ul>${session.chance.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</div>` : ''}
         <p class="muted" style="margin:0">${esc(sum.verdict.note)}</p>
         <div class="bars">${bar('Technical knowledge', sum.technical)}${bar('Communication', sum.communication)}</div>
+        ${session.addedToRevision || session.clearedFromRevision ? `<p class="revision-note">${session.addedToRevision ? `${session.addedToRevision} question${session.addedToRevision === 1 ? '' : 's'} added to your revision list. ` : ''}${session.clearedFromRevision ? `${session.clearedFromRevision} cleared from it — well done. ` : ''}<button class="linkbtn" data-nav="revision">Open revision list →</button></p>` : ''}
         <p class="muted" style="font-size:13px;margin:12px 0 0">${date.toLocaleString()} · with ${esc(persona.name)} · ${sum.answered}/${session.items.length} answered${sum.skipped ? ` · ${sum.skipped} skipped` : ''} · ${fmtTime(session.elapsed || 0)}${session.endedEarly ? ' · ended early' : ''}</p>
       </div>
     </section>
@@ -800,7 +994,7 @@ function renderHistory() {
       ${hist.length ? hist.map(h => `
         <button class="hist-row" data-open="${h.id}">
           <span class="hist-score score-pill ${tone(h.summary.overall)}">${h.summary.overall}</span>
-          <span><b>${esc(h.position)}</b><br><span class="muted" style="font-size:13px">${new Date(h.date).toLocaleString()} · ${h.items.length} questions · Tech ${h.summary.technical} · Comm ${h.summary.communication}</span></span>
+          <span><b>${esc(h.position)}</b><br><span class="muted" style="font-size:13px">${new Date(h.date).toLocaleString()} · ${h.items.length} questions · Tech ${h.summary.technical} · Comm ${h.summary.communication}${h.chance ? ` · Selection chance ${h.chance.score}/100` : ''}${h.style === 'prep' ? ' · Preparation' : ''}</span></span>
           <span class="muted">›</span>
         </button>`).join('') : `<div class="empty"><p>No interviews yet.</p><button class="btn btn-primary" data-nav="home">Start your first interview</button></div>`}
     </section>`, 'history');
@@ -810,8 +1004,59 @@ function renderHistory() {
   if (c) c.addEventListener('click', () => { if (window.confirm('Delete all saved interview results on this device?')) { store.clearHistory(); go('history'); } });
 }
 
+
+// ---------------------------------------------------------------- revision list
+function renderRevision({ role = null } = {}) {
+  const progress = store.progress();
+  const all = weakQuestions(progress, { role });
+  const qmap = new Map(QUESTIONS.map(q => [q.id, q]));
+  const items = all.filter(w => qmap.has(w.id));
+  const roleChip = (id, label) => `<button type="button" class="topic-chip" data-rrole="${id || ''}" aria-pressed="${(role || '') === (id || '')}">${esc(label)} <span class="cnt">${weakQuestions(progress, { role: id }).length}</span></button>`;
+  const fmtDate = (t) => new Date(t).toLocaleDateString();
+  app.innerHTML = shell(`
+    <div class="section-title" style="margin-top:0"><div><h2>Revision list</h2><p class="muted" style="margin:4px 0 0;font-size:14px">Questions you have not answered correctly yet (score below ${PASS_SCORE} or skipped). Answer them well in any later session, or mark them as learned, and they leave this list.</p></div></div>
+    <div class="chips" style="margin-bottom:14px">${roleChip(null, 'All roles')}${CATEGORIES.map(c => roleChip(c.id, c.short)).join('')}</div>
+    ${items.length ? `<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      ${CATEGORIES.filter(c => (!role || role === c.id) && weakQuestions(progress, { role: c.id }).length).map(c => `<button class="btn btn-primary" data-practice="${c.id}">Practise ${esc(c.short)} revision list (${Math.min(20, weakQuestions(progress, { role: c.id }).length)}) in Preparation mode</button>`).join('')}
+    </div>` : ''}
+    <section class="card" style="overflow:hidden" id="revisionList">
+      ${items.length ? items.map((w, idx) => {
+        const q = qmap.get(w.id);
+        return `<details class="qa" data-qid="${w.id}">
+          <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${esc(categoryById(w.role)?.short || '')} · ${esc(q.topic)} · asked ${w.n}× · last ${fmtDate(w.last)}${w.skipped ? ' · skipped' : ''}</small></span><span class="score-pill ${tone(w.lastScore)}">${w.lastScore}</span></summary>
+          <div class="qa-body">
+            <div><h4>Your last answer</h4><p class="quote">${w.lastAnswer ? esc(w.lastAnswer) : '<span class="muted">No answer given.</span>'}</p></div>
+            ${w.missed && w.missed.length ? `<div><h4>Missed key points</h4><div class="chips">${w.missed.map(m => `<span class="chip bad">✕ ${esc(m)}</span>`).join('')}</div></div>` : ''}
+            <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p></div>
+            <div><button class="btn" data-learned="${w.id}">${ICONS.check} Mark as learned</button></div>
+          </div>
+        </details>`;
+      }).join('') : `<div class="empty"><p>Nothing to revise${role ? ' for this role' : ''}. Questions you answer below ${PASS_SCORE} will appear here.</p><button class="btn btn-primary" data-nav="home">Start practising</button></div>`}
+    </section>
+    <p style="margin-top:20px"><button class="btn btn-ghost" id="resetProgress">Reset all progress</button> <span class="muted" style="font-size:12px">Clears the revision list and question history, so questions can be asked again.</span></p>
+  `, 'revision');
+  bindNav();
+  $$('[data-rrole]').forEach(b => b.addEventListener('click', () => go('revision', { role: b.dataset.rrole || null })));
+  $$('[data-learned]').forEach(b => b.addEventListener('click', () => {
+    store.saveProgress(markLearned(store.progress(), b.dataset.learned));
+    toast('Marked as learned.');
+    go('revision', { role });
+  }));
+  $$('[data-practice]').forEach(b => b.addEventListener('click', () => {
+    const r = b.dataset.practice;
+    state.setup.category = r;
+    state.setup.style = 'prep';
+    state.setup.source = 'revision';
+    state.setup.practiceIds = weakQuestions(store.progress(), { role: r }).map(w => w.id).slice(0, 20);
+    go('check');
+  }));
+  $('#resetProgress').addEventListener('click', () => {
+    if (window.__ip.fast || window.confirm('Reset all progress? Your revision list and question history will be cleared.')) { store.resetProgress(); go('revision'); }
+  });
+}
+
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.1.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.2.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

@@ -59,25 +59,24 @@ export function categoryById(id) {
 
 export const INTERVIEWERS = [
   {
-    id: 'ananya',
-    name: 'Ananya Rao',
-    title: 'Engineering Manager',
-    gender: 'female',
-    look: { skin: '#c68863', skinShade: '#a96e4c', hair: '#1d1512', hairStyle: 'long', shirt: '#2f4a6d', eyes: '#3a2416', lips: '#a4524a', glasses: false },
+    id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female',
+    look: { skin: '#c68863', skinShade: '#a96e4c', hair: '#2a1d17', hairStyle: 'long', shirt: '#2f4566', blouse: '#a9c7e8', eyes: '#3a2416', lips: '#a4524a', glasses: true, glassesColor: '#3b2a22', necklace: true },
   },
   {
-    id: 'vikram',
-    name: 'Vikram Mehta',
-    title: 'Principal Engineer',
-    gender: 'male',
-    look: { skin: '#b97a55', skinShade: '#9a603f', hair: '#16110e', hairStyle: 'short', shirt: '#3c4f3a', eyes: '#2b1a10', lips: '#8e4a3e', glasses: true, beard: true },
+    id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male',
+    look: { skin: '#b97a55', skinShade: '#9a603f', hair: '#16110e', hairStyle: 'short', shirt: '#6f747c', blouse: '#f3f5f8', tie: '#25365c', eyes: '#2b1a10', lips: '#8e4a3e', glasses: true, beard: true },
   },
   {
-    id: 'sarah',
-    name: 'Sarah Collins',
-    title: 'Senior Technical Recruiter',
-    gender: 'female',
-    look: { skin: '#f0c9a8', skinShade: '#d9a982', hair: '#7a4a24', hairStyle: 'bob', shirt: '#6b2f4a', eyes: '#3d5a73', lips: '#b65d5d', glasses: false },
+    id: 'sarah', name: 'Sarah Collins', title: 'Senior Technical Recruiter', gender: 'female',
+    look: { skin: '#f0c9a8', skinShade: '#d9a982', hair: '#8a5a32', hairStyle: 'bob', shirt: '#55708f', blouse: '#9fbde0', eyes: '#3d5a73', lips: '#c0605c', glasses: true, glassesColor: '#111111' },
+  },
+  {
+    id: 'daniel', name: 'Daniel Okafor', title: 'Head of Engineering', gender: 'male',
+    look: { skin: '#7a4a32', skinShade: '#5e3624', hair: '#120c09', hairStyle: 'short', shirt: '#80848b', blouse: '#e9eef5', tie: '#2d3b63', eyes: '#1d120c', lips: '#6e3a2e' },
+  },
+  {
+    id: 'minjun', name: 'Min-jun Park', title: 'Staff Software Engineer', gender: 'male',
+    look: { skin: '#eac5a0', skinShade: '#cfa47c', hair: '#14110f', hairStyle: 'short', shirt: '#e6e9ee', blouse: '#ffffff', eyes: '#24170f', lips: '#b06a5c', glasses: true, glassesColor: '#2b2b2b' },
   },
 ];
 

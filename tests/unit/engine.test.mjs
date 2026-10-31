@@ -240,7 +240,7 @@ test('voice picking prefers persona gender and requested accent', () => {
     { name: 'Veena', lang: 'en-IN' },
     { name: 'Thomas', lang: 'fr-FR' },
   ];
-  assert.equal(pickVoice(voices, { gender: 'female', lang: 'en-US' }).name, 'Microsoft Zira - English (United States)');
+  assert.equal(pickVoice(voices, { gender: 'female', lang: 'en-US' }).name, 'Microsoft Zira - English (United States)'); // matching accent wins over a slightly better voice
   assert.equal(pickVoice(voices, { gender: 'male', lang: 'en-US' }).name, 'Microsoft David - English (United States)');
   assert.equal(pickVoice(voices, { gender: 'female', lang: 'en-IN' }).name, 'Veena');
   assert.equal(pickVoice(voices, { gender: 'male', lang: 'en-IN' }).name, 'Rishi');

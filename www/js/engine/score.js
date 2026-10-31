@@ -136,3 +136,52 @@ export function summarize(items) {
     avgWords: scored.length ? Math.round(totalWords / scored.length) : 0,
   };
 }
+
+/**
+ * Selection chance (0-100): an estimate of how likely this performance would pass a real
+ * round. Starts from the overall score, then adjusts for things interviewers notice:
+ * skipped/blank answers, very weak answers, inconsistency, hints and level of difficulty.
+ * @param {Array<{question:object,result:object,skipped?:boolean,hintUsed?:boolean,attempts?:number}>} items
+ * @param {{mode?: 'interview'|'prep', levelRank?: number}} [opts]
+ */
+export function selectionChance(items, opts = {}) {
+  const scored = items.filter(i => i.result);
+  if (!scored.length) return { score: 0, label: 'Not enough data', tone: 'bad', reasons: ['No questions were answered.'] };
+  const sum = summarize(scored);
+  const reasons = [];
+  let score = sum.overall;
+  const n = scored.length;
+
+  const skipped = scored.filter(i => i.skipped || i.result.flags.empty).length;
+  if (skipped) { const p = Math.round((skipped / n) * 25); score -= p; reasons.push(`${skipped} question${skipped === 1 ? '' : 's'} skipped or left blank (−${p})`); }
+
+  const veryWeak = scored.filter(i => !i.skipped && !i.result.flags.empty && i.result.overall < 35).length;
+  if (veryWeak) { const p = Math.min(15, veryWeak * 4); score -= p; reasons.push(`${veryWeak} very weak answer${veryWeak === 1 ? '' : 's'} (−${p})`); }
+
+  const vals = scored.map(i => i.result.overall);
+  const mean = vals.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / n);
+  if (n >= 3 && sd > 30) { score -= 5; reasons.push('Inconsistent: strong and weak answers mixed (−5)'); }
+  else if (n >= 3 && sd < 12 && mean >= 70) { score += 3; reasons.push('Consistently strong answers (+3)'); }
+
+  if (sum.communication >= 80) { score += 2; reasons.push('Clear, well-structured communication (+2)'); }
+  else if (sum.communication < 45) { score -= 4; reasons.push('Communication needs work: length, structure or fillers (−4)'); }
+
+  const hints = scored.filter(i => i.hintUsed).length;
+  const retried = scored.filter(i => (i.attempts || 1) > 1).length;
+  if (opts.mode === 'prep' && (hints || retried)) {
+    const p = Math.min(15, hints * 3 + retried * 2);
+    score -= p; reasons.push(`Practice aids used: ${hints} hint${hints === 1 ? '' : 's'}, ${retried} retr${retried === 1 ? 'y' : 'ies'} (−${p})`);
+  }
+  const interrupted = scored.filter(i => i.interrupted).length;
+  if (interrupted) { const p = Math.min(10, interrupted * 3); score -= p; reasons.push(`Interviewer had to redirect ${interrupted} off-topic answer${interrupted === 1 ? '' : 's'} (−${p})`); }
+  if (n < 4) { score -= 5; reasons.push('Short session: fewer than 4 questions, so less reliable (−5)'); }
+  if ((opts.levelRank || 1) >= 3 && sum.technical < 60) { score -= 5; reasons.push('Senior/lead roles expect deeper technical answers (−5)'); }
+
+  score = Math.round(Math.max(0, Math.min(100, score)));
+  const band = score >= 80 ? { label: 'High chance of selection', tone: 'great' }
+    : score >= 65 ? { label: 'Good chance — polish weak areas', tone: 'good' }
+      : score >= 50 ? { label: 'Borderline — could go either way', tone: 'warn' }
+        : { label: 'Low chance today — keep practising', tone: 'bad' };
+  return { score, ...band, reasons };
+}

@@ -12,6 +12,10 @@ export const RULES = Object.freeze({
 const ACKS = ['Thank you.', 'Okay, got it.', 'Alright, thanks.', 'Understood.', 'Okay.', 'Thanks for that.'];
 const NEXT = ['Let’s move on.', 'Next question.', 'Moving on.', 'Here’s the next one.', 'Let’s continue.'];
 
+export function prepGreetingLine({ interviewer, candidateName, count }) {
+  return `${candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}. This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit. After each answer you will see feedback and the model answer, and you can try again as often as you like.`;
+}
+
 export function greetingLine({ interviewer, candidateName, position, count }) {
   const who = candidateName ? `Hi ${candidateName}` : 'Hi there';
   return `${who}, I’m ${interviewer.name.split(' ')[0]}, ${interviewer.title.toLowerCase()} on the hiring panel. Thanks for joining. This is ${[8, 11, 18].includes(count) || String(count).startsWith('8') ? 'an' : 'a'} ${count}-question interview for the ${position} role. Take your time and think out loud — when you’ve finished an answer, tap “Done”. Let’s begin.`;
@@ -61,7 +65,8 @@ export class InterviewSession {
 
   async run() {
     const { io, config } = this;
-    await io.say(greetingLine({ ...config, count: this.questions.length }), { kind: 'greeting' });
+    const prep = config.mode === 'prep';
+    await io.say((prep ? prepGreetingLine : greetingLine)({ ...config, count: this.questions.length }), { kind: 'greeting' });
 
     for (let i = 0; i < this.questions.length && !this.ended; i++) {
       const q = this.questions[i];
@@ -75,8 +80,27 @@ export class InterviewSession {
       const a = await io.getAnswer({ kind: 'answer', question: q, index: i });
       if (a.action === 'end') { this.ended = true; if (!a.text) break; }
 
-      const item = { questionId: q.id, question: q, answer: a.text || '', durationSec: a.durationSec || 0, skipped: a.action === 'skip', result: null, nudge: null, followUp: null };
-      if (item.skipped) {
+      const item = { questionId: q.id, question: q, answer: a.text || '', durationSec: a.durationSec || 0, skipped: a.action === 'skip', result: null, nudge: null, followUp: null, attempts: 1, hintUsed: !!a.hintUsed, interrupted: !!a.interrupted };
+      if (prep) {
+        // Preparation mode: instant feedback, unlimited retries, no follow-up probing.
+        item.result = scoreAnswer(q, item.skipped ? '' : item.answer, { durationSec: item.durationSec });
+        item.firstScore = item.result.overall;
+        while (!this.ended) {
+          const choice = io.review ? await io.review(item, { index: i, isLast }) : 'next';
+          if (choice === 'end') { this.ended = true; break; }
+          if (choice !== 'retry') break;
+          const b = await io.getAnswer({ kind: 'retry', question: q, index: i });
+          if (b.action === 'end') { this.ended = true; if (!b.text) break; }
+          if (b.action === 'skip') continue;
+          item.attempts++;
+          item.skipped = false;
+          item.answer = b.text || '';
+          item.durationSec = b.durationSec || 0;
+          item.hintUsed = item.hintUsed || !!b.hintUsed;
+          item.interrupted = item.interrupted || !!b.interrupted;
+          item.result = scoreAnswer(q, item.answer, { durationSec: item.durationSec });
+        }
+      } else if (item.skipped) {
         item.result = scoreAnswer(q, '');
       } else {
         item.result = scoreAnswer(q, item.answer, { durationSec: item.durationSec });
@@ -105,7 +129,7 @@ export class InterviewSession {
       }
       this.items.push(item);
       this.progress({ index: i + 1, phase: 'scored', item });
-      if (!this.ended) await io.say(transitionLine(this.rand, { skipped: item.skipped, isLast }), { kind: 'transition' });
+      if (!this.ended && !prep) await io.say(transitionLine(this.rand, { skipped: item.skipped, isLast }), { kind: 'transition', score: item.result.overall });
     }
 
     if (!this.ended || this.items.length) {
