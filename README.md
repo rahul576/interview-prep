@@ -97,10 +97,10 @@ The site runs from `~/Library/Application Support/InterviewPro`, because macOS d
 
 ## Live web version (GitHub Pages)
 
-Every push to `main` runs the unit tests and deploys `www/` to GitHub Pages (`.github/workflows/pages.yml`):
+Every push to `main` runs the unit tests and then publishes `www/` to the `gh-pages` branch (`.github/workflows/pages.yml`). GitHub Pages serves that branch at:
 **https://rahul576.github.io/interview-prep/**
 
-One-time setup: in the repo go to **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+Pages settings: **Settings → Pages → Source: Deploy from a branch → `gh-pages` / root**.
 
 ## Run the web version locally
 
