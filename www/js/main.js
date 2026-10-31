@@ -1,0 +1,824 @@
+// InterviewPro V1 – app shell, screens and interview room.
+import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById, levelFromYears, levelById } from './data/meta.js';
+import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
+import { selectQuestions, targetLevels, planSlots, availableCount } from './engine/select.js';
+import { summarize } from './engine/score.js';
+import { InterviewSession } from './engine/session.js';
+import { InterviewerAvatar } from './ui/avatar.js';
+import { SpeechService, isNative, sleep } from './services/speech.js';
+import { MediaService } from './services/media.js';
+import { store } from './services/store.js';
+
+const params = new URLSearchParams(location.search);
+const FAST = params.has('fast');           // test mode: silent speech, short timers
+const app = document.getElementById('app');
+const speech = new SpeechService({ fast: FAST });
+const media = new MediaService();
+const avatars = new Set();
+
+const ICONS = {
+  java: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18h11a3 3 0 0 0 0-6h-1"/><path d="M5 12h10v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M8 3c1 1.2-1 2 0 3.5M11 2c1.2 1.5-1.2 2.6 0 4.5"/></svg>',
+  devops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17"/><path d="M15 3h6v6"/><path d="m21 3-6 6"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>',
+  cc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 10a2 2 0 1 0 0 4M16 10a2 2 0 1 0 0 4"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  end: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 15.5c5-4.7 13-4.7 18 0l-2.4 2.4a1 1 0 0 1-1.3.1l-2.4-1.8a1 1 0 0 1-.4-.9l.2-1.7a12 12 0 0 0-5.4 0l.2 1.7a1 1 0 0 1-.4.9l-2.4 1.8a1 1 0 0 1-1.3-.1z"/></svg>',
+  repeat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>',
+};
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const tone = (v) => v >= 70 ? 'ok' : v >= 50 ? 'warn' : 'bad';
+const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function clearAvatars() { avatars.forEach(a => a.destroy()); avatars.clear(); }
+function mountAvatar(host, persona) { const a = new InterviewerAvatar(host, persona); avatars.add(a); return a; }
+
+function toast(msg, ms = 2600) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+
+// ---------------------------------------------------------------- state
+const prefs = store.prefs();
+const state = {
+  screen: 'home',
+  setup: {
+    category: prefs.category || 'java-backend',
+    positionId: prefs.positionId || null,
+    topics: null, // null = all categories
+    years: prefs.years ?? 3,
+    mode: prefs.mode || 'mixed',
+    count: prefs.count || 8,
+    interviewerId: prefs.interviewerId || 'ananya',
+    candidateName: prefs.candidateName || '',
+    lang: prefs.lang || 'en-US',
+    followUps: prefs.followUps ?? true,
+    record: prefs.record ?? true,
+    answerMode: 'voice',
+    camera: true,
+  },
+  report: null,
+};
+
+function shell(content, active = 'home') {
+  return `
+  <header class="topbar">
+    <button class="logo" data-nav="home" aria-label="InterviewPro home">
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.1</span>
+    </button>
+    <nav aria-label="Main">
+      <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
+      <button class="navbtn" data-nav="history" ${active === 'history' ? 'aria-current="page"' : ''}>History</button>
+    </nav>
+  </header>
+  <main class="page" id="main">${content}</main>`;
+}
+
+function bindNav() {
+  $$('[data-nav]').forEach(b => b.addEventListener('click', () => go(b.dataset.nav)));
+}
+
+function go(screen, data) {
+  clearAvatars();
+  document.body.classList.toggle('in-room', screen === 'room');
+  state.screen = screen;
+  window.scrollTo(0, 0);
+  ({ home: renderHome, setup: renderSetup, check: renderCheck, room: renderRoom, report: renderReport, history: renderHistory }[screen])(data);
+  window.__ip.screen = screen;
+}
+
+// ---------------------------------------------------------------- home
+function renderHome() {
+  const hist = store.history();
+  const scores = hist.map(h => h.summary.overall);
+  const best = scores.length ? Math.max(...scores) : 0;
+  const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+  const roleCards = CATEGORIES.map(c => {
+    const roleQs = QUESTIONS.filter(q => belongsTo(q, c.id));
+    const counts = LEVELS.map(l => roleQs.filter(q => q.levels.includes(l.id)).length);
+    const topics = topicsFor(c.id);
+    return `
+    <article class="card role-card" style="--role-accent:${c.accent}">
+      <div class="role-head">
+        <div class="role-icon" aria-hidden="true">${ICONS[c.icon]}</div>
+        <div><h3>${esc(c.title)}</h3><span class="muted" style="font-size:13px">${roleQs.length} questions · ${topics.length} categories</span></div>
+      </div>
+      <p>${esc(c.blurb)}</p>
+      <div class="level-row" aria-label="Questions per level">
+        ${LEVELS.map((l, i) => `<div class="level-pill"><b>${counts[i]}</b>${esc(l.label.split(' ')[0])}</div>`).join('')}
+      </div>
+      <button class="btn btn-primary" data-role="${c.id}">Practice ${esc(c.short)} interview</button>
+    </article>`;
+  }).join('');
+
+  app.innerHTML = shell(`
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Mock interviews · Works offline</div>
+        <h1>Rehearse the <em>real</em> interview, face to face.</h1>
+        <p class="lead">A live interviewer asks role-specific questions matched to your experience, listens to your spoken answers, asks follow-ups, and scores you on technical depth and communication.</p>
+        <div class="hero-actions">
+          <button class="btn btn-primary btn-lg" data-role="${state.setup.category}">Start a mock interview</button>
+          <button class="btn btn-lg" data-nav="history">View past results</button>
+        </div>
+      </div>
+      <div class="hero-stage" aria-hidden="true">
+        <div class="avatar-host" id="heroAvatar"></div>
+        <div class="hero-caption"><span class="live-dot"></span><b>Vikram:</b> How does HashMap work internally?</div>
+      </div>
+    </section>
+
+    ${hist.length ? `
+    <div class="section-title"><h2>Your progress</h2></div>
+    <div class="stats">
+      <div class="card stat"><div class="v">${hist.length}</div><div class="l">Interviews taken</div></div>
+      <div class="card stat"><div class="v">${avg}</div><div class="l">Average score</div></div>
+      <div class="card stat"><div class="v">${best}</div><div class="l">Best score</div></div>
+      <div class="card stat">${sparkline(scores.slice(0, 10).reverse())}<div class="l">Last ${Math.min(10, scores.length)} scores</div></div>
+    </div>` : ''}
+
+    <div class="section-title"><h2>Choose a role</h2><span class="muted" style="font-size:14px">More roles coming soon</span></div>
+    <div class="roles">${roleCards}</div>
+
+    <div class="section-title"><h2>How it works</h2></div>
+    <div class="steps">
+      <div class="card step"><h3>Pick role &amp; level</h3><p>Choose position and years of experience. Questions are drawn from an offline bank matched to that level.</p></div>
+      <div class="card step"><h3>Check camera &amp; mic</h3><p>See yourself on camera and confirm your microphone. You can also type answers.</p></div>
+      <div class="card step"><h3>Talk to the interviewer</h3><p>The interviewer speaks each question, listens, and asks follow-ups when an answer is thin.</p></div>
+      <div class="card step"><h3>Get your report</h3><p>Overall, technical and communication scores, missed concepts, model answers and your recording.</p></div>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:28px">Question bank v${BANK_VERSION} · ${QUESTIONS.length} questions · Your video and answers never leave this device.</p>
+  `, 'home');
+  bindNav();
+  $$('[data-role]').forEach(b => b.addEventListener('click', () => {
+    state.setup.category = b.dataset.role;
+    state.setup.positionId = null;
+    state.setup.topics = null;
+    go('setup');
+  }));
+  const a = mountAvatar($('#heroAvatar'), interviewerById('vikram'));
+  a.setState('listening');
+}
+
+function sparkline(vals) {
+  if (vals.length < 2) return `<div class="v">${vals[0] ?? '–'}</div>`;
+  const w = 160, h = 40, max = 100;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - (v / max) * h}`).join(' ');
+  return `<svg class="spark" viewBox="-2 -2 ${w + 4} ${h + 4}" preserveAspectRatio="none" role="img" aria-label="Score trend"><polyline points="${pts}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+// ---------------------------------------------------------------- setup
+function currentPosition() {
+  const cat = categoryById(state.setup.category);
+  const expLevel = levelFromYears(state.setup.years);
+  return cat.positions.find(p => p.id === state.setup.positionId) || cat.positions.find(p => p.level === expLevel) || cat.positions[0];
+}
+
+function renderSetup() {
+  const s = state.setup;
+  const cat = categoryById(s.category);
+  const pos = currentPosition();
+  s.positionId = pos.id;
+
+  app.innerHTML = shell(`
+    <button class="btn btn-ghost" data-nav="home" style="margin:-8px 0 8px -12px">← All roles</button>
+    <h1 style="font-size:28px;margin-bottom:4px">${esc(cat.title)} interview</h1>
+    <p class="muted" style="margin:0 0 20px">Set up your session. Questions are tailored to the position and your experience.</p>
+    <div class="setup">
+      <div class="card">
+        <div class="form-sec">
+          <h3><label for="name">Your first name</label></h3>
+          <p class="hint">The interviewer will greet you by name (optional).</p>
+          <input id="name" class="field" maxlength="30" autocomplete="given-name" placeholder="e.g. Rahul" value="${esc(s.candidateName)}">
+        </div>
+        <div class="form-sec">
+          <h3>Position you are interviewing for</h3>
+          <p class="hint">Sets the target difficulty of the technical questions.</p>
+          <div class="opts" role="group" aria-label="Position">
+            ${cat.positions.map(p => `<button class="opt" data-pos="${p.id}" aria-pressed="${p.id === pos.id}">${esc(p.title)}<small>${esc(levelById(p.level).label)} · ${esc(levelById(p.level).years)}</small></button>`).join('')}
+          </div>
+        </div>
+        <div class="form-sec">
+          <h3><label for="years">Your experience</label></h3>
+          <p class="hint">We mix questions for your experience level and the position's level.</p>
+          <div class="range-row">
+            <input id="years" type="range" min="0" max="15" step="1" value="${s.years}" aria-describedby="yearsVal">
+            <div class="range-val" id="yearsVal"></div>
+          </div>
+        </div>
+        <div class="form-sec">
+          <h3>Interview format</h3>
+          <p class="hint">Technical + HR adds an introduction and behavioural questions, like a real first round.</p>
+          <div class="seg" role="group" aria-label="Format">
+            <button data-mode="mixed" aria-pressed="${s.mode === 'mixed'}">Technical + HR</button>
+            <button data-mode="technical" aria-pressed="${s.mode === 'technical'}">Technical only</button>
+          </div>
+          <div style="height:12px"></div>
+          <div class="seg" role="group" aria-label="Length">
+            ${[[5, 'Quick · 5'], [8, 'Standard · 8'], [12, 'Full · 12']].map(([n, l]) => `<button data-count="${n}" aria-pressed="${s.count === n}">${l}</button>`).join('')}
+          </div>
+        </div>
+        <div class="form-sec">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+            <h3>Topics to cover</h3>
+            <div class="seg" role="group" aria-label="Select topics">
+              <button id="topicsAll" type="button">Select all</button>
+              <button id="topicsNone" type="button">Clear</button>
+            </div>
+          </div>
+          <p class="hint" id="topicHint">All categories are selected. Tap a category to include or exclude it.</p>
+          <div class="chips topic-chips" role="group" aria-label="Topic categories">
+            ${topicsFor(s.category).map(t => `<button type="button" class="topic-chip" data-topic="${esc(t.topic)}" aria-pressed="${!s.topics || s.topics.includes(t.topic)}">${esc(t.topic)} <span class="cnt">${t.count}</span></button>`).join('')}
+          </div>
+        </div>
+        <div class="form-sec">
+          <h3>Interviewer</h3>
+          <p class="hint">All interviewers are fictional characters.</p>
+          <div class="persona-grid" role="group" aria-label="Interviewer">
+            ${INTERVIEWERS.map(p => `<button class="persona" data-iv="${p.id}" aria-pressed="${p.id === s.interviewerId}"><div class="ph"><div class="avatar-host" data-av="${p.id}"></div></div><div class="pn"><b>${esc(p.name)}</b><span>${esc(p.title)}</span></div></button>`).join('')}
+          </div>
+        </div>
+        <div class="form-sec">
+          <h3><label for="lang">Speech accent</label></h3>
+          <p class="hint">Used for the interviewer's voice and for recognising your speech.</p>
+          <select id="lang" class="field">
+            ${[['en-US', 'English (United States)'], ['en-IN', 'English (India)'], ['en-GB', 'English (United Kingdom)'], ['en-AU', 'English (Australia)']].map(([v, l]) => `<option value="${v}" ${s.lang === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <div style="height:12px"></div>
+          <label class="toggle"><span><b style="font-size:15px">Follow-up questions</b><br><span class="muted" style="font-size:13px">Interviewer probes thin answers and digs deeper on strong ones</span></span><input type="checkbox" id="followUps" ${s.followUps ? 'checked' : ''}></label>
+          <label class="toggle"><span><b style="font-size:15px">Record my session</b><br><span class="muted" style="font-size:13px">Saved only in this session for playback in your report</span></span><input type="checkbox" id="record" ${s.record ? 'checked' : ''}></label>
+        </div>
+      </div>
+      <aside class="card summary" aria-live="polite" id="summary"></aside>
+    </div>
+  `, 'home');
+  bindNav();
+  INTERVIEWERS.forEach(p => { const a = mountAvatar($(`[data-av="${p.id}"]`), p); a.setState('listening'); });
+
+  const update = () => {
+    const pos2 = currentPosition();
+    const exp = levelFromYears(s.years);
+    const lv = targetLevels(pos2.level, exp).map(l => levelById(l).label.split(' ')[0]);
+    const rank = Math.max(...targetLevels(pos2.level, exp).map(l => levelById(l).rank));
+    const slots = planSlots(s.count, s.mode, rank);
+    const allTopics = topicsFor(s.category).map(t => t.topic);
+    const selected = s.topics || allTopics;
+    const avail = availableCount({ bank: QUESTIONS, category: s.category, positionLevel: pos2.level, experienceLevel: exp, topics: selected });
+    $('#topicHint').textContent = !s.topics ? `All ${allTopics.length} categories selected. Tap a category to include or exclude it.` : `${selected.length} of ${allTopics.length} categories selected · ${avail} matching questions at this level.`;
+    $('#yearsVal').innerHTML = `${s.years}${s.years >= 15 ? '+' : ''} year${s.years === 1 ? '' : 's'}<small>${esc(levelById(exp).label)}</small>`;
+    $('#summary').innerHTML = `
+      <div class="eyebrow">Session summary</div>
+      <h3 style="font-size:18px">${esc(pos2.title)}</h3>
+      <dl>
+        <dt>Difficulty</dt><dd>${esc(lv.join(' → '))}</dd>
+        <dt>Questions</dt><dd>${s.count}</dd>
+        <dt>Technical</dt><dd>${slots.technical}</dd>
+        <dt>${rank >= 3 ? 'Intro + HR / managerial' : 'Intro + behavioural'}</dt><dd>${slots.intro + slots.behavioral}</dd>
+        <dt>Topics</dt><dd>${s.topics ? `${selected.length} selected` : 'All'}</dd>
+        <dt>Matching questions</dt><dd>${avail}</dd>
+        <dt>Estimated time</dt><dd>${Math.round(s.count * 2.6)}–${Math.round(s.count * 3.6)} min</dd>
+        <dt>Interviewer</dt><dd>${esc(interviewerById(s.interviewerId).name)}</dd>
+      </dl>
+      ${selected.length === 0 ? '<p style="color:var(--bad);font-size:13px;margin:0">Select at least one topic.</p>' : avail < slots.technical ? `<p style="color:var(--warn);font-size:13px;margin:0">Only ${avail} questions match at this level; nearby levels will be used to fill the interview.</p>` : ''}
+      <button class="btn btn-primary btn-lg" id="toCheck" ${selected.length === 0 ? 'disabled' : ''}>Continue to device check</button>
+      <p class="muted" style="font-size:12px;margin:0">Tip: answer out loud as you would in a real interview — explain, then give an example.</p>`;
+    $('#toCheck').addEventListener('click', () => { saveSetup(); go('check'); });
+  };
+  const saveSetup = () => {
+    s.candidateName = $('#name').value.trim().replace(/[^\p{L}\p{M}' -]/gu, '').slice(0, 30);
+    s.lang = $('#lang').value;
+    s.followUps = $('#followUps').checked;
+    s.record = $('#record').checked;
+    store.savePrefs({ category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
+  };
+  const press = (sel, attr, fn) => $$(sel).forEach(b => b.addEventListener('click', () => {
+    $$(sel).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    fn(b.dataset[attr]); update();
+  }));
+  press('[data-pos]', 'pos', v => { s.positionId = v; });
+  press('[data-mode]', 'mode', v => { s.mode = v; });
+  press('[data-count]', 'count', v => { s.count = Number(v); });
+  press('[data-iv]', 'iv', v => { s.interviewerId = v; });
+  $('#years').addEventListener('input', e => { s.years = Number(e.target.value); update(); });
+  const allTopicNames = topicsFor(s.category).map(t => t.topic);
+  const syncChips = () => $$('[data-topic]').forEach(b => b.setAttribute('aria-pressed', String(!s.topics || s.topics.includes(b.dataset.topic))));
+  $$('[data-topic]').forEach(b => b.addEventListener('click', () => {
+    const cur = new Set(s.topics || allTopicNames);
+    if (cur.has(b.dataset.topic)) cur.delete(b.dataset.topic); else cur.add(b.dataset.topic);
+    s.topics = cur.size === allTopicNames.length ? null : allTopicNames.filter(t => cur.has(t));
+    syncChips(); update();
+  }));
+  $('#topicsAll').addEventListener('click', () => { s.topics = null; syncChips(); update(); });
+  $('#topicsNone').addEventListener('click', () => { s.topics = []; syncChips(); update(); });
+  update();
+}
+
+// ---------------------------------------------------------------- device check
+async function renderCheck() {
+  const s = state.setup;
+  speech.lang = s.lang;
+  app.innerHTML = shell(`
+    <button class="btn btn-ghost" id="back" style="margin:-8px 0 8px -12px">← Back to setup</button>
+    <h1 style="font-size:28px;margin-bottom:4px">Device check</h1>
+    <p class="muted" style="margin:0 0 20px">Make sure the interviewer can see and hear you. Nothing is uploaded.</p>
+    <div class="check">
+      <div>
+        <div class="preview" id="preview">
+          <video id="pv" autoplay playsinline muted></video>
+          <div class="placeholder" id="pvPh">Requesting camera…</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
+          <span style="width:22px;color:var(--muted)" aria-hidden="true">${ICONS.mic}</span>
+          <div class="meter" style="flex:1" aria-label="Microphone level"><i id="lvl"></i></div>
+        </div>
+        <p class="muted" style="font-size:13px" id="micHint">Say something — the bar should move.</p>
+      </div>
+      <div class="card card-pad" style="display:flex;flex-direction:column;gap:16px">
+        <ul class="checklist" id="checks"></ul>
+        <div>
+          <div class="eyebrow" style="margin-bottom:8px">How will you answer?</div>
+          <div class="seg" role="group" aria-label="Answer mode">
+            <button data-am="voice" aria-pressed="${s.answerMode === 'voice'}">Speak (auto-transcribe)</button>
+            <button data-am="type" aria-pressed="${s.answerMode === 'type'}">Type</button>
+          </div>
+        </div>
+        <button class="btn" id="testVoice">${ICONS.play} Test interviewer voice</button>
+        <button class="btn btn-primary btn-lg" id="start">Start interview</button>
+      </div>
+    </div>`, 'home');
+  bindNav();
+  $('#back').addEventListener('click', () => { media.stop(); go('setup'); });
+
+  await speech.init();
+  const sttOk = speech.sttAvailable();
+  if (!sttOk) s.answerMode = 'type';
+  $$('[data-am]').forEach(b => {
+    b.setAttribute('aria-pressed', String(b.dataset.am === s.answerMode));
+    if (b.dataset.am === 'voice' && !sttOk) b.disabled = true;
+    b.addEventListener('click', () => { s.answerMode = b.dataset.am; $$('[data-am]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+  });
+
+  const checks = { camera: ['warn', 'Camera', 'Checking…'], mic: ['warn', 'Microphone', 'Checking…'], stt: [sttOk ? 'ok' : 'warn', 'Voice answers', sttOk ? (isNative() ? 'On-device speech recognition ready' : 'Speech recognition available in this browser') : 'Not supported here (works in Chrome, Edge, Safari) — you will type answers'], tts: [speech.ttsAvailable() ? 'ok' : 'warn', 'Interviewer voice', speech.ttsAvailable() ? `${speech.voices.length || 'System'} voice${speech.voices.length === 1 ? '' : 's'} available` : 'Voice unavailable — questions appear as captions'] };
+  const drawChecks = () => {
+    $('#checks').innerHTML = Object.values(checks).map(([st, t, d]) => `<li><span class="st ${st}" aria-hidden="true">${st === 'ok' ? '✓' : st === 'bad' ? '✕' : '!'}</span><div><b>${t}</b><span>${esc(d)}</span></div></li>`).join('');
+  };
+  drawChecks();
+
+  try {
+    await media.start({ video: true, audio: true });
+    media.attach($('#pv'));
+    $('#pvPh').remove();
+    checks.camera = ['ok', 'Camera', 'Camera is working'];
+    if (media.hasAudio()) {
+      checks.mic = ['ok', 'Microphone', 'Microphone connected'];
+      const level = media.levelMeter();
+      const loop = () => { if (!$('#lvl')) return; $('#lvl').style.width = `${Math.round(level() * 100)}%`; requestAnimationFrame(loop); };
+      loop();
+    } else {
+      const micOk = await speech.requestMicPermission();
+      checks.mic = [micOk ? 'ok' : 'warn', 'Microphone', isNative() ? (micOk ? 'Microphone access granted for speech recognition' : 'Microphone permission needed for voice answers') : 'No microphone detected'];
+      $('#micHint').textContent = isNative() ? 'On the app, your microphone is used by speech recognition.' : 'No microphone — you can type answers.';
+      if (!micOk && isNative()) { s.answerMode = 'type'; $$('[data-am]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.am === 'type'))); }
+    }
+  } catch (err) {
+    $('#pvPh').textContent = 'Camera unavailable or permission denied. You can still continue — the interviewer will just not see you.';
+    checks.camera = ['bad', 'Camera', 'Permission denied or no camera'];
+    checks.mic = ['warn', 'Microphone', 'Not available'];
+    state.setup.camera = false;
+  }
+  drawChecks();
+
+  $('#testVoice').addEventListener('click', () => speech.speak(`Hello${s.candidateName ? ' ' + s.candidateName : ''}, can you hear me clearly?`, { gender: interviewerById(s.interviewerId).gender }));
+  $('#start').addEventListener('click', () => go('room'));
+}
+
+// ---------------------------------------------------------------- interview room
+function answerSeconds(q) {
+  if (FAST) return 20;
+  if (q.type === 'intro') return 120;
+  if (q.type === 'design') return 300;
+  if (q.type === 'scenario') return 240;
+  return 180;
+}
+
+function renderRoom() {
+  const s = state.setup;
+  const cat = categoryById(s.category);
+  const pos = currentPosition();
+  const persona = interviewerById(s.interviewerId);
+  const seed = Number(params.get('seed')) || Math.floor(Math.random() * 1e9);
+  const questions = selectQuestions({
+    bank: QUESTIONS, category: s.category, positionLevel: pos.level, experienceLevel: levelFromYears(s.years),
+    count: s.count, mode: s.mode, topics: s.topics, seed, recentIds: store.recentQuestionIds(s.category),
+  });
+  const initials = (s.candidateName || 'You').slice(0, 2).toUpperCase();
+
+  app.innerHTML = `
+  <div class="room" id="room">
+    <div class="room-top">
+      <span class="live-dot" aria-hidden="true"></span>
+      <div style="min-width:0"><div class="title">${esc(pos.title)} · Interview</div><div class="sub">with ${esc(persona.name)}, ${esc(persona.title)}</div></div>
+      <div class="spacer"></div>
+      <span class="pill-dark" id="qcount">Q 0/${questions.length}</span>
+      <span class="pill-dark" id="elapsed">00:00</span>
+    </div>
+    <div class="room-main">
+      <section class="stage has-captions" id="stage" aria-label="Interviewer video">
+        <div class="avatar-host" id="ivAvatar"></div>
+        <div class="nameplate"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>${esc(persona.name)}</div>
+        <div class="state-tag" id="stateTag">Connecting…</div>
+        <div class="captions" id="captions" aria-live="polite"></div>
+        <div class="selfview" id="selfview">
+          <video id="self" autoplay playsinline muted></video>
+          <div class="initials" id="initials" ${media.hasVideo() ? 'hidden' : ''}>${esc(initials)}</div>
+          <span class="you">You</span>
+        </div>
+      </section>
+      <aside class="panel">
+        <div class="qcard" id="qcard"><div class="qmeta"><span class="tag">${esc(cat.short)}</span><span>Waiting for the interviewer…</span></div><div class="qtext">Your interviewer is joining.</div></div>
+        <div class="answer">
+          <div class="answer-head">
+            <span class="mic-state" id="micState"><span class="dot"></span><span id="micText">Mic idle</span></span>
+            <span id="ansTimer" style="font-variant-numeric:tabular-nums">--:--</span>
+          </div>
+          <div class="timebar" id="timebar"><i id="timefill"></i></div>
+          <label for="answer" class="sr-only">Your answer</label>
+          <textarea id="answer" placeholder="${s.answerMode === 'voice' ? 'Your spoken answer will appear here as you talk. You can edit it.' : 'Type your answer here…'}" disabled></textarea>
+          <div class="answer-actions">
+            <button class="btn" id="repeatBtn" disabled>${ICONS.repeat} Repeat</button>
+            <button class="btn" id="skipBtn" disabled>Skip</button>
+            <button class="btn btn-primary" id="doneBtn" disabled>${ICONS.check} Done</button>
+          </div>
+        </div>
+        <div class="log" id="log" aria-label="Conversation transcript"></div>
+      </aside>
+    </div>
+    <div class="room-bottom">
+      <div class="ctl-wrap"><button class="ctl" id="micBtn" aria-pressed="${s.answerMode === 'voice'}" aria-label="Microphone" ${speech.sttAvailable() ? '' : 'disabled'}>${ICONS.mic}</button><span class="ctl-label">${s.answerMode === 'voice' ? 'Voice' : 'Typing'}</span></div>
+      <div class="ctl-wrap"><button class="ctl" id="camBtn" aria-pressed="${media.hasVideo()}" aria-label="Camera">${ICONS.cam}</button><span class="ctl-label">Camera</span></div>
+      <div class="ctl-wrap"><button class="ctl" id="ccBtn" aria-pressed="true" aria-label="Captions">${ICONS.cc}</button><span class="ctl-label">Captions</span></div>
+      <div class="ctl-wrap"><button class="ctl" id="pauseBtn" aria-pressed="true" aria-label="Pause interview">${ICONS.pause}</button><span class="ctl-label">Pause</span></div>
+      <div class="ctl-wrap"><button class="ctl end" id="endBtn" aria-label="End interview">${ICONS.end}</button><span class="ctl-label">End</span></div>
+    </div>
+  </div>`;
+
+  const avatar = mountAvatar($('#ivAvatar'), persona);
+  const ui = {
+    stage: $('#stage'), captions: $('#captions'), stateTag: $('#stateTag'), qcard: $('#qcard'), answer: $('#answer'),
+    done: $('#doneBtn'), skip: $('#skipBtn'), repeat: $('#repeatBtn'), log: $('#log'), timer: $('#ansTimer'), fill: $('#timefill'),
+    micState: $('#micState'), micText: $('#micText'),
+  };
+  if (media.hasVideo()) media.attach($('#self'));
+  let recording = false;
+  if (s.record && media.stream) recording = media.startRecording();
+
+  // room-level state
+  const started = performance.now();
+  let paused = false;
+  let ended = false;
+  let voice = s.answerMode === 'voice' && speech.sttAvailable();
+  let captionsOn = true;
+  let pending = null; // current answer promise controls
+  let currentQ = null;
+  let pausedAt = 0, pausedTotal = 0, pauseEpoch = 0;
+  const tick = setInterval(() => {
+    if (!document.body.contains(ui.stage)) return clearInterval(tick);
+    if (!paused) $('#elapsed').textContent = fmtTime((performance.now() - started - pausedTotal) / 1000);
+  }, 500);
+
+  const addLog = (who, text) => {
+    const m = document.createElement('div');
+    m.className = 'm' + (who === 'You' ? ' you' : '');
+    m.innerHTML = `<span class="who">${esc(who)}</span>${esc(text)}`;
+    ui.log.appendChild(m);
+    ui.log.scrollTop = ui.log.scrollHeight;
+  };
+  const setTag = (t) => { ui.stateTag.textContent = t; };
+
+  const say = async (text, meta = {}) => {
+    if (ended && meta.kind !== 'closing') return;
+    while (paused) await sleep(200);
+    ui.stage.dataset.speaking = 'true';
+    setTag('Speaking');
+    if (captionsOn) ui.captions.textContent = text;
+    addLog(persona.name.split(' ')[0], text);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      while (paused) await sleep(200);
+      const epoch = pauseEpoch;
+      await speech.speak(text, {
+        gender: persona.gender,
+        onStart: (ms) => avatar.startSpeech(text, ms),
+        onBoundary: (i) => avatar.syncToChar(i),
+      });
+      avatar.endSpeech();
+      if (epoch === pauseEpoch || ended) break; // interrupted by pause -> repeat after resume
+    }
+    avatar.setState('idle');
+    ui.stage.dataset.speaking = 'false';
+    await sleep(FAST ? 30 : 350);
+  };
+
+  const showQuestion = (q, i, kind) => {
+    currentQ = q;
+    $('#qcount').textContent = `Q ${i + 1}/${questions.length}`;
+    const lv = q.levels.map(l => levelById(l).label.split(' ')[0]).join(', ');
+    const label = kind === 'nudge' ? 'Follow-up · elaborate' : kind === 'followup' ? 'Follow-up' : q.type === 'intro' ? 'Introduction' : q.type === 'behavioral' ? 'Behavioural' : q.type === 'managerial' ? 'Managerial scenario' : q.type === 'design' ? 'Design' : q.type === 'scenario' ? 'Scenario' : 'Concept';
+    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(q.q)}</div>`;
+  };
+
+  const setMic = (on, text) => { ui.micState.classList.toggle('on', on); ui.micText.textContent = text; $('#selfview').dataset.mic = on ? 'active' : ''; };
+
+  const getAnswer = (meta) => new Promise((resolve) => {
+    if (ended) return resolve({ text: '', action: 'end' });
+    const q = meta.question;
+    showQuestion(q, meta.index, meta.kind);
+    if (meta.kind !== 'answer') {
+      const prompt = meta.kind === 'nudge' ? 'Add to your previous answer.' : 'Answer the follow-up.';
+      ui.answer.placeholder = prompt;
+    }
+    ui.answer.value = '';
+    ui.answer.disabled = false;
+    [ui.done, ui.skip, ui.repeat].forEach(b => { b.disabled = false; });
+    ui.skip.hidden = meta.kind !== 'answer';
+    avatar.setState('listening');
+    setTag('Listening');
+    if (!voice) setTimeout(() => ui.answer.focus(), 50);
+    const limit = meta.kind === 'answer' ? answerSeconds(q) : Math.min(120, answerSeconds(q));
+    let remaining = limit;
+    const t0 = performance.now();
+    let pauseOffset = pausedTotal;
+    let ctl = null;
+
+    const startListening = () => {
+      if (paused) return;
+      if (!voice) { setMic(false, 'Typing mode'); return; }
+      const base = ui.answer.value;
+      ctl = speech.startListening({
+        onText: (txt) => { ui.answer.value = (base ? base + ' ' : '') + txt; ui.answer.scrollTop = ui.answer.scrollHeight; },
+        onError: (e) => {
+          voice = false;
+          const mb = $('#micBtn');
+          if (mb) { mb.setAttribute('aria-pressed', 'false'); mb.nextElementSibling.textContent = 'Typing'; }
+          const blocked = e === 'not-allowed' || e === 'service-not-allowed';
+          setMic(false, blocked ? 'Mic blocked — type instead' : 'Voice unavailable — type instead');
+          toast(blocked ? 'Microphone blocked. You can type your answer.' : `Voice input stopped (${e}). Your words so far are kept — continue by typing.`, 4000);
+          ui.answer.focus();
+        },
+        onState: (st) => setMic(st === 'listening', st === 'listening' ? 'Listening… speak now' : 'Mic idle'),
+      });
+      setMic(true, 'Listening… speak now');
+    };
+    const stopListening = () => { if (ctl) { ctl.stop(); ctl = null; } speech._listen = null; setMic(false, voice ? 'Mic idle' : 'Typing mode'); };
+
+    const timer = setInterval(() => {
+      if (paused) return;
+      const used = (performance.now() - t0 - (pausedTotal - pauseOffset)) / 1000;
+      remaining = Math.max(0, limit - used);
+      ui.timer.textContent = fmtTime(remaining);
+      ui.fill.style.transform = `scaleX(${remaining / limit})`;
+      $('#timebar').classList.toggle('low', remaining < 20);
+      if (remaining <= 0) finish('timeout');
+    }, 250);
+
+    const finish = (action) => {
+      clearInterval(timer);
+      stopListening();
+      document.removeEventListener('keydown', onKey);
+      [ui.done, ui.skip, ui.repeat].forEach(b => { b.disabled = true; b.onclick = null; });
+      ui.answer.disabled = true;
+      const text = action === 'skip' ? '' : ui.answer.value.trim();
+      const durationSec = Math.round((performance.now() - t0 - (pausedTotal - pauseOffset)) / 1000);
+      if (text) addLog('You', text);
+      else if (action === 'skip') addLog('You', '(skipped)');
+      avatar.setState('thinking');
+      setTag('Thinking');
+      pending = null;
+      if (action === 'timeout') toast('Time is up for this question.');
+      resolve({ text, durationSec, action: action === 'timeout' ? 'done' : action });
+    };
+    const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); finish('done'); } };
+    document.addEventListener('keydown', onKey);
+    ui.done.onclick = () => finish('done');
+    ui.skip.onclick = () => finish('skip');
+    ui.repeat.onclick = async () => {
+      ui.repeat.disabled = true;
+      stopListening();
+      const text = meta.kind === 'answer' ? q.q : (meta.kind === 'followup' ? q.followUp : 'Could you elaborate a little more on your previous answer?');
+      await say(text, { kind: 'repeat' });
+      avatar.setState('listening'); setTag('Listening');
+      ui.repeat.disabled = false;
+      startListening();
+    };
+    pending = { finish, startListening, stopListening };
+    startListening();
+  });
+
+  // controls
+  $('#micBtn').addEventListener('click', (e) => {
+    voice = !voice;
+    e.currentTarget.setAttribute('aria-pressed', String(voice));
+    e.currentTarget.nextElementSibling.textContent = voice ? 'Voice' : 'Typing';
+    if (pending) { pending.stopListening(); if (voice) pending.startListening(); else { setMic(false, 'Typing mode'); ui.answer.focus(); } }
+  });
+  $('#camBtn').addEventListener('click', (e) => {
+    const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+    if (!media.stream || !media.stream.getVideoTracks().length) { toast('Camera is not available.'); return; }
+    media.setVideoEnabled(on);
+    e.currentTarget.setAttribute('aria-pressed', String(on));
+    $('#initials').hidden = on;
+  });
+  $('#ccBtn').addEventListener('click', (e) => {
+    captionsOn = !captionsOn;
+    e.currentTarget.setAttribute('aria-pressed', String(captionsOn));
+    ui.stage.classList.toggle('has-captions', captionsOn);
+    if (!captionsOn) ui.captions.textContent = '';
+  });
+  $('#pauseBtn').addEventListener('click', () => {
+    if (paused) return;
+    paused = true; pausedAt = performance.now(); pauseEpoch++;
+    speech.stopSpeaking();
+    if (pending) pending.stopListening();
+    const ov = document.createElement('div');
+    ov.className = 'pause-overlay';
+    ov.innerHTML = `<div><h3>Interview paused</h3><p style="color:var(--room-muted)">Take a breath. Your timer is stopped.</p><button class="btn btn-primary btn-lg" id="resume">Resume</button></div>`;
+    ui.stage.appendChild(ov);
+    $('#resume').addEventListener('click', () => {
+      pausedTotal += performance.now() - pausedAt; paused = false; ov.remove();
+      if (pending) { avatar.setState('listening'); pending.startListening(); }
+    });
+  });
+  $('#endBtn').addEventListener('click', () => {
+    if (!confirmEnd()) return;
+    ended = true;
+    session.end();
+    speech.stopSpeaking();
+    if (pending) pending.finish('end');
+  });
+  const confirmEnd = () => FAST || window.confirm('End the interview now? You will get a report for the questions answered so far.');
+
+  const session = new InterviewSession({
+    questions,
+    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps, seed },
+    io: { say, getAnswer },
+  });
+  window.__ip.session = session;
+
+  (async () => {
+    await sleep(FAST ? 50 : 900);
+    setTag('Connected');
+    const result = await session.run();
+    speech.stopListening();
+    const blob = recording ? await media.stopRecording() : null;
+    media.stop();
+    finishInterview({ result, questions, seed, pos, persona, blob, elapsed: Math.round((performance.now() - started - pausedTotal) / 1000) });
+  })().catch(err => {
+    console.error(err);
+    toast('Something went wrong. Returning home.');
+    media.stop();
+    go('home');
+  });
+}
+
+function finishInterview({ result, seed, pos, persona, blob, elapsed }) {
+  const s = state.setup;
+  const items = result.items;
+  const summary = summarize(items);
+  const sessionRecord = {
+    id: `s_${Date.now().toString(36)}`,
+    date: new Date().toISOString(),
+    category: s.category, position: pos.title, positionLevel: pos.level, years: s.years,
+    interviewer: persona.id, mode: s.mode, seed, elapsed, endedEarly: result.endedEarly,
+    summary,
+    items: items.map(i => ({ questionId: i.questionId, answer: i.answer, durationSec: i.durationSec, skipped: i.skipped, result: stripResult(i.result), nudge: i.nudge, followUp: i.followUp })),
+  };
+  if (items.length) store.saveSession(sessionRecord);
+  go('report', { session: sessionRecord, videoUrl: blob ? URL.createObjectURL(blob) : null, videoType: blob ? blob.type : null });
+}
+
+function stripResult(r) {
+  return { technical: r.technical, communication: r.communication, overall: r.overall, coverage: r.coverage, matched: r.matched, missed: r.missed, wordCount: r.wordCount, fillerCount: r.fillerCount, wpm: r.wpm, flags: r.flags, tips: r.tips };
+}
+
+// ---------------------------------------------------------------- report
+function ring(value, size = 150) {
+  const r = 62, c = 2 * Math.PI * r;
+  const color = value >= 70 ? 'var(--ok)' : value >= 50 ? 'var(--warn)' : 'var(--bad)';
+  return `<div class="ring" style="width:${size}px;height:${size}px" role="img" aria-label="Overall score ${value} out of 100">
+    <svg viewBox="0 0 150 150"><circle cx="75" cy="75" r="${r}" fill="none" stroke="var(--line)" stroke-width="12"/><circle cx="75" cy="75" r="${r}" fill="none" stroke="${color}" stroke-width="12" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - value / 100)}"/></svg>
+    <div class="val"><div><b>${value}</b><span>out of 100</span></div></div></div>`;
+}
+
+function renderReport({ session, videoUrl, videoType } = {}) {
+  if (!session) return go('home');
+  const cat = categoryById(session.category);
+  const persona = interviewerById(session.interviewer);
+  const sum = session.summary;
+  const qmap = new Map(QUESTIONS.map(q => [q.id, q]));
+  const date = new Date(session.date);
+
+  const bar = (label, v) => `<div class="bar-row"><span>${esc(label)}</span><div class="bar"><i class="${tone(v)}" style="width:${v}%"></i></div><b>${v}</b></div>`;
+  const qa = session.items.map((it, idx) => {
+    const q = qmap.get(it.questionId);
+    if (!q) return '';
+    const r = it.result;
+    return `
+    <details class="qa" ${idx === 0 ? 'open' : ''}>
+      <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${esc(q.topic)} · ${it.skipped ? 'Skipped' : `${r.wordCount} words${it.durationSec ? ` · ${fmtTime(it.durationSec)}` : ''}`}</small></span><span class="score-pill ${tone(r.overall)}">${r.overall}</span></summary>
+      <div class="qa-body">
+        <div class="mini-scores"><span class="chip">Technical ${r.technical}</span><span class="chip">Communication ${r.communication}</span>${r.wpm ? `<span class="chip">${r.wpm} words/min</span>` : ''}${r.fillerCount ? `<span class="chip">${r.fillerCount} filler words</span>` : ''}</div>
+        <div><h4>Your answer</h4><p class="quote">${it.answer ? esc(it.answer) : '<span class="muted">No answer given.</span>'}</p>
+          ${it.nudge ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Interviewer: “${esc(it.nudge.prompt)}”</p><p class="quote">${esc(it.nudge.answer || '—')}</p>` : ''}
+          ${it.followUp ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Follow-up: “${esc(it.followUp.prompt)}”</p><p class="quote">${esc(it.followUp.answer || '—')}</p>` : ''}
+        </div>
+        <div><h4>Key points</h4><div class="chips">${r.matched.map(m => `<span class="chip ok">✓ ${esc(m.label)}</span>`).join('')}${r.missed.map(m => `<span class="chip bad">✕ ${esc(m.label)}</span>`).join('')}</div></div>
+        ${r.tips.length ? `<div><h4>Coaching</h4><ul class="list-clean">${r.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+        <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p></div>
+      </div>
+    </details>`;
+  }).join('');
+
+  app.innerHTML = shell(`
+    <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      <button class="btn btn-ghost" data-nav="home" style="margin-left:-12px">← Home</button>
+      <span style="flex:1"></span>
+      <button class="btn" id="printBtn">Save as PDF</button>
+      <button class="btn btn-primary" id="retake">Retake interview</button>
+    </div>
+    <section class="card report-head" id="reportHead">
+      ${ring(sum.overall)}
+      <div>
+        <div class="eyebrow">${esc(cat.title)} · ${esc(session.position)}</div>
+        <h1 style="font-size:26px;margin:4px 0 8px">Interview report</h1>
+        <span class="verdict ${sum.verdict.tone}" id="verdict">${esc(sum.verdict.label)}</span>
+        <p class="muted" style="margin:0">${esc(sum.verdict.note)}</p>
+        <div class="bars">${bar('Technical knowledge', sum.technical)}${bar('Communication', sum.communication)}</div>
+        <p class="muted" style="font-size:13px;margin:12px 0 0">${date.toLocaleString()} · with ${esc(persona.name)} · ${sum.answered}/${session.items.length} answered${sum.skipped ? ` · ${sum.skipped} skipped` : ''} · ${fmtTime(session.elapsed || 0)}${session.endedEarly ? ' · ended early' : ''}</p>
+      </div>
+    </section>
+
+    <div class="grid-2" style="margin-top:16px">
+      <section class="card card-pad">
+        <h2 style="font-size:17px;margin-bottom:10px">Score by topic</h2>
+        <div class="bars" style="margin:0">${sum.topics.map(t => bar(t.topic, t.score)).join('') || '<p class="muted">No scored answers.</p>'}</div>
+      </section>
+      <section class="card card-pad">
+        <h2 style="font-size:17px;margin-bottom:10px">What to work on</h2>
+        ${sum.strengths.length ? `<p style="margin:0 0 6px"><b>Strengths:</b> ${esc(sum.strengths.join(', '))}</p>` : ''}
+        ${sum.improve.length ? `<p style="margin:0 0 6px"><b>Practise next:</b> ${esc(sum.improve.join(', '))}</p>` : ''}
+        ${sum.focusPoints.length ? `<ul class="list-clean">${sum.focusPoints.slice(0, 6).map(f => `<li>${esc(f.label)} <span class="muted">(${esc(f.topic)})</span></li>`).join('')}</ul>` : '<p class="muted">You covered every key point. Excellent.</p>'}
+        <p class="muted" style="font-size:13px;margin:10px 0 0">Average answer length ${sum.avgWords} words · filler words ${sum.fillerRate}% of speech</p>
+      </section>
+    </div>
+
+    ${videoUrl ? `<section class="card card-pad recording no-print" style="margin-top:16px"><h2 style="font-size:17px;margin-bottom:10px">Your recording</h2><video controls playsinline src="${videoUrl}"></video><div style="margin-top:10px"><a class="btn" href="${videoUrl}" download="interview-${session.id}.${(videoType || '').includes('mp4') ? 'mp4' : 'webm'}">Download recording</a> <span class="muted" style="font-size:13px">Recordings are not stored after you leave this page.</span></div></section>` : ''}
+
+    <section class="card" style="margin-top:16px;overflow:hidden">
+      <div class="card-pad" style="padding-bottom:12px"><h2 style="font-size:17px">Question-by-question feedback</h2></div>
+      ${qa}
+    </section>
+    <p class="muted" style="font-size:12px;margin-top:16px">Scores are produced offline by matching your answer against the key concepts an interviewer expects (70% technical) plus answer length, structure, pace and filler words (30% communication). Use them as practice guidance, not as a hiring decision.</p>
+  `, 'history');
+  bindNav();
+  $('#printBtn').addEventListener('click', () => window.print());
+  $('#retake').addEventListener('click', () => go('setup'));
+  window.__ip.report = session;
+}
+
+// ---------------------------------------------------------------- history
+function renderHistory() {
+  const hist = store.history();
+  app.innerHTML = shell(`
+    <div class="section-title" style="margin-top:0"><h2>Interview history</h2>${hist.length ? '<button class="btn" id="clear">Clear history</button>' : ''}</div>
+    <section class="card" style="overflow:hidden">
+      ${hist.length ? hist.map(h => `
+        <button class="hist-row" data-open="${h.id}">
+          <span class="hist-score score-pill ${tone(h.summary.overall)}">${h.summary.overall}</span>
+          <span><b>${esc(h.position)}</b><br><span class="muted" style="font-size:13px">${new Date(h.date).toLocaleString()} · ${h.items.length} questions · Tech ${h.summary.technical} · Comm ${h.summary.communication}</span></span>
+          <span class="muted">›</span>
+        </button>`).join('') : `<div class="empty"><p>No interviews yet.</p><button class="btn btn-primary" data-nav="home">Start your first interview</button></div>`}
+    </section>`, 'history');
+  bindNav();
+  $$('[data-open]').forEach(b => b.addEventListener('click', () => go('report', { session: store.getSession(b.dataset.open) })));
+  const c = $('#clear');
+  if (c) c.addEventListener('click', () => { if (window.confirm('Delete all saved interview results on this device?')) { store.clearHistory(); go('history'); } });
+}
+
+// ---------------------------------------------------------------- boot
+window.__ip = { go, state, store, version: '1.1.0', fast: FAST };
+document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
+
+if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+if (isNative()) {
+  document.documentElement.classList.add('native');
+  try { window.Capacitor.Plugins.SplashScreen && window.Capacitor.Plugins.SplashScreen.hide(); } catch { /* optional */ }
+}
+go('home');
