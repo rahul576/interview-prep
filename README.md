@@ -1,4 +1,10 @@
-# InterviewPro — V1.3
+# InterviewPro — V1.4
+
+## What's new in V1.4
+- **580 questions**: all 300 questions from the owner's Java Backend list are in the bank. 141 are new entries, each with a model answer, key points and a follow-up. The other 159 were already covered by an existing question; `scripts/import/plan.mjs` lists which one covers each.
+- **Time-limited preparation mode**: choose 30 min, 45 min or 1 hour instead of a question count. A countdown shows the time left, and the interviewer keeps asking until time is up.
+- **Speak to explain**: after each preparation answer, the interviewer reads out the score, what you covered and what needs work, at a brisk pace (can be turned off).
+- **Long voice answers fixed**: speech recognition now restarts on the same microphone and keeps every word. Before, a hiccup after about a minute could switch it to a silent virtual mic.
 
 ## What's new in V1.3.2
 - Skips silent virtual microphones (Microsoft Teams, Zoom, BlackHole, Loopback…) that Chrome can pick as its default, and uses a real mic instead.

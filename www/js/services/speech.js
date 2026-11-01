@@ -131,9 +131,10 @@ export class SpeechService {
    * Speak text. Calls onStart(durationEstimate), onBoundary(charIndex) for lip-sync.
    * Always resolves (with a timeout fallback) so the interview never stalls.
    */
-  async speak(text, { gender = 'female', onStart, onBoundary } = {}) {
+  async speak(text, { gender = 'female', onStart, onBoundary, rate = null } = {}) {
     const token = ++this._speakToken;
-    const est = estimateDurationMs(text, this.rate) * (this.fast ? 0.08 : 1);
+    const r = rate || this.rate;
+    const est = estimateDurationMs(text, r) * (this.fast ? 0.08 : 1);
     if (!this.ttsAvailable()) {
       onStart && onStart(est);
       await sleep(est);
@@ -146,7 +147,7 @@ export class SpeechService {
     for (const chunk of chunks) {
       if (token !== this._speakToken) return;
       const base = offset;
-      await this._speakChunk(chunk, gender, (i) => onBoundary && onBoundary(base + i));
+      await this._speakChunk(chunk, gender, (i) => onBoundary && onBoundary(base + i), r);
       offset += chunk.length + 1;
       if (token === this._speakToken && chunks.length > 1) await sleep(/[?]$/.test(chunk) ? 120 : 220); // breath between sentences
     }
@@ -156,8 +157,8 @@ export class SpeechService {
     if (token === this._speakToken && elapsed < est * 0.4) await sleep(est * 0.9 - elapsed);
   }
 
-  async _speakChunk(chunk, gender, onBoundary) {
-    const fallback = estimateDurationMs(chunk, this.rate) * 1.7 + 2500;
+  async _speakChunk(chunk, gender, onBoundary, rate = this.rate) {
+    const fallback = estimateDurationMs(chunk, rate) * 1.7 + 2500;
     if (this.native) {
       const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
       const voiceIndex = voice ? this.voices.indexOf(voice) : undefined;
@@ -167,7 +168,7 @@ export class SpeechService {
       } catch { /* older plugin */ }
       try {
         await Promise.race([
-          this.tts.speak({ text: chunk, lang: this.lang, rate: this.rate, pitch: gender === 'male' ? 0.95 : 1.05, volume: 1, voice: voiceIndex >= 0 ? voiceIndex : undefined, category: 'playback' }),
+          this.tts.speak({ text: chunk, lang: this.lang, rate, pitch: gender === 'male' ? 0.95 : 1.05, volume: 1, voice: voiceIndex >= 0 ? voiceIndex : undefined, category: 'playback' }),
           sleep(fallback),
         ]);
       } catch { await sleep(estimateDurationMs(chunk)); }
@@ -178,7 +179,7 @@ export class SpeechService {
       const u = new SpeechSynthesisUtterance(chunk);
       const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
       if (v) { u.voice = v; u.lang = v.lang; } else u.lang = this.lang;
-      u.rate = this.rate;
+      u.rate = rate;
       u.pitch = gender === 'male' ? 0.95 : 1.05;
       let done = false;
       const finish = () => { if (!done) { done = true; clearTimeout(timer); resolve(); } };
@@ -229,15 +230,23 @@ export class SpeechService {
     let active = true;
     let rec = null;
     let restarts = [];
+    let transientErrors = 0;
+    // Feed the microphone the user picked. The engine is only switched to the browser default input if
+    // start(track) is not supported at all — never because of a later, transient error, because the default
+    // input can be a silent virtual device (Teams, Zoom…), which made long answers stop being captured.
     let useTrack = !!(track && track.readyState === 'live');
+    const FATAL = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported']);
     const emit = (final) => onText && onText((committed + ' ' + interim).replace(/\s+/g, ' ').trim(), final);
+    const flushInterim = () => { if (interim.trim()) { committed += ' ' + interim; } interim = ''; };
     const start = () => {
+      if (!active) return;
       rec = new Rec();
       rec.lang = this.lang;
       rec.continuous = true;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
       rec.onresult = (e) => {
+        transientErrors = 0;
         interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i];
@@ -248,30 +257,40 @@ export class SpeechService {
       };
       rec.onerror = (e) => {
         if (e.error === 'no-speech' || e.error === 'aborted') return;
-        // Feeding a chosen mic track is newer; if the engine rejects it, retry once on the default input.
-        if (useTrack) { useTrack = false; return; }
-        // network, audio-capture, not-allowed, language-not-supported...: stop and let the UI fall back to typing
-        active = false;
-        onError && onError(e.error);
+        if (FATAL.has(e.error)) { active = false; flushInterim(); emit(true); onError && onError(e.error); return; }
+        // network / audio-capture hiccups happen in long sessions: keep the words so far and restart (onend).
+        transientErrors++;
+        if (transientErrors > 4) { active = false; flushInterim(); emit(true); onError && onError(e.error); }
       };
       rec.onend = () => {
-        if (interim) { committed += ' ' + interim; interim = ''; }
+        if (interim.trim()) { flushInterim(); emit(true); }
+        if (!active) { onState && onState('stopped'); return; }
         const now = Date.now();
         restarts = restarts.filter(t => now - t < 10000);
-        if (active && restarts.length < 8) { restarts.push(now); try { start(); } catch { active = false; } }
-        else { if (active) { active = false; onError && onError('restart-limit'); } onState && onState('stopped'); }
+        if (restarts.length >= 8) { active = false; onError && onError('restart-limit'); onState && onState('stopped'); return; }
+        restarts.push(now);
+        // Restart on the next tick (calling start() inside onend can throw InvalidStateError in some browsers).
+        setTimeout(() => {
+          if (!active) return;
+          try { start(); } catch { setTimeout(() => { try { start(); } catch (err) { active = false; onError && onError('restart-failed'); } }, 300); }
+        }, transientErrors ? 250 * transientErrors : 0);
       };
-      try {
-        if (useTrack) { try { rec.start(track); } catch { useTrack = false; rec.start(); } } else rec.start();
-        onState && onState('listening');
-      } catch (err) { active = false; onError && onError(String(err && err.name || err)); }
+      if (useTrack && track.readyState !== 'live') useTrack = false;
+      if (useTrack) {
+        try { rec.start(track); }
+        catch (err) {
+          if (err && err.name === 'InvalidStateError') throw err;
+          useTrack = false; rec.start(); // engine does not accept a track
+        }
+      } else rec.start();
+      onState && onState('listening');
     };
-    start();
+    try { start(); } catch (err) { active = false; onError && onError(String(err && err.name || err)); }
     return {
       stop: () => {
         active = false;
         try { rec && rec.stop(); } catch { /* ignore */ }
-        if (interim) { committed += ' ' + interim; interim = ''; }
+        flushInterim();
         return committed.replace(/\s+/g, ' ').trim();
       },
       setText: (t) => { committed = t; interim = ''; },

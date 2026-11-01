@@ -12,8 +12,12 @@ import { JAVA_EXTRA, DEVOPS_EXTRA } from './questions-extra.js';
 import { JAVA_CORE2 } from './questions-java-core2.js';
 import { JAVA_SPRING2 } from './questions-java-spring2.js';
 import { JAVA_ARCH2 } from './questions-java-arch2.js';
+import { JB_CORE } from './questions-jb300-core.js';
+import { JB_RUNTIME } from './questions-jb300-runtime.js';
+import { JB_SPRING } from './questions-jb300-spring.js';
+import { JB_ARCH } from './questions-jb300-arch.js';
 
-export const BANK_VERSION = '1.2.0';
+export const BANK_VERSION = '1.4.0';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -25,6 +29,10 @@ export const QUESTIONS = Object.freeze([
   ...withCat(JAVA_CORE2, 'java-backend'),
   ...withCat(JAVA_SPRING2, 'java-backend'),
   ...withCat(JAVA_ARCH2, 'java-backend'),
+  ...withCat(JB_CORE, 'java-backend'),
+  ...withCat(JB_RUNTIME, 'java-backend'),
+  ...withCat(JB_SPRING, 'java-backend'),
+  ...withCat(JB_ARCH, 'java-backend'),
   ...withCat(DEVOPS_QUESTIONS, 'devops'),
   ...withCat(DEVOPS_MORE, 'devops'),
   ...withCat(AZURE, 'devops'),

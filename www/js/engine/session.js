@@ -12,8 +12,37 @@ export const RULES = Object.freeze({
 const ACKS = ['Thank you.', 'Okay, got it.', 'Alright, thanks.', 'Understood.', 'Okay.', 'Thanks for that.'];
 const NEXT = ['Let’s move on.', 'Next question.', 'Moving on.', 'Here’s the next one.', 'Let’s continue.'];
 
-export function prepGreetingLine({ interviewer, candidateName, count, audioChecked }) {
-  return `${audioChecked ? 'Perfect' : candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}. This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit. After each answer you will see feedback and the model answer, and you can try again as often as you like.`;
+export function prepGreetingLine({ interviewer, candidateName, count, audioChecked, timeLimitMin }) {
+  const hello = `${audioChecked ? 'Perfect' : candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}.`;
+  const length = timeLimitMin
+    ? `This is a ${timeLimitMin >= 60 ? 'one hour' : `${timeLimitMin} minute`} preparation session. I\u2019ll keep asking questions until our time is up.`
+    : `This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit.`;
+  return `${hello} ${length} After each answer you will get feedback and the model answer, and you can try again as often as you like.`;
+}
+
+/** Said when a time-limited preparation session runs out of time. */
+export function timeUpLine() {
+  return 'That\u2019s our time for this session.';
+}
+
+/** Spoken summary of the feedback card after a preparation answer (read at a brisk pace). */
+export function feedbackSpeech(item, { passScore = 60 } = {}) {
+  const r = item.result;
+  if (item.skipped) return 'You skipped this one. Have a look at the model answer, and try it again when you are ready.';
+  const verdict = r.overall >= passScore ? 'Good answer' : 'This needs work';
+  const parts = [`You scored ${r.overall} out of 100. ${verdict}. Technical ${r.technical}, communication ${r.communication}.`];
+  if (r.matched.length) parts.push(`You covered ${listText(r.matched.map(m => m.label))}.`);
+  if (r.missed.length) parts.push(`To improve, also cover ${listText(r.missed.map(m => m.label))}.`);
+  const tips = (r.tips || []).filter(t => !/^Also cover/i.test(t)).slice(0, 2);
+  if (tips.length) parts.push(tips.join(' '));
+  if (r.overall < passScore) parts.push('Read the model answer, then press Try again.');
+  return parts.join(' ').replace(/\s+/g, ' ');
+}
+
+function listText(items) {
+  const xs = items.map(x => x.replace(/\s*\/\s*/g, ' or ').toLowerCase());
+  if (xs.length <= 1) return xs.join('');
+  return `${xs.slice(0, -1).join('; ')}; and ${xs.at(-1)}`;
 }
 
 /** First thing the interviewer says, before anything else: a two-way audio check. */
@@ -80,10 +109,13 @@ export class InterviewSession {
       config = { ...config, audioChecked: true };
     }
     await io.say((prep ? prepGreetingLine : greetingLine)({ ...config, count: this.questions.length }), { kind: 'greeting' });
+    if (io.onStarted) io.onStarted();
 
+    const timeUp = () => !!(io.timeUp && io.timeUp());
     for (let i = 0; i < this.questions.length && !this.ended; i++) {
+      if (i > 0 && timeUp()) { this.outOfTime = true; await io.say(timeUpLine(), { kind: 'transition', score: 0 }); break; }
       const q = this.questions[i];
-      const isLast = i === this.questions.length - 1;
+      let isLast = i === this.questions.length - 1;
       this.progress({ index: i, question: q, phase: 'asking' });
       const prefix = i === 0 ? '' : (isLast && this.questions.length > 2 ? 'Last question. ' : '');
       await io.say(prefix + q.q, { kind: 'question', question: q, index: i });
@@ -99,7 +131,7 @@ export class InterviewSession {
         item.result = scoreAnswer(q, item.skipped ? '' : item.answer, { durationSec: item.durationSec });
         item.firstScore = item.result.overall;
         while (!this.ended) {
-          const choice = io.review ? await io.review(item, { index: i, isLast }) : 'next';
+          const choice = io.review ? await io.review(item, { index: i, isLast: isLast || timeUp() }) : 'next';
           if (choice === 'end') { this.ended = true; break; }
           if (choice !== 'retry') break;
           const b = await io.getAnswer({ kind: 'retry', question: q, index: i });
@@ -148,6 +180,6 @@ export class InterviewSession {
     if (!this.ended || this.items.length) {
       await io.say(closingLine(config.candidateName), { kind: 'closing' });
     }
-    return { items: this.items, endedEarly: this.items.length < this.questions.length };
+    return { items: this.items, endedEarly: !this.outOfTime && this.items.length < this.questions.length, outOfTime: !!this.outOfTime };
   }
 }

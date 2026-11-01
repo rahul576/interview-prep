@@ -3,7 +3,7 @@ import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById as buil
 import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
 import { selectQuestions, targetLevels, planSlots, availableCount } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
-import { InterviewSession, hearingCheckLine } from './engine/session.js';
+import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
@@ -33,6 +33,8 @@ const ICONS = {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const tone = (v) => v >= 70 ? 'ok' : v >= 50 ? 'warn' : 'bad';
+/** Preparation sessions are time-boxed: queue enough questions to fill the time (about 2–3 min each). */
+const prepPoolSize = (minutes) => Math.min(60, Math.ceil(minutes / 2) + 6);
 const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -86,6 +88,8 @@ const state = {
     years: prefs.years ?? 3,
     mode: prefs.mode || 'mixed',
     count: prefs.count || 8,
+    minutes: prefs.minutes || 30, // preparation mode: session length
+    speakFeedback: prefs.speakFeedback ?? true, // preparation mode: interviewer reads the feedback aloud
     interviewerId: prefs.interviewerId || 'ananya',
     candidateName: prefs.candidateName || '',
     lang: prefs.lang || 'en-US',
@@ -101,7 +105,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.3.2</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -232,7 +236,7 @@ function renderSetup() {
           <h3>Mode</h3>
           <p class="hint">Preparation mode is for learning; Interview mode simulates the real thing.</p>
           <div class="mode-grid" role="group" aria-label="Mode">
-            <button type="button" class="opt mode-opt" data-style="prep" aria-pressed="${s.style === 'prep'}"><b>Preparation mode</b><small>No time limit · hints · instant feedback and model answer after every question · try again as often as you like</small></button>
+            <button type="button" class="opt mode-opt" data-style="prep" aria-pressed="${s.style === 'prep'}"><b>Preparation mode</b><small>30, 45 or 60 minutes · hints · spoken feedback and model answer after every question · try again as often as you like</small></button>
             <button type="button" class="opt mode-opt" data-style="interview" aria-pressed="${s.style === 'interview'}"><b>Interview mode</b><small>Timed answers · follow-up questions · no hints · full report at the end, like a real interview</small></button>
           </div>
           <div id="prepSource" ${s.style === 'prep' ? '' : 'hidden'} style="margin-top:12px">
@@ -240,6 +244,10 @@ function renderSetup() {
               <button type="button" data-source="new" aria-pressed="${s.source === 'new'}">New questions</button>
               <button type="button" data-source="revision" aria-pressed="${s.source === 'revision'}">My revision list (${weakCount(s.category)})</button>
             </div>
+            <div class="seg" role="group" aria-label="Session length" style="margin-top:12px">
+              ${[[30, '30 min'], [45, '45 min'], [60, '1 hour']].map(([n, l]) => `<button type="button" data-minutes="${n}" aria-pressed="${s.minutes === n}">${l}</button>`).join('')}
+            </div>
+            <label class="toggle" style="margin-top:12px"><span><b style="font-size:15px">Speak to explain</b><br><span class="muted" style="font-size:13px">After each answer the interviewer reads out your score, what you covered and what needs work, at a brisk pace</span></span><input type="checkbox" id="speakFeedback" ${s.speakFeedback ? 'checked' : ''}></label>
           </div>
         </div>
         <div class="form-sec">
@@ -270,7 +278,7 @@ function renderSetup() {
             <button data-mode="technical" aria-pressed="${s.mode === 'technical'}">Technical only</button>
           </div>
           <div style="height:12px"></div>
-          <div class="seg" role="group" aria-label="Length">
+          <div class="seg" role="group" aria-label="Length" id="countSeg" ${s.style === 'prep' ? 'hidden' : ''}>
             ${[[5, 'Quick · 5'], [8, 'Standard · 8'], [12, 'Full · 12']].map(([n, l]) => `<button data-count="${n}" aria-pressed="${s.count === n}">${l}</button>`).join('')}
           </div>
         </div>
@@ -357,12 +365,14 @@ function renderSetup() {
         <dt>Mode</dt><dd>${s.style === 'prep' ? 'Preparation' : 'Interview'}</dd>
         ${fromRevision ? `<dt>Source</dt><dd>Revision list (${weakN})</dd>` : ''}
         <dt>Difficulty</dt><dd>${esc(lv.join(' → '))}</dd>
-        <dt>Questions</dt><dd>${s.count}</dd>
+        ${s.style === 'prep' ? `<dt>Session length</dt><dd>${s.minutes >= 60 ? '1 hour' : `${s.minutes} min`}</dd>
+        <dt>Questions</dt><dd>As many as fit</dd>
+        <dt>Spoken feedback</dt><dd>${s.speakFeedback ? 'On' : 'Off'}</dd>` : `<dt>Questions</dt><dd>${s.count}</dd>
         <dt>Technical</dt><dd>${slots.technical}</dd>
-        <dt>${rank >= 3 ? 'Intro + HR / managerial' : 'Intro + behavioural'}</dt><dd>${slots.intro + slots.behavioral}</dd>
+        <dt>${rank >= 3 ? 'Intro + HR / managerial' : 'Intro + behavioural'}</dt><dd>${slots.intro + slots.behavioral}</dd>`}
         <dt>Topics</dt><dd>${s.topics ? `${selected.length} selected` : 'All'}</dd>
         <dt>Matching questions</dt><dd>${avail}</dd>
-        <dt>Estimated time</dt><dd>${Math.round(s.count * 2.6)}–${Math.round(s.count * 3.6)} min</dd>
+        ${s.style === 'prep' ? '' : `<dt>Estimated time</dt><dd>${Math.round(s.count * 2.6)}–${Math.round(s.count * 3.6)} min</dd>`}
         <dt>Interviewer</dt><dd>${esc(interviewerById(s.interviewerId).name)}</dd>
       </dl>
       ${fromRevision && weakN === 0 ? '<p style="color:var(--warn);font-size:13px;margin:0">Your revision list is empty. Questions you answer below 60 will appear there.</p>' : ''}
@@ -376,7 +386,8 @@ function renderSetup() {
     s.lang = $('#lang').value;
     s.followUps = $('#followUps').checked;
     s.record = $('#record').checked;
-    store.savePrefs({ style: s.style, category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
+    s.speakFeedback = $('#speakFeedback').checked;
+    store.savePrefs({ minutes: s.minutes, speakFeedback: s.speakFeedback, style: s.style, category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
   };
   const press = (sel, attr, fn) => $$(sel).forEach(b => b.addEventListener('click', () => {
     $$(sel).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
@@ -384,7 +395,9 @@ function renderSetup() {
   }));
   press('[data-pos]', 'pos', v => { s.positionId = v; });
   press('[data-mode]', 'mode', v => { s.mode = v; });
-  press('[data-style]', 'style', v => { s.style = v; s.practiceIds = null; $('#prepSource').hidden = v !== 'prep'; });
+  press('[data-style]', 'style', v => { s.style = v; s.practiceIds = null; $('#prepSource').hidden = v !== 'prep'; $('#countSeg').hidden = v === 'prep'; });
+  press('[data-minutes]', 'minutes', v => { s.minutes = Number(v); });
+  $('#speakFeedback').addEventListener('change', (e) => { s.speakFeedback = e.target.checked; update(); });
   press('[data-source]', 'source', v => { s.source = v; s.practiceIds = null; });
   press('[data-count]', 'count', v => { s.count = Number(v); });
   press('[data-iv]', 'iv', v => { s.interviewerId = v; });
@@ -595,7 +608,7 @@ async function renderCheck() {
     const timer = setTimeout(() => done(!!heard.trim(), heard.trim() ? `✓ Heard: “${esc(heard.trim())}”` : 'Nothing was recognised in 10 seconds. Check the microphone bar above moves when you talk; if it does not, follow the microphone tips. If it does, your browser\u2019s speech service may be blocked: try Chrome, Edge or Safari.'), 10000);
     sttCtl = speech.startListening({
       track: media.audioTrack(),
-      onText: (txt) => { heard = txt; out.innerHTML = `Heard: “${esc(txt)}”`; if (txt.trim().split(/\s+/).length >= 3) { clearTimeout(timer); done(true, `✓ Voice answers work. Heard: “${esc(txt.trim())}”`); } },
+      onText: (txt) => { if (!sttCtl) return; heard = txt; out.innerHTML = `Heard: “${esc(txt)}”`; if (txt.trim().split(/\s+/).length >= 3) { clearTimeout(timer); done(true, `✓ Voice answers work. Heard: “${esc(txt.trim())}”`); } },
       onError: (code) => { clearTimeout(timer); done(false, `✕ ${esc(sttErrorHelp(code))}`); },
     });
   });
@@ -625,11 +638,11 @@ function renderRoom() {
   let questions;
   if (prep && (s.practiceIds || s.source === 'revision')) {
     const ids = s.practiceIds || weakQuestions(progressNow, { role: s.category }).map(w => w.id);
-    questions = ids.map(id => QUESTIONS.find(q => q.id === id)).filter(Boolean).slice(0, s.practiceIds ? 20 : s.count);
+    questions = ids.map(id => QUESTIONS.find(q => q.id === id)).filter(Boolean).slice(0, s.practiceIds ? 20 : prep ? 60 : s.count);
   } else {
     questions = selectQuestions({
       bank: QUESTIONS, category: s.category, positionLevel: pos.level, experienceLevel: levelFromYears(s.years),
-      count: s.count, mode: s.mode, topics: s.topics, seed, seen: seenMap(progressNow), recentIds: store.lastSessionIds(s.category),
+      count: prep ? prepPoolSize(s.minutes) : s.count, mode: s.mode, topics: s.topics, seed, seen: seenMap(progressNow), recentIds: store.lastSessionIds(s.category),
     });
   }
   window.__ip.questions = questions.map(q => q.id);
@@ -641,7 +654,8 @@ function renderRoom() {
       <span class="live-dot" aria-hidden="true"></span>
       <div style="min-width:0"><div class="title">${esc(pos.title)} · ${prep ? 'Preparation' : 'Interview'}</div><div class="sub">with ${esc(persona.name)}, ${esc(persona.title)}</div></div>
       <div class="spacer"></div>
-      <span class="pill-dark" id="qcount">Q 0/${questions.length}</span>
+      <span class="pill-dark" id="qcount">${prep ? 'Q 0' : `Q 0/${questions.length}`}</span>
+      ${prep ? `<span class="pill-dark" id="timeLeft" title="Time left in this preparation session">${fmtTime(s.minutes * 60)} left</span>` : ''}
       <span class="pill-dark" id="elapsed">00:00</span>
     </div>
     <div class="room-main">
@@ -706,9 +720,22 @@ function renderRoom() {
   let pending = null; // current answer promise controls
   let currentQ = null;
   let pausedAt = 0, pausedTotal = 0, pauseEpoch = 0;
+  // Preparation sessions run for a fixed time (30/45/60 min), counted from the first question, pauses excluded.
+  const limitMs = prep ? (Number(params.get('prepsec')) || s.minutes * 60) * 1000 : Infinity;
+  let sessionStart = null, pausedBeforeStart = 0, timeUpShown = false;
+  const activeMs = () => sessionStart === null ? 0 : performance.now() - sessionStart - (pausedTotal - pausedBeforeStart) - (paused ? performance.now() - pausedAt : 0);
+  const timeLeftMs = () => Math.max(0, limitMs - activeMs());
+  const timeUp = () => prep && sessionStart !== null && timeLeftMs() <= 0;
   const tick = setInterval(() => {
     if (!document.body.contains(ui.stage)) return clearInterval(tick);
     if (!paused) $('#elapsed').textContent = fmtTime((performance.now() - started - pausedTotal) / 1000);
+    if (prep && $('#timeLeft')) {
+      const left = timeLeftMs() / 1000;
+      $('#timeLeft').textContent = left > 0 ? `${fmtTime(left)} left` : 'Time up';
+      $('#timeLeft').classList.toggle('warn', left > 0 && left <= 120);
+      $('#timeLeft').classList.toggle('bad', left <= 0);
+      if (timeUp() && !timeUpShown && !ended) { timeUpShown = true; toast('Time is up. Finish this question and the session will wrap up.', 4500); }
+    }
   }, 500);
 
   const addLog = (who, text) => {
@@ -734,6 +761,7 @@ function renderRoom() {
       const epoch = pauseEpoch;
       await speech.speak(text, {
         gender: persona.gender,
+        rate: meta.rate || null,
         onStart: (ms) => avatar.startSpeech(text, ms, EXPR_FOR[meta.kind] || undefined),
         onBoundary: (i) => avatar.syncToChar(i),
       });
@@ -748,7 +776,7 @@ function renderRoom() {
 
   const showQuestion = (q, i, kind) => {
     currentQ = q;
-    $('#qcount').textContent = `Q ${i + 1}/${questions.length}`;
+    $('#qcount').textContent = prep ? `Q ${i + 1}` : `Q ${i + 1}/${questions.length}`;
     const lv = q.levels.map(l => levelById(l).label.split(' ')[0]).join(', ');
     const label = kind === 'nudge' ? 'Follow-up · elaborate' : kind === 'followup' ? 'Follow-up' : q.type === 'intro' ? 'Introduction' : q.type === 'behavioral' ? 'Behavioural' : q.type === 'managerial' ? 'Managerial scenario' : q.type === 'design' ? 'Design' : q.type === 'scenario' ? 'Scenario' : 'Concept';
     ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(q.q)}</div>`;
@@ -1008,6 +1036,8 @@ function renderRoom() {
     avatar.setState('listening'); avatar.setExpression(ok ? 'pleased' : 'thinking'); if (ok) avatar.nod(); setTag(ok ? 'Well done' : 'Review');
     const done = (v) => { reviewPending = null; speech.stopSpeaking(); resolve(v); };
     reviewPending = done;
+    // "Speak to explain": the interviewer reads the score and the needs-work points at a brisk pace.
+    if (s.speakFeedback) say(feedbackSpeech(item, { passScore: PASS_SCORE }), { kind: 'feedback', rate: 1.18 });
     $('#retryBtn').onclick = () => done('retry');
     $('#nextBtn').onclick = () => done('next');
     $('#listenBtn').onclick = async (e) => { e.currentTarget.disabled = true; await say(q.ideal, { kind: 'model' }); const b = $('#listenBtn'); if (b) b.disabled = false; };
@@ -1060,8 +1090,8 @@ function renderRoom() {
 
   const session = new InterviewSession({
     questions,
-    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview' },
-    io: { say, getAnswer, review, audioCheck },
+    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview', timeLimitMin: prep ? s.minutes : null },
+    io: { say, getAnswer, review, audioCheck, timeUp, onStarted: () => { if (sessionStart === null) { sessionStart = performance.now(); pausedBeforeStart = pausedTotal; } } },
   });
   window.__ip.session = session;
 
@@ -1274,7 +1304,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.3.2', fast: FAST };
+window.__ip = { go, state, store, version: '1.4.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

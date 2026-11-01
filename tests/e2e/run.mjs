@@ -240,7 +240,8 @@ async function startSession(page, { role, style, count = 5, mode = 'technical', 
   await page.click(`.role-card [data-role="${role}"]`);
   await page.click(`[data-style="${style}"]`);
   if (source) await page.click(`[data-source="${source}"]`);
-  await page.click(`[data-count="${count}"]`);
+  if (style === 'prep') { assert.equal(await page.$eval('#countSeg', e => e.hidden), true, 'prep uses a time limit, not a count'); await page.click('[data-minutes="30"]'); }
+  else await page.click(`[data-count="${count}"]`);
   await page.click(`[data-mode="${mode}"]`);
   await page.click('#toCheck');
   await page.waitForFunction(() => /Camera (is working|unavailable)|Permission denied/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 10000 });
@@ -252,14 +253,19 @@ try {
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
   page.on('dialog', d => d.accept());
-  await page.goto(`http://localhost:${PORT}/?fast=1&seed=501`);
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=501&prepsec=4`);
   await page.waitForSelector('.role-card');
 
   // 1) Preparation mode: hint, weak answer -> review -> retry with model answer -> next
   await startSession(page, { role: 'java-backend', style: 'prep', count: 5 });
   const prepIds = await page.evaluate(() => window.__ip.questions);
+  assert.ok(prepIds.length >= 20, `30-minute prep queues enough questions (${prepIds.length})`);
+  assert.match(await page.textContent('#timeLeft'), /left|Time up/);
   for (let k = 0; k < prepIds.length; k++) {
-    await page.waitForSelector('#doneBtn:not([disabled])');
+    if (await page.$('#reportHead')) break;
+    await page.waitForSelector('#doneBtn:not([disabled]), #reportHead');
+    if (await page.$('#reportHead')) break;
+    assert.equal(await page.textContent('#qcount'), `Q ${k + 1}`);
     assert.equal(await page.textContent('#timebar').then(() => page.$eval('#timebar', e => e.hidden)), true, 'prep: no countdown');
     const q = QUESTIONS.find(x => x.id === prepIds[k]);
     if (k === 0) {
@@ -282,10 +288,13 @@ try {
       await page.click('#doneBtn');
       await page.waitForSelector('#review:not([hidden])');
     }
+    if (k === 1) assert.match(await page.textContent('#log'), /You scored \d+ out of 100\./, 'feedback is spoken');
     await page.click('#nextBtn');
   }
   await page.waitForSelector('#reportHead');
   assert.match(await page.textContent('#reportHead'), /Preparation report/);
+  const prepAnswered = (await page.evaluate(() => window.__ip.report.items)).map(i => i.questionId);
+  assert.ok(prepAnswered.length >= 2 && prepAnswered.length < prepIds.length, `time limit ended the session (${prepAnswered.length} answered)`);
   assert.match(await page.textContent('#chance'), /practice estimate/);
   const prepReport = await page.evaluate(() => window.__ip.report);
   const expectedWeak = prepReport.items.filter(i => i.result.overall < 60).map(i => i.questionId).sort();
@@ -329,7 +338,7 @@ try {
   }
 
   // 4) Two consecutive interviews: no repeated questions (intro exempt)
-  const seenBefore = new Set([...prepIds, ...revIds]);
+  const seenBefore = new Set([...prepAnswered, ...revIds]);
   await startSession(page, { role: 'java-backend', style: 'interview', count: 8, mode: 'mixed' });
   const s1 = await page.evaluate(() => window.__ip.questions);
   // answer every question so they all count as asked

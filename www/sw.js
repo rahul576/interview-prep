@@ -1,11 +1,11 @@
 // Offline cache for the web/PWA build. Bump VERSION when assets change.
-const VERSION = 'interviewpro-v1.3.2';
+const VERSION = 'interviewpro-v1.4.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/data/meta.js', './js/data/kp.js', './js/data/questions.js',
   './js/data/questions-java.js', './js/data/questions-java-more.js', './js/data/questions-devops.js', './js/data/questions-devops-more.js',
   './js/data/questions-azure.js', './js/data/questions-kafka-es.js', './js/data/questions-dsa.js', './js/data/questions-managerial.js',
-  './js/data/questions-extra.js', './js/data/questions-java-core2.js', './js/data/questions-java-spring2.js', './js/data/questions-java-arch2.js', './js/data/questions-common.js',
+  './js/data/questions-extra.js', './js/data/questions-java-core2.js', './js/data/questions-java-spring2.js', './js/data/questions-java-arch2.js', './js/data/questions-jb300-core.js', './js/data/questions-jb300-runtime.js', './js/data/questions-jb300-spring.js', './js/data/questions-jb300-arch.js', './js/data/questions-common.js',
   './js/engine/text.js', './js/engine/score.js', './js/engine/select.js', './js/engine/session.js', './js/engine/progress.js',
   './js/ui/avatar.js', './js/services/speech.js', './js/services/media.js', './js/services/store.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
