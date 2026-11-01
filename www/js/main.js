@@ -7,7 +7,7 @@ import { InterviewSession, hearingCheckLine } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
-import { MediaService } from './services/media.js';
+import { MediaService, isVirtualMic } from './services/media.js';
 import { store } from './services/store.js';
 import { updateProgress, weakQuestions, markLearned, seenMap, progressStats, PASS_SCORE } from './engine/progress.js';
 
@@ -101,7 +101,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.3</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.3.2</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -535,6 +535,11 @@ async function renderCheck() {
         if ($('#pvPh')) $('#pvPh').textContent = 'No camera found. You can still continue — the interviewer will just not see you.';
         checks.camera = ['warn', 'Camera', 'No camera (optional)'];
         state.setup.camera = false;
+      }
+      // Chrome sometimes defaults to a silent virtual device (Teams, Zoom, BlackHole…): switch to a real mic.
+      if (media.hasAudio() && !micId && isVirtualMic(media.micLabel())) {
+        const real = await media.preferredMicId();
+        if (real) { store.savePrefs({ micId: real }); return startDevices(real); }
       }
       if (media.hasAudio()) {
         checks.mic = ['ok', 'Microphone', `Connected: ${media.micLabel() || 'default microphone'} — say something`];
@@ -1269,11 +1274,18 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.3.1', fast: FAST };
+window.__ip = { go, state, store, version: '1.3.2', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  // When a new version takes over, reload once so the page never runs a mix of old and new files.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded || state.screen === 'room') return;
+    reloaded = true; location.reload();
+  });
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
 }
 if (isNative()) {
   document.documentElement.classList.add('native');

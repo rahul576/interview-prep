@@ -1,6 +1,9 @@
 // Camera / microphone access and local session recording (never uploaded).
 import { isNative } from './speech.js';
 
+/** Virtual audio devices that usually deliver silence to the browser. */
+export const isVirtualMic = (label = '') => /virtual|teams audio|zoomaudio|zoom audio|blackhole|loopback|soundflower|vb-audio|voicemeeter|krisp|aggregate|ndi audio|\bobs\b/i.test(label);
+
 export class MediaService {
   constructor() {
     this.stream = null;
@@ -54,6 +57,13 @@ export class MediaService {
       const all = await navigator.mediaDevices.enumerateDevices();
       return all.filter(d => d.kind === 'audioinput').map(d => ({ id: d.deviceId, label: d.label || 'Microphone' }));
     } catch { return []; }
+  }
+
+  /** A real microphone, not a virtual/loopback device created by Teams, Zoom, BlackHole etc. */
+  async preferredMicId() {
+    const mics = await this.listMics();
+    const real = mics.filter(m => !isVirtualMic(m.label));
+    return (real.find(m => m.id === 'default') || real.find(m => /^default/i.test(m.label)) || real[0] || {}).id || null;
   }
 
   audioTrack() { return this.stream ? this.stream.getAudioTracks()[0] || null : null; }

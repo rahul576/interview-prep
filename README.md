@@ -1,5 +1,10 @@
 # InterviewPro — V1.3
 
+## What's new in V1.3.2
+- Skips silent virtual microphones (Microsoft Teams, Zoom, BlackHole, Loopback…) that Chrome can pick as its default, and uses a real mic instead.
+- Speech recognition listens to the microphone you picked, not Chrome's own default input.
+- New releases load straight away (the offline cache no longer serves the previous version first); the version is shown in the header badge.
+
 ## What's new in V1.3.1 – microphone diagnostics
 - Device check lists every **microphone** and lets you pick one (remembered); the interview uses it.
 - A missing webcam (e.g. Mac mini) no longer disables the microphone.

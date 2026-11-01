@@ -1,5 +1,5 @@
 // Offline cache for the web/PWA build. Bump VERSION when assets change.
-const VERSION = 'interviewpro-v1.3.1';
+const VERSION = 'interviewpro-v1.3.2';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/data/meta.js', './js/data/kp.js', './js/data/questions.js',
@@ -16,13 +16,13 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
+// Network first, so a new release shows up on the next load; the cache keeps it working offline.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
-  e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(hit => hit || fetch(e.request).then(res => {
-    if (res.ok && new URL(e.request.url).origin === location.origin) {
-      const copy = res.clone();
-      caches.open(VERSION).then(c => c.put(e.request, copy));
-    }
+  const same = new URL(e.request.url).origin === location.origin;
+  if (!same) return;
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(res => {
+    if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); }
     return res;
-  }).catch(() => caches.match('./index.html'))));
+  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(hit => hit || caches.match('./index.html'))));
 });
