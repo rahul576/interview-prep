@@ -1,4 +1,13 @@
-# InterviewPro — V1.2
+# InterviewPro — V1.3
+
+## What's new in V1.3
+- **"Can you hear me?" audio check** before every session. The interviewer greets you and asks whether you can hear them, and the interview starts only when both sides are confirmed:
+  - **You can hear them:** tap *Yes, I hear you*, or just say "Yes, I can hear you".
+  - **They can hear you:** your spoken reply or the mic level meter confirms your microphone works. In typing mode, no microphone is needed.
+  - **Can't hear them?** You get tips (mute, volume, output device, voice), *Repeat* (spoken a little slower) or *Continue with captions only*.
+  - **They can't hear you?** After about 12 seconds the interviewer says so and offers *Try microphone again* or *Type my answers instead*.
+  - Pressing *End* during the check cancels without saving a session.
+- Fixed: clicking *Start interview* before the device check finished was ignored.
 
 ## What's new in V1.2
 - **439 questions** (was 332). The Java Backend role now has **269 technical questions**: core language, collections, concurrency, JVM, modern Java (17/21), exceptions, Spring/Spring Boot 3, JPA/Hibernate, security, REST, testing, build tools, databases/SQL, caching/Redis, microservices, messaging, **low-level design** (parking lot, rate limiter, elevator, cache) and system design (chat, payments, feed, IDs, uploads, typeahead).
@@ -136,7 +145,7 @@ App icons and splash: `resources/icon.png` and `resources/splash.png`. Generate 
 ## Tests
 
 ```bash
-npm test             # 43 unit tests (node:test, no dependencies)
+npm test             # 44 unit tests (node:test, no dependencies)
 npm run test:e2e     # browser end-to-end tests (needs: npm i -D playwright && npx playwright install chromium)
 ```
 

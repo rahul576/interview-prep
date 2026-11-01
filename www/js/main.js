@@ -3,7 +3,7 @@ import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById as buil
 import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
 import { selectQuestions, targetLevels, planSlots, availableCount } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
-import { InterviewSession } from './engine/session.js';
+import { InterviewSession, hearingCheckLine } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices } from './services/speech.js';
@@ -101,7 +101,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.2</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.3</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -442,6 +442,8 @@ async function renderCheck() {
     </div>`, 'home');
   bindNav();
   $('#back').addEventListener('click', () => { media.stop(); go('setup'); });
+  // attach immediately so an early click is never lost while devices are still being checked
+  $('#start').addEventListener('click', () => go('room'));
 
   await speech.init();
   speech.voiceName = store.prefs().voiceName || null;
@@ -493,7 +495,7 @@ async function renderCheck() {
   drawChecks();
 
   $('#testVoice').addEventListener('click', () => speech.speak(`Hello${s.candidateName ? ' ' + s.candidateName : ''}, can you hear me clearly?`, { gender: interviewerById(s.interviewerId).gender }));
-  $('#start').addEventListener('click', () => go('room'));
+
 }
 
 // ---------------------------------------------------------------- interview room
@@ -612,7 +614,7 @@ function renderRoom() {
   };
   const setTag = (t) => { ui.stateTag.textContent = t; };
 
-  const EXPR_FOR = { greeting: 'warm', question: 'curious', nudge: 'curious', followup: 'curious', interrupt: 'concerned', closing: 'warm', model: 'warm', repeat: 'curious' };
+  const EXPR_FOR = { check: 'warm', greeting: 'warm', question: 'curious', nudge: 'curious', followup: 'curious', interrupt: 'concerned', closing: 'warm', model: 'warm', repeat: 'curious' };
   const say = async (text, meta = {}) => {
     if (ended && meta.kind !== 'closing') return;
     if (meta.kind === 'transition') { if (meta.score >= 70) { avatar.setExpression('pleased'); avatar.nod(); } else avatar.setExpression('neutral'); await sleep(FAST ? 10 : 500); }
@@ -771,6 +773,112 @@ function renderRoom() {
     startListening();
   });
 
+  // ---- two-way audio check ("Can you hear me?") before the interview starts
+  let checkPending = null;
+  const audioCheck = () => new Promise((resolve) => {
+    const first = persona.name.split(' ')[0];
+    $('#answerBox').hidden = true; $('#hints').hidden = true;
+    const box = $('#review');
+    box.innerHTML = `
+      <div class="audio-check">
+
+        <div class="ac-row" id="acYou"><span class="st">?</span><div><b>Can you hear ${esc(first)}?</b><span>Tap \u201cYes\u201d or just say \u201cYes, I can hear you\u201d.</span></div></div>
+        <div class="ac-row" id="acThem"><span class="st">?</span><div><b>Can ${esc(first)} hear you?</b><span id="acThemHint">${voice ? 'Say something out loud \u2014 your microphone is listening.' : 'Typing mode: your answers will be typed, so the microphone is not needed.'}</span></div></div>
+        ${media.hasAudio() ? '<div class="meter ac-meter" aria-label="Your microphone level"><i id="acLevel"></i></div>' : ''}
+        <div class="answer-actions">
+          <button class="btn" id="hearNo">I can\u2019t hear</button>
+          <button class="btn" id="hearRepeat">${ICONS.repeat} Repeat</button>
+          <button class="btn btn-primary" id="hearYes">${ICONS.check} Yes, I hear you</button>
+        </div>
+        <div class="answer-actions" id="acFallback" hidden>
+          <button class="btn" id="acCaptions">Continue with captions only</button>
+          <button class="btn" id="acType">Type my answers instead</button>
+          <button class="btn" id="acRetryMic">Try microphone again</button>
+        </div>
+        <div class="ac-tips" id="acTips" hidden>
+          <b>Can\u2019t hear the interviewer?</b>
+          <ul><li>Check that your device is not muted and the volume is up.</li><li>Check the sound output (speakers or headphones) in your system settings.</li><li>Try another voice on the device-check screen, or use Microsoft Edge for natural voices.</li><li>You can also continue with captions only.</li></ul>
+        </div>
+      </div>`;
+    box.hidden = false;
+    ui.log.hidden = true;
+    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">Audio check</span><span>Before we start</span></div><div class="qtext">Let\u2019s make sure you can hear each other.</div>`;
+    avatar.setState('idle'); avatar.setExpression('warm');
+    setTag('Audio check');
+    let candidateHears = false, heardCandidate = !voice, done = false, ctl = null, micWait = null;
+    const mark = (id, ok) => { const st = $(`#${id} .st`); if (st) { st.textContent = ok ? '\u2713' : '!'; st.className = 'st ' + (ok ? 'ok' : 'bad'); } };
+    const level = media.levelMeter();
+    let loud = 0;
+    const meter = setInterval(() => {
+      const v = level(); const bar = $('#acLevel'); if (bar) bar.style.width = `${Math.round(v * 100)}%`;
+      loud = v > 0.12 ? loud + 1 : 0;
+      if (loud >= 4 && voice && !heardCandidate) { heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = 'Microphone is working.'; maybeFinish(); }
+    }, 100);
+    const stopMic = () => { if (ctl) { ctl.stop(); ctl = null; } speech._listen = null; };
+    const finish = async (result, line) => {
+      if (done) return; done = true;
+      clearInterval(meter); clearTimeout(micWait); stopMic(); checkPending = null;
+      if (line) { avatar.setExpression('pleased'); avatar.nod(); await say(line, { kind: 'check' }); }
+      box.hidden = true; $('#answerBox').hidden = false; ui.log.hidden = false;
+      resolve(result);
+    };
+    checkPending = finish;
+    const maybeFinish = () => {
+      if (!candidateHears) return;
+      if (heardCandidate) finish(voice ? 'ok' : 'typing', voice ? 'Great, I can hear you clearly too.' : 'Great. You\u2019ll be typing your answers, so I\u2019ll read them on screen.');
+    };
+    const listen = () => {
+      if (!voice || ctl) return;
+      ctl = speech.startListening({
+        onText: (txt) => {
+          if (!txt.trim()) return;
+          if (!heardCandidate) { heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = 'I can hear you.'; }
+          if (/\b(no|not|can'?t|cannot|can ?not)\b/i.test(txt) && !/\byes\b/i.test(txt)) { cantHear(); return; }
+          if (!candidateHears) { candidateHears = true; mark('acYou', true); }
+          maybeFinish();
+        },
+        onError: () => { voice = false; heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = 'Voice input is unavailable here, so you will type your answers.'; maybeFinish(); },
+      });
+    };
+    const cantHear = () => {
+      mark('acYou', false);
+      $('#acTips').hidden = false; $('#acFallback').hidden = false;
+      $('#acType').hidden = true; $('#acRetryMic').hidden = true;
+      speech.rate = Math.max(0.85, speech.rate - 0.06);
+    };
+    $('#hearYes').onclick = async () => {
+      candidateHears = true; mark('acYou', true); $('#acTips').hidden = true;
+      if (heardCandidate) return maybeFinish();
+      // they can hear us; now make sure we can hear them
+      stopMic();
+      await say('Great. Now please say a few words, so I can check your microphone.', { kind: 'check' });
+      if (done) return;
+      listen();
+      micWait = setTimeout(async () => {
+        if (heardCandidate || done) return;
+        mark('acThem', false); stopMic();
+        await say('Hmm, I can\u2019t hear you. Please check your microphone, or you can type your answers instead.', { kind: 'check' });
+        $('#acFallback').hidden = false; $('#acCaptions').hidden = true; $('#acType').hidden = false; $('#acRetryMic').hidden = false;
+      }, FAST ? 1500 : 12000);
+    };
+    $('#hearNo').onclick = () => cantHear();
+    $('#hearRepeat').onclick = async () => { stopMic(); await say(hearingCheckLine({ interviewer: persona, candidateName: s.candidateName }), { kind: 'check' }); listen(); };
+    $('#acCaptions').onclick = () => { candidateHears = true; captionsOn = true; mark('acYou', true); finish(voice ? 'captions' : 'typing', 'No problem. I\u2019ll keep the captions on so you can read every question.'); };
+    $('#acType').onclick = () => {
+      voice = false; heardCandidate = true;
+      const mb = $('#micBtn'); if (mb) { mb.setAttribute('aria-pressed', 'false'); mb.nextElementSibling.textContent = 'Typing'; }
+      finish('typing', 'Okay, you can type your answers. I\u2019ll read them on screen.');
+    };
+    $('#acRetryMic').onclick = () => { $('#acFallback').hidden = true; heardCandidate = false; mark('acThem', false); $('#acThemHint').textContent = 'Say something out loud.'; listen(); };
+    (async () => {
+      await say(hearingCheckLine({ interviewer: persona, candidateName: s.candidateName }), { kind: 'check' });
+      if (done) return;
+      avatar.setState('listening');
+      setTag('Listening');
+      listen();
+    })();
+  });
+
   let reviewPending = null;
   const review = (item, { isLast }) => new Promise((resolve) => {
     const q = item.question, r = item.result;
@@ -838,13 +946,14 @@ function renderRoom() {
     speech.stopSpeaking();
     if (pending) pending.finish('end');
     if (reviewPending) reviewPending('end');
+    if (checkPending) checkPending('end');
   });
   const confirmEnd = () => FAST || window.confirm('End the interview now? You will get a report for the questions answered so far.');
 
   const session = new InterviewSession({
     questions,
     config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview' },
-    io: { say, getAnswer, review },
+    io: { say, getAnswer, review, audioCheck },
   });
   window.__ip.session = session;
 
@@ -852,6 +961,7 @@ function renderRoom() {
     await sleep(FAST ? 50 : 900);
     setTag('Connected');
     const result = await session.run();
+    if (result.audioCheck === 'end') { speech.stopListening(); if (recording) await media.stopRecording(); media.stop(); toast('Interview cancelled before it started.'); go('home'); return; }
     speech.stopListening();
     const blob = recording ? await media.stopRecording() : null;
     media.stop();
@@ -1056,7 +1166,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.2.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.3.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

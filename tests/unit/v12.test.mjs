@@ -167,3 +167,26 @@ test('selection chance penalises interruptions', () => {
   assert.ok(b.score < a.score, `${b.score} < ${a.score}`);
   assert.ok(b.reasons.some(r => /redirect 2 off-topic answers \(−6\)/.test(r)));
 });
+
+test('audio check runs before anything else; cancelling it ends the session', async () => {
+  const qs = ['java-009'].map(questionById);
+  const order = [];
+  const mk = (check) => ({
+    say: async (t, m) => { order.push(m.kind + ':' + t.slice(0, 7)); },
+    getAnswer: async () => ({ action: 'done', text: qs[0].ideal }),
+    audioCheck: async () => { order.push('check'); return check; },
+  });
+  const s1 = new InterviewSession({ questions: qs, config: { interviewer: INTERVIEWERS[0], position: 'X', followUps: false, seed: 1 }, io: mk('ok') });
+  const r1 = await s1.run();
+  assert.equal(order[0], 'check');
+  assert.equal(order[1], 'greeting:Perfect');
+  assert.equal(r1.items.length, 1);
+  order.length = 0;
+  const s2 = new InterviewSession({ questions: qs, config: { interviewer: INTERVIEWERS[0], position: 'X', followUps: false, seed: 1 }, io: mk('end') });
+  const r2 = await s2.run();
+  assert.deepEqual(order, ['check']);
+  assert.equal(r2.items.length, 0);
+  assert.equal(r2.audioCheck, 'end');
+  const { hearingCheckLine } = await import('../../www/js/engine/session.js');
+  assert.equal(hearingCheckLine({ interviewer: INTERVIEWERS[1], candidateName: 'Rahul' }), 'Hi Rahul, this is Vikram. Can you hear me okay?');
+});

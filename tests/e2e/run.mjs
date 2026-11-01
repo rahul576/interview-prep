@@ -33,6 +33,14 @@ const SCENARIOS = [
 ];
 
 const server = createServer().listen(PORT);
+
+/** Every session starts with the interviewer asking "Can you hear me?" — confirm it. */
+async function confirmAudio(page) {
+  await page.waitForSelector('#hearYes', { timeout: 15000 });
+  await page.waitForFunction(() => /Can you hear me/.test(document.querySelector('#log')?.textContent || ''), null, { timeout: 15000 });
+  await page.click('#hearYes');
+  await page.waitForSelector('#answerBox:not([hidden])', { timeout: 15000 });
+}
 const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
 let failures = 0;
 const log = (...a) => console.log(...a);
@@ -81,7 +89,7 @@ async function runInterview(vp, sc, idx) {
   await page.waitForFunction(() => document.querySelector('#checks')?.textContent.includes('Camera is working'), null, { timeout: 10000 });
   await noHorizontalScroll(page, `${tag} check`);
   await shot('3-check');
-  await page.click('#start');
+  await page.click('#start'); await confirmAudio(page);
 
   // Interview room: answer every prompt
   const asked = [];
@@ -204,7 +212,7 @@ try {
   await page.click('.role-card [data-role="devops"]');
   await page.click('#toCheck');
   await page.waitForFunction(() => document.querySelector('#checks')?.textContent.includes('Camera'));
-  await page.click('#start');
+  await page.click('#start'); await confirmAudio(page);
   await page.waitForSelector('#doneBtn:not([disabled])');
   await page.click('#pauseBtn');
   await page.waitForSelector('.pause-overlay');
@@ -236,7 +244,7 @@ async function startSession(page, { role, style, count = 5, mode = 'technical', 
   await page.click(`[data-mode="${mode}"]`);
   await page.click('#toCheck');
   await page.waitForFunction(() => /Camera (is working|unavailable)|Permission denied/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 10000 });
-  await page.click('#start');
+  await page.click('#start'); await confirmAudio(page);
 }
 try {
   const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, isMobile: true, hasTouch: true, permissions: ['camera', 'microphone'] });
@@ -296,7 +304,7 @@ try {
   // 3) Practise the revision list, answer one correctly -> it leaves the list
   await page.click('[data-practice="java-backend"]');
   await page.waitForFunction(() => /Camera (is working|unavailable)/.test(document.querySelector('#checks')?.textContent || ''));
-  await page.click('#start');
+  await page.click('#start'); await confirmAudio(page);
   const revIds = await page.evaluate(() => window.__ip.questions);
   assert.deepEqual([...revIds].sort(), expectedWeak, 'revision practice uses the weak questions');
   for (let k = 0; k < revIds.length; k++) {
@@ -352,7 +360,7 @@ try {
   await page.click('[data-style="interview"]'); await page.click('[data-mode="technical"]'); await page.click('[data-count="5"]');
   await page.click('#toCheck');
   await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
-  await page.click('#start');
+  await page.click('#start'); await confirmAudio(page);
   await page.waitForSelector('#doneBtn:not([disabled])');
   const chat = 'Well I think the most important thing in my career has been working with great people and learning every day from my mentors who taught me how to be patient and kind and to always keep growing as a person in whatever I do in my life and at home with my family on weekends';
   await page.fill('#answer', chat);
@@ -374,6 +382,85 @@ try {
   log('PASS  interviewer interrupts off-topic answer');
   await ctx.close();
 } catch (e) { failures++; log('FAIL  interruption', e.message); }
+
+
+// Audio check: "Can you hear me?" — can't-hear path, captions fallback, and nothing starts before confirmation
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, permissions: ['camera', 'microphone'] });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=77`);
+  await page.click('.role-card [data-role="devops"]');
+  await page.fill('#name', 'Rahul');
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start');
+  await page.waitForSelector('#hearYes');
+  await page.waitForFunction(() => /Hi Rahul, this is \w+\. Can you hear me okay\?/.test(document.querySelector('#log')?.textContent || ''));
+  await page.waitForTimeout(800);
+  assert.equal(await page.$eval('#answerBox', e => e.hidden), true, 'no question before the audio check is confirmed');
+  assert.equal(await page.textContent('#qcount'), 'Q 0/8', 'interview has not started');
+  await page.click('#hearNo');
+  await page.waitForSelector('#acTips:not([hidden])');
+  assert.equal(await page.$eval('#acYou .st', e => e.textContent), '!');
+  await page.click('#hearRepeat');
+  await page.waitForFunction(() => (document.querySelector('#log')?.textContent.match(/Can you hear me okay\?/g) || []).length === 2);
+  await page.screenshot({ path: new URL('audio-check.png', OUT).pathname });
+  await page.click('#acCaptions');
+  await page.waitForSelector('#doneBtn:not([disabled])');
+  const logText = await page.textContent('#log');
+  assert.ok(/captions on/.test(logText), 'captions fallback acknowledged');
+  assert.ok(/Perfect, I’m/.test(logText), 'greeting follows the check');
+  assert.equal(await page.textContent('#qcount'), 'Q 1/8');
+  // End during a new session's audio check -> back home, nothing saved
+  const before = (await page.evaluate(() => window.__ip.store.history())).length;
+  await page.click('[data-nav="home"] >> nth=0').catch(() => {});
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=78`);
+  await page.click('.role-card [data-role="devops"]'); await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start');
+  await page.waitForSelector('#hearYes');
+  await page.click('#endBtn');
+  await page.waitForFunction(() => window.__ip.screen === 'home');
+  assert.equal((await page.evaluate(() => window.__ip.store.history())).length, before, 'cancelled check saves nothing');
+  assert.deepEqual(errors, []);
+  log('PASS  audio check: can-you-hear-me, repeat, captions fallback, cancel');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  audio check', e.message); }
+
+
+// Voice path: candidate SAYS "yes, I can hear you" -> interviewer confirms and starts automatically
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, permissions: ['camera', 'microphone'] });
+  await ctx.addInitScript(() => {
+    // Simulated speech recogniser: replies "yes I can hear you" shortly after listening starts.
+    class FakeRec {
+      start() { this._t = setTimeout(() => { const r = [{ 0: { transcript: 'yes I can hear you' }, isFinal: true, length: 1 }]; this.onresult && this.onresult({ resultIndex: 0, results: r }); }, 400); }
+      stop() { clearTimeout(this._t); setTimeout(() => this.onend && this.onend(), 10); }
+      abort() { this.stop(); }
+    }
+    window.webkitSpeechRecognition = FakeRec;
+    window.SpeechRecognition = FakeRec;
+  });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?seed=79`);
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.click('[data-count="5"]');
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 15000 });
+  assert.equal(await page.getAttribute('[data-am="voice"]', 'aria-pressed'), 'true', 'voice mode selected');
+  await page.click('#start');
+  await page.waitForFunction(() => /I can hear you clearly too/.test(document.querySelector('#log')?.textContent || ''), null, { timeout: 40000 });
+  assert.equal(await page.$eval('#acYou .st', e => e.textContent), '✓');
+  assert.equal(await page.$eval('#acThem .st', e => e.textContent), '✓');
+  await page.waitForFunction(() => document.querySelector('#qcount')?.textContent === 'Q 1/5', null, { timeout: 60000 });
+  assert.deepEqual(errors, []);
+  log('PASS  audio check by voice: "yes, I can hear you" starts the interview');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  audio check by voice', e.message); }
 
 await browser.close();
 server.close();

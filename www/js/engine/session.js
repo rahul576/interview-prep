@@ -12,12 +12,17 @@ export const RULES = Object.freeze({
 const ACKS = ['Thank you.', 'Okay, got it.', 'Alright, thanks.', 'Understood.', 'Okay.', 'Thanks for that.'];
 const NEXT = ['Let’s move on.', 'Next question.', 'Moving on.', 'Here’s the next one.', 'Let’s continue.'];
 
-export function prepGreetingLine({ interviewer, candidateName, count }) {
-  return `${candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}. This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit. After each answer you will see feedback and the model answer, and you can try again as often as you like.`;
+export function prepGreetingLine({ interviewer, candidateName, count, audioChecked }) {
+  return `${audioChecked ? 'Perfect' : candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}. This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit. After each answer you will see feedback and the model answer, and you can try again as often as you like.`;
 }
 
-export function greetingLine({ interviewer, candidateName, position, count }) {
-  const who = candidateName ? `Hi ${candidateName}` : 'Hi there';
+/** First thing the interviewer says, before anything else: a two-way audio check. */
+export function hearingCheckLine({ interviewer, candidateName }) {
+  return `Hi${candidateName ? ' ' + candidateName : ''}, this is ${interviewer.name.split(' ')[0]}. Can you hear me okay?`;
+}
+
+export function greetingLine({ interviewer, candidateName, position, count, audioChecked }) {
+  const who = audioChecked ? 'Perfect' : (candidateName ? `Hi ${candidateName}` : 'Hi there');
   return `${who}, I’m ${interviewer.name.split(' ')[0]}, ${interviewer.title.toLowerCase()} on the hiring panel. Thanks for joining. This is ${[8, 11, 18].includes(count) || String(count).startsWith('8') ? 'an' : 'a'} ${count}-question interview for the ${position} role. Take your time and think out loud — when you’ve finished an answer, tap “Done”. Let’s begin.`;
 }
 
@@ -64,8 +69,16 @@ export class InterviewSession {
   }
 
   async run() {
-    const { io, config } = this;
+    const { io } = this;
+    let { config } = this;
     const prep = config.mode === 'prep';
+    // Like a real call: confirm both sides can hear each other before starting.
+    if (io.audioCheck) {
+      const check = await io.audioCheck();
+      if (check === 'end') { this.ended = true; return { items: [], endedEarly: true, audioCheck: check }; }
+      this.audioCheck = check;
+      config = { ...config, audioChecked: true };
+    }
     await io.say((prep ? prepGreetingLine : greetingLine)({ ...config, count: this.questions.length }), { kind: 'greeting' });
 
     for (let i = 0; i < this.questions.length && !this.ended; i++) {
