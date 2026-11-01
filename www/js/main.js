@@ -6,7 +6,7 @@ import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession, hearingCheckLine } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
-import { SpeechService, isNative, sleep, rankedVoices } from './services/speech.js';
+import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
 import { MediaService } from './services/media.js';
 import { store } from './services/store.js';
 import { updateProgress, weakQuestions, markLearned, seenMap, progressStats, PASS_SCORE } from './engine/progress.js';
@@ -421,6 +421,15 @@ async function renderCheck() {
           <div class="meter" style="flex:1" aria-label="Microphone level"><i id="lvl"></i></div>
         </div>
         <p class="muted" style="font-size:13px" id="micHint">Say something — the bar should move.</p>
+        <div id="micBox" hidden style="margin-top:8px">
+          <label class="eyebrow" for="micSel" style="display:block;margin-bottom:6px">Microphone</label>
+          <select id="micSel" class="field"></select>
+        </div>
+        <div class="mic-help" id="micHelp" hidden role="alert"></div>
+        <div class="stt-test" style="margin-top:12px">
+          <button class="btn" id="sttTest">${ICONS.mic} Test voice answers</button>
+          <p class="muted" id="sttOut" style="font-size:13px;margin:8px 0 0">Click, then say a sentence. You should see your words appear here.</p>
+        </div>
       </div>
       <div class="card card-pad" style="display:flex;flex-direction:column;gap:16px">
         <ul class="checklist" id="checks"></ul>
@@ -470,29 +479,121 @@ async function renderCheck() {
   };
   drawChecks();
 
-  try {
-    await media.start({ video: true, audio: true });
-    media.attach($('#pv'));
-    $('#pvPh').remove();
-    checks.camera = ['ok', 'Camera', 'Camera is working'];
-    if (media.hasAudio()) {
-      checks.mic = ['ok', 'Microphone', 'Microphone connected'];
-      const level = media.levelMeter();
-      const loop = () => { if (!$('#lvl')) return; $('#lvl').style.width = `${Math.round(level() * 100)}%`; requestAnimationFrame(loop); };
-      loop();
-    } else {
-      const micOk = await speech.requestMicPermission();
-      checks.mic = [micOk ? 'ok' : 'warn', 'Microphone', isNative() ? (micOk ? 'Microphone access granted for speech recognition' : 'Microphone permission needed for voice answers') : 'No microphone detected'];
-      $('#micHint').textContent = isNative() ? 'On the app, your microphone is used by speech recognition.' : 'No microphone — you can type answers.';
-      if (!micOk && isNative()) { s.answerMode = 'type'; $$('[data-am]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.am === 'type'))); }
+  const setVoiceMode = (on) => {
+    s.answerMode = on ? 'voice' : 'type';
+    $$('[data-am]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.am === s.answerMode)));
+  };
+  const showHelp = (html) => { const h = $('#micHelp'); if (!h) return; h.hidden = !html; h.innerHTML = html || ''; };
+  const note = browserSpeechNote();
+  if (note && !isNative()) checks.stt = ['warn', 'Voice answers', note];
+
+  let meterRun = 0;
+  const startMeter = () => {
+    const run = ++meterRun;
+    const level = media.levelMeter();
+    let loudSeen = false;
+    const t0 = performance.now();
+    const loop = () => {
+      if (run !== meterRun || !$('#lvl')) return;
+      const v = level();
+      $('#lvl').style.width = `${Math.round(v * 100)}%`;
+      if (v > 0.04 && !loudSeen) {
+        loudSeen = true;
+        checks.mic = ['ok', 'Microphone', `Hearing you on: ${media.micLabel() || 'default microphone'}`];
+        drawChecks(); showHelp('');
+        $('#micHint').textContent = 'Great — the bar is moving, your microphone works.';
+      }
+      if (!loudSeen && performance.now() - t0 > 6000 && !$('#micHelp').dataset.silent) {
+        $('#micHelp').dataset.silent = '1';
+        checks.mic = ['warn', 'Microphone', `No sound from: ${media.micLabel() || 'default microphone'}`];
+        drawChecks();
+        showHelp(`<b>The microphone is connected but silent.</b> Try these:<ol>
+          <li>Pick another microphone in the list${$('#micSel') && $('#micSel').options.length > 1 ? ' above' : ''} (a Mac mini has no built-in mic; choose your headset/AirPods/USB mic).</li>
+          <li>macOS: <b>System Settings → Privacy &amp; Security → Microphone</b> — switch on your browser (Chrome/Edge/Safari), then <b>quit and reopen the browser</b>. Without this the browser gets silence even though the site is allowed.</li>
+          <li>macOS: System Settings → Sound → Input — check the input level moves when you talk.</li></ol>`);
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  };
+
+  const fillMics = async () => {
+    const mics = await media.listMics();
+    if (mics.length < 1 || isNative()) return;
+    const cur = media.audioTrack()?.getSettings?.().deviceId || store.prefs().micId || '';
+    $('#micBox').hidden = false;
+    $('#micSel').innerHTML = mics.map(m => `<option value="${esc(m.id)}" ${m.id === cur ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+  };
+
+  const startDevices = async (micId) => {
+    try {
+      await media.start({ video: true, audio: true, micId });
+      if (media.hasVideo()) {
+        media.attach($('#pv')); $('#pvPh')?.remove();
+        checks.camera = ['ok', 'Camera', 'Camera is working'];
+      } else {
+        if ($('#pvPh')) $('#pvPh').textContent = 'No camera found. You can still continue — the interviewer will just not see you.';
+        checks.camera = ['warn', 'Camera', 'No camera (optional)'];
+        state.setup.camera = false;
+      }
+      if (media.hasAudio()) {
+        checks.mic = ['ok', 'Microphone', `Connected: ${media.micLabel() || 'default microphone'} — say something`];
+        delete $('#micHelp').dataset.silent; showHelp('');
+        startMeter();
+        await fillMics();
+      } else if (isNative()) {
+        const micOk = await speech.requestMicPermission();
+        checks.mic = [micOk ? 'ok' : 'warn', 'Microphone', micOk ? 'Microphone access granted for speech recognition' : 'Microphone permission needed for voice answers'];
+        $('#micHint').textContent = 'On the app, your microphone is used by speech recognition.';
+        if (!micOk) setVoiceMode(false);
+      } else {
+        const e = media.audioError;
+        const denied = e && /NotAllowed|Security/i.test(e.name);
+        checks.mic = ['bad', 'Microphone', denied ? 'Blocked by the browser or macOS' : 'No microphone found'];
+        $('#micHint').textContent = 'The microphone could not be opened.';
+        showHelp(denied ? sttErrorHelp('not-allowed') : `No microphone could be opened${e ? ` (${esc(e.name)})` : ''}. Plug in or select a microphone, then reload this page.`);
+      }
+    } catch (err) {
+      const denied = /NotAllowed|Security/i.test(err && err.name);
+      if ($('#pvPh')) $('#pvPh').textContent = 'Camera and microphone unavailable. You can still type your answers.';
+      checks.camera = ['bad', 'Camera', denied ? 'Permission denied' : 'No camera'];
+      checks.mic = ['bad', 'Microphone', denied ? 'Blocked by the browser or macOS' : 'No microphone found'];
+      showHelp(denied ? sttErrorHelp('not-allowed') : 'No camera or microphone could be opened. Check they are connected and not used by another app (Zoom, Teams, FaceTime), then reload.');
+      state.setup.camera = false;
     }
-  } catch (err) {
-    $('#pvPh').textContent = 'Camera unavailable or permission denied. You can still continue — the interviewer will just not see you.';
-    checks.camera = ['bad', 'Camera', 'Permission denied or no camera'];
-    checks.mic = ['warn', 'Microphone', 'Not available'];
-    state.setup.camera = false;
-  }
-  drawChecks();
+    drawChecks();
+  };
+  await startDevices(store.prefs().micId || null);
+  $('#micSel')?.addEventListener('change', async (e) => {
+    store.savePrefs({ micId: e.target.value });
+    $('#micHint').textContent = 'Switching microphone… say something.';
+    await startDevices(e.target.value);
+  });
+
+  // End-to-end check of the voice-answer pipeline (mic → browser speech recognition → text).
+  let sttCtl = null;
+  $('#sttTest').addEventListener('click', () => {
+    const out = $('#sttOut'); const btn = $('#sttTest');
+    if (sttCtl) { sttCtl.stop(); sttCtl = null; return; }
+    if (!speech.sttAvailable()) { out.innerHTML = esc(sttErrorHelp('unsupported')); return; }
+    let heard = '';
+    out.textContent = 'Listening… say a sentence.';
+    btn.innerHTML = `${ICONS.mic} Stop test`;
+    const done = (ok, msg) => {
+      if (sttCtl) { try { sttCtl.stop(); } catch {} sttCtl = null; }
+      btn.innerHTML = `${ICONS.mic} Test voice answers`;
+      out.innerHTML = msg;
+      checks.stt = [ok ? 'ok' : 'bad', 'Voice answers', ok ? 'Speech recognition works' : 'Speech recognition failed — see the note on the left'];
+      drawChecks();
+      if (!ok) setVoiceMode(false); else setVoiceMode(true);
+    };
+    const timer = setTimeout(() => done(!!heard.trim(), heard.trim() ? `✓ Heard: “${esc(heard.trim())}”` : 'Nothing was recognised in 10 seconds. Check the microphone bar above moves when you talk; if it does not, follow the microphone tips. If it does, your browser\u2019s speech service may be blocked: try Chrome, Edge or Safari.'), 10000);
+    sttCtl = speech.startListening({
+      track: media.audioTrack(),
+      onText: (txt) => { heard = txt; out.innerHTML = `Heard: “${esc(txt)}”`; if (txt.trim().split(/\s+/).length >= 3) { clearTimeout(timer); done(true, `✓ Voice answers work. Heard: “${esc(txt.trim())}”`); } },
+      onError: (code) => { clearTimeout(timer); done(false, `✕ ${esc(sttErrorHelp(code))}`); },
+    });
+  });
 
   $('#testVoice').addEventListener('click', () => speech.speak(`Hello${s.candidateName ? ' ' + s.candidateName : ''}, can you hear me clearly?`, { gender: interviewerById(s.interviewerId).gender }));
 
@@ -690,6 +791,7 @@ function renderRoom() {
       if (!voice) { setMic(false, 'Typing mode'); return; }
       const base = ui.answer.value;
       ctl = speech.startListening({
+        track: media.audioTrack(),
         onText: (txt) => { ui.answer.value = (base ? base + ' ' : '') + txt; ui.answer.scrollTop = ui.answer.scrollHeight; },
         onError: (e) => {
           voice = false;
@@ -697,7 +799,7 @@ function renderRoom() {
           if (mb) { mb.setAttribute('aria-pressed', 'false'); mb.nextElementSibling.textContent = 'Typing'; }
           const blocked = e === 'not-allowed' || e === 'service-not-allowed';
           setMic(false, blocked ? 'Mic blocked — type instead' : 'Voice unavailable — type instead');
-          toast(blocked ? 'Microphone blocked. You can type your answer.' : `Voice input stopped (${e}). Your words so far are kept — continue by typing.`, 4000);
+          toast(`${sttErrorHelp(e)} Your words so far are kept — continue by typing.`, 9000);
           ui.answer.focus();
         },
         onState: (st) => setMic(st === 'listening', st === 'listening' ? 'Listening… speak now' : 'Mic idle'),
@@ -830,6 +932,7 @@ function renderRoom() {
     const listen = () => {
       if (!voice || ctl) return;
       ctl = speech.startListening({
+        track: media.audioTrack(),
         onText: (txt) => {
           if (!txt.trim()) return;
           if (!heardCandidate) { heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = 'I can hear you.'; }
@@ -837,7 +940,7 @@ function renderRoom() {
           if (!candidateHears) { candidateHears = true; mark('acYou', true); }
           maybeFinish();
         },
-        onError: () => { voice = false; heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = 'Voice input is unavailable here, so you will type your answers.'; maybeFinish(); },
+        onError: (code) => { voice = false; heardCandidate = true; mark('acThem', true); $('#acThemHint').textContent = `Voice input is unavailable, so you will type your answers. ${sttErrorHelp(code)}`; maybeFinish(); },
       });
     };
     const cantHear = () => {
@@ -1166,7 +1269,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.3.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.3.1', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

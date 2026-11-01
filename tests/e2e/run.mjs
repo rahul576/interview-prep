@@ -462,6 +462,78 @@ try {
   await ctx.close();
 } catch (e) { failures++; log('FAIL  audio check by voice', e.message); }
 
+// Microphone diagnostics on the device-check screen (V1.3.1)
+async function checkPage(init) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['camera', 'microphone'] });
+  if (init) await ctx.addInitScript(init);
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  await page.goto(`http://localhost:${PORT}/?seed=81`);
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.click('#toCheck');
+  return { ctx, page, errors };
+}
+try {
+  // 1) working mic + working recogniser: picker listed, meter hears the (fake) tone, voice test passes
+  const { ctx, page, errors } = await checkPage(() => {
+    class FakeRec { start(track) { window.__recTrack = track ? track.kind : null; this._t = setTimeout(() => this.onresult && this.onresult({ resultIndex: 0, results: [{ 0: { transcript: 'hello this is a test' }, isFinal: true, length: 1 }] }), 300); }
+      stop() { clearTimeout(this._t); setTimeout(() => this.onend && this.onend(), 10); } abort() { this.stop(); } }
+    window.webkitSpeechRecognition = FakeRec; window.SpeechRecognition = FakeRec;
+  });
+  await page.waitForSelector('#micBox:not([hidden])', { timeout: 15000 });
+  assert.ok(await page.$$eval('#micSel option', o => o.length) >= 1, 'microphones listed');
+  await page.waitForFunction(() => /Hearing you on/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 15000 });
+  await page.click('#sttTest');
+  await page.waitForFunction(() => /Voice answers work/.test(document.querySelector('#sttOut')?.textContent || ''), null, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => window.__recTrack), 'audio', 'selected mic track handed to recogniser');
+  assert.equal(await page.getAttribute('[data-am="voice"]', 'aria-pressed'), 'true');
+  // switching microphone restarts the stream and remembers the choice
+  const id = await page.$eval('#micSel', s => s.options[s.options.length - 1].value);
+  await page.selectOption('#micSel', id);
+  await page.waitForFunction(() => /Connected:|Hearing you/.test(document.querySelector('#checks')?.textContent || ''));
+  assert.equal(await page.evaluate(() => window.__ip.store.prefs().micId), id, 'mic choice saved');
+  await page.screenshot({ path: new URL('mic-check.png', OUT).pathname });
+  assert.deepEqual(errors, []);
+  await ctx.close();
+
+  // 2) recogniser fails with "network" (e.g. Brave/Arc): explained, and answers switch to typing
+  const b = await checkPage(() => {
+    class FakeRec { start() { setTimeout(() => { this.onerror && this.onerror({ error: 'network' }); this.onend && this.onend(); }, 200); } stop() {} abort() {} }
+    window.webkitSpeechRecognition = FakeRec; window.SpeechRecognition = FakeRec;
+  });
+  await b.page.waitForSelector('#micBox:not([hidden])', { timeout: 15000 });
+  await b.page.click('#sttTest');
+  await b.page.waitForFunction(() => /speech service could not be reached/.test(document.querySelector('#sttOut')?.textContent || ''), null, { timeout: 15000 });
+  assert.equal(await b.page.getAttribute('[data-am="type"]', 'aria-pressed'), 'true', 'falls back to typing');
+  assert.deepEqual(b.errors, []);
+  await b.ctx.close();
+
+  // 3) no webcam (e.g. Mac mini): microphone must still work
+  const c = await checkPage(() => {
+    const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = (cons) => cons.video ? Promise.reject(Object.assign(new Error('no cam'), { name: 'NotFoundError' })) : orig(cons);
+  });
+  await c.page.waitForFunction(() => /No camera \(optional\)/.test(document.querySelector('#checks')?.textContent || ''), null, { timeout: 15000 });
+  await c.page.waitForFunction(() => /Microphone(Connected|Hearing)/.test(document.querySelector('#checks')?.textContent.replace(/\s+/g, '') || ''), null, { timeout: 15000 });
+  assert.deepEqual(c.errors, []);
+  await c.ctx.close();
+
+  // 4) silent microphone (macOS privacy block gives silence): tips shown after a few seconds
+  const d = await checkPage(() => {
+    const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (cons) => {
+      const st = await orig({ video: cons.video });
+      if (cons.audio) { const ac = new AudioContext(); const dst = ac.createMediaStreamDestination(); st.addTrack(dst.stream.getAudioTracks()[0]); }
+      return st;
+    };
+  });
+  await d.page.waitForSelector('#micHelp:not([hidden])', { timeout: 15000 });
+  assert.ok(/Privacy &amp; Security|Privacy & Security/.test(await d.page.innerHTML('#micHelp')), 'macOS privacy tip shown');
+  await d.page.screenshot({ path: new URL('mic-silent.png', OUT).pathname });
+  await d.ctx.close();
+  log('PASS  microphone diagnostics: picker, voice test, network error, no webcam, silent mic');
+} catch (e) { failures++; log('FAIL  microphone diagnostics', e.message); }
+
 await browser.close();
 server.close();
 log(failures ? `\n${failures} E2E scenario(s) failed` : '\nAll E2E scenarios passed. Screenshots in test-results/');

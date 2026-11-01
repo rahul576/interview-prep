@@ -17,16 +17,47 @@ export class MediaService {
    * On native apps the microphone is used by the speech recogniser, so we only
    * capture video there to avoid both fighting over the mic.
    */
-  async start({ video = true, audio = true } = {}) {
+  /**
+   * Start camera + microphone. They are requested together first, and if that fails
+   * (for example a Mac mini with no webcam) each one is requested on its own, so a
+   * missing camera never disables a working microphone.
+   */
+  async start({ video = true, audio = true, micId = null } = {}) {
     if (!this.supported()) throw new Error('Camera API not available');
     this.stop();
+    this.audioError = null; this.videoError = null;
     const wantAudio = audio && !isNative();
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      video: video ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
-      audio: wantAudio ? { echoCancellation: true, noiseSuppression: true } : false,
-    });
+    const gum = (c) => navigator.mediaDevices.getUserMedia(c);
+    const audioC = (id) => wantAudio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(id ? { deviceId: { exact: id } } : {}) } : false;
+    const videoC = video ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false;
+    try {
+      this.stream = await gum({ video: videoC, audio: audioC(micId) });
+    } catch (both) {
+      let a = null, v = null;
+      if (wantAudio) {
+        try { a = await gum({ audio: audioC(micId) }); }
+        catch (e) {
+          if (micId) { try { a = await gum({ audio: audioC(null) }); } catch (e2) { this.audioError = e2; } }
+          else this.audioError = e;
+        }
+      }
+      if (videoC) { try { v = await gum({ video: videoC }); } catch (e) { this.videoError = e; } }
+      if (!a && !v) { this.audioError = this.audioError || both; this.videoError = this.videoError || both; throw both; }
+      this.stream = new MediaStream([...(v ? v.getVideoTracks() : []), ...(a ? a.getAudioTracks() : [])]);
+    }
     return this.stream;
   }
+
+  /** Audio input devices (labels are available once permission was granted). */
+  async listMics() {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      return all.filter(d => d.kind === 'audioinput').map(d => ({ id: d.deviceId, label: d.label || 'Microphone' }));
+    } catch { return []; }
+  }
+
+  audioTrack() { return this.stream ? this.stream.getAudioTracks()[0] || null : null; }
+  micLabel() { const t = this.audioTrack(); return t ? t.label : ''; }
 
   attach(videoEl) {
     if (!videoEl || !this.stream) return;
@@ -47,6 +78,12 @@ export class MediaService {
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       this.audioCtx = this.audioCtx || new Ctx();
+      // Safari/Chrome may create the context suspended (autoplay rules), which reads as silence.
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+        const wake = () => { this.audioCtx && this.audioCtx.resume().catch(() => {}); };
+        document.addEventListener('pointerdown', wake, { once: true });
+      }
       const src = this.audioCtx.createMediaStreamSource(this.stream);
       const an = this.audioCtx.createAnalyser();
       an.fftSize = 512;

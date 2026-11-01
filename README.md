@@ -1,5 +1,12 @@
 # InterviewPro — V1.3
 
+## What's new in V1.3.1 – microphone diagnostics
+- Device check lists every **microphone** and lets you pick one (remembered); the interview uses it.
+- A missing webcam (e.g. Mac mini) no longer disables the microphone.
+- **Silent-mic detection**: if the mic is connected but nothing is heard for 6 s, the app explains the macOS fix (System Settings → Privacy & Security → Microphone → enable the browser, then quit and reopen it).
+- **Test voice answers** button: checks mic → speech recognition → text end to end, and explains each failure (blocked permission, Safari Dictation off, Brave/Arc blocking the speech service, no audio, Firefox).
+- Clear, actionable messages if voice input stops during the interview.
+
 ## What's new in V1.3
 - **"Can you hear me?" audio check** before every session. The interviewer greets you and asks whether you can hear them, and the interview starts only when both sides are confirmed:
   - **You can hear them:** tap *Yes, I hear you*, or just say "Yes, I can hear you".

@@ -215,20 +215,21 @@ export class SpeechService {
    * Continuous dictation. onText(fullTranscript, isFinal) is called as speech arrives.
    * Returns a controller with stop() -> final transcript.
    */
-  startListening({ onText, onError, onState } = {}) {
+  startListening({ onText, onError, onState, track = null } = {}) {
     if (this._listen) this._listen.stop();
-    const ctl = this.native ? this._listenNative({ onText, onError, onState }) : this._listenWeb({ onText, onError, onState });
+    const ctl = this.native ? this._listenNative({ onText, onError, onState }) : this._listenWeb({ onText, onError, onState, track });
     this._listen = ctl;
     return ctl;
   }
 
-  _listenWeb({ onText, onError, onState }) {
+  _listenWeb({ onText, onError, onState, track }) {
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     let committed = '';
     let interim = '';
     let active = true;
     let rec = null;
     let restarts = [];
+    let useTrack = !!(track && track.readyState === 'live');
     const emit = (final) => onText && onText((committed + ' ' + interim).replace(/\s+/g, ' ').trim(), final);
     const start = () => {
       rec = new Rec();
@@ -247,6 +248,8 @@ export class SpeechService {
       };
       rec.onerror = (e) => {
         if (e.error === 'no-speech' || e.error === 'aborted') return;
+        // Feeding a chosen mic track is newer; if the engine rejects it, retry once on the default input.
+        if (useTrack) { useTrack = false; return; }
         // network, audio-capture, not-allowed, language-not-supported...: stop and let the UI fall back to typing
         active = false;
         onError && onError(e.error);
@@ -258,7 +261,10 @@ export class SpeechService {
         if (active && restarts.length < 8) { restarts.push(now); try { start(); } catch { active = false; } }
         else { if (active) { active = false; onError && onError('restart-limit'); } onState && onState('stopped'); }
       };
-      try { rec.start(); onState && onState('listening'); } catch (err) { onError && onError(String(err)); }
+      try {
+        if (useTrack) { try { rec.start(track); } catch { useTrack = false; rec.start(); } } else rec.start();
+        onState && onState('listening');
+      } catch (err) { active = false; onError && onError(String(err && err.name || err)); }
     };
     start();
     return {
@@ -323,3 +329,27 @@ export class SpeechService {
 }
 
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** Human explanation + fix for a speech-recognition error code. */
+export function sttErrorHelp(code) {
+  const mac = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : '');
+  const macPerm = mac ? ' On a Mac also check System Settings → Privacy & Security → Microphone, switch your browser on, then quit and reopen the browser.' : '';
+  switch (code) {
+    case 'not-allowed': return 'Microphone access is blocked for this site. Click the lock/settings icon in the address bar and allow Microphone.' + macPerm;
+    case 'service-not-allowed': return 'The browser\u2019s speech-recognition service is turned off. In Safari it uses macOS Dictation: System Settings → Keyboard → Dictation → On. Or use Chrome or Edge.';
+    case 'network': return 'The browser\u2019s speech service could not be reached. Chrome and Edge recognise speech online, so check your internet. Brave, Arc and Opera often block this service: use Chrome, Edge or Safari.';
+    case 'audio-capture': return 'No audio could be captured from the microphone. Pick the right microphone on the device-check screen.' + macPerm;
+    case 'language-not-supported': return 'The selected accent is not supported for recognition here. Choose English (United States) in setup.';
+    case 'restart-limit': return 'Speech recognition kept stopping without hearing anything. Check the microphone input and permissions.' + macPerm;
+    case 'unsupported': return 'This browser has no speech recognition (for example Firefox). Use Chrome, Edge or Safari to answer by voice, or type your answers.';
+    default: return `Speech recognition stopped (${code}).` + macPerm;
+  }
+}
+
+/** Known browser limitations worth warning about before the interview. */
+export function browserSpeechNote() {
+  if (typeof navigator === 'undefined') return '';
+  if (navigator.brave) return 'Brave blocks the online speech service that voice answers rely on. For voice answers use Chrome, Edge or Safari.';
+  if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return sttErrorHelp('unsupported');
+  return '';
+}

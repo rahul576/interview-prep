@@ -1,5 +1,5 @@
 // Offline cache for the web/PWA build. Bump VERSION when assets change.
-const VERSION = 'interviewpro-v1.3.0';
+const VERSION = 'interviewpro-v1.3.1';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/data/meta.js', './js/data/kp.js', './js/data/questions.js',
