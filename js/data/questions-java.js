@@ -1,0 +1,596 @@
+// Java Backend Developer question bank (offline).
+// Each key point lists keywords/phrases (any one match = point covered).
+// A trailing * on a keyword means prefix match on its last word (e.g. "autoscal*").
+import { kp } from './kp.js';
+
+export const JAVA_QUESTIONS = [
+  // ---------------- Core Java ----------------
+  {
+    id: 'java-001', topic: 'Core Java & OOP', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What are the four pillars of object-oriented programming, and how does Java support each of them?',
+    keyPoints: [
+      kp('Encapsulation – private state with controlled access', 'encapsulation', 'private field*', 'getter*', 'data hiding'),
+      kp('Inheritance – reuse via extends', 'inheritance', 'extends', 'subclass'),
+      kp('Polymorphism – overriding and overloading', 'polymorphism', 'overriding', 'overloading', 'dynamic dispatch'),
+      kp('Abstraction – abstract classes and interfaces', 'abstraction', 'abstract class', 'interface'),
+    ],
+    ideal: 'Encapsulation hides internal state behind private fields and exposes it through getters and setters or meaningful methods. Inheritance lets a subclass reuse and specialise another class using extends. Polymorphism lets one reference call different implementations: runtime polymorphism through method overriding and dynamic dispatch, compile-time polymorphism through method overloading. Abstraction exposes only the essential behaviour using abstract classes and interfaces, so callers depend on contracts instead of implementation details.',
+    followUp: 'Can you give a concrete example of runtime polymorphism from a project you worked on?',
+  },
+  {
+    id: 'java-002', topic: 'Core Java & OOP', levels: ['entry'], type: 'concept',
+    q: 'Explain the difference between the JDK, the JRE and the JVM.',
+    keyPoints: [
+      kp('JVM executes bytecode', 'jvm', 'java virtual machine', 'bytecode'),
+      kp('JRE = JVM plus runtime libraries', 'jre', 'runtime environment', 'class librar*', 'standard librar*'),
+      kp('JDK = JRE plus development tools like javac', 'jdk', 'javac', 'compiler', 'development kit'),
+      kp('Platform independence', 'platform independent', 'write once', 'platform independence'),
+    ],
+    ideal: 'The JVM, the Java Virtual Machine, loads and executes compiled bytecode, using an interpreter and a JIT compiler, and manages memory and garbage collection. The JRE, the Java Runtime Environment, is the JVM plus the standard class libraries needed to run applications. The JDK, the Java Development Kit, contains the JRE plus development tools such as the javac compiler, jar, javadoc and debugging tools. Because code is compiled to bytecode that any JVM can run, Java is platform independent: write once, run anywhere. Since Java 11 a separate JRE is no longer shipped by Oracle, and jlink can build a custom runtime.',
+    followUp: 'What does the JIT compiler do, and why does it matter for performance?',
+  },
+  {
+    id: 'java-003', topic: 'Core Java & OOP', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is the contract between equals and hashCode, and what goes wrong if you break it?',
+    keyPoints: [
+      kp('Equal objects must have the same hash code', 'same hashcode', 'same hash code', 'equal hashcode*', 'equal objects'),
+      kp('Unequal objects may collide', 'collision', 'collide', 'unequal objects'),
+      kp('Used by HashMap / HashSet buckets', 'hashmap', 'hashset', 'bucket'),
+      kp('Override both methods together', 'override both', 'both methods', 'always override'),
+    ],
+    ideal: 'If two objects are equal according to equals, they must return the same hashCode. The reverse is not required: unequal objects may share a hash code, which is a collision. HashMap and HashSet use hashCode to choose the bucket and then equals to find the exact key. If you override equals but not hashCode, two equal objects can land in different buckets, so lookups fail and duplicates appear in a HashSet. So you should always override both methods together, base them on the same immutable fields, and keep equals reflexive, symmetric, transitive and consistent.',
+    followUp: 'What happens if you use a mutable field in hashCode and change it after putting the object in a HashMap?',
+  },
+  {
+    id: 'java-004', topic: 'Core Java & OOP', levels: ['entry'], type: 'concept',
+    q: 'Why is String immutable in Java, and when would you use StringBuilder instead?',
+    keyPoints: [
+      kp('String is immutable', 'immutable', 'cannot be changed', 'cannot change'),
+      kp('String pool / interning', 'string pool', 'intern*', 'constant pool'),
+      kp('Safety: thread safety, security, cached hash', 'thread safe', 'security', 'cached hash', 'hash is cached', 'hashcode is cached'),
+      kp('StringBuilder for repeated concatenation', 'stringbuilder', 'string builder'),
+    ],
+    ideal: 'A String object is immutable: once created its value cannot be changed, and every modification creates a new object. This enables the string pool, where literals are interned and shared, saving memory. Immutability also makes strings thread safe without synchronization, helps security because values like file paths or class names cannot be altered after validation, and lets the hash code be cached, which makes strings fast HashMap keys. When you build a string in a loop or with many concatenations, use StringBuilder, which is mutable and avoids creating many temporary objects; StringBuffer is the older synchronized variant.',
+    followUp: 'How many objects are created by: String s = new String("hello")?',
+  },
+  {
+    id: 'java-005', topic: 'Core Java & OOP', levels: ['entry'], type: 'concept',
+    q: 'What is the difference between final, finally and finalize?',
+    keyPoints: [
+      kp('final keyword: variable, method, class', 'final keyword', 'cannot be reassigned', 'cannot be overridden', 'cannot be extended', 'cannot be subclassed'),
+      kp('finally block always runs', 'finally block', 'always execute*', 'always run*'),
+      kp('finalize is deprecated', 'finalize', 'deprecated'),
+      kp('Use try-with-resources / Cleaner instead', 'try with resources', 'cleaner', 'autocloseable'),
+    ],
+    ideal: 'final is a keyword: a final variable cannot be reassigned, a final method cannot be overridden, and a final class cannot be extended. finally is a block after try or catch that always executes, whether or not an exception is thrown, so it is used for cleanup; it is skipped only in cases like System.exit or the JVM crashing. finalize was a method on Object called by the garbage collector before reclaiming an object, but it is unpredictable, slow and deprecated since Java 9 and marked for removal. For resource cleanup you should use try-with-resources with AutoCloseable, or java.lang.ref.Cleaner.',
+    followUp: 'If both the try block and the finally block contain a return statement, which value is returned?',
+  },
+  {
+    id: 'java-006', topic: 'Core Java & OOP', levels: ['entry', 'mid'], type: 'concept',
+    q: 'Compare an abstract class with an interface in modern Java. When would you choose each?',
+    keyPoints: [
+      kp('A class can implement multiple interfaces but extend one class', 'multiple interfaces', 'implement multiple', 'single inheritance', 'extend only one'),
+      kp('Interfaces have default and static methods (Java 8+)', 'default method*', 'static method*', 'private method*'),
+      kp('Abstract classes can hold state and constructors', 'instance field*', 'constructor', 'state'),
+      kp('Interface = contract/capability, abstract class = shared base code', 'contract', 'capability', 'shared code', 'common code', 'template'),
+    ],
+    ideal: 'A class can extend only one abstract class but implement multiple interfaces. Since Java 8 interfaces can have default methods and static methods, and since Java 9 private methods, but they still cannot hold instance fields or constructors. An abstract class can have state, constructors, protected members and a mix of abstract and concrete methods. I use an interface to define a contract or capability that unrelated classes can share, like Comparable or a PaymentGateway, and an abstract class when closely related classes need shared code and state, for example a template method base class.',
+    followUp: 'What happens if a class implements two interfaces that have the same default method?',
+  },
+  {
+    id: 'java-007', topic: 'Exceptions', levels: ['entry', 'mid'], type: 'concept',
+    q: 'Explain checked versus unchecked exceptions, and how you handle resources safely.',
+    keyPoints: [
+      kp('Checked exceptions are verified at compile time', 'checked exception*', 'compile time', 'ioexception', 'sqlexception'),
+      kp('Unchecked = RuntimeException subclasses', 'runtimeexception', 'unchecked', 'nullpointerexception', 'illegalargumentexception'),
+      kp('Handle or declare with try/catch or throws', 'throws', 'try catch', 'catch block', 'declare'),
+      kp('try-with-resources for AutoCloseable', 'try with resources', 'autocloseable', 'closeable'),
+    ],
+    ideal: 'Checked exceptions, like IOException or SQLException, are checked at compile time: the method must either handle them in a try catch block or declare them with throws. Unchecked exceptions extend RuntimeException, like NullPointerException or IllegalArgumentException, and usually indicate programming errors, so the compiler does not force handling. Errors such as OutOfMemoryError are also unchecked and should not normally be caught. For resources I use try-with-resources, which automatically closes anything that implements AutoCloseable, even when an exception occurs, and keeps suppressed exceptions. In services I translate low-level exceptions into meaningful domain exceptions and handle them centrally, for example with a ControllerAdvice.',
+    followUp: 'Should you ever catch Exception or Throwable? Why or why not?',
+  },
+
+  // ---------------- Collections ----------------
+  {
+    id: 'java-008', topic: 'Collections', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is the difference between ArrayList and LinkedList, and which one do you use by default?',
+    keyPoints: [
+      kp('ArrayList is backed by a resizable array', 'resizable array', 'dynamic array', 'backed by an array', 'array backed'),
+      kp('O(1) random access by index', 'random access', 'get by index', 'constant time', 'o 1'),
+      kp('LinkedList is a doubly linked list of nodes', 'doubly linked', 'nodes', 'node'),
+      kp('Insert/remove trade-offs', 'insertion*', 'removal', 'middle', 'shifting'),
+      kp('ArrayList usually wins: cache locality, less memory', 'cache locality', 'cache friendly', 'memory overhead', 'less memory'),
+    ],
+    ideal: 'ArrayList is backed by a resizable array, so get by index is random access in constant time, O 1, and appending is amortised O 1, but insertion or removal in the middle requires shifting elements. LinkedList is a doubly linked list of nodes, so insertion and removal are O 1 once you already hold the position, but get by index is O n because it must traverse nodes. In practice I use ArrayList by default because contiguous memory gives good cache locality and it has much less memory overhead per element; for queue or deque behaviour I prefer ArrayDeque over LinkedList.',
+    followUp: 'How does ArrayList grow when it runs out of capacity?',
+  },
+  {
+    id: 'java-009', topic: 'Collections', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How does HashMap work internally?',
+    keyPoints: [
+      kp('Array of buckets', 'bucket*', 'array of node*', 'table'),
+      kp('hashCode is hashed to choose bucket index', 'hashcode', 'hash function', 'index'),
+      kp('Collisions handled with linked lists', 'collision*', 'linked list'),
+      kp('Treeify into red-black tree (Java 8+)', 'red black tree', 'treeif*', 'balanced tree'),
+      kp('Load factor 0.75 and resizing', 'load factor', 'resiz*', 'rehash*', '0 75'),
+    ],
+    ideal: 'HashMap stores entries in an array of buckets, called the table. On put it takes the key hashCode, spreads the high bits, and computes the bucket index with hash and capacity minus one, since the capacity is a power of two. Keys in the same bucket are a collision; they are stored as a linked list and compared with equals. Since Java 8, when a bucket has more than eight entries and the table has at least 64 buckets, the list is converted, or treeified, into a red-black tree, so worst-case lookup becomes O log n instead of O n. When the size exceeds capacity times the load factor, 0.75 by default, the map resizes to double the capacity and redistributes the entries. HashMap allows one null key and is not thread safe.',
+    followUp: 'Why is the capacity of a HashMap always a power of two?',
+  },
+  {
+    id: 'java-010', topic: 'Collections', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How does ConcurrentHashMap differ from Hashtable or Collections.synchronizedMap?',
+    keyPoints: [
+      kp('Synchronized map uses one lock for the entire map', 'entire map', 'single lock', 'one lock', 'whole map'),
+      kp('ConcurrentHashMap uses fine-grained locking / CAS', 'fine grained', 'bucket level', 'cas', 'compare and swap', 'segment*'),
+      kp('Reads are non-blocking', 'non blocking', 'without locking', 'lock free read*'),
+      kp('Weakly consistent iterators, no ConcurrentModificationException', 'weakly consistent', 'concurrentmodificationexception', 'fail safe'),
+      kp('No null keys or values', 'null'),
+    ],
+    ideal: 'Hashtable and Collections.synchronizedMap guard every operation with a single lock on the entire map, so only one thread can work at a time and throughput collapses under contention. ConcurrentHashMap uses fine grained locking: in Java 7 it used segments, and since Java 8 it uses CAS, compare and swap, for empty bins and synchronizes only on the first node of a bucket. Reads are non blocking in almost all cases. Its iterators are weakly consistent, so they never throw ConcurrentModificationException. It does not allow null keys or values, because null would be ambiguous between absent and present. It also offers atomic compound operations like computeIfAbsent, merge and putIfAbsent.',
+    followUp: 'Is a check-then-act sequence like containsKey followed by put safe on a ConcurrentHashMap?',
+  },
+
+  // ---------------- Java 8+ ----------------
+  {
+    id: 'java-011', topic: 'Java 8+ Features', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is a functional interface, and how do lambdas and method references relate to it?',
+    keyPoints: [
+      kp('Exactly one abstract method', 'single abstract method', 'one abstract method', 'sam'),
+      kp('@FunctionalInterface annotation', 'functionalinterface', 'functional interface annotation'),
+      kp('Built-ins: Function, Predicate, Supplier, Consumer', 'predicate', 'supplier', 'consumer', 'bifunction'),
+      kp('Lambda and method reference implement it', 'lambda', 'method reference'),
+    ],
+    ideal: 'A functional interface has exactly one abstract method, a single abstract method or SAM type, although it can have default and static methods. The FunctionalInterface annotation is optional but makes the compiler enforce that rule. The java.util.function package provides common ones: Function, BiFunction, Predicate, Supplier, Consumer and UnaryOperator. A lambda expression is a concise implementation of that single method, and a method reference such as String::toUpperCase is shorthand for a lambda that just calls an existing method. Runnable, Callable and Comparator are also functional interfaces.',
+    followUp: 'What does "effectively final" mean for variables used inside a lambda?',
+  },
+  {
+    id: 'java-012', topic: 'Java 8+ Features', levels: ['mid'], type: 'concept',
+    q: 'Explain how Java Streams work: intermediate versus terminal operations, and laziness.',
+    keyPoints: [
+      kp('Intermediate operations like map/filter return a stream', 'intermediate', 'filter', 'map'),
+      kp('Terminal operations like collect/reduce trigger processing', 'terminal', 'collect', 'reduce', 'foreach'),
+      kp('Lazy evaluation', 'lazy', 'lazily'),
+      kp('A stream can be consumed only once', 'only once', 'consumed once', 'cannot be reused'),
+      kp('Parallel streams caveats', 'parallel stream*', 'parallel', 'forkjoinpool'),
+    ],
+    ideal: 'A stream is a pipeline over a data source; it does not store data. Intermediate operations such as filter, map, sorted and distinct return a new stream and are lazy: nothing runs until a terminal operation such as collect, reduce, forEach or count is invoked. Laziness enables optimisations like short-circuiting with findFirst or limit and processing element by element in a single pass. A stream can be consumed only once; after a terminal operation it cannot be reused. Parallel streams split work across the common ForkJoinPool, which helps for large CPU-bound workloads but can hurt with small data, blocking I O or shared mutable state.',
+    followUp: 'What is the difference between map and flatMap?',
+  },
+  {
+    id: 'java-013', topic: 'Java 8+ Features', levels: ['mid'], type: 'concept',
+    q: 'How should Optional be used, and what are common misuses?',
+    keyPoints: [
+      kp('Represents a possibly absent value to avoid null', 'null', 'absent', 'nullpointerexception'),
+      kp('API: map, orElse, orElseThrow, ifPresent', 'orelsethrow', 'orelse', 'ifpresent', 'map'),
+      kp('Use as return type, not fields or parameters', 'return type', 'not for fields', 'fields', 'parameter*'),
+      kp('orElse vs orElseGet evaluation', 'orelseget', 'eagerly', 'lazily'),
+      kp('Avoid calling get without checking', 'get without', 'isPresent', 'ispresent'),
+    ],
+    ideal: 'Optional is a container that makes a possibly absent value explicit, so callers handle the empty case instead of hitting a NullPointerException. It is designed mainly as a method return type, for example a repository findById. Good usage chains map, filter and flatMap, and finishes with orElse, orElseGet, orElseThrow or ifPresent. Common misuses are calling get without checking isPresent, using Optional for fields, method parameters or collections, and returning null from a method that returns Optional. Note that orElse evaluates its argument eagerly, while orElseGet takes a Supplier that is called lazily only when the value is absent.',
+    followUp: 'Why is Optional not Serializable, and how does that affect using it in entities?',
+  },
+  {
+    id: 'java-014', topic: 'Java 8+ Features', levels: ['mid', 'senior'], type: 'concept',
+    q: 'Which features from Java 17 and Java 21 do you use, such as records, sealed classes, pattern matching and virtual threads?',
+    keyPoints: [
+      kp('Records: immutable data carriers', 'record*', 'immutable data', 'boilerplate'),
+      kp('Sealed classes restrict subclasses', 'sealed', 'permits'),
+      kp('Pattern matching for instanceof and switch', 'pattern matching', 'switch', 'instanceof'),
+      kp('Virtual threads (Project Loom, Java 21)', 'virtual thread*', 'project loom', 'loom'),
+    ],
+    ideal: 'Records are concise immutable data carriers: the compiler generates the constructor, accessors, equals, hashCode and toString, which removes boilerplate for DTOs and value objects. Sealed classes and interfaces use permits to restrict which classes can extend them, which models closed hierarchies. Pattern matching for instanceof removes casts, and pattern matching for switch in Java 21, together with record patterns, lets the compiler check exhaustiveness over a sealed hierarchy. Java 21 also made virtual threads from Project Loom final: lightweight threads managed by the JVM that make the thread-per-request style scalable for blocking I O. Text blocks and switch expressions are other features I use daily.',
+    followUp: 'How would you model API responses using a sealed interface and records?',
+  },
+
+  // ---------------- Concurrency ----------------
+  {
+    id: 'java-015', topic: 'Concurrency', levels: ['mid', 'senior'], type: 'concept',
+    q: 'Explain volatile, synchronized and atomic classes. When is volatile not enough?',
+    keyPoints: [
+      kp('volatile guarantees visibility / happens-before', 'visibility', 'visible', 'happens before', 'main memory'),
+      kp('synchronized provides mutual exclusion via monitor lock', 'mutual exclusion', 'monitor', 'intrinsic lock', 'lock'),
+      kp('volatile does not make compound actions atomic', 'count', 'compound', 'read modify write', 'not atomic'),
+      kp('Atomic classes use CAS', 'atomicinteger', 'atomiclong', 'compare and swap', 'cas'),
+    ],
+    ideal: 'volatile guarantees visibility: a write to a volatile field happens before every subsequent read, so threads do not see stale cached values, and it prevents certain reorderings. But volatile does not provide mutual exclusion, so a compound read modify write operation like count plus plus is not atomic and can lose updates. synchronized acquires the object monitor lock, giving both mutual exclusion and visibility for the critical section. Atomic classes like AtomicInteger and AtomicLong use CAS, compare and swap, to update a single variable atomically without locking; for heavy contention LongAdder is better. volatile is a good fit for a simple flag like a shutdown signal.',
+    followUp: 'Why is double-checked locking broken without volatile?',
+  },
+  {
+    id: 'java-016', topic: 'Concurrency', levels: ['entry', 'mid'], type: 'concept',
+    q: 'How do you run tasks concurrently in Java? Explain Runnable, Callable, ExecutorService and Future.',
+    keyPoints: [
+      kp('Runnable vs Callable', 'runnable', 'callable'),
+      kp('ExecutorService / thread pool', 'executorservice', 'thread pool', 'executors'),
+      kp('Future / CompletableFuture for results', 'future', 'completablefuture'),
+      kp('Shutdown the executor', 'shutdown', 'awaittermination'),
+    ],
+    ideal: 'Runnable represents a task with no result that cannot throw checked exceptions, while Callable returns a value and can throw. Instead of creating raw threads, I submit tasks to an ExecutorService backed by a thread pool, created with Executors or a ThreadPoolExecutor with a bounded queue so the pool size and rejection policy are explicit. submit returns a Future, whose get blocks until the result is ready, and supports cancel and timeouts. For non-blocking composition I use CompletableFuture. Finally I always shutdown the executor and awaitTermination during application shutdown so threads do not leak.',
+    followUp: 'What can go wrong with Executors.newFixedThreadPool under heavy load?',
+  },
+  {
+    id: 'java-017', topic: 'Concurrency', levels: ['senior', 'lead'], type: 'concept',
+    q: 'What causes a deadlock, and how do you prevent and diagnose one in production?',
+    keyPoints: [
+      kp('Coffman conditions incl. circular wait', 'circular wait', 'hold and wait', 'no preemption', 'mutual exclusion'),
+      kp('Consistent lock ordering', 'lock ordering', 'same order', 'global order'),
+      kp('tryLock with timeout', 'trylock', 'timeout'),
+      kp('Diagnose with thread dumps', 'thread dump', 'jstack', 'jcmd'),
+    ],
+    ideal: 'A deadlock needs four conditions: mutual exclusion, hold and wait, no preemption, and circular wait, for example thread A holds lock 1 and wants lock 2 while thread B holds lock 2 and wants lock 1. The most practical prevention is a global lock ordering, so every thread acquires locks in the same order, plus keeping critical sections small and avoiding calling external code while holding a lock. With ReentrantLock you can use tryLock with a timeout and back off. To diagnose, take a thread dump with jstack or jcmd Thread.print; the JVM reports found one Java-level deadlock and shows which threads hold and wait for which monitors. ThreadMXBean findDeadlockedThreads can also detect it programmatically for monitoring.',
+    followUp: 'How is a livelock different from a deadlock?',
+  },
+  {
+    id: 'java-018', topic: 'Concurrency', levels: ['senior', 'lead'], type: 'concept',
+    q: 'How do you compose asynchronous work with CompletableFuture, and what pitfalls do you watch for?',
+    keyPoints: [
+      kp('thenApply vs thenCompose', 'thenapply', 'thencompose'),
+      kp('Combine futures: thenCombine / allOf', 'thencombine', 'allof', 'anyof'),
+      kp('Error handling: exceptionally / handle', 'exceptionally', 'handle', 'whencomplete'),
+      kp('Use a dedicated executor, not the common pool for blocking I/O', 'executor', 'common pool', 'forkjoinpool'),
+      kp('Timeouts', 'ortimeout', 'timeout', 'completeontimeout'),
+    ],
+    ideal: 'thenApply transforms a result synchronously, while thenCompose flattens a function that itself returns a CompletableFuture, like flatMap. To run independent calls in parallel I use thenCombine for two futures or allOf for many, then join the results. For errors I use exceptionally to provide a fallback, or handle and whenComplete to see both result and exception. A key pitfall is that async methods default to the ForkJoinPool common pool, so for blocking I O I pass a dedicated executor to avoid starving it. I also add timeouts with orTimeout or completeOnTimeout, and avoid calling join or get on request threads, which defeats the purpose.',
+    followUp: 'With virtual threads available, would you still use CompletableFuture? Why?',
+  },
+  {
+    id: 'java-019', topic: 'Concurrency', levels: ['senior', 'lead'], type: 'concept',
+    q: 'When do virtual threads help, and what are their pitfalls?',
+    keyPoints: [
+      kp('Great for blocking I/O-bound, high-concurrency workloads', 'blocking', 'io bound', 'i o bound', 'i o'),
+      kp('Mounted on carrier threads', 'carrier thread*', 'mount*', 'unmount*'),
+      kp('Pinning with synchronized / native code', 'pinning', 'pinned', 'synchronized'),
+      kp('No benefit for CPU-bound work', 'cpu bound', 'cpu intensive'),
+      kp('Do not pool them; limit with semaphores', 'pool', 'semaphore'),
+    ],
+    ideal: 'Virtual threads are cheap JVM-managed threads, so you can run one per request even with hundreds of thousands of concurrent requests. They help most for blocking I O bound workloads: when a virtual thread blocks on I O it unmounts from its carrier thread, and the carrier runs other virtual threads. They do not make CPU bound work faster, because the number of carrier threads equals the number of cores. Pitfalls: pinning, where a virtual thread blocking inside a synchronized block or native code holds its carrier, which was largely fixed in Java 24; heavy ThreadLocal usage; and the fact that you should not pool virtual threads but create one per task, using a Semaphore to limit access to scarce resources like database connections.',
+    followUp: 'How would you enable virtual threads in a Spring Boot 3 application?',
+  },
+
+  // ---------------- JVM ----------------
+  {
+    id: 'java-020', topic: 'JVM & Performance', levels: ['mid', 'senior'], type: 'concept',
+    q: 'Describe the JVM memory areas and how garbage collection generations work.',
+    keyPoints: [
+      kp('Heap for objects', 'heap'),
+      kp('Thread stacks for frames and local variables', 'stack', 'stack frame*', 'local variable*'),
+      kp('Metaspace for class metadata', 'metaspace', 'class metadata', 'permgen'),
+      kp('Young (Eden, survivor) and old generations', 'young generation', 'old generation', 'eden', 'survivor'),
+    ],
+    ideal: 'The heap is shared by all threads and holds objects and arrays; it is managed by the garbage collector. Each thread has its own stack of stack frames holding local variables, operand stacks and return addresses, which is why deep recursion causes StackOverflowError. Metaspace, in native memory since Java 8 replacing PermGen, stores class metadata. There are also the program counter register and native method stacks, plus the code cache for JIT-compiled code. Most collectors are generational: new objects are allocated in the young generation in Eden; minor GCs copy survivors between survivor spaces, and objects that survive several cycles are promoted to the old generation, which is collected less often, because most objects die young.',
+    followUp: 'What is the difference between a minor GC, a major GC and a full GC?',
+  },
+  {
+    id: 'java-021', topic: 'JVM & Performance', levels: ['senior', 'lead'], type: 'concept',
+    q: 'How do you choose and tune a garbage collector for a latency-sensitive service?',
+    keyPoints: [
+      kp('G1 default, balanced', 'g1'),
+      kp('ZGC / Shenandoah for low pause times', 'zgc', 'shenandoah', 'low latency', 'low pause'),
+      kp('Throughput vs latency trade-off', 'throughput', 'pause time*', 'latency'),
+      kp('Measure with GC logs / JFR', 'gc log*', 'jfr', 'flight recorder', 'jstat'),
+      kp('Heap sizing Xms/Xmx', 'xmx', 'xms', 'heap size', 'maxrampercentage'),
+    ],
+    ideal: 'First I define the goal: throughput or tail latency. G1 is the default since Java 9 and balances both with a pause time target set by MaxGCPauseMillis. For very low latency with large heaps, I consider ZGC, generational since Java 21, or Shenandoah, which do most work concurrently and keep pauses around a millisecond, at some CPU and throughput cost. Parallel GC maximises throughput for batch jobs. I size the heap with Xms equal to Xmx to avoid resizing, or MaxRAMPercentage in containers. Then I measure rather than guess: enable GC logs with Xlog gc, use JFR, Java Flight Recorder, and jstat, and look at allocation rate, pause times and promotion. Often the biggest win is reducing allocation in the code rather than tuning flags.',
+    followUp: 'How do container memory limits interact with JVM heap settings?',
+  },
+  {
+    id: 'java-022', topic: 'JVM & Performance', levels: ['senior', 'lead'], type: 'scenario',
+    q: 'Your service crashes with OutOfMemoryError every few days. How do you find the memory leak?',
+    keyPoints: [
+      kp('Symptoms: heap growth after full GC', 'outofmemoryerror', 'growing heap', 'heap usage', 'after full gc', 'full gc'),
+      kp('Capture a heap dump', 'heap dump', 'heapdumponoutofmemoryerror', 'hprof', 'jmap', 'jcmd'),
+      kp('Analyse with Eclipse MAT / VisualVM', 'eclipse mat', 'memory analyzer', 'visualvm', 'jprofiler', 'dominator tree'),
+      kp('Typical causes: static collections, caches, ThreadLocal, unclosed resources', 'static collection*', 'static map', 'threadlocal', 'unbounded cache', 'listener*', 'unclosed'),
+    ],
+    ideal: 'First I confirm it is a leak by checking that heap usage after full GC keeps growing over time in the metrics, rather than simply being under-provisioned. I enable HeapDumpOnOutOfMemoryError with a HeapDumpPath, or take a heap dump with jcmd GC.heap_dump or jmap while usage is high, producing an hprof file. Then I open it in Eclipse MAT, the Memory Analyzer, look at the leak suspects report and the dominator tree, and follow the path to GC roots to see who keeps the objects alive. Typical causes are static collections or a static map that only grows, an unbounded cache without eviction, ThreadLocal values not removed in thread pools, registered listeners never removed, and unclosed resources. After fixing, I add a bounded cache like Caffeine and alerts on old-gen usage.',
+    followUp: 'How would you distinguish a heap leak from a native memory or Metaspace leak?',
+  },
+
+  // ---------------- Spring ----------------
+  {
+    id: 'java-023', topic: 'Spring Framework', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is dependency injection and inversion of control in Spring? Which injection style do you prefer?',
+    keyPoints: [
+      kp('IoC container (ApplicationContext) creates and wires beans', 'inversion of control', 'ioc', 'applicationcontext', 'container'),
+      kp('Injection types', 'constructor injection', 'setter injection', 'field injection'),
+      kp('Beans via annotations', 'bean', 'component', 'autowired'),
+      kp('Benefits: loose coupling and testability', 'loose coupling', 'loosely coupled', 'testab*', 'mock'),
+    ],
+    ideal: 'With inversion of control, objects do not create their own dependencies; the Spring IoC container, the ApplicationContext, creates beans, manages their lifecycle and wires dependencies into them. Beans are declared with Component and its stereotypes, or with Bean methods in a Configuration class, and injected with Autowired or implicitly. Spring supports constructor injection, setter injection and field injection. I prefer constructor injection: dependencies are explicit, fields can be final, the object is never half-initialised, and it is easy to unit test by passing mocks. Overall DI gives loose coupling and testability, because classes depend on interfaces rather than concrete implementations.',
+    followUp: 'How does Spring resolve a circular dependency, and why is it a design smell?',
+  },
+  {
+    id: 'java-024', topic: 'Spring Framework', levels: ['mid'], type: 'concept',
+    q: 'Explain Spring bean scopes. What happens when you inject a prototype bean into a singleton?',
+    keyPoints: [
+      kp('Singleton is the default', 'singleton', 'default'),
+      kp('Prototype creates a new instance per request for the bean', 'prototype', 'new instance'),
+      kp('Web scopes: request, session, application', 'request scope', 'session scope', 'request', 'session'),
+      kp('Fix with ObjectProvider / lookup / scoped proxy', 'objectprovider', 'objectfactory', 'lookup', 'scoped proxy', 'provider'),
+    ],
+    ideal: 'Singleton is the default scope: one instance per ApplicationContext. Prototype creates a new instance every time the bean is requested from the container. In web applications there are also request, session, application and websocket scopes. If a prototype bean is injected into a singleton, it is injected only once when the singleton is created, so the singleton keeps the same instance forever, which is usually not what you want. To get a fresh instance each time, inject an ObjectProvider or ObjectFactory and call getObject, use a Lookup method, or configure a scoped proxy.',
+    followUp: 'Are singleton beans thread safe by default?',
+  },
+  {
+    id: 'java-025', topic: 'Spring Framework', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How does Spring Boot auto-configuration work?',
+    keyPoints: [
+      kp('@SpringBootApplication enables auto-configuration', 'springbootapplication', 'enableautoconfiguration'),
+      kp('Conditional annotations', 'conditionalonclass', 'conditionalonmissingbean', 'conditional*'),
+      kp('Starters bring dependencies', 'starter*'),
+      kp('Discovered from AutoConfiguration.imports (spring.factories earlier)', 'autoconfiguration imports', 'spring factories', 'imports file'),
+      kp('Override with properties, own beans or exclude', 'application properties', 'application yml', 'exclude', 'your own bean'),
+    ],
+    ideal: 'SpringBootApplication combines Configuration, ComponentScan and EnableAutoConfiguration. Spring Boot loads candidate auto-configuration classes listed in META-INF spring AutoConfiguration.imports, which replaced spring.factories in Boot 3. Each class is guarded by conditional annotations such as ConditionalOnClass, ConditionalOnMissingBean and ConditionalOnProperty, so for example a DataSource is configured only if a JDBC driver is on the classpath and you have not defined your own. Starters like spring-boot-starter-web bring a consistent set of dependencies that trigger those conditions. You customise behaviour through application properties or application yml, by defining your own bean, which makes Boot back off, or with exclude. The conditions evaluation report, using the debug flag or the actuator conditions endpoint, shows why something was or was not configured.',
+    followUp: 'How would you write your own Spring Boot starter for a shared library?',
+  },
+  {
+    id: 'java-026', topic: 'Spring Framework', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is the difference between @Component, @Service, @Repository and @Controller?',
+    keyPoints: [
+      kp('All are stereotypes detected by component scanning', 'stereotype*', 'component scan*'),
+      kp('@Repository adds exception translation', 'exception translation', 'dataaccessexception'),
+      kp('@Controller / @RestController handle web requests', 'restcontroller', 'controller', 'http request*', 'web request*'),
+      kp('@Service marks business logic', 'business logic', 'service layer'),
+    ],
+    ideal: 'All four are stereotype annotations; Service, Repository and Controller are specialisations of Component, so all are detected by component scanning and registered as beans. Repository marks the data access layer and enables persistence exception translation, converting database-specific exceptions into Spring DataAccessException. Controller marks a web controller that handles HTTP requests in Spring MVC, and RestController adds ResponseBody so return values are written to the response body as JSON. Service has no extra behaviour today but marks the service layer that holds business logic, which improves readability and is a natural place for transactions and aspects.',
+    followUp: 'Where do you usually put @Transactional, and why?',
+  },
+  {
+    id: 'java-027', topic: 'Spring Data & JPA', levels: ['mid', 'senior'], type: 'concept',
+    q: 'What are common pitfalls with @Transactional in Spring?',
+    keyPoints: [
+      kp('Proxy-based: self-invocation bypasses it', 'self invocation', 'proxy', 'same class', 'internal call'),
+      kp('Rollback only on unchecked exceptions by default', 'checked exception*', 'rollbackfor', 'runtimeexception'),
+      kp('Propagation behaviour', 'propagation', 'requires new', 'required'),
+      kp('Only works on public methods / Spring-managed beans', 'public method*', 'spring managed'),
+      kp('Isolation and read-only', 'isolation', 'read only', 'readonly'),
+    ],
+    ideal: 'Transactional is implemented with a proxy, so calling a transactional method from another method in the same class, self invocation, bypasses the proxy and no transaction starts. Historically it only applied to public methods on Spring managed beans; since Spring 6 protected and package-private methods work with class-based proxies, but private methods never do. By default it rolls back only on RuntimeException and Error; a checked exception commits unless you set rollbackFor. Propagation matters: REQUIRED joins the existing transaction, while REQUIRES_NEW suspends it and starts a new one, which is useful for audit logs. You can set isolation and readOnly for queries. Other pitfalls are long transactions holding connections during remote calls, and catching an exception inside a nested call which marks the transaction rollback-only and causes UnexpectedRollbackException.',
+    followUp: 'How would you make an audit log entry commit even if the main transaction rolls back?',
+  },
+  {
+    id: 'java-028', topic: 'Spring Data & JPA', levels: ['mid', 'senior'], type: 'concept',
+    q: 'What is the N+1 query problem in Hibernate/JPA, and how do you fix it?',
+    keyPoints: [
+      kp('One query for parents plus one per child access', 'n 1', 'one query', 'additional query', 'extra query', 'each'),
+      kp('Caused by lazy loading of associations', 'lazy'),
+      kp('Fix: JOIN FETCH, EntityGraph, batch fetching', 'join fetch', 'entitygraph', 'entity graph', 'batch size', 'batch fetch*'),
+      kp('Detect with SQL logging / statistics', 'show sql', 'sql log*', 'hibernate statistics', 'statistics'),
+      kp('Or use DTO projections', 'projection*', 'dto'),
+    ],
+    ideal: 'The N plus 1 problem happens when you load N parent entities with one query, and then accessing a lazy association on each parent triggers an additional query per parent, so you get N plus 1 queries instead of one or two. It is usually caused by lazy loading inside a loop or by serialising entities. Fixes include JOIN FETCH in JPQL, an EntityGraph on the repository method, Hibernate batch fetching with BatchSize or default_batch_fetch_size so lazy loads are grouped with IN queries, or DTO projections that select exactly the columns needed. I detect it by enabling SQL logging or show sql in development, Hibernate statistics, or tests that assert the query count.',
+    followUp: 'What problem appears if you JOIN FETCH two collections in the same query?',
+  },
+  {
+    id: 'java-029', topic: 'Spring Data & JPA', levels: ['entry', 'mid'], type: 'concept',
+    q: 'What is the difference between lazy and eager fetching in JPA, and what is a LazyInitializationException?',
+    keyPoints: [
+      kp('Lazy loads on access via proxy', 'lazy', 'proxy', 'on access', 'when accessed'),
+      kp('Eager loads immediately with the parent', 'eager', 'immediately'),
+      kp('Defaults: ToOne eager, ToMany lazy', 'manytoone', 'onetomany', 'default*'),
+      kp('LazyInitializationException when session is closed', 'lazyinitializationexception', 'session is closed', 'outside the transaction', 'closed session'),
+    ],
+    ideal: 'With lazy fetching, an association is not loaded with the entity; Hibernate puts a proxy or uninitialised collection in its place and loads the data on access. With eager fetching, the association is loaded immediately along with the parent. The JPA defaults are eager for ManyToOne and OneToOne and lazy for OneToMany and ManyToMany, but the recommended practice is to make everything lazy and fetch explicitly per use case. A LazyInitializationException occurs when you access a lazy association after the persistence context or session is closed, for example outside the transaction in a controller. The fix is to fetch what you need inside the transaction using a join fetch or entity graph, or map to a DTO, rather than enabling open-session-in-view.',
+    followUp: 'Why is spring.jpa.open-in-view often disabled in production?',
+  },
+
+  // ---------------- REST & APIs ----------------
+  {
+    id: 'java-030', topic: 'REST & API Design', levels: ['entry', 'mid'], type: 'concept',
+    q: 'Explain the differences between POST, PUT and PATCH, and what idempotency means.',
+    keyPoints: [
+      kp('POST creates / not idempotent', 'post', 'create*'),
+      kp('PUT replaces the whole resource and is idempotent', 'put', 'replace*', 'full update'),
+      kp('PATCH is a partial update', 'patch', 'partial'),
+      kp('Idempotent = same effect when repeated', 'idempotent', 'idempotency', 'same result', 'same effect'),
+      kp('Status codes', '201', '200', '204', '404'),
+    ],
+    ideal: 'POST is typically used to create a resource under a collection and is not idempotent: sending it twice creates two resources, and the response is usually 201 Created with a Location header. PUT replaces the whole resource at a known URI with the representation sent; it is idempotent, because sending the same request twice leaves the server in the same state. PATCH applies a partial update, for example JSON Merge Patch, and is not guaranteed to be idempotent. Idempotent means repeating the request has the same effect as sending it once, which makes retries safe; GET, PUT and DELETE are idempotent. Typical responses are 200 OK or 204 No Content for updates and 404 Not Found when the resource does not exist. For POST, an idempotency key header makes retries safe for things like payments.',
+    followUp: 'How would you implement an idempotency key for a payment API?',
+  },
+  {
+    id: 'java-031', topic: 'REST & API Design', levels: ['mid', 'senior'], type: 'concept',
+    q: 'What best practices do you follow when designing a REST API?',
+    keyPoints: [
+      kp('Resource-oriented nouns and proper HTTP verbs', 'noun*', 'resource*', 'http method*', 'verb*'),
+      kp('Correct status codes', 'status code*'),
+      kp('Versioning', 'versioning', 'version'),
+      kp('Pagination, filtering, sorting', 'pagination', 'paging', 'cursor'),
+      kp('Validation and consistent error format', 'validation', 'error response', 'problem detail*', 'error format'),
+      kp('Security: authN/authZ, HTTPS', 'oauth*', 'jwt', 'authentication', 'https'),
+    ],
+    ideal: 'I model resources as plural nouns, like orders and orders slash id, and use HTTP methods for actions: GET to read, POST to create, PUT or PATCH to update and DELETE to remove. I return correct status codes, such as 201 for creation, 400 for validation errors, 404 when not found, and 409 for conflicts. I version the API, usually in the path like v1 or via a header, and keep changes backward compatible. Collections support pagination, ideally cursor based for large data, plus filtering and sorting. Inputs get Bean Validation, and errors use a consistent error format such as RFC 9457 Problem Details. For security I use HTTPS and OAuth 2 with JWT bearer tokens for authentication and authorization, and add rate limiting. I document the contract with OpenAPI.',
+    followUp: 'How do you evolve an API without breaking existing clients?',
+  },
+  {
+    id: 'java-032', topic: 'Security', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How does JWT-based authentication work in a Spring Boot microservice?',
+    keyPoints: [
+      kp('Spring Security filter chain validates the token', 'filter chain', 'securityfilterchain', 'filter'),
+      kp('JWT = header, payload (claims), signature', 'header', 'payload', 'claims', 'signature'),
+      kp('Stateless: no server session', 'stateless', 'no session'),
+      kp('Validate signature, expiry, issuer, audience', 'expir*', 'issuer', 'audience', 'verify', 'validate'),
+      kp('Short-lived access tokens + refresh tokens', 'refresh token*', 'short lived'),
+    ],
+    ideal: 'The client authenticates with an identity provider, for example via OAuth 2 and OpenID Connect, and receives a JWT access token. A JWT has a header, a payload of claims such as subject, roles, issuer, audience and expiry, and a signature. On each request the client sends it as a Bearer token. In Spring Boot I configure the service as an OAuth 2 resource server; a filter in the SecurityFilterChain extracts the token, uses the provider public keys from the JWKS endpoint to verify the signature, and validates the expiry, issuer and audience before building the security context. Because the token is self-contained, the service is stateless, with no server session. Access tokens should be short lived, with refresh tokens used to obtain new ones, and sensitive data should never go in the payload because it is only encoded, not encrypted.',
+    followUp: 'How would you revoke a JWT before it expires?',
+  },
+
+  // ---------------- Data ----------------
+  {
+    id: 'java-033', topic: 'Databases & SQL', levels: ['entry', 'mid'], type: 'concept',
+    q: 'How do database indexes work, and what are their trade-offs?',
+    keyPoints: [
+      kp('Usually a B-tree structure', 'b tree', 'btree', 'b+ tree'),
+      kp('Speeds up lookups, avoids full table scans', 'full table scan', 'faster', 'lookup*'),
+      kp('Cost: slower writes and extra storage', 'slower write*', 'write*', 'storage', 'insert*'),
+      kp('Composite indexes follow the leftmost prefix', 'composite', 'leftmost', 'column order'),
+      kp('Verify with EXPLAIN', 'explain', 'execution plan', 'query plan'),
+    ],
+    ideal: 'An index is a separate data structure, usually a B tree, that keeps column values sorted with pointers to rows, so the database can find rows with a lookup in logarithmic time instead of a full table scan. It also speeds up ORDER BY and joins. The trade-offs are that every insert, update and delete must also maintain the index, so writes become slower, and indexes use extra storage and memory. For a composite index the column order matters: it can serve queries using the leftmost prefix of its columns. Low-selectivity columns and functions applied to indexed columns often prevent index use. I always verify with EXPLAIN or EXPLAIN ANALYZE to read the query plan.',
+    followUp: 'What is a covering index?',
+  },
+  {
+    id: 'java-034', topic: 'Databases & SQL', levels: ['mid', 'senior'], type: 'concept',
+    q: 'Explain the transaction isolation levels and the anomalies each one prevents.',
+    keyPoints: [
+      kp('Read uncommitted allows dirty reads', 'read uncommitted', 'dirty read*'),
+      kp('Read committed prevents dirty reads', 'read committed', 'non repeatable'),
+      kp('Repeatable read prevents non-repeatable reads', 'repeatable read'),
+      kp('Phantom reads and serializable', 'phantom*', 'serializable'),
+      kp('Database defaults', 'default', 'postgres*', 'mysql'),
+    ],
+    ideal: 'Read uncommitted allows dirty reads, meaning a transaction can see uncommitted changes of another transaction. Read committed prevents dirty reads, but a row read twice can change, which is a non repeatable read. Repeatable read guarantees that rows you have read do not change during the transaction, but in the SQL standard new matching rows can still appear, called phantom reads. Serializable is the strictest level and behaves as if transactions ran one after another, at the cost of more locking or serialization failures that must be retried. Defaults differ: PostgreSQL, Oracle and SQL Server default to read committed, while MySQL InnoDB defaults to repeatable read, which also prevents most phantoms using MVCC snapshots and next-key locks.',
+    followUp: 'What is a lost update, and how do optimistic locking and @Version prevent it?',
+  },
+  {
+    id: 'java-035', topic: 'Caching', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How would you add caching to a Spring Boot service using Redis, and how do you keep it consistent?',
+    keyPoints: [
+      kp('Cache-aside pattern', 'cache aside', 'look aside'),
+      kp('TTL and eviction', 'ttl', 'time to live', 'evict*', 'lru'),
+      kp('Invalidation and stale data', 'invalidat*', 'stale', 'consistency'),
+      kp('Spring Cache abstraction', 'cacheable', 'cacheevict', 'spring cache'),
+      kp('Cache stampede protection', 'stampede', 'thundering herd', 'dogpile'),
+    ],
+    ideal: 'I usually use the cache aside pattern: read from Redis first, on a miss load from the database and populate the cache. In Spring I use the Spring Cache abstraction with Cacheable on reads and CacheEvict or CachePut on writes, backed by Redis with a serializer and a TTL. Every entry gets a time to live and Redis is configured with an eviction policy like allkeys-lru, so memory is bounded. For consistency I update the database first and then invalidate the cache key, accepting brief stale data; where stronger consistency is needed I use short TTLs or event-driven invalidation through change data capture. I protect against cache stampede, also called the thundering herd, with request coalescing, locking or jittered TTLs, and I never cache without monitoring the hit ratio.',
+    followUp: 'When would you choose a local cache like Caffeine instead of Redis?',
+  },
+
+  // ---------------- Microservices & messaging ----------------
+  {
+    id: 'java-036', topic: 'Microservices', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How should microservices communicate: synchronous or asynchronous? What are the trade-offs?',
+    keyPoints: [
+      kp('Synchronous REST / gRPC', 'rest', 'grpc', 'synchronous'),
+      kp('Asynchronous messaging via a broker', 'kafka', 'rabbitmq', 'asynchronous', 'message broker', 'event*'),
+      kp('Trade-offs: coupling, latency, availability, consistency', 'coupling', 'latency', 'availability', 'eventual consistency'),
+      kp('Resilience: timeouts, retries, circuit breakers', 'circuit breaker', 'retr*', 'timeout*', 'resilience4j'),
+    ],
+    ideal: 'Synchronous communication, using REST or gRPC, is simple and good for queries that need an immediate answer, but it creates temporal coupling: the caller is affected by the latency and availability of every downstream service. Asynchronous communication through a message broker such as Kafka or RabbitMQ, with events or commands, decouples services, absorbs load spikes and improves availability, at the cost of eventual consistency, harder debugging and handling duplicates. In practice I use synchronous calls for reads and user-facing requests, and events for state changes that other services react to. For synchronous calls I always add timeouts, retries with backoff and a circuit breaker using Resilience4j; for messaging I make consumers idempotent and use dead letter queues.',
+    followUp: 'How do you trace a single request across synchronous calls and asynchronous events?',
+  },
+  {
+    id: 'java-037', topic: 'Microservices', levels: ['senior', 'lead'], type: 'concept',
+    q: 'How do you handle a business transaction that spans multiple microservices?',
+    keyPoints: [
+      kp('Avoid two-phase commit', 'two phase commit', '2pc', 'xa'),
+      kp('Saga pattern', 'saga'),
+      kp('Choreography vs orchestration', 'choreography', 'orchestrat*'),
+      kp('Compensating transactions', 'compensat*'),
+      kp('Transactional outbox and idempotency', 'outbox', 'idempoten*'),
+    ],
+    ideal: 'I avoid distributed two phase commit with XA, because it couples services, blocks on failures and is poorly supported by modern brokers. Instead I use the saga pattern: a sequence of local transactions where each step publishes an event or command that triggers the next. With choreography, services react to each other events, which suits simple flows; with orchestration, a central orchestrator, for example built with Temporal or a state machine, tells each service what to do, which is clearer for complex flows. If a step fails, previous steps are undone with compensating transactions, such as refunding a payment or releasing reserved stock. To publish events reliably I use the transactional outbox pattern, writing the event to an outbox table in the same local transaction, and all consumers must be idempotent because messages can be delivered more than once.',
+    followUp: 'How would you design the compensation for an order-payment-inventory saga?',
+  },
+  {
+    id: 'java-038', topic: 'Microservices', levels: ['senior', 'lead'], type: 'concept',
+    q: 'Explain the circuit breaker pattern and how you would configure it.',
+    keyPoints: [
+      kp('States: closed, open, half-open', 'closed', 'open', 'half open'),
+      kp('Failure-rate threshold over a window', 'threshold', 'failure rate', 'sliding window'),
+      kp('Fallback response', 'fallback'),
+      kp('Library: Resilience4j', 'resilience4j', 'hystrix'),
+      kp('Combine with timeouts / retries / bulkhead', 'timeout', 'retry', 'bulkhead'),
+    ],
+    ideal: 'A circuit breaker wraps calls to a dependency and tracks failures. In the closed state calls pass through. When the failure rate or slow-call rate over a sliding window crosses a threshold, it moves to open and fails fast without calling the dependency, protecting both sides and freeing threads. After a wait duration it goes half open and lets a few trial calls through; if they succeed it closes again, otherwise it reopens. On rejection it returns a fallback, such as cached data or a default response. In Spring Boot I use Resilience4j, since Hystrix is in maintenance mode, and configure failureRateThreshold, slidingWindowSize, waitDurationInOpenState and permitted calls in half open. I combine it with a timeout, a limited retry with backoff, and a bulkhead to cap concurrency.',
+    followUp: 'Why can retries without backoff make an outage worse?',
+  },
+  {
+    id: 'java-039', topic: 'Kafka', levels: ['mid', 'senior'], type: 'concept',
+    q: 'How does Kafka guarantee ordering, and what delivery semantics can you achieve?',
+    keyPoints: [
+      kp('Topics split into partitions', 'topic*', 'partition*'),
+      kp('Ordering only within a partition, choose a key', 'within a partition', 'ordering', 'message key', 'same key', 'key'),
+      kp('Consumer groups', 'consumer group*'),
+      kp('Offsets and commits', 'offset*', 'commit*'),
+      kp('At-least-once / exactly-once', 'at least once', 'exactly once', 'at most once', 'idempotent producer'),
+    ],
+    ideal: 'A Kafka topic is split into partitions, each an append-only ordered log. Ordering is guaranteed only within a partition, so messages that must stay ordered, like all events for one order, use the same message key, which hashes to the same partition. Within a consumer group each partition is assigned to one consumer, which gives parallelism up to the number of partitions. Consumers track their position with offsets and commit them. If you commit after processing you get at least once delivery, so processing must be idempotent; committing before processing gives at most once. Exactly once is possible within Kafka using the idempotent producer and transactions with read_committed consumers, or end to end by combining at least once with idempotent writes. Producers should use acks all for durability.',
+    followUp: 'What happens during a consumer group rebalance, and how do you minimise its impact?',
+  },
+
+  // ---------------- Testing & observability ----------------
+  {
+    id: 'java-040', topic: 'Testing', levels: ['entry', 'mid'], type: 'concept',
+    q: 'How do you test a Spring Boot application? Describe your unit and integration testing approach.',
+    keyPoints: [
+      kp('JUnit 5 unit tests', 'junit'),
+      kp('Mockito mocks for dependencies', 'mockito', 'mock*'),
+      kp('Assertions / AssertJ', 'assert*'),
+      kp('Integration tests with SpringBootTest / Testcontainers', 'springboottest', 'testcontainers', 'integration test*', 'webmvctest', 'datajpatest'),
+      kp('Structure: given/when/then, test pyramid', 'given when then', 'arrange act assert', 'test pyramid'),
+    ],
+    ideal: 'I follow the test pyramid: many fast unit tests, fewer integration tests and a small number of end-to-end tests. Unit tests use JUnit 5 with Mockito to mock dependencies, and AssertJ assertions, written in a given when then or arrange act assert structure. For slices I use WebMvcTest for controllers with MockMvc and DataJpaTest for repositories. For full integration tests I use SpringBootTest together with Testcontainers to run a real PostgreSQL, Kafka or Redis in Docker rather than an in-memory database, so tests match production. For external HTTP services I use WireMock, and for service-to-service contracts, consumer-driven contract tests. Tests run in CI on every pull request with coverage reports.',
+    followUp: 'How do you keep integration tests fast in CI?',
+  },
+  {
+    id: 'java-041', topic: 'Observability', levels: ['senior', 'lead'], type: 'concept',
+    q: 'How do you make a Java microservice observable in production?',
+    keyPoints: [
+      kp('Structured logging with correlation IDs', 'structured log*', 'correlation id', 'trace id', 'mdc'),
+      kp('Metrics with Micrometer and Prometheus', 'micrometer', 'prometheus', 'metrics'),
+      kp('Distributed tracing with OpenTelemetry', 'opentelemetry', 'distributed tracing', 'tracing', 'span*'),
+      kp('Spring Boot Actuator health endpoints', 'actuator', 'health', 'liveness', 'readiness'),
+      kp('Dashboards and alerts on SLOs', 'grafana', 'alert*', 'dashboard*', 'slo'),
+    ],
+    ideal: 'I cover the three pillars. Logs are structured logs in JSON with a correlation id or trace id in the MDC, shipped to a central store like ELK or Loki. Metrics use Micrometer, exposed for Prometheus through Spring Boot Actuator: request rate, errors and latency percentiles, JVM memory and GC, connection pool and Kafka consumer lag, plus business metrics. Distributed tracing uses OpenTelemetry, or Micrometer Tracing, propagating context across HTTP and messaging so each request is a trace made of spans, viewed in Jaeger or Tempo. Actuator health endpoints back Kubernetes liveness and readiness probes. On top, Grafana dashboards and alerts are defined against SLOs, alerting on symptoms like error rate and latency rather than on every cause.',
+    followUp: 'What would you alert on, and what would you only put on a dashboard?',
+  },
+
+  // ---------------- Design ----------------
+  {
+    id: 'java-042', topic: 'System Design', levels: ['senior', 'lead'], type: 'design',
+    q: 'Design a URL shortening service like bit.ly. Walk me through the key components.',
+    keyPoints: [
+      kp('API: create short URL and redirect', 'api', 'redirect'),
+      kp('Unique ID generation, e.g. base62', 'base62', 'base 62', 'unique id', 'counter', 'hash'),
+      kp('Storage in a key-value / database', 'key value', 'database', 'nosql', 'cassandra', 'dynamodb'),
+      kp('Caching hot links', 'cache', 'redis', 'cdn'),
+      kp('Scaling: replicas, sharding, partitioning', 'shard*', 'replica*', 'partition*', 'horizontal*'),
+      kp('301 vs 302 redirects', '301', '302'),
+    ],
+    ideal: 'The API has a POST endpoint that takes a long URL and returns a short code, and a GET on the short code that responds with a redirect. I would use a 302 if we need analytics on every click, or a 301 to let browsers cache it. For unique id generation I would take a 64-bit unique id from a distributed counter with pre-allocated ranges or a Snowflake-style generator and encode it in base62, so seven characters give about 3.5 trillion codes; hashing the URL is possible but needs collision handling. The mapping is stored in a key value database like DynamoDB or Cassandra, which scales horizontally with sharding by the short code, plus read replicas. Reads dominate writes, so hot links are kept in a Redis cache and at the CDN edge. Click analytics are sent asynchronously through Kafka. I would add rate limiting, URL validation against malware lists, and expiry for links.',
+    followUp: 'How would you prevent two servers from generating the same short code?',
+  },
+  {
+    id: 'java-043', topic: 'System Design', levels: ['senior', 'lead'], type: 'design',
+    q: 'How would you implement API rate limiting for a distributed Spring Boot service?',
+    keyPoints: [
+      kp('Algorithms: token bucket, sliding window, leaky bucket', 'token bucket', 'sliding window', 'leaky bucket', 'fixed window'),
+      kp('Shared counter store like Redis', 'redis'),
+      kp('Return HTTP 429 with Retry-After', '429', 'too many requests', 'retry after'),
+      kp('Placement: API gateway or filter', 'api gateway', 'gateway', 'filter', 'interceptor'),
+      kp('Per-key limits: user, API key, IP', 'per user', 'api key', 'ip address', 'per client'),
+    ],
+    ideal: 'First I decide the key, such as per user, per API key or per IP address, and the limits per tier. For the algorithm I prefer the token bucket, which allows controlled bursts, or a sliding window log or counter for smoother limits; a fixed window is simplest but allows bursts at window edges, and a leaky bucket smooths output. Because there are many instances, the counters live in a shared store like Redis, updated atomically with a Lua script or using a library like Bucket4j with a Redis backend. I enforce limits at the edge, in the API gateway such as Spring Cloud Gateway, or in a servlet filter, and return HTTP 429 Too Many Requests with a Retry-After header and rate-limit headers. I also decide whether to fail open if Redis is unavailable, and monitor rejected requests.',
+    followUp: 'How would you handle a client that is legitimately bursty, like a batch import?',
+  },
+  {
+    id: 'java-044', topic: 'Architecture', levels: ['lead'], type: 'design',
+    q: 'How would you lead the migration of a large Java monolith to microservices?',
+    keyPoints: [
+      kp('Strangler fig pattern', 'strangler'),
+      kp('Domain-driven design and bounded contexts', 'bounded context*', 'domain driven', 'ddd'),
+      kp('Data ownership: database per service', 'database per service', 'data ownership', 'own database', 'own data'),
+      kp('Platform: CI/CD, observability, tracing', 'ci cd', 'observability', 'tracing', 'platform'),
+      kp('Incremental delivery with measurable goals', 'incremental*', 'step by step', 'one at a time', 'business value'),
+    ],
+    ideal: 'I would start by clarifying why: deployment speed, team autonomy or scaling, because microservices add operational cost, and a modular monolith may be enough. Then I would use domain driven design to find bounded contexts and pick a first candidate with clear boundaries and high business value. I would apply the strangler fig pattern: put a gateway in front, build the new service, route traffic to it gradually, and remove the old code. Data ownership is the hardest part: each service gets its own database, with data synced via events or change data capture during the transition. Before scaling out, I would invest in the platform: CI CD pipelines, containers, observability with centralised logs, metrics and distributed tracing. The migration is incremental, one service at a time, with metrics like lead time and incident rate to prove it is working, and teams aligned to the services they own.',
+    followUp: 'Which part of the monolith would you avoid extracting first, and why?',
+  },
+  {
+    id: 'java-045', topic: 'Troubleshooting', levels: ['mid', 'senior', 'lead'], type: 'scenario',
+    q: 'After a deployment, the p99 latency of your Spring Boot API jumps from 100 milliseconds to 2 seconds. How do you investigate?',
+    keyPoints: [
+      kp('Check dashboards/metrics/APM to scope impact', 'dashboard*', 'metrics', 'apm', 'grafana'),
+      kp('Correlate with the deploy and roll back if needed', 'rollback', 'roll back', 'recent deploy*', 'diff', 'what changed'),
+      kp('Traces / thread dumps / profiling', 'trace*', 'thread dump*', 'profil*', 'jfr', 'flame graph'),
+      kp('Database: slow queries, connection pool', 'slow quer*', 'connection pool', 'database', 'hikari'),
+      kp('JVM: GC pauses, CPU, memory', 'gc', 'garbage collection', 'cpu'),
+    ],
+    ideal: 'First I scope the impact on dashboards and APM metrics: is it all endpoints or one, all instances or some, and does it correlate exactly with the deploy? If users are badly affected, I roll back first and investigate after. Then I look at what changed in the diff, including dependency versions and configuration. I use distributed traces to find which span is slow: database, a downstream call, or our own code. For the database I check slow queries, missing indexes, N plus 1 queries and Hikari connection pool wait time. For the JVM I check GC pause times, CPU and memory, and take thread dumps or a JFR profile with flame graphs to spot blocking, lock contention or pool exhaustion. Once fixed, I add a regression test or a performance check in the pipeline and an alert on p99 latency.',
+    followUp: 'Thread dumps show 200 threads waiting on HikariPool getConnection. What does that tell you?',
+  },
+];
