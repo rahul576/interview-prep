@@ -121,6 +121,34 @@ export class SpeechService {
     return this.native ? !!this.tts : ('speechSynthesis' in window);
   }
 
+  /**
+   * Prefer on-device (offline) speech recognition where the browser offers it (Chrome 139+).
+   * The online service can hang mid-answer on some networks, which stopped long answers being captured.
+   * Downloads the language model if needed. Returns 'on-device', 'cloud' or 'unsupported'.
+   */
+  async prepareOnDevice() {
+    if (this.fast || this.native) return 'unsupported';
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!R || typeof R.available !== 'function') { this.onDevice = false; return R ? 'cloud' : 'unsupported'; }
+    // Automated/headless browsers have no speech service (calling available() crashes headless Chromium).
+    if (typeof navigator !== 'undefined' && navigator.webdriver) return 'cloud';
+    const opts = { langs: [this.lang], processLocally: true };
+    try {
+      let st = await R.available(opts);
+      if ((st === 'downloadable' || st === 'downloading') && typeof R.install === 'function') {
+        this._log(`on-device model ${st}, installing`);
+        await Promise.race([R.install(opts), sleep(60000)]);
+        st = await R.available(opts);
+      }
+      // The online service is more accurate and faster, so it stays the default; the on-device model is the
+      // automatic fallback when the online service stalls or fails (as it did on the owner's network).
+      this.onDeviceCapable = st === 'available';
+      this.onDevice = false;
+      this._log(`on-device recognition: ${st}`);
+      return this.onDeviceCapable ? 'on-device' : 'cloud';
+    } catch (err) { this.onDevice = false; this._log(`on-device check failed: ${err && err.name}`); return 'cloud'; }
+  }
+
   sttAvailable() {
     if (this.fast) return false;
     if (this.native) return !!this.stt;
@@ -259,6 +287,8 @@ export class SpeechService {
         if (!loud && loudSince && now - loudSince > 1500) loudSince = 0;
         if (loudSince && now - lastProgress > 6000 && now - loudSince > 2500) {
           log(`watchdog: speech heard but no words for ${Math.round((now - lastProgress) / 1000)}s, restarting`);
+          // A stalled online service usually stays stalled: continue on the device if possible.
+          if (!this.onDevice && this.onDeviceCapable) { this.onDevice = true; log('switching to on-device recognition'); }
           lastProgress = now; loudSince = 0;
           try { rec.abort(); } catch { /* ignore */ }
         }
@@ -273,8 +303,10 @@ export class SpeechService {
       rec.continuous = true;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
+      const local = !!this.onDevice;
+      if (local) rec.processLocally = true;
       const k = ++session;
-      rec.onstart = () => { lastProgress = Date.now(); log(`#${k} start${useTrack ? ' (selected mic)' : ' (default mic)'}`); };
+      rec.onstart = () => { lastProgress = Date.now(); log(`#${k} start${useTrack ? ' (selected mic)' : ' (default mic)'}${local ? ' on-device' : ' online'}`); };
       rec.onresult = (e) => {
         lastProgress = Date.now();
         transientErrors = 0;
@@ -289,6 +321,10 @@ export class SpeechService {
       rec.onerror = (e) => {
         log(`#${k} error ${e.error}`);
         if (e.error === 'no-speech' || e.error === 'aborted') return;
+        // On-device model missing or refused: fall back to the online service instead of giving up.
+        if (local && (e.error === 'language-not-supported' || e.error === 'service-not-allowed')) { this.onDevice = false; return; }
+        // The online service hangs or drops on some networks: switch to on-device recognition when it exists.
+        if (!local && e.error === 'network' && this.onDeviceCapable) { this.onDevice = true; return; }
         if (FATAL.has(e.error)) { active = false; flushInterim(); emit(true); onError && onError(e.error); return; }
         // network / audio-capture hiccups happen in long sessions: keep the words so far and restart (onend).
         transientErrors++;

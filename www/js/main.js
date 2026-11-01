@@ -105,7 +105,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4.1</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4.2</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -479,6 +479,8 @@ async function renderCheck() {
     $('#voiceSel').addEventListener('change', (e) => { speech.voiceName = e.target.value || null; store.savePrefs({ voiceName: speech.voiceName }); tip(); speech.speak('Hi, this is how I will sound in your interview.', { gender: persona0.gender }); });
   }
   const sttOk = speech.sttAvailable();
+  // Offline recognition is more reliable for long answers; set it up (and download the model) in the background.
+  const onDeviceReady = sttOk && !isNative() ? speech.prepareOnDevice() : Promise.resolve('unsupported');
   if (!sttOk) s.answerMode = 'type';
   $$('[data-am]').forEach(b => {
     b.setAttribute('aria-pressed', String(b.dataset.am === s.answerMode));
@@ -491,6 +493,9 @@ async function renderCheck() {
     $('#checks').innerHTML = Object.values(checks).map(([st, t, d]) => `<li><span class="st ${st}" aria-hidden="true">${st === 'ok' ? '✓' : st === 'bad' ? '✕' : '!'}</span><div><b>${t}</b><span>${esc(d)}</span></div></li>`).join('');
   };
   drawChecks();
+  onDeviceReady.then((mode) => {
+    if (mode === 'on-device' && checks.stt[0] !== 'bad') { checks.stt = ['ok', 'Voice answers', 'Online speech recognition, with offline backup on this device']; drawChecks(); }
+  });
 
   const setVoiceMode = (on) => {
     s.answerMode = on ? 'voice' : 'type';
@@ -1311,7 +1316,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.4.1', fast: FAST };
+window.__ip = { go, state, store, version: '1.4.2', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

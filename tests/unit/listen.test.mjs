@@ -82,3 +82,47 @@ test('watchdog: engine stalls while the mic hears speech -> recogniser restarts 
     assert.ok(log.length >= 2);
   } finally { Date.now = realNow; }
 });
+
+test('on-device model is downloaded and used as the fallback', async () => {
+  const starts = [];
+  let state = 'downloadable';
+  class R {
+    static async available(o) { assert.equal(o.processLocally, true); return state; }
+    static async install() { state = 'available'; return true; }
+    start() { starts.push(this.processLocally === true); setTimeout(() => { this.onresult({ resultIndex: 0, results: [{ 0: { transcript: 'offline words' }, isFinal: true, length: 1 }] }); }, 5); }
+    stop() { setTimeout(() => this.onend && this.onend(), 1); }
+    abort() { this.stop(); }
+  }
+  globalThis.window = { webkitSpeechRecognition: R };
+  globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+  const { SpeechService } = await import('../../www/js/services/speech.js');
+  const sp = new SpeechService();
+  sp.fast = false;
+  assert.equal(await sp.prepareOnDevice(), 'on-device');
+  assert.equal(sp.onDevice, false, 'online stays the default');
+  sp.onDevice = true; // as after a stall
+  const ctl = sp._listenWeb({ onText: () => {}, onError: () => {}, track: null });
+  await tick(30);
+  assert.match(ctl.stop(), /offline words/);
+  assert.deepEqual(starts, [true]);
+});
+
+test('a network failure of the online service switches to on-device recognition instead of failing', async () => {
+  const modes = [];
+  class R {
+    start() { const local = this.processLocally === true; modes.push(local ? 'local' : 'cloud');
+      setTimeout(() => { if (local) this.onresult({ resultIndex: 0, results: [{ 0: { transcript: 'recovered' }, isFinal: true, length: 1 }] }); else { this.onerror({ error: 'network' }); this.onend(); } }, 5); }
+    stop() { setTimeout(() => this.onend && this.onend(), 1); }
+    abort() { this.stop(); }
+  }
+  globalThis.window = { webkitSpeechRecognition: R };
+  const { SpeechService } = await import('../../www/js/services/speech.js');
+  const sp = new SpeechService({ fast: true });
+  sp.onDevice = false; sp.onDeviceCapable = true;
+  const errors = [];
+  const ctl = sp._listenWeb({ onText: () => {}, onError: (e) => errors.push(e), track: null });
+  await tick(400);
+  assert.match(ctl.stop(), /recovered/);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(modes.slice(0, 2), ['cloud', 'local']);
+});

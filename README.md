@@ -1,5 +1,9 @@
 # InterviewPro — V1.4
 
+## What's new in V1.4.2
+- Offline backup for voice answers: Chrome's on-device English model is downloaded automatically. If the online speech service stalls or fails mid-answer, recognition switches to the offline model and keeps capturing. Online stays the default because it is faster and more accurate.
+- Tip: on a Mac, Safari (Apple dictation) or Microsoft Edge (Microsoft's speech service) can recognise fast speech better when Chrome's online service is unreliable on your network.
+
 ## What's new in V1.4.1
 - Voice watchdog: if the mic hears you talking but Chrome's speech engine stops producing words for 6 seconds, the recognizer restarts automatically and keeps everything said so far.
 - Recognition events are logged in localStorage (`interviewpro.sttlog.v1`) for troubleshooting.
