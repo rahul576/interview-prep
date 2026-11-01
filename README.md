@@ -1,5 +1,10 @@
 # InterviewPro — V1.4
 
+## What's new in V1.4.1
+- Voice watchdog: if the mic hears you talking but Chrome's speech engine stops producing words for 6 seconds, the recognizer restarts automatically and keeps everything said so far.
+- Recognition events are logged in localStorage (`interviewpro.sttlog.v1`) for troubleshooting.
+- Device check warns when a Bluetooth headset mic is selected: its low-quality call audio is often misheard.
+
 ## What's new in V1.4
 - **580 questions**: all 300 questions from the owner's Java Backend list are in the bank. 141 are new entries, each with a model answer, key points and a follow-up. The other 159 were already covered by an existing question; `scripts/import/plan.mjs` lists which one covers each.
 - **Time-limited preparation mode**: choose 30 min, 45 min or 1 hour instead of a question count. A countdown shows the time left, and the interviewer keeps asking until time is up.

@@ -216,14 +216,24 @@ export class SpeechService {
    * Continuous dictation. onText(fullTranscript, isFinal) is called as speech arrives.
    * Returns a controller with stop() -> final transcript.
    */
-  startListening({ onText, onError, onState, track = null } = {}) {
+  startListening({ onText, onError, onState, track = null, level = null } = {}) {
     if (this._listen) this._listen.stop();
-    const ctl = this.native ? this._listenNative({ onText, onError, onState }) : this._listenWeb({ onText, onError, onState, track });
+    const ctl = this.native ? this._listenNative({ onText, onError, onState }) : this._listenWeb({ onText, onError, onState, track, level });
     this._listen = ctl;
     return ctl;
   }
 
-  _listenWeb({ onText, onError, onState, track }) {
+  /** Small rolling log of recognition events, kept in localStorage for troubleshooting voice input. */
+  _log(msg) {
+    try {
+      const key = 'interviewpro.sttlog.v1';
+      const log = JSON.parse(localStorage.getItem(key) || '[]');
+      log.push(`${new Date().toISOString().slice(11, 23)} ${msg}`);
+      localStorage.setItem(key, JSON.stringify(log.slice(-300)));
+    } catch { /* storage unavailable */ }
+  }
+
+  _listenWeb({ onText, onError, onState, track, level }) {
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     let committed = '';
     let interim = '';
@@ -236,6 +246,24 @@ export class SpeechService {
     // input can be a silent virtual device (Teams, Zoom…), which made long answers stop being captured.
     let useTrack = !!(track && track.readyState === 'live');
     const FATAL = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported']);
+    const log = (m) => this._log(m);
+    let session = 0, lastProgress = Date.now(), loudSince = 0, watchdog = null;
+    // Watchdog: some engines silently stop producing results while still "listening". If the microphone
+    // clearly hears speech but no words arrive for a few seconds, restart the recogniser (words so far are kept).
+    if (typeof level === 'function') {
+      watchdog = setInterval(() => {
+        if (!active || !rec) return;
+        const now = Date.now();
+        const loud = level() > 0.08;
+        if (loud && !loudSince) loudSince = now;
+        if (!loud && loudSince && now - loudSince > 1500) loudSince = 0;
+        if (loudSince && now - lastProgress > 6000 && now - loudSince > 2500) {
+          log(`watchdog: speech heard but no words for ${Math.round((now - lastProgress) / 1000)}s, restarting`);
+          lastProgress = now; loudSince = 0;
+          try { rec.abort(); } catch { /* ignore */ }
+        }
+      }, 400);
+    }
     const emit = (final) => onText && onText((committed + ' ' + interim).replace(/\s+/g, ' ').trim(), final);
     const flushInterim = () => { if (interim.trim()) { committed += ' ' + interim; } interim = ''; };
     const start = () => {
@@ -245,7 +273,10 @@ export class SpeechService {
       rec.continuous = true;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
+      const k = ++session;
+      rec.onstart = () => { lastProgress = Date.now(); log(`#${k} start${useTrack ? ' (selected mic)' : ' (default mic)'}`); };
       rec.onresult = (e) => {
+        lastProgress = Date.now();
         transientErrors = 0;
         interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -256,6 +287,7 @@ export class SpeechService {
         emit(false);
       };
       rec.onerror = (e) => {
+        log(`#${k} error ${e.error}`);
         if (e.error === 'no-speech' || e.error === 'aborted') return;
         if (FATAL.has(e.error)) { active = false; flushInterim(); emit(true); onError && onError(e.error); return; }
         // network / audio-capture hiccups happen in long sessions: keep the words so far and restart (onend).
@@ -263,8 +295,9 @@ export class SpeechService {
         if (transientErrors > 4) { active = false; flushInterim(); emit(true); onError && onError(e.error); }
       };
       rec.onend = () => {
+        log(`#${k} end (${committed.split(' ').filter(Boolean).length} words so far)`);
         if (interim.trim()) { flushInterim(); emit(true); }
-        if (!active) { onState && onState('stopped'); return; }
+        if (!active) { clearInterval(watchdog); onState && onState('stopped'); return; }
         const now = Date.now();
         restarts = restarts.filter(t => now - t < 10000);
         if (restarts.length >= 8) { active = false; onError && onError('restart-limit'); onState && onState('stopped'); return; }
@@ -289,6 +322,7 @@ export class SpeechService {
     return {
       stop: () => {
         active = false;
+        clearInterval(watchdog);
         try { rec && rec.stop(); } catch { /* ignore */ }
         flushInterim();
         return committed.replace(/\s+/g, ' ').trim();

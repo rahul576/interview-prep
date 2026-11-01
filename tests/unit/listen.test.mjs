@@ -65,3 +65,20 @@ test('fatal errors stop listening and report once', async () => {
   const { errors } = await listenWith(() => [{ say: 'hello' }, { error: 'not-allowed' }]);
   assert.deepEqual(errors, ['not-allowed']);
 });
+
+test('watchdog: engine stalls while the mic hears speech -> recogniser restarts and keeps capturing', async () => {
+  // Reproduces what Chrome did on the owner's Mac: one sentence, then no more results and no "end" event.
+  const { FakeRec, log } = fakeEngine((n) => n === 1 ? [{ say: 'first sentence' }, ...Array(4000).fill({})] : [{ say: `sentence after restart ${n}` }]);
+  globalThis.window = { webkitSpeechRecognition: FakeRec };
+  const { SpeechService } = await import('../../www/js/services/speech.js');
+  const sp = new SpeechService({ fast: true });
+  const realNow = Date.now; let offset = 0; Date.now = () => realNow() + offset; // fast-forward the clock
+  try {
+    const ctl = sp._listenWeb({ onText: () => {}, onError: () => {}, track: { label: 'mic', readyState: 'live' }, level: () => 0.3 });
+    await tick(50); offset += 3000; await tick(450); offset += 5000; await tick(900);
+    const text = ctl.stop();
+    assert.match(text, /first sentence/);
+    assert.match(text, /sentence after restart 2/, `restarted after the stall: ${text}`);
+    assert.ok(log.length >= 2);
+  } finally { Date.now = realNow; }
+});

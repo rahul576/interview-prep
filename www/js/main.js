@@ -105,7 +105,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4.1</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -513,7 +513,8 @@ async function renderCheck() {
       if (v > 0.04 && !loudSeen) {
         loudSeen = true;
         checks.mic = ['ok', 'Microphone', `Hearing you on: ${media.micLabel() || 'default microphone'}`];
-        drawChecks(); showHelp('');
+        drawChecks();
+        if (!/Bluetooth headset/.test($('#micHelp').innerHTML)) showHelp('');
         $('#micHint').textContent = 'Great — the bar is moving, your microphone works.';
       }
       if (!loudSeen && performance.now() - t0 > 6000 && !$('#micHelp').dataset.silent) {
@@ -554,9 +555,13 @@ async function renderCheck() {
         const real = await media.preferredMicId();
         if (real) { store.savePrefs({ micId: real }); return startDevices(real); }
       }
+      // Bluetooth headset mics switch to low-bandwidth "call" mode, which speech recognition often mis-hears.
+      const btNote = /bluetooth|\bbt\b/i.test(media.micLabel())
+        ? '<b>Bluetooth headset microphone detected.</b> While the mic is on, Bluetooth headsets switch to low-quality call audio, so speech recognition often mishears or stops. For reliable voice answers use a wired or USB headset, AirPods, or your iPhone as the Mac microphone (Continuity), then pick it in the Microphone list.'
+        : '';
       if (media.hasAudio()) {
         checks.mic = ['ok', 'Microphone', `Connected: ${media.micLabel() || 'default microphone'} — say something`];
-        delete $('#micHelp').dataset.silent; showHelp('');
+        delete $('#micHelp').dataset.silent; showHelp(btNote);
         startMeter();
         await fillMics();
       } else if (isNative()) {
@@ -708,6 +713,7 @@ function renderRoom() {
     micState: $('#micState'), micText: $('#micText'),
   };
   if (media.hasVideo()) media.attach($('#self'));
+  const roomLevel = media.hasAudio() ? media.levelMeter() : null; // lets the voice watchdog see that you are talking
   let recording = false;
   if (s.record && media.stream) recording = media.startRecording();
 
@@ -825,6 +831,7 @@ function renderRoom() {
       const base = ui.answer.value;
       ctl = speech.startListening({
         track: media.audioTrack(),
+        level: roomLevel,
         onText: (txt) => { ui.answer.value = (base ? base + ' ' : '') + txt; ui.answer.scrollTop = ui.answer.scrollHeight; },
         onError: (e) => {
           voice = false;
@@ -1304,7 +1311,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.4.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.4.1', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
