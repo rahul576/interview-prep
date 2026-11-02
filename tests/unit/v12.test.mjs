@@ -179,7 +179,7 @@ test('audio check runs before anything else; cancelling it ends the session', as
   const s1 = new InterviewSession({ questions: qs, config: { interviewer: INTERVIEWERS[0], position: 'X', followUps: false, seed: 1 }, io: mk('ok') });
   const r1 = await s1.run();
   assert.equal(order[0], 'check');
-  assert.equal(order[1], 'greeting:Perfect');
+  assert.equal(order[1], 'greeting:1 quest');
   assert.equal(r1.items.length, 1);
   order.length = 0;
   const s2 = new InterviewSession({ questions: qs, config: { interviewer: INTERVIEWERS[0], position: 'X', followUps: false, seed: 1 }, io: mk('end') });

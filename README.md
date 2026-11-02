@@ -1,4 +1,13 @@
-# InterviewPro — V1.5
+# InterviewPro — V1.6
+
+## What's new in V1.6
+- **655 questions**: 75 new DevOps questions, so every DevOps topic now has entry-level (fresher) questions as well as harder ones. Topics covered: Linux, scripting, networking, Git, Docker, Kubernetes, CI/CD, IaC/Ansible, AWS, Azure, observability, backup/DR, DevSecOps, GitOps/Helm, platform engineering and troubleshooting.
+- **Practise one topic** (preparation mode → One topic): every question of that topic, easiest first. The session length can be 30, 45 or 60 minutes, or **No limit**.
+- **Easy-to-hard order**: interview questions now go from the lowest level up, and concepts come before scenarios and design.
+- **"Tell me about yourself" is optional** (checkbox, off by default), and the greetings are now one short sentence, so sessions start straight away.
+- **User profiles**: each person on the device has their own history, revision list and answered questions. Switch users or reset a user's history from the home screen. Existing data stays with the first user.
+- **No repeats**: "Allow questions I've already answered" is off by default, so every session uses questions this user has never seen. The setup screen shows how many new questions are left.
+- **Mac desktop app**: `InterviewPro.app` opens the app in its own window (Chrome or Edge app mode, so voice answers keep working). It uses the always-on service if it is running, and otherwise starts its own server. Build it with `deploy/macos/desktop/build-app.sh`, then install it with `Install InterviewPro Desktop.command`.
 
 ## What's new in V1.5 – AI interviewer
 - The interviewer reacts to what you actually say instead of fixed lines:

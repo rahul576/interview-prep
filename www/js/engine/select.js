@@ -30,16 +30,33 @@ export function targetLevels(positionLevel, experienceLevel) {
 
 const TYPE_ORDER = { intro: 0, concept: 1, scenario: 2, design: 3, behavioral: 4, managerial: 5 };
 const minRank = q => Math.min(...q.levels.map(l => levelById(l).rank));
+const avgRank = q => q.levels.reduce((n, l) => n + levelById(l).rank, 0) / q.levels.length;
+
+/** Difficulty order: lowest level first, then concepts before scenarios before design, then wider-level questions. */
+export function byDifficulty(a, b) {
+  return (minRank(a) - minRank(b)) || (TYPE_ORDER[a.type] - TYPE_ORDER[b.type]) || (avgRank(a) - avgRank(b)) || a.id.localeCompare(b.id, undefined, { numeric: true });
+}
+
+/**
+ * Preparation by topic: every technical question of one category for the role, easiest first.
+ * Questions already answered are left out unless allowRepeats is true.
+ */
+export function topicQuestions({ bank, category, topic, seen = {}, allowRepeats = false }) {
+  return bank
+    .filter(q => TECH_TYPES.includes(q.type) && belongsTo(q, category) && topicGroup(q.topic) === topic && (allowRepeats || !seen[q.id]))
+    .sort(byDifficulty);
+}
 
 /**
  * How many technical vs HR questions a session has. For senior/lead, HR slots
  * are filled mostly with managerial scenarios; full lead interviews get one extra.
  */
-export function planSlots(count, mode, levelRank = 1) {
+export function planSlots(count, mode, levelRank = 1, includeIntro = false) {
   if (mode !== 'mixed') return { intro: 0, behavioral: 0, technical: count };
   let behavioral = count >= 8 ? 2 : 1;
   if (levelRank >= 4 && count >= 12) behavioral += 1;
-  return { intro: 1, behavioral, technical: Math.max(1, count - 1 - behavioral) };
+  const intro = includeIntro ? 1 : 0;
+  return { intro, behavioral, technical: Math.max(1, count - intro - behavioral) };
 }
 
 function pickDiverse(pool, n, rand, preferLevel) {
@@ -108,11 +125,13 @@ export function freshFirst(pool, n, seen = {}, lastSession = new Set()) {
  * @param {Object<string,number>} [p.seen] - question id -> last asked timestamp
  * @param {string[]} [p.recentIds] - ids asked in the previous session (never repeated if avoidable)
  */
-export function selectQuestions({ bank, category, positionLevel, experienceLevel, count = 6, mode = 'mixed', topics = null, seed = Date.now(), seen = {}, recentIds = [] }) {
+export function selectQuestions({ bank, category, positionLevel, experienceLevel, count = 6, mode = 'mixed', topics = null, seed = Date.now(), seen = {}, recentIds = [], includeIntro = false, allowRepeats = true }) {
   const rand = mulberry32(seed);
   const levels = targetLevels(positionLevel, experienceLevel);
   const rank = Math.max(...levels.map(l => levelById(l).rank));
-  const slots = planSlots(count, mode, rank);
+  const slots = planSlots(count, mode, rank, includeIntro);
+  // "Don't repeat": anything this user has answered before is excluded outright.
+  if (!allowRepeats) bank = bank.filter(q => q.type === 'intro' || !seen[q.id]);
   const last = new Set(recentIds);
   const chosen = topics && topics.length ? new Set(topics) : null;
   const overlaps = q => q.levels.some(l => levels.includes(l));
@@ -131,8 +150,8 @@ export function selectQuestions({ bank, category, positionLevel, experienceLevel
   if (atLevel.filter(unseen).length >= n) candidates = atLevel.filter(unseen);
   else if (atLevel.filter(q => !last.has(q.id)).length >= n) candidates = freshFirst(atLevel, n, seen, last);
   else candidates = freshFirst([...atLevel, ...near, ...far], n, seen, last);
-  const technical = pickDiverse(candidates, n, rand, positionLevel)
-    .sort((a, b) => (TYPE_ORDER[a.type] - TYPE_ORDER[b.type]) || (minRank(a) - minRank(b)));
+  // Easiest first, so a session warms up like a real interview.
+  const technical = pickDiverse(candidates, n, rand, positionLevel).sort(byDifficulty);
 
   // Intro + behavioural / managerial (managerial preferred for senior and lead)
   const common = bank.filter(q => q.cat === 'common' && belongsTo(q, category) && overlaps(q));
@@ -151,8 +170,8 @@ export function selectQuestions({ bank, category, positionLevel, experienceLevel
 }
 
 /** How many technical questions are available for the given filters (for the setup screen). */
-export function availableCount({ bank, category, positionLevel, experienceLevel, topics }) {
+export function availableCount({ bank, category, positionLevel, experienceLevel, topics, seen = null }) {
   const levels = targetLevels(positionLevel, experienceLevel);
   const chosen = topics && topics.length ? new Set(topics) : null;
-  return bank.filter(q => TECH_TYPES.includes(q.type) && belongsTo(q, category) && (!chosen || chosen.has(topicGroup(q.topic))) && q.levels.some(l => levels.includes(l))).length;
+  return bank.filter(q => TECH_TYPES.includes(q.type) && belongsTo(q, category) && (!chosen || chosen.has(topicGroup(q.topic))) && q.levels.some(l => levels.includes(l)) && (!seen || !seen[q.id])).length;
 }

@@ -16,8 +16,12 @@ import { JB_CORE } from './questions-jb300-core.js';
 import { JB_RUNTIME } from './questions-jb300-runtime.js';
 import { JB_SPRING } from './questions-jb300-spring.js';
 import { JB_ARCH } from './questions-jb300-arch.js';
+import { DEVOPS_V16A } from './questions-devops-v16a.js';
+import { DEVOPS_V16B } from './questions-devops-v16b.js';
+import { DEVOPS_V16C } from './questions-devops-v16c.js';
+import { DEVOPS_V16D } from './questions-devops-v16d.js';
 
-export const BANK_VERSION = '1.4.0';
+export const BANK_VERSION = '1.6.0';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -37,6 +41,10 @@ export const QUESTIONS = Object.freeze([
   ...withCat(DEVOPS_MORE, 'devops'),
   ...withCat(AZURE, 'devops'),
   ...withCat(DEVOPS_EXTRA, 'devops'),
+  ...withCat(DEVOPS_V16A, 'devops'),
+  ...withCat(DEVOPS_V16B, 'devops'),
+  ...withCat(DEVOPS_V16C, 'devops'),
+  ...withCat(DEVOPS_V16D, 'devops'),
   ...withCat(KAFKA, 'shared'),
   ...withCat(ELASTIC, 'shared'),
   ...withCat(DSA, 'shared'),

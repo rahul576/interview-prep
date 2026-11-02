@@ -12,12 +12,11 @@ export const RULES = Object.freeze({
 const ACKS = ['Thank you.', 'Okay, got it.', 'Alright, thanks.', 'Understood.', 'Okay.', 'Thanks for that.'];
 const NEXT = ['Let’s move on.', 'Next question.', 'Moving on.', 'Here’s the next one.', 'Let’s continue.'];
 
-export function prepGreetingLine({ interviewer, candidateName, count, audioChecked, timeLimitMin }) {
-  const hello = `${audioChecked ? 'Perfect' : candidateName ? `Hi ${candidateName}` : 'Hi'}, I\u2019m ${interviewer.name.split(' ')[0]}.`;
-  const length = timeLimitMin
-    ? `This is a ${timeLimitMin >= 60 ? 'one hour' : `${timeLimitMin} minute`} preparation session. I\u2019ll keep asking questions until our time is up.`
-    : `This is a preparation session with ${count} question${count === 1 ? '' : 's'}. There is no time limit.`;
-  return `${hello} ${length} After each answer you will get feedback and the model answer, and you can try again as often as you like.`;
+export function prepGreetingLine({ interviewer, candidateName, audioChecked, timeLimitMin, topic }) {
+  const hello = audioChecked ? '' : `Hi${candidateName ? ' ' + candidateName : ''}, I\u2019m ${interviewer.name.split(' ')[0]}. `;
+  const what = topic ? `Let\u2019s practise ${topic}, starting easy.` : 'Let\u2019s practise.';
+  const time = timeLimitMin ? ` We have ${timeLimitMin >= 60 ? 'an hour' : `${timeLimitMin} minutes`}.` : '';
+  return `${hello}${what}${time} First question.`;
 }
 
 /** Said when a time-limited preparation session runs out of time. */
@@ -51,8 +50,8 @@ export function hearingCheckLine({ interviewer, candidateName }) {
 }
 
 export function greetingLine({ interviewer, candidateName, position, count, audioChecked }) {
-  const who = audioChecked ? 'Perfect' : (candidateName ? `Hi ${candidateName}` : 'Hi there');
-  return `${who}, I’m ${interviewer.name.split(' ')[0]}, ${interviewer.title.toLowerCase()} on the hiring panel. Thanks for joining. This is ${[8, 11, 18].includes(count) || String(count).startsWith('8') ? 'an' : 'a'} ${count}-question interview for the ${position} role. Take your time and think out loud — when you’ve finished an answer, tap “Done”. Let’s begin.`;
+  const who = audioChecked ? '' : `Hi${candidateName ? ' ' + candidateName : ''}, I\u2019m ${interviewer.name.split(' ')[0]}. `;
+  return `${who}${count} question${count === 1 ? "" : "s"} for the ${position} role. Let\u2019s begin.`;
 }
 
 export function nudgeLine(result) {

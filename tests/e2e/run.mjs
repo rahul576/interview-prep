@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createServer } from '../../scripts/serve.mjs';
 import { QUESTIONS, belongsTo, topicGroup } from '../../www/js/data/questions.js';
 import { scoreAnswer, summarize, selectionChance } from '../../www/js/engine/score.js';
-import { targetLevels } from '../../www/js/engine/select.js';
+import { targetLevels, topicQuestions } from '../../www/js/engine/select.js';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -73,6 +73,9 @@ async function runInterview(vp, sc, idx) {
   await page.$eval('#years', (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true })); }, sc.years);
   await page.click(`[data-mode="${sc.mode}"]`);
   await page.click(`[data-count="${sc.count}"]`);
+  assert.equal(await page.isChecked('#includeIntro'), false, `${tag}: intro question is off by default`);
+  assert.equal(await page.isChecked('#allowRepeats'), false, `${tag}: repeats are off by default`);
+  if (sc.mode === 'mixed') await page.check('#includeIntro');
   // all categories selected by default
   const pressed = await page.$$eval('[data-topic]', els => els.map(e => e.getAttribute('aria-pressed')));
   assert.ok(pressed.length >= 10 && pressed.every(p => p === 'true'), `${tag}: all topics should be selected by default`);
@@ -420,7 +423,7 @@ try {
   await page.waitForSelector('#doneBtn:not([disabled])');
   const logText = await page.textContent('#log');
   assert.ok(/captions on/.test(logText), 'captions fallback acknowledged');
-  assert.ok(/Perfect, I’m/.test(logText), 'greeting follows the check');
+  assert.ok(/questions for the .* role\. Let’s begin\./.test(logText), 'short greeting follows the check');
   assert.equal(await page.textContent('#qcount'), 'Q 1/8');
   // End during a new session's audio check -> back home, nothing saved
   const before = (await page.evaluate(() => window.__ip.store.history())).length;
@@ -599,6 +602,52 @@ try {
   log('PASS  AI interviewer: reacts to "I don\'t know", AI coach in prep, AI report feedback');
   await ctx.close();
 } catch (e) { failures++; log('FAIL  AI interviewer', e.message); }
+
+// V1.6: user profiles, practise one topic (all questions, easiest first), no repeats, reset
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['camera', 'microphone'] });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=701`);
+  await page.click('#profileNew'); await page.fill('#profileName', 'Priya'); await page.click('#profileCreate');
+  await page.waitForFunction(() => /Priya/.test(document.querySelector('.user-chip')?.textContent || ''));
+  const runTopic = async (answerN) => {
+    await page.click('[data-nav="home"] >> nth=0');
+    await page.click('.role-card [data-role="devops"]');
+    await page.click('[data-style="prep"]'); await page.click('[data-source="topic"]');
+    await page.selectOption('#practiceTopic', 'Docker');
+    await page.click('[data-minutes="0"]');
+    await page.click('#toCheck');
+    await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+    await page.click('#start'); await confirmAudio(page);
+    const ids = await page.evaluate(() => window.__ip.questions);
+    for (let k = 0; k < answerN; k++) {
+      await page.waitForSelector('#doneBtn:not([disabled])');
+      await page.fill('#answer', 'Containers package an application with its dependencies into an image.');
+      await page.click('#doneBtn'); await page.waitForSelector('#review:not([hidden])'); await page.click('#nextBtn');
+    }
+    await page.waitForSelector('#doneBtn:not([disabled])');
+    assert.equal(await page.$('#timeLeft'), null, 'no countdown with "No limit"');
+    await page.click('#endBtn');
+    await page.waitForSelector('#reportHead');
+    return ids;
+  };
+  const all = topicQuestions({ bank: QUESTIONS, category: 'devops', topic: 'Docker' }).map(q => q.id);
+  const first = await runTopic(2);
+  assert.deepEqual(first, all, 'all Docker questions, easiest first');
+  const second = await runTopic(1);
+  assert.deepEqual(second, all.slice(2), 'answered questions are not repeated');
+  // another user still sees the full topic, and reset brings everything back for Priya
+  await page.click('[data-nav="home"] >> nth=0');
+  await page.click('#profileReset');
+  await page.waitForFunction(() => /history was reset/.test(document.body.textContent));
+  const third = await runTopic(0);
+  assert.deepEqual(third, all, 'after reset every question is available again');
+  assert.deepEqual(errors, []);
+  log('PASS  user profiles, one-topic practice easiest first, no repeats, reset');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  profiles/topic practice', e.message); }
 
 await browser.close();
 server.close();

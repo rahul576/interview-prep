@@ -115,14 +115,14 @@ test('selection respects role, level, count, uniqueness and is deterministic', (
     for (const [pos, exp] of [['entry', 'entry'], ['mid', 'entry'], ['senior', 'mid'], ['lead', 'lead']]) {
       for (const count of [5, 8, 12]) {
         for (const mode of ['mixed', 'technical']) {
-          const args = { bank: QUESTIONS, category: c.id, positionLevel: pos, experienceLevel: exp, count, mode, seed: 1234 };
+          const args = { bank: QUESTIONS, category: c.id, positionLevel: pos, experienceLevel: exp, count, mode, seed: 1234, includeIntro: true };
           const qs = selectQuestions(args);
           assert.equal(qs.length, count, `${c.id} ${pos}/${exp} ${mode} ${count}`);
           assert.equal(new Set(qs.map(q => q.id)).size, count, 'no duplicates');
           const lv = targetLevels(pos, exp);
           const tech = qs.filter(q => q.cat !== 'common');
           const rank = Math.max(...lv.map(l => levelById(l).rank));
-          assert.equal(tech.length, planSlots(count, mode, rank).technical);
+          assert.equal(tech.length, planSlots(count, mode, rank, true).technical);
           for (const q of tech) {
             assert.ok(belongsTo(q, c.id), `${q.id} not in role ${c.id}`);
             assert.ok(q.levels.some(l => lv.includes(l)), `${q.id} level ${q.levels} not in ${lv}`);
@@ -215,12 +215,11 @@ test('session: ending early keeps answered items and reports endedEarly', async 
   assert.equal(out.endedEarly, true);
 });
 
-test('greeting uses the right article', async () => {
+test('greeting is short and states the count and role', async () => {
   const { greetingLine } = await import('../../www/js/engine/session.js');
   const g = (count) => greetingLine({ interviewer: INTERVIEWERS[0], candidateName: '', position: 'X', count });
-  assert.match(g(8), /This is an 8-question/);
-  assert.match(g(5), /This is a 5-question/);
-  assert.match(g(12), /This is a 12-question/);
+  assert.match(g(8), /8 questions for the X role\. Let’s begin\./);
+  assert.match(g(12), /^Hi, I’m \w+\. 12 questions/);
 });
 
 test('nudge line names a missed concept without the full answer', () => {
@@ -287,13 +286,13 @@ test('Azure questions only go to DevOps; Java-only DSA never goes to DevOps', ()
 });
 
 test('senior/lead interviews include managerial scenarios; entry/mid do not', () => {
-  const run = (pos, exp) => selectQuestions({ bank: QUESTIONS, category: 'java-backend', positionLevel: pos, experienceLevel: exp, count: 12, mode: 'mixed', seed: 11 });
+  const run = (pos, exp) => selectQuestions({ bank: QUESTIONS, category: 'java-backend', positionLevel: pos, experienceLevel: exp, count: 12, mode: 'mixed', seed: 11, includeIntro: true });
   assert.equal(run('entry', 'entry').filter(q => q.type === 'managerial').length, 0);
   assert.equal(run('mid', 'mid').filter(q => q.type === 'managerial').length, 0);
   assert.ok(run('senior', 'senior').filter(q => q.type === 'managerial').length >= 1);
   assert.ok(run('lead', 'lead').filter(q => q.type === 'managerial').length >= 2);
-  assert.deepEqual(planSlots(12, 'mixed', 4), { intro: 1, behavioral: 3, technical: 8 });
-  assert.deepEqual(planSlots(8, 'mixed', 3), { intro: 1, behavioral: 2, technical: 5 });
-  assert.deepEqual(planSlots(8, 'mixed', 2), { intro: 1, behavioral: 2, technical: 5 });
+  assert.deepEqual(planSlots(12, 'mixed', 4, true), { intro: 1, behavioral: 3, technical: 8 });
+  assert.deepEqual(planSlots(8, 'mixed', 3, true), { intro: 1, behavioral: 2, technical: 5 });
+  assert.deepEqual(planSlots(8, 'mixed', 2, true), { intro: 1, behavioral: 2, technical: 5 });
   assert.deepEqual(planSlots(5, 'technical', 4), { intro: 0, behavioral: 0, technical: 5 });
 });

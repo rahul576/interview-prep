@@ -1,7 +1,7 @@
 // InterviewPro V1 – app shell, screens and interview room.
 import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById as builtinInterviewer, levelFromYears, levelById } from './data/meta.js';
 import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
-import { selectQuestions, targetLevels, planSlots, availableCount } from './engine/select.js';
+import { selectQuestions, targetLevels, planSlots, availableCount, topicQuestions } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
@@ -24,6 +24,7 @@ const avatars = new Set();
 const ICONS = {
   java: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18h11a3 3 0 0 0 0-6h-1"/><path d="M5 12h10v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M8 3c1 1.2-1 2 0 3.5M11 2c1.2 1.5-1.2 2.6 0 4.5"/></svg>',
   devops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17"/><path d="M15 3h6v6"/><path d="m21 3-6 6"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
   mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>',
   cc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 10a2 2 0 1 0 0 4M16 10a2 2 0 1 0 0 4"/></svg>',
@@ -37,7 +38,8 @@ const ICONS = {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const tone = (v) => v >= 70 ? 'ok' : v >= 50 ? 'warn' : 'bad';
 /** Preparation sessions are time-boxed: queue enough questions to fill the time (about 2–3 min each). */
-const prepPoolSize = (minutes) => Math.min(60, Math.ceil(minutes / 2) + 6);
+const prepPoolSize = (minutes) => (minutes ? Math.min(60, Math.ceil(minutes / 2) + 6) : 40);
+const limitMsFor = (s) => !!(s.minutes || params.get('prepsec'));
 const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -91,7 +93,10 @@ const state = {
     years: prefs.years ?? 3,
     mode: prefs.mode || 'mixed',
     count: prefs.count || 8,
-    minutes: prefs.minutes || 30, // preparation mode: session length
+    minutes: prefs.minutes ?? 30, // preparation mode: session length (0 = no limit)
+    includeIntro: prefs.includeIntro ?? false, // ask "tell me about yourself" first (off by default)
+    allowRepeats: prefs.allowRepeats ?? false, // off: only questions this user has never answered
+    practiceTopic: prefs.practiceTopic || null, // preparation mode: one topic, all its questions
     speakFeedback: prefs.speakFeedback ?? true, // preparation mode: interviewer reads the feedback aloud
     interviewerId: prefs.interviewerId || 'ananya',
     candidateName: prefs.candidateName || '',
@@ -108,9 +113,10 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.5</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.6</span>
     </button>
     <nav aria-label="Main">
+      <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
       <button class="navbtn" data-nav="revision" ${active === 'revision' ? 'aria-current="page"' : ''}>Revision${weakCount() ? ` <span class="nav-badge">${weakCount()}</span>` : ''}</button>
       <button class="navbtn" data-nav="history" ${active === 'history' ? 'aria-current="page"' : ''}>History</button>
@@ -176,6 +182,17 @@ function renderHome() {
       </div>
     </section>
 
+    <section class="card card-pad profile-card" id="profileCard">
+      <div class="profile-row">
+        <label for="profileSel" class="eyebrow" style="margin:0">Practising as</label>
+        <select id="profileSel" class="field">${store.profiles().list.map(p => `<option value="${p.id}" ${p.id === store.activeProfile().id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <button class="btn" id="profileNew" type="button">+ New user</button>
+        <button class="btn btn-ghost" id="profileReset" type="button">Reset my history</button>
+      </div>
+      <p class="muted" style="font-size:13px;margin:8px 0 0">Each user has their own history, revision list and answered questions on this device. Resetting means every question can be asked again.</p>
+      <div class="profile-new" id="profileNewBox" hidden><input id="profileName" class="field" maxlength="30" placeholder="Name"><button class="btn btn-primary" id="profileCreate" type="button">Create</button></div>
+    </section>
+
     ${hist.length ? `
     <div class="section-title"><h2>Your progress</h2></div>
     <div class="stats">
@@ -207,6 +224,16 @@ function renderHome() {
   }));
   const a = mountAvatar($('#heroAvatar'), interviewerById('vikram'));
   a.setState('listening');
+  $('#profileSel').addEventListener('change', (e) => { const p = store.switchProfile(e.target.value); state.setup.candidateName = p.name === 'Me' ? state.setup.candidateName : p.name; toast(`Switched to ${p.name}`); go('home'); });
+  $('#profileNew').addEventListener('click', () => { $('#profileNewBox').hidden = false; $('#profileName').focus(); });
+  const create = () => { const name = $('#profileName').value.trim(); if (!name) return; const p = store.createProfile(name); state.setup.candidateName = p.name; toast(`Hi ${p.name}! You start with a fresh set of questions.`); go('home'); };
+  $('#profileCreate').addEventListener('click', create);
+  $('#profileName').addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
+  $('#profileReset').addEventListener('click', () => {
+    const p = store.activeProfile();
+    if (!FAST && !window.confirm(`Reset ${p.name}'s history? Past reports, the revision list and answered questions are cleared, so every question can be asked again.`)) return;
+    store.resetProfile(); toast(`${p.name}'s history was reset.`); go('home');
+  });
 }
 
 function sparkline(vals) {
@@ -246,9 +273,14 @@ function renderSetup() {
             <div class="seg" role="group" aria-label="Question source">
               <button type="button" data-source="new" aria-pressed="${s.source === 'new'}">New questions</button>
               <button type="button" data-source="revision" aria-pressed="${s.source === 'revision'}">My revision list (${weakCount(s.category)})</button>
+              <button type="button" data-source="topic" aria-pressed="${s.source === 'topic'}">One topic</button>
+            </div>
+            <div id="topicPick" ${s.source === 'topic' ? '' : 'hidden'} style="margin-top:12px">
+              <label class="eyebrow" for="practiceTopic" style="display:block;margin-bottom:6px">Topic: all of its questions, easiest first</label>
+              <select id="practiceTopic" class="field"></select>
             </div>
             <div class="seg" role="group" aria-label="Session length" style="margin-top:12px">
-              ${[[30, '30 min'], [45, '45 min'], [60, '1 hour']].map(([n, l]) => `<button type="button" data-minutes="${n}" aria-pressed="${s.minutes === n}">${l}</button>`).join('')}
+              ${[[30, '30 min'], [45, '45 min'], [60, '1 hour'], [0, 'No limit']].map(([n, l]) => `<button type="button" data-minutes="${n}" aria-pressed="${s.minutes === n}">${l}</button>`).join('')}
             </div>
             <label class="toggle" style="margin-top:12px"><span><b style="font-size:15px">Speak to explain</b><br><span class="muted" style="font-size:13px">After each answer the interviewer reads out your score, what you covered and what needs work, at a brisk pace</span></span><input type="checkbox" id="speakFeedback" ${s.speakFeedback ? 'checked' : ''}></label>
           </div>
@@ -336,6 +368,8 @@ function renderSetup() {
             ${[['en-US', 'English (United States)'], ['en-IN', 'English (India)'], ['en-GB', 'English (United Kingdom)'], ['en-AU', 'English (Australia)']].map(([v, l]) => `<option value="${v}" ${s.lang === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
           <div style="height:12px"></div>
+          <label class="toggle"><span><b style="font-size:15px">Start with \u201cTell me about yourself\u201d</b><br><span class="muted" style="font-size:13px">Off by default, so the interview goes straight to technical questions</span></span><input type="checkbox" id="includeIntro" ${s.includeIntro ? 'checked' : ''}></label>
+          <label class="toggle"><span><b style="font-size:15px">Allow questions I\u2019ve already answered</b><br><span class="muted" style="font-size:13px">Off: you always get a fresh set of questions you have never seen</span></span><input type="checkbox" id="allowRepeats" ${s.allowRepeats ? 'checked' : ''}></label>
           <label class="toggle"><span><b style="font-size:15px">Follow-up questions</b><br><span class="muted" style="font-size:13px">Interviewer probes thin answers and digs deeper on strong ones</span></span><input type="checkbox" id="followUps" ${s.followUps ? 'checked' : ''}></label>
           <label class="toggle"><span><b style="font-size:15px">Record my session</b><br><span class="muted" style="font-size:13px">Saved only in this session for playback in your report</span></span><input type="checkbox" id="record" ${s.record ? 'checked' : ''}></label>
         </div>
@@ -366,12 +400,22 @@ function renderSetup() {
     const exp = levelFromYears(s.years);
     const lv = targetLevels(pos2.level, exp).map(l => levelById(l).label.split(' ')[0]);
     const rank = Math.max(...targetLevels(pos2.level, exp).map(l => levelById(l).rank));
-    const slots = planSlots(s.count, s.mode, rank);
+    const slots = planSlots(s.count, s.mode, rank, s.includeIntro);
     const fromRevision = s.style === 'prep' && s.source === 'revision';
+    const byTopic = s.style === 'prep' && s.source === 'topic';
+    const seenNow = seenMap(store.progress());
+    const topicList = topicsFor(s.category);
+    if (!s.practiceTopic || !topicList.some(t => t.topic === s.practiceTopic)) s.practiceTopic = topicList[0] && topicList[0].topic;
+    const topicAll = byTopic ? topicQuestions({ bank: QUESTIONS, category: s.category, topic: s.practiceTopic, allowRepeats: true }) : [];
+    const topicNew = byTopic ? topicAll.filter(q => !seenNow[q.id]) : [];
+    if ($('#practiceTopic') && !$('#practiceTopic').options.length) {
+      $('#practiceTopic').innerHTML = topicList.map(t => { const all = topicQuestions({ bank: QUESTIONS, category: s.category, topic: t.topic, allowRepeats: true }); const fresh = all.filter(q => !seenNow[q.id]).length; return `<option value="${esc(t.topic)}" ${t.topic === s.practiceTopic ? 'selected' : ''}>${esc(t.topic)} · ${all.length} questions${fresh < all.length ? ` (${fresh} new)` : ''}</option>`; }).join('');
+    }
     const weakN = weakCount(s.category);
     const allTopics = topicsFor(s.category).map(t => t.topic);
     const selected = s.topics || allTopics;
-    const avail = availableCount({ bank: QUESTIONS, category: s.category, positionLevel: pos2.level, experienceLevel: exp, topics: selected });
+    const avail = availableCount({ bank: QUESTIONS, category: s.category, positionLevel: pos2.level, experienceLevel: exp, topics: selected, seen: s.allowRepeats ? null : seenNow });
+    const topicCount = s.allowRepeats ? topicAll.length : topicNew.length;
     $('#topicHint').textContent = !s.topics ? `All ${allTopics.length} categories selected. Tap a category to include or exclude it.` : `${selected.length} of ${allTopics.length} categories selected · ${avail} matching questions at this level.`;
     $('#yearsVal').innerHTML = `${s.years}${s.years >= 15 ? '+' : ''} year${s.years === 1 ? '' : 's'}<small>${esc(levelById(exp).label)}</small>`;
     $('#summary').innerHTML = `
@@ -380,20 +424,24 @@ function renderSetup() {
       <dl>
         <dt>Mode</dt><dd>${s.style === 'prep' ? 'Preparation' : 'Interview'}</dd>
         ${fromRevision ? `<dt>Source</dt><dd>Revision list (${weakN})</dd>` : ''}
+        ${byTopic ? `<dt>Topic</dt><dd>${esc(s.practiceTopic || '')}</dd><dt>Order</dt><dd>Easiest first</dd>` : ''}
+        <dt>User</dt><dd>${esc(store.activeProfile().name)}</dd>
         <dt>Difficulty</dt><dd>${esc(lv.join(' → '))}</dd>
-        ${s.style === 'prep' ? `<dt>Session length</dt><dd>${s.minutes >= 60 ? '1 hour' : `${s.minutes} min`}</dd>
-        <dt>Questions</dt><dd>As many as fit</dd>
+        ${s.style === 'prep' ? `<dt>Session length</dt><dd>${!s.minutes ? 'No limit' : s.minutes >= 60 ? '1 hour' : `${s.minutes} min`}</dd>
+        <dt>Questions</dt><dd>${byTopic ? `${topicCount} ${s.allowRepeats ? '' : 'new '}in this topic` : 'As many as fit'}</dd>
         <dt>Spoken feedback</dt><dd>${s.speakFeedback ? 'On' : 'Off'}</dd>` : `<dt>Questions</dt><dd>${s.count}</dd>
         <dt>Technical</dt><dd>${slots.technical}</dd>
         <dt>${rank >= 3 ? 'Intro + HR / managerial' : 'Intro + behavioural'}</dt><dd>${slots.intro + slots.behavioral}</dd>`}
         <dt>Topics</dt><dd>${s.topics ? `${selected.length} selected` : 'All'}</dd>
-        <dt>Matching questions</dt><dd>${avail}</dd>
+        <dt>${s.allowRepeats ? 'Matching questions' : 'New questions left'}</dt><dd>${byTopic ? topicCount : avail}</dd>
         ${s.style === 'prep' ? '' : `<dt>Estimated time</dt><dd>${Math.round(s.count * 2.6)}–${Math.round(s.count * 3.6)} min</dd>`}
         <dt>Interviewer</dt><dd>${esc(interviewerById(s.interviewerId).name)}</dd>
       </dl>
       ${fromRevision && weakN === 0 ? '<p style="color:var(--warn);font-size:13px;margin:0">Your revision list is empty. Questions you answer below 60 will appear there.</p>' : ''}
+      ${byTopic && topicCount === 0 ? '<p style="color:var(--warn);font-size:13px;margin:0">You have answered every question in this topic. Tick \u201cAllow questions I\u2019ve already answered\u201d or reset your history on the home screen.</p>' : ''}
+      ${!byTopic && !fromRevision && !s.allowRepeats && avail < slots.technical ? `<p style="color:var(--warn);font-size:13px;margin:0">Only ${avail} new question${avail === 1 ? '' : 's'} left at this level and topics, so the session will be shorter. Allow repeats or reset your history to get more.</p>` : ''}
       ${selected.length === 0 ? '<p style="color:var(--bad);font-size:13px;margin:0">Select at least one topic.</p>' : avail < slots.technical ? `<p style="color:var(--warn);font-size:13px;margin:0">Only ${avail} questions match at this level; nearby levels will be used to fill the interview.</p>` : ''}
-      <button class="btn btn-primary btn-lg" id="toCheck" ${selected.length === 0 || (fromRevision && weakN === 0) ? 'disabled' : ''}>Continue to device check</button>
+      <button class="btn btn-primary btn-lg" id="toCheck" ${(!byTopic && selected.length === 0) || (fromRevision && weakN === 0) || (byTopic && topicCount === 0) || (!byTopic && !fromRevision && !s.allowRepeats && avail === 0) ? 'disabled' : ''}>Continue to device check</button>
       <p class="muted" style="font-size:12px;margin:0">Tip: answer out loud as you would in a real interview — explain, then give an example.</p>`;
     $('#toCheck').addEventListener('click', () => { saveSetup(); go('check'); });
   };
@@ -403,7 +451,10 @@ function renderSetup() {
     s.followUps = $('#followUps').checked;
     s.record = $('#record').checked;
     s.speakFeedback = $('#speakFeedback').checked;
-    store.savePrefs({ minutes: s.minutes, speakFeedback: s.speakFeedback, style: s.style, category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
+    s.includeIntro = $('#includeIntro').checked;
+    s.allowRepeats = $('#allowRepeats').checked;
+    if (s.candidateName && store.activeProfile().name === 'Me') store.renameProfile(store.activeProfile().id, s.candidateName);
+    store.savePrefs({ includeIntro: s.includeIntro, allowRepeats: s.allowRepeats, practiceTopic: s.practiceTopic, minutes: s.minutes, speakFeedback: s.speakFeedback, style: s.style, category: s.category, positionId: s.positionId, years: s.years, mode: s.mode, count: s.count, interviewerId: s.interviewerId, candidateName: s.candidateName, lang: s.lang, followUps: s.followUps, record: s.record });
   };
   const press = (sel, attr, fn) => $$(sel).forEach(b => b.addEventListener('click', () => {
     $$(sel).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
@@ -415,7 +466,10 @@ function renderSetup() {
   press('[data-minutes]', 'minutes', v => { s.minutes = Number(v); });
   bindAiSettings();
   $('#speakFeedback').addEventListener('change', (e) => { s.speakFeedback = e.target.checked; update(); });
-  press('[data-source]', 'source', v => { s.source = v; s.practiceIds = null; });
+  press('[data-source]', 'source', v => { s.source = v; s.practiceIds = null; $('#topicPick').hidden = v !== 'topic'; });
+  $('#practiceTopic').addEventListener('change', (e) => { s.practiceTopic = e.target.value; update(); });
+  $('#includeIntro').addEventListener('change', (e) => { s.includeIntro = e.target.checked; update(); });
+  $('#allowRepeats').addEventListener('change', (e) => { s.allowRepeats = e.target.checked; $('#practiceTopic').innerHTML = ''; update(); });
   press('[data-count]', 'count', v => { s.count = Number(v); });
   press('[data-iv]', 'iv', v => { s.interviewerId = v; });
   $('#years').addEventListener('input', e => { s.years = Number(e.target.value); update(); });
@@ -664,16 +718,24 @@ function renderRoom() {
   speech.voiceName = store.prefs().voiceName || null;
   const progressNow = store.progress();
   let questions;
-  if (prep && (s.practiceIds || s.source === 'revision')) {
+  if (prep && !s.practiceIds && s.source === 'topic') {
+    questions = topicQuestions({ bank: QUESTIONS, category: s.category, topic: s.practiceTopic, seen: seenMap(progressNow), allowRepeats: s.allowRepeats });
+  } else if (prep && (s.practiceIds || s.source === 'revision')) {
     const ids = s.practiceIds || weakQuestions(progressNow, { role: s.category }).map(w => w.id);
     questions = ids.map(id => QUESTIONS.find(q => q.id === id)).filter(Boolean).slice(0, s.practiceIds ? 20 : prep ? 60 : s.count);
   } else {
     questions = selectQuestions({
       bank: QUESTIONS, category: s.category, positionLevel: pos.level, experienceLevel: levelFromYears(s.years),
-      count: prep ? prepPoolSize(s.minutes) : s.count, mode: s.mode, topics: s.topics, seed, seen: seenMap(progressNow), recentIds: store.lastSessionIds(s.category),
+      count: prep ? prepPoolSize(s.minutes) : s.count, includeIntro: s.includeIntro, allowRepeats: s.allowRepeats, mode: s.mode, topics: s.topics, seed, seen: seenMap(progressNow), recentIds: store.lastSessionIds(s.category),
     });
   }
   window.__ip.questions = questions.map(q => q.id);
+  if (!questions.length) {
+    media.stop();
+    toast('No new questions are left for these settings. Allow repeats, choose other topics, or reset your history.', 6000);
+    go('setup');
+    return;
+  }
   const initials = (s.candidateName || 'You').slice(0, 2).toUpperCase();
 
   app.innerHTML = `
@@ -683,7 +745,7 @@ function renderRoom() {
       <div style="min-width:0"><div class="title">${esc(pos.title)} · ${prep ? 'Preparation' : 'Interview'}</div><div class="sub">with ${esc(persona.name)}, ${esc(persona.title)}</div></div>
       <div class="spacer"></div>
       <span class="pill-dark" id="qcount">${prep ? 'Q 0' : `Q 0/${questions.length}`}</span>
-      ${prep ? `<span class="pill-dark" id="timeLeft" title="Time left in this preparation session">${fmtTime(s.minutes * 60)} left</span>` : ''}
+      ${prep && limitMsFor(s) ? `<span class="pill-dark" id="timeLeft" title="Time left in this preparation session">${fmtTime(s.minutes * 60)} left</span>` : ''}
       <span class="pill-dark" id="elapsed">00:00</span>
     </div>
     <div class="room-main">
@@ -750,7 +812,7 @@ function renderRoom() {
   let currentQ = null;
   let pausedAt = 0, pausedTotal = 0, pauseEpoch = 0;
   // Preparation sessions run for a fixed time (30/45/60 min), counted from the first question, pauses excluded.
-  const limitMs = prep ? (Number(params.get('prepsec')) || s.minutes * 60) * 1000 : Infinity;
+  const limitMs = prep && (s.minutes || params.get('prepsec')) ? (Number(params.get('prepsec')) || s.minutes * 60) * 1000 : Infinity;
   let sessionStart = null, pausedBeforeStart = 0, timeUpShown = false;
   const activeMs = () => sessionStart === null ? 0 : performance.now() - sessionStart - (pausedTotal - pausedBeforeStart) - (paused ? performance.now() - pausedAt : 0);
   const timeLeftMs = () => Math.max(0, limitMs - activeMs());
@@ -1141,7 +1203,7 @@ function renderRoom() {
 
   const session = new InterviewSession({
     questions,
-    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview', timeLimitMin: prep ? s.minutes : null },
+    config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview', timeLimitMin: prep && s.minutes ? s.minutes : null, topic: prep && s.source === 'topic' && !s.practiceIds ? s.practiceTopic : null },
     io: { say, getAnswer, review, audioCheck, timeUp, react: ai.active ? react : undefined, onStarted: () => { if (sessionStart === null) { sessionStart = performance.now(); pausedBeforeStart = pausedTotal; } } },
   });
   window.__ip.session = session;
@@ -1404,7 +1466,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.5.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.6.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
