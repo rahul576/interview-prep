@@ -8,6 +8,7 @@ import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
 import { MediaService, isVirtualMic } from './services/media.js';
+import { AIInterviewer } from './services/ai.js';
 import { store } from './services/store.js';
 import { updateProgress, weakQuestions, markLearned, seenMap, progressStats, PASS_SCORE } from './engine/progress.js';
 
@@ -16,6 +17,8 @@ const FAST = params.has('fast');           // test mode: silent speech, short ti
 const app = document.getElementById('app');
 const speech = new SpeechService({ fast: FAST });
 const media = new MediaService();
+const ai = new AIInterviewer();
+const aiReady = ai.init().catch(() => null);
 const avatars = new Set();
 
 const ICONS = {
@@ -105,7 +108,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.4.2</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.5</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn" data-nav="home" ${active === 'home' ? 'aria-current="page"' : ''}>Practice</button>
@@ -295,6 +298,19 @@ function renderSetup() {
             ${topicsFor(s.category).map(t => `<button type="button" class="topic-chip" data-topic="${esc(t.topic)}" aria-pressed="${!s.topics || s.topics.includes(t.topic)}">${esc(t.topic)} <span class="cnt">${t.count}</span></button>`).join('')}
           </div>
         </div>
+        <div class="form-sec" id="aiSec">
+          <h3>AI interviewer</h3>
+          <p class="hint">Reacts to what you actually say: asks follow-ups on your answer, helps when you don\u2019t know, repeats or clarifies the question, and gives personalised coaching and feedback. Without AI, the built-in rules are used.</p>
+          <label class="toggle"><span><b style="font-size:15px">Use AI responses</b><br><span class="muted" style="font-size:13px" id="aiStatus">Checking…</span></span><input type="checkbox" id="aiOn" ${ai.enabled ? 'checked' : ''}></label>
+          <details class="custom-iv" id="aiSetup" style="margin-top:10px">
+            <summary>Set up Claude (best quality)</summary>
+            <p class="hint" style="margin-top:8px" id="aiKeyHint"></p>
+            <div class="custom-row"><input id="aiKey" type="password" class="field" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"><button type="button" class="btn" id="aiSave">Save &amp; test</button></div>
+            <p class="muted" style="font-size:13px;margin:8px 0 0" id="aiMsg"></p>
+            <button type="button" class="linkbtn" id="aiRemove" hidden>Remove saved key</button>
+          </details>
+          <button type="button" class="btn" id="chromeDl" style="margin-top:10px" hidden>Download Chrome built-in AI (one time, about 2 GB)</button>
+        </div>
         <div class="form-sec">
           <h3>Interviewer</h3>
           <p class="hint">All interviewers are fictional characters.</p>
@@ -397,6 +413,7 @@ function renderSetup() {
   press('[data-mode]', 'mode', v => { s.mode = v; });
   press('[data-style]', 'style', v => { s.style = v; s.practiceIds = null; $('#prepSource').hidden = v !== 'prep'; $('#countSeg').hidden = v === 'prep'; });
   press('[data-minutes]', 'minutes', v => { s.minutes = Number(v); });
+  bindAiSettings();
   $('#speakFeedback').addEventListener('change', (e) => { s.speakFeedback = e.target.checked; update(); });
   press('[data-source]', 'source', v => { s.source = v; s.practiceIds = null; });
   press('[data-count]', 'count', v => { s.count = Number(v); });
@@ -643,6 +660,7 @@ function renderRoom() {
   const persona = interviewerById(s.interviewerId);
   const seed = Number(params.get('seed')) || Math.floor(Math.random() * 1e9);
   const prep = s.style === 'prep';
+  const levelLabel = levelById(pos.level).label;
   speech.voiceName = store.prefs().voiceName || null;
   const progressNow = store.progress();
   let questions;
@@ -1049,7 +1067,20 @@ function renderRoom() {
     const done = (v) => { reviewPending = null; speech.stopSpeaking(); resolve(v); };
     reviewPending = done;
     // "Speak to explain": the interviewer reads the score and the needs-work points at a brisk pace.
-    if (s.speakFeedback) say(feedbackSpeech(item, { passScore: PASS_SCORE }), { kind: 'feedback', rate: 1.18 });
+    const fixedFeedback = () => { if (s.speakFeedback) say(feedbackSpeech(item, { passScore: PASS_SCORE }), { kind: 'feedback', rate: 1.18 }); };
+    if (ai.active && !item.skipped) {
+      // AI coach: personalised explanation of what was good and what needs work, based on the actual answer.
+      box.querySelector('.review-head').insertAdjacentHTML('afterend', '<div class="coach" id="coach"><b>Coach</b><p>Looking at your answer…</p></div>');
+      setTag('Thinking'); avatar.setExpression('thinking');
+      ai.coach({ persona, position: pos.title, level: levelLabel, question: q, answer: item.answer, result: r }).then((text) => {
+        if (reviewPending !== done) return; // the candidate already moved on
+        const el = $('#coach');
+        if (!text) { if (el) el.remove(); fixedFeedback(); return; }
+        if (el) el.querySelector('p').textContent = text;
+        setTag(ok ? 'Well done' : 'Review');
+        if (s.speakFeedback) say(text, { kind: 'feedback', rate: 1.15 });
+      });
+    } else fixedFeedback();
     $('#retryBtn').onclick = () => done('retry');
     $('#nextBtn').onclick = () => done('next');
     $('#listenBtn').onclick = async (e) => { e.currentTarget.disabled = true; await say(q.ideal, { kind: 'model' }); const b = $('#listenBtn'); if (b) b.disabled = false; };
@@ -1100,10 +1131,18 @@ function renderRoom() {
   });
   const confirmEnd = () => FAST || window.confirm('End the interview now? You will get a report for the questions answered so far.');
 
+  // AI interviewer reaction after each answer (interview mode). Returns null -> rule-based fallback.
+  const react = async (ctx) => {
+    setTag('Thinking'); avatar.setState('idle'); avatar.setExpression('thinking');
+    const r = await ai.react({ ...ctx, persona, position: pos.title, level: levelLabel, mode: 'interview' });
+    if (!r) avatar.setExpression('neutral');
+    return r;
+  };
+
   const session = new InterviewSession({
     questions,
     config: { interviewer: persona, candidateName: s.candidateName, position: pos.title, followUps: s.followUps && !prep, seed, mode: prep ? 'prep' : 'interview', timeLimitMin: prep ? s.minutes : null },
-    io: { say, getAnswer, review, audioCheck, timeUp, onStarted: () => { if (sessionStart === null) { sessionStart = performance.now(); pausedBeforeStart = pausedTotal; } } },
+    io: { say, getAnswer, review, audioCheck, timeUp, react: ai.active ? react : undefined, onStarted: () => { if (sessionStart === null) { sessionStart = performance.now(); pausedBeforeStart = pausedTotal; } } },
   });
   window.__ip.session = session;
 
@@ -1217,6 +1256,8 @@ function renderReport({ session, videoUrl, videoType } = {}) {
       </div>
     </section>
 
+    <section class="card card-pad ai-feedback" id="aiFeedback" ${session.aiFeedback || (ai.active && !session.aiFeedbackTried) ? '' : 'hidden'} style="margin-top:16px">${aiFeedbackHtml(session.aiFeedback)}</section>
+
     <div class="grid-2" style="margin-top:16px">
       <section class="card card-pad">
         <h2 style="font-size:17px;margin-bottom:10px">Score by topic</h2>
@@ -1243,6 +1284,53 @@ function renderReport({ session, videoUrl, videoType } = {}) {
   $('#printBtn').addEventListener('click', () => window.print());
   $('#retake').addEventListener('click', () => go('setup'));
   window.__ip.report = session;
+  if (!session.aiFeedback && !session.aiFeedbackTried && ai.active) {
+    session.aiFeedbackTried = true;
+    const items = session.items.map(it => ({ ...it, question: QUESTIONS.find(q => q.id === it.questionId) || it.question })).filter(it => it.question);
+    ai.summarize({ items, position: session.position, persona, level: session.positionLevel, mode: session.style }).then((fb) => {
+      const el = $('#aiFeedback');
+      if (fb) { session.aiFeedback = fb; store.saveSession(session); }
+      else if (el) { el.hidden = true; }
+      if (el && fb && window.__ip.report === session) el.innerHTML = aiFeedbackHtml(fb);
+    });
+  }
+}
+
+function aiFeedbackHtml(fb) {
+  if (!fb) return '<h2 style="font-size:17px;margin-bottom:6px">Interviewer\u2019s feedback</h2><p class="muted" style="margin:0">Writing personalised feedback from your answers…</p>';
+  const list = (title, xs) => xs && xs.length ? `<div><b>${title}</b><ul class="list-clean">${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+  return `<h2 style="font-size:17px;margin-bottom:6px">Interviewer\u2019s feedback <span class="muted" style="font-size:12px;font-weight:500">AI</span></h2>
+    <p style="margin:0 0 10px">${esc(fb.summary)}</p>
+    <div class="ai-fb-grid">${list('Strengths', fb.strengths)}${list('Improve', fb.improvements)}${list('Study next', fb.studyTopics)}</div>`;
+}
+
+/** AI settings on the setup screen. */
+async function bindAiSettings() {
+  const st = await aiReady.then(() => ai.status());
+  const paint = (status) => {
+    if (!$('#aiStatus')) return;
+    const chromeNote = status.chrome === 'downloadable' || status.chrome === 'downloading' ? ' Chrome\u2019s free built-in AI can also be downloaded.' : '';
+    $('#aiStatus').textContent = !status.enabled ? 'Off: the built-in rules are used.' : status.provider === 'offline' ? `No AI connected yet: the built-in rules are used. Set up Claude below.${chromeNote}` : `Using ${status.label}.`;
+    $('#aiKeyHint').innerHTML = status.proxyAvailable
+      ? 'Paste an Anthropic API key from <b>console.anthropic.com</b>. The InterviewPro service on this Mac stores it in <code>~/.interviewpro</code> with private permissions. It is never saved in the browser or the repository. Each interview costs a fraction of a cent with the fast Haiku model.'
+      : 'Paste an Anthropic API key from <b>console.anthropic.com</b>. On this website it is stored only in this browser, so only use it on your own device. For the safest setup, use the InterviewPro service on your Mac.';
+    $('#aiRemove').hidden = !(status.proxyHasKey || status.browserKey);
+    $('#chromeDl').hidden = !(status.chrome === 'downloadable' || status.chrome === 'downloading') || status.provider.startsWith('claude');
+  };
+  paint(st);
+  $('#aiOn')?.addEventListener('change', (e) => { ai.setPrefs({ enabled: e.target.checked }); paint(ai.status()); });
+  $('#aiSave')?.addEventListener('click', async () => {
+    const btn = $('#aiSave'); btn.disabled = true; $('#aiMsg').textContent = 'Saving and testing…';
+    try { const s2 = await ai.saveKey($('#aiKey').value); $('#aiKey').value = ''; $('#aiMsg').textContent = '✓ Connected. The interviewer will now react to your answers with Claude.'; paint(s2); }
+    catch (err) { $('#aiMsg').textContent = `✕ ${err.message}`; paint(ai.status()); }
+    finally { btn.disabled = false; }
+  });
+  $('#aiRemove')?.addEventListener('click', async () => { paint(await ai.removeKey()); $('#aiMsg').textContent = 'Key removed.'; });
+  $('#chromeDl')?.addEventListener('click', async () => {
+    const b = $('#chromeDl'); b.disabled = true; b.textContent = 'Downloading… 0%';
+    try { paint(await ai.downloadChromeModel((p) => { b.textContent = `Downloading… ${Math.round(p * 100)}%`; })); }
+    catch (err) { b.textContent = `Download failed: ${err.message}`; b.disabled = false; }
+  });
 }
 
 // ---------------------------------------------------------------- history
@@ -1316,7 +1404,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.4.2', fast: FAST };
+window.__ip = { go, state, store, version: '1.5.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

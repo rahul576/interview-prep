@@ -63,6 +63,20 @@ export function nudgeLine(result) {
     : 'Could you elaborate a little more on that?';
 }
 
+/** Did the candidate ask to hear the question again instead of answering? */
+export function isRepeatRequest(text) {
+  const t = String(text || '').toLowerCase().trim();
+  return t.split(/\s+/).length <= 14 && /\b(repeat|say (that|it) again|come again|pardon|didn'?t (hear|catch)|once more|one more time)\b/.test(t);
+}
+
+/** Offline reaction when the candidate says they don't know (instead of a stock "Thank you"). */
+export function dontKnowLine(rand, question, isLast) {
+  const opener = ['That\u2019s completely fine.', 'No worries, that happens.', 'That\u2019s okay \u2014 honesty is better than guessing.'][Math.floor(rand() * 3)];
+  const point = question.keyPoints[0] ? question.keyPoints[0].label.split(/[(–]/)[0].trim().replace(/\.$/, '') : '';
+  const pointer = point ? ` Briefly, a good answer would start with ${point.charAt(0).toLowerCase() + point.slice(1)}.` : '';
+  return `${opener}${pointer}${isLast ? '' : ' Let\u2019s move on.'}`;
+}
+
 export function closingLine(candidateName) {
   return `That’s all the questions I have${candidateName ? ', ' + candidateName : ''}. Thank you for your time — your detailed feedback is ready on the next screen.`;
 }
@@ -92,6 +106,49 @@ export class InterviewSession {
   }
 
   end() { this.ended = true; }
+
+  /**
+   * Up to two extra AI-driven turns for one question (nudge / follow-up / clarify / repeat).
+   * Returns the interviewer's closing reaction for this question (string, may be ''), or null when
+   * the AI is unavailable on the first turn so the rule-based flow is used instead.
+   */
+  async aiTurns(item, q, i, isLast) {
+    const { io, config } = this;
+    const history = [];
+    let latest = item.answer, combined = item.answer, turn = 0;
+    while (!this.ended) {
+      const r = await io.react({
+        question: q, answer: latest, history, result: item.result, turn, isLast,
+        allowFollowUps: !!config.followUps, followUpsLeft: RULES.maxDeepFollowUps - this.deepUsed,
+      });
+      if (!r) return turn === 0 ? null : '';
+      if (r.action === 'next') return r.say || '';
+      turn++;
+      history.push({ role: 'candidate', text: latest }, { role: 'interviewer', text: r.say });
+      const kind = r.action === 'followup' ? 'followup' : r.action === 'repeat' ? 'answer' : 'nudge';
+      await io.say(r.action === 'repeat' ? `${r.say} ${q.q}` : r.say, { kind: r.action === 'repeat' ? 'question' : kind, question: q, index: i });
+      if (this.ended) return '';
+      const b = await io.getAnswer({ kind, question: q, index: i });
+      if (b.action === 'end') this.ended = true;
+      latest = b.text || '';
+      item.durationSec += b.durationSec || 0;
+      item.aiTurns = (item.aiTurns || 0) + 1;
+      if (r.action === 'followup') {
+        this.deepUsed++;
+        item.followUp = { prompt: r.say, answer: latest };
+      } else if (latest) {
+        // A repeat/clarification request was not an answer: score the real answer that follows it.
+        const replace = turn === 1 && (r.action === 'repeat' || r.action === 'clarify' || /clarif|repeat/.test(r.intent || ''));
+        combined = replace ? latest : `${combined} ${latest}`;
+        item.answer = combined;
+        item.skipped = false;
+        item.result = scoreAnswer(q, combined, { durationSec: item.durationSec });
+        if (r.action === 'nudge') item.nudge = { prompt: r.say, answer: latest };
+      }
+      if (this.ended || b.action === 'skip') return '';
+    }
+    return '';
+  }
 
   progress(extra) {
     this.io.onProgress && this.io.onProgress({ index: this.items.length, total: this.questions.length, ...extra });
@@ -125,6 +182,7 @@ export class InterviewSession {
       const a = await io.getAnswer({ kind: 'answer', question: q, index: i });
       if (a.action === 'end') { this.ended = true; if (!a.text) break; }
 
+      let transitionSay = null;
       const item = { questionId: q.id, question: q, answer: a.text || '', durationSec: a.durationSec || 0, skipped: a.action === 'skip', result: null, nudge: null, followUp: null, attempts: 1, hintUsed: !!a.hintUsed, interrupted: !!a.interrupted };
       if (prep) {
         // Preparation mode: instant feedback, unlimited retries, no follow-up probing.
@@ -149,8 +207,19 @@ export class InterviewSession {
         item.result = scoreAnswer(q, '');
       } else {
         item.result = scoreAnswer(q, item.answer, { durationSec: item.durationSec });
-
-        if (config.followUps && !this.ended && !item.result.flags.empty && !item.result.flags.dontKnow
+        // AI interviewer (when available) decides how to react to what was actually said.
+        const ai = io.react && !this.ended ? await this.aiTurns(item, q, i, isLast) : null;
+        if (ai !== null) {
+          transitionSay = ai;
+        } else if (isRepeatRequest(item.answer) && !this.ended) {
+          await io.say(`Sure. ${q.q}`, { kind: 'question', question: q, index: i });
+          const b = await io.getAnswer({ kind: 'answer', question: q, index: i });
+          if (b.action === 'end') this.ended = true;
+          item.answer = b.text || ''; item.durationSec = b.durationSec || 0; item.skipped = b.action === 'skip';
+          item.result = scoreAnswer(q, item.skipped ? '' : item.answer, { durationSec: item.durationSec });
+        } else if (item.result.flags.dontKnow) {
+          transitionSay = dontKnowLine(this.rand, q, isLast);
+        } else if (config.followUps && !this.ended && !item.result.flags.empty && !item.result.flags.dontKnow
             && item.result.coverage < RULES.nudgeBelowCoverage) {
           const prompt = nudgeLine(item.result);
           await io.say(prompt, { kind: 'nudge', question: q, index: i });
@@ -174,7 +243,10 @@ export class InterviewSession {
       }
       this.items.push(item);
       this.progress({ index: i + 1, phase: 'scored', item });
-      if (!this.ended && !prep) await io.say(transitionLine(this.rand, { skipped: item.skipped, isLast }), { kind: 'transition', score: item.result.overall });
+      if (!this.ended && !prep) {
+        const line = transitionSay || transitionLine(this.rand, { skipped: item.skipped, isLast });
+        await io.say(line, { kind: 'transition', score: item.result.overall });
+      }
     }
 
     if (!this.ended || this.items.length) {

@@ -1,4 +1,20 @@
-# InterviewPro — V1.4
+# InterviewPro — V1.5
+
+## What's new in V1.5 – AI interviewer
+- The interviewer reacts to what you actually say instead of fixed lines:
+  - "I don't know": a kind reply with a short pointer, then it moves on;
+  - partial answers: one targeted follow-up about what you missed;
+  - strong answers: a deeper follow-up;
+  - "can you repeat / what do you mean": it repeats or clarifies the question.
+- Preparation mode: an AI coach explains your answer (what was good, what was missing, with the correct idea) and reads it out.
+- Report: personalised interviewer feedback written from your answers.
+- Engines, with automatic fallback:
+  - **Claude** (best quality) through your own API key;
+  - **Chrome's built-in AI** (free, on-device);
+  - the offline rules.
+- **Key safety**: on the always-on Mac service, the key is saved by the local server in `~/.interviewpro/anthropic.key` (permission 600), never in the browser or the repo. The proxy only accepts same-origin requests from the Mac itself. On GitHub Pages the key is stored only in that browser.
+- Setup: Setup screen → AI interviewer → Set up Claude → paste the key → Save & test. Or start the service with `ANTHROPIC_API_KEY` set.
+- Scores stay deterministic (keyword-based), so progress tracking is comparable across sessions.
 
 ## What's new in V1.4.2
 - Offline backup for voice answers: Chrome's on-device English model is downloaded automatically. If the online speech service stalls or fails mid-answer, recognition switches to the offline model and keeps capturing. Online stays the default because it is faster and more accurate.

@@ -543,6 +543,63 @@ try {
   log('PASS  microphone diagnostics: picker, voice test, network error, no webcam, silent mic');
 } catch (e) { failures++; log('FAIL  microphone diagnostics', e.message); }
 
+// V1.5 AI interviewer with a mocked Claude behind the local proxy
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['camera', 'microphone'] });
+  const prompts = [];
+  await ctx.route('**/api/ai/**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/api/ai/status')) return route.fulfill({ json: { claude: true, source: 'file', models: ['claude-haiku-5-5'] } });
+    const body = JSON.parse(route.request().postData() || '{}');
+    const text = body.messages[0].content;
+    prompts.push(text);
+    let reply;
+    if (/Coach the candidate/.test(text)) reply = { say: 'AI coach: you named buckets, now explain hashCode and equals.' };
+    else if (/personalised feedback/.test(text)) reply = { summary: 'AI summary: honest about gaps, solid on basics.', strengths: ['Honest'], improvements: ['Learn HashMap internals'], studyTopics: ['Collections'] };
+    else if (/LATEST ANSWER: "I really don.t know/.test(text)) reply = { intent: 'dont_know', action: 'next', say: 'AI: no problem at all, this is about hashing keys into buckets.' };
+    else reply = { intent: 'answered', action: 'next', say: 'AI: thanks, that made sense.' };
+    return route.fulfill({ json: { content: [{ type: 'text', text: JSON.stringify(reply) }] } });
+  });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=611`);
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.waitForFunction(() => /Using Claude/.test(document.querySelector('#aiStatus')?.textContent || ''), null, { timeout: 10000 });
+  await page.click('[data-style="interview"]'); await page.click('[data-mode="technical"]'); await page.click('[data-count="5"]');
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start'); await confirmAudio(page);
+  await page.waitForSelector('#doneBtn:not([disabled])');
+  await page.fill('#answer', "I really don't know this one");
+  await page.click('#doneBtn');
+  await page.waitForFunction(() => /AI: no problem at all/.test(document.querySelector('#log')?.textContent || ''), null, { timeout: 15000 });
+  assert.ok(prompts.some(p => /CANDIDATE'S LATEST ANSWER: "I really don't know this one"/.test(p)), 'the real answer was sent to the AI');
+  for (const until = Date.now() + 90000; Date.now() < until && !(await page.$('#reportHead'));) {
+    if (await page.$('#doneBtn:not([disabled])')) { await page.fill('#answer', 'Some answer about the topic'); await page.click('#doneBtn'); }
+    await page.waitForTimeout(150);
+  }
+  await page.waitForFunction(() => /AI summary: honest about gaps/.test(document.querySelector('#aiFeedback')?.textContent || ''), null, { timeout: 15000 });
+  await page.screenshot({ path: new URL('ai-report.png', OUT).pathname });
+
+  // Preparation mode: AI coach explains the answer
+  await page.click('[data-nav="home"] >> nth=0');
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.click('[data-style="prep"]');
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.click('#start'); await confirmAudio(page);
+  await page.waitForSelector('#doneBtn:not([disabled])');
+  await page.fill('#answer', 'It uses buckets.');
+  await page.click('#doneBtn');
+  await page.waitForFunction(() => /AI coach: you named buckets/.test(document.querySelector('#coach')?.textContent || ''), null, { timeout: 15000 });
+  assert.match(await page.textContent('#log'), /AI coach: you named buckets/, 'coaching is spoken');
+  await page.screenshot({ path: new URL('ai-coach.png', OUT).pathname });
+  assert.deepEqual(errors, []);
+  log('PASS  AI interviewer: reacts to "I don\'t know", AI coach in prep, AI report feedback');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  AI interviewer', e.message); }
+
 await browser.close();
 server.close();
 log(failures ? `\n${failures} E2E scenario(s) failed` : '\nAll E2E scenarios passed. Screenshots in test-results/');
