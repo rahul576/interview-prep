@@ -5,6 +5,7 @@
 - **Topic deep-dives** (`www/js/data/topics/`): the aim is about 100 questions per DevOps topic, released topic by topic.
   - Docker: 100 questions (39 beginner, 36 intermediate, 18 advanced, 7 expert).
   - Cloud (AWS): 100 questions (38 beginner, 37 intermediate, 18 advanced, 7 expert), added in V1.7.1.
+  - IaC & Config Management: 100 questions on Terraform, Ansible, Packer and governance (40 beginner, 37 intermediate, 17 advanced, 6 expert), added in V1.7.2.
 
 ## What's new in V1.6
 - **655 questions**: 75 new DevOps questions, so every DevOps topic now has entry-level (fresher) questions as well as harder ones. Topics covered: Linux, scripting, networking, Git, Docker, Kubernetes, CI/CD, IaC/Ansible, AWS, Azure, observability, backup/DR, DevSecOps, GitOps/Helm, platform engineering and troubleshooting.

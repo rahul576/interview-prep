@@ -5,6 +5,9 @@ import { DOCKER_3 } from './docker-3.js';
 import { AWS_1 } from './aws-1.js';
 import { AWS_2 } from './aws-2.js';
 import { AWS_3 } from './aws-3.js';
+import { IAC_1 } from './iac-1.js';
+import { IAC_2 } from './iac-2.js';
+import { IAC_3 } from './iac-3.js';
 
 export const TOPIC_BANKS_DEVOPS = [
   ...DOCKER_1,
@@ -13,4 +16,7 @@ export const TOPIC_BANKS_DEVOPS = [
   ...AWS_1,
   ...AWS_2,
   ...AWS_3,
+  ...IAC_1,
+  ...IAC_2,
+  ...IAC_3,
 ];
