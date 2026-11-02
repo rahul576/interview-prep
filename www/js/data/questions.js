@@ -20,6 +20,7 @@ import { DEVOPS_V16A } from './questions-devops-v16a.js';
 import { DEVOPS_V16B } from './questions-devops-v16b.js';
 import { DEVOPS_V16C } from './questions-devops-v16c.js';
 import { DEVOPS_V16D } from './questions-devops-v16d.js';
+import { TOPIC_BANKS_DEVOPS } from './topics/index.js';
 
 export const BANK_VERSION = '1.6.0';
 
@@ -45,6 +46,7 @@ export const QUESTIONS = Object.freeze([
   ...withCat(DEVOPS_V16B, 'devops'),
   ...withCat(DEVOPS_V16C, 'devops'),
   ...withCat(DEVOPS_V16D, 'devops'),
+  ...withCat(TOPIC_BANKS_DEVOPS, 'devops'),
   ...withCat(KAFKA, 'shared'),
   ...withCat(ELASTIC, 'shared'),
   ...withCat(DSA, 'shared'),

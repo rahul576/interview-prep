@@ -32,6 +32,13 @@ const TYPE_ORDER = { intro: 0, concept: 1, scenario: 2, design: 3, behavioral: 4
 const minRank = q => Math.min(...q.levels.map(l => levelById(l).rank));
 const avgRank = q => q.levels.reduce((n, l) => n + levelById(l).rank, 0) / q.levels.length;
 
+/** Difficulty label shown to the user, from the lowest level a question is meant for. */
+export const DIFFICULTIES = ['Beginner', 'Intermediate', 'Advanced', 'Expert'];
+export function difficultyOf(q) {
+  if (!q || !q.levels || q.cat === 'common') return null;
+  return DIFFICULTIES[Math.min(...q.levels.map(l => levelById(l).rank)) - 1] || null;
+}
+
 /** Difficulty order: lowest level first, then concepts before scenarios before design, then wider-level questions. */
 export function byDifficulty(a, b) {
   return (minRank(a) - minRank(b)) || (TYPE_ORDER[a.type] - TYPE_ORDER[b.type]) || (avgRank(a) - avgRank(b)) || a.id.localeCompare(b.id, undefined, { numeric: true });

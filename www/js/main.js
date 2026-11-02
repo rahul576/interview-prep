@@ -1,7 +1,7 @@
 // InterviewPro V1 – app shell, screens and interview room.
 import { CATEGORIES, LEVELS, INTERVIEWERS, categoryById, interviewerById as builtinInterviewer, levelFromYears, levelById } from './data/meta.js';
 import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.js';
-import { selectQuestions, targetLevels, planSlots, availableCount, topicQuestions } from './engine/select.js';
+import { selectQuestions, targetLevels, planSlots, availableCount, topicQuestions, difficultyOf, DIFFICULTIES } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/session.js';
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
@@ -40,6 +40,8 @@ const tone = (v) => v >= 70 ? 'ok' : v >= 50 ? 'warn' : 'bad';
 /** Preparation sessions are time-boxed: queue enough questions to fill the time (about 2–3 min each). */
 const prepPoolSize = (minutes) => (minutes ? Math.min(60, Math.ceil(minutes / 2) + 6) : 40);
 const limitMsFor = (s) => !!(s.minutes || params.get('prepsec'));
+/** Coloured difficulty badge for a question (Beginner / Intermediate / Advanced / Expert). */
+const diffBadge = (q) => { const d = difficultyOf(q); return d ? `<span class="diff diff-${d.toLowerCase()}" title="Difficulty">${d}</span>` : ''; };
 const fmtTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -113,7 +115,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.6</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.7</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -123,6 +125,11 @@ function shell(content, active = 'home') {
     </nav>
   </header>
   <main class="page" id="main">${content}</main>`;
+}
+
+function topicMix(role, topic) {
+  const all = topicQuestions({ bank: QUESTIONS, category: role, topic, allowRepeats: true });
+  return DIFFICULTIES.map(d => `${d}: ${all.filter(q => difficultyOf(q) === d).length}`).join(' · ');
 }
 
 function weakCount(role = null) { return weakQuestions(store.progress(), { role }).length; }
@@ -327,7 +334,7 @@ function renderSetup() {
           </div>
           <p class="hint" id="topicHint">All categories are selected. Tap a category to include or exclude it.</p>
           <div class="chips topic-chips" role="group" aria-label="Topic categories">
-            ${topicsFor(s.category).map(t => `<button type="button" class="topic-chip" data-topic="${esc(t.topic)}" aria-pressed="${!s.topics || s.topics.includes(t.topic)}">${esc(t.topic)} <span class="cnt">${t.count}</span></button>`).join('')}
+            ${topicsFor(s.category).map(t => `<button type="button" class="topic-chip" data-topic="${esc(t.topic)}" title="${esc(topicMix(s.category, t.topic))}" aria-pressed="${!s.topics || s.topics.includes(t.topic)}">${esc(t.topic)} <span class="cnt">${t.count}</span></button>`).join('')}
           </div>
         </div>
         <div class="form-sec" id="aiSec">
@@ -409,7 +416,7 @@ function renderSetup() {
     const topicAll = byTopic ? topicQuestions({ bank: QUESTIONS, category: s.category, topic: s.practiceTopic, allowRepeats: true }) : [];
     const topicNew = byTopic ? topicAll.filter(q => !seenNow[q.id]) : [];
     if ($('#practiceTopic') && !$('#practiceTopic').options.length) {
-      $('#practiceTopic').innerHTML = topicList.map(t => { const all = topicQuestions({ bank: QUESTIONS, category: s.category, topic: t.topic, allowRepeats: true }); const fresh = all.filter(q => !seenNow[q.id]).length; return `<option value="${esc(t.topic)}" ${t.topic === s.practiceTopic ? 'selected' : ''}>${esc(t.topic)} · ${all.length} questions${fresh < all.length ? ` (${fresh} new)` : ''}</option>`; }).join('');
+      $('#practiceTopic').innerHTML = topicList.map(t => { const all = topicQuestions({ bank: QUESTIONS, category: s.category, topic: t.topic, allowRepeats: true }); const fresh = all.filter(q => !seenNow[q.id]).length; const mix = DIFFICULTIES.map(d => [d, all.filter(q => difficultyOf(q) === d).length]).filter(([, n]) => n).map(([d, n]) => `${n} ${d.toLowerCase()}`).join(', '); return `<option value="${esc(t.topic)}" ${t.topic === s.practiceTopic ? 'selected' : ''}>${esc(t.topic)} · ${all.length} questions (${mix})${fresh < all.length ? ` · ${fresh} new` : ''}</option>`; }).join('');
     }
     const weakN = weakCount(s.category);
     const allTopics = topicsFor(s.category).map(t => t.topic);
@@ -870,7 +877,7 @@ function renderRoom() {
     $('#qcount').textContent = prep ? `Q ${i + 1}` : `Q ${i + 1}/${questions.length}`;
     const lv = q.levels.map(l => levelById(l).label.split(' ')[0]).join(', ');
     const label = kind === 'nudge' ? 'Follow-up · elaborate' : kind === 'followup' ? 'Follow-up' : q.type === 'intro' ? 'Introduction' : q.type === 'behavioral' ? 'Behavioural' : q.type === 'managerial' ? 'Managerial scenario' : q.type === 'design' ? 'Design' : q.type === 'scenario' ? 'Scenario' : 'Concept';
-    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(q.q)}</div>`;
+    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${diffBadge(q)}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(q.q)}</div>`;
   };
 
   const setMic = (on, text) => { ui.micState.classList.toggle('on', on); ui.micText.textContent = text; $('#selfview').dataset.mic = on ? 'active' : ''; };
@@ -1283,7 +1290,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
     const r = it.result;
     return `
     <details class="qa" ${idx === 0 ? 'open' : ''}>
-      <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${esc(q.topic)} · ${it.skipped ? 'Skipped' : `${r.wordCount} words${it.durationSec ? ` · ${fmtTime(it.durationSec)}` : ''}`}</small></span><span class="score-pill ${tone(r.overall)}">${r.overall}</span></summary>
+      <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${diffBadge(q)} ${esc(q.topic)} · ${it.skipped ? 'Skipped' : `${r.wordCount} words${it.durationSec ? ` · ${fmtTime(it.durationSec)}` : ''}`}</small></span><span class="score-pill ${tone(r.overall)}">${r.overall}</span></summary>
       <div class="qa-body">
         <div class="mini-scores"><span class="chip">Technical ${r.technical}</span><span class="chip">Communication ${r.communication}</span>${it.attempts > 1 ? `<span class="chip">${it.attempts} attempts (first: ${it.firstScore})</span>` : ''}${it.hintUsed ? '<span class="chip">hint used</span>' : ''}${it.interrupted ? '<span class="chip bad">interviewer redirected you (off-topic)</span>' : ''}${r.wpm ? `<span class="chip">${r.wpm} words/min</span>` : ''}${r.fillerCount ? `<span class="chip">${r.fillerCount} filler words</span>` : ''}</div>
         <div><h4>Your answer</h4><p class="quote">${it.answer ? esc(it.answer) : '<span class="muted">No answer given.</span>'}</p>
@@ -1433,7 +1440,7 @@ function renderRevision({ role = null } = {}) {
       ${items.length ? items.map((w, idx) => {
         const q = qmap.get(w.id);
         return `<details class="qa" data-qid="${w.id}">
-          <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${esc(categoryById(w.role)?.short || '')} · ${esc(q.topic)} · asked ${w.n}× · last ${fmtDate(w.last)}${w.skipped ? ' · skipped' : ''}</small></span><span class="score-pill ${tone(w.lastScore)}">${w.lastScore}</span></summary>
+          <summary><span class="num">${idx + 1}</span><span class="qt">${esc(q.q)}<small>${diffBadge(q)} ${esc(categoryById(w.role)?.short || '')} · ${esc(q.topic)} · asked ${w.n}× · last ${fmtDate(w.last)}${w.skipped ? ' · skipped' : ''}</small></span><span class="score-pill ${tone(w.lastScore)}">${w.lastScore}</span></summary>
           <div class="qa-body">
             <div><h4>Your last answer</h4><p class="quote">${w.lastAnswer ? esc(w.lastAnswer) : '<span class="muted">No answer given.</span>'}</p></div>
             ${w.missed && w.missed.length ? `<div><h4>Missed key points</h4><div class="chips">${w.missed.map(m => `<span class="chip bad">✕ ${esc(m)}</span>`).join('')}</div></div>` : ''}
@@ -1466,7 +1473,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.6.0', fast: FAST };
+window.__ip = { go, state, store, version: '1.7.0', fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
