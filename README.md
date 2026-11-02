@@ -4,7 +4,7 @@
 - **Difficulty badges**: every technical question is labelled Beginner, Intermediate, Advanced or Expert. The badge shows in the interview, the report, the revision list and the topic picker, and hovering a topic chip shows its difficulty mix.
 - **Topic deep-dives** (`www/js/data/topics/`): the aim is about 100 questions per DevOps topic, released topic by topic.
   - Docker: 100 questions (39 beginner, 36 intermediate, 18 advanced, 7 expert).
-  - Cloud (AWS): the first 33 beginner questions.
+  - Cloud (AWS): 100 questions (38 beginner, 37 intermediate, 18 advanced, 7 expert), added in V1.7.1.
 
 ## What's new in V1.6
 - **655 questions**: 75 new DevOps questions, so every DevOps topic now has entry-level (fresher) questions as well as harder ones. Topics covered: Linux, scripting, networking, Git, Docker, Kubernetes, CI/CD, IaC/Ansible, AWS, Azure, observability, backup/DR, DevSecOps, GitOps/Helm, platform engineering and troubleshooting.
