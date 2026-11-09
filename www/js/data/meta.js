@@ -62,8 +62,8 @@ export function categoryById(id) {
 export const INTERVIEWERS = [
   {
     id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female', photo: 'img/interviewers/ananya.jpg',
-    // V1.11: real video loops made from her portrait with LivePortrait (see docs/interviewer-video.md)
-    clips: { listen: 'img/interviewers/ananya-listen', talk: 'img/interviewers/ananya-talk' }, // .mp4 (H.264) and .webm (VP9)
+    // V1.12: talking head made from her portrait (see docs/interviewer-video.md); base is .mp4 or .webm
+    rig: { base: 'img/interviewers/ananya-base', sprite: 'img/interviewers/ananya-face.webp', meta: 'img/interviewers/ananya-rig.json' },
   },
   {
     id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male', photo: 'img/interviewers/vikram.jpg',

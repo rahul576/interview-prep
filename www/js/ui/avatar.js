@@ -489,113 +489,29 @@ export class PhotoAvatar {
   destroy() { cancelAnimationFrame(this._raf); this.host.replaceChildren(); }
 }
 
-// ------------------------------------------------------------------ V1.11 video interviewer
-// Real-looking interviewer: short video loops made offline from the interviewer's portrait with
-// LivePortrait (an open, MIT-licensed portrait animation model). One loop is the interviewer
-// listening (blinks, small natural head motion, slight smile), the other is her talking. The app
-// crossfades between them as she starts and stops speaking. Nothing is generated at run time, so it
-// works offline on any device that can play a video, and the picture is never moved or warped.
+// ------------------------------------------------------------------ V1.12 talking head
+// A real-looking interviewer that speaks in sync with her voice. Everything was made offline from
+// the interviewer's portrait (see docs/interviewer-video.md):
+//  - base video: the portrait animated by LivePortrait (an open portrait-animation model) with calm,
+//    natural head movement and no blinks, played as a seamless loop;
+//  - rig.json: for every frame of that video, where the face is (an affine transform from the
+//    portrait to the frame, measured with image alignment);
+//  - sprite: real mouth shapes from her animated footage, from closed to wide open (3 variants each),
+//    and three eyelid frames (half closed, mostly closed, closed), all with soft edges.
+// At run time each video frame is drawn to a canvas and the mouth that matches the loudness of the
+// voice playing at that moment is placed on the face, so the lips open and close with every syllable.
+// Blinks are added on a natural schedule (every 2.5 to 7 seconds). Works offline, no model at run time.
 
-const clipCache = new Map();
-/** Fetch a clip once and share it as a blob URL (works offline from the service worker cache and
- *  avoids video range-request issues in Safari). */
-export function loadClip(url) {
-  if (!clipCache.has(url)) {
-    clipCache.set(url, fetch(url)
-      .then(r => { if (!r.ok) throw new Error(`clip ${r.status}`); return r.blob(); })
-      .then(b => URL.createObjectURL(b))
-      .catch((e) => { clipCache.delete(url); throw e; }));
-  }
-  return clipCache.get(url);
+const assetCache = new Map();
+function cached(key, make) {
+  if (!assetCache.has(key)) assetCache.set(key, make().catch((e) => { assetCache.delete(key); throw e; }));
+  return assetCache.get(key);
 }
+const blobUrl = (url) => cached(url, () => fetch(url).then(r => { if (!r.ok) throw new Error(`${url} ${r.status}`); return r.blob(); }).then(b => URL.createObjectURL(b)));
+const jsonOf = (url) => cached(url, () => fetch(url).then(r => { if (!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); }));
+const imageOf = (url) => cached('img:' + url, () => blobUrl(url).then(src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; })));
 
-const FADE_MS = 220;
-
-export class VideoAvatar {
-  /** persona.clips = { listen, talk } (video URLs); persona.photo is shown until they load. */
-  constructor(host, persona, { levelSource = null } = {}) {
-    this.host = host;
-    this.persona = persona;
-    this.levelSource = levelSource;
-    this.state = 'idle';
-    this.speaking = false;
-    this.ready = false;
-    const wrap = document.createElement('div');
-    wrap.className = 'photo-avatar video-avatar';
-    let photoUrl = String(persona.photo);
-    try { photoUrl = new URL(photoUrl, document.baseURI).href; } catch { /* keep */ }
-    wrap.style.setProperty('--photo', `url("${photoUrl.replace(/"/g, '%22')}")`);
-    this.wrap = wrap;
-    // still portrait underneath: visible until the videos are ready, and if they cannot play
-    this.img = new Image();
-    this.img.alt = `${persona.name}, interviewer`;
-    this.img.decoding = 'async';
-    this.img.src = persona.photo;
-    this.img.className = 'va-still';
-    wrap.appendChild(this.img);
-    const mk = (cls) => {
-      const v = document.createElement('video');
-      v.className = `va-clip ${cls}`;
-      v.muted = true; v.defaultMuted = true; v.loop = true; v.playsInline = true;
-      v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('aria-hidden', 'true');
-      v.preload = 'auto';
-      wrap.appendChild(v);
-      return v;
-    };
-    this.listenV = mk('va-listen');
-    this.talkV = mk('va-talk');
-    host.replaceChildren(wrap);
-    this._load();
-  }
-
-  async _load() {
-    try {
-      const ext = clipFormat();
-      const [l, t] = await Promise.all([loadClip(this.persona.clips.listen + ext), loadClip(this.persona.clips.talk + ext)]);
-      if (!this.host.contains(this.wrap)) return;
-      this.listenV.src = l; this.talkV.src = t;
-      await new Promise((res, rej) => { this.listenV.onloadeddata = res; this.listenV.onerror = rej; });
-      // start the listening loop at a random point so several avatars on one page are not in sync
-      try { this.listenV.currentTime = Math.random() * Math.max(0, (this.listenV.duration || 0) - 1); } catch { /* fine */ }
-      await this.listenV.play().catch(() => {});
-      this.ready = true;
-      this.wrap.classList.add('va-ready');
-      this._apply();
-    } catch { /* keep the still portrait */ }
-  }
-
-  _apply() {
-    if (!this.ready) return;
-    const talk = this.speaking;
-    this.wrap.classList.toggle('va-talking', talk);
-    if (talk) {
-      if (this.talkV.paused) {
-        // each sentence starts at a different place in the talking loop, so it never looks repeated
-        try { this.talkV.currentTime = Math.random() * Math.max(0, (this.talkV.duration || 0) - 2); } catch { /* fine */ }
-        this.talkV.play().catch(() => {});
-      }
-      clearTimeout(this._pauseTimer);
-    } else {
-      if (this.listenV.paused) this.listenV.play().catch(() => {});
-      clearTimeout(this._pauseTimer);
-      this._pauseTimer = setTimeout(() => { if (!this.speaking) this.talkV.pause(); }, FADE_MS + 60);
-    }
-  }
-
-  setExpression(name) { this.host.dataset.expression = name; }
-  nod() {}
-  setState(s) { this.state = s; this.host.dataset.state = s; if (s !== 'speaking' && this.speaking) { this.speaking = false; this._apply(); } }
-  startSpeech() { this.speaking = true; this.host.dataset.state = 'speaking'; this._apply(); }
-  syncToChar() {}
-  endSpeech() { this.speaking = false; this._apply(); }
-  destroy() {
-    clearTimeout(this._pauseTimer);
-    for (const v of [this.listenV, this.talkV]) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* ignore */ } }
-    this.host.replaceChildren();
-  }
-}
-
-/** File extension of the clip format this browser plays: H.264 MP4 (Safari, Chrome, Edge) or VP9 WebM. */
+/** File extension of the video format this browser plays: H.264 MP4 (Safari, Chrome, Edge) or VP9 WebM. */
 export function clipFormat() {
   if (typeof document === 'undefined') return null;
   const v = document.createElement('video');
@@ -604,9 +520,141 @@ export function clipFormat() {
   return null;
 }
 
-/** The best avatar for a persona: real video loops when it has them, otherwise the still photo. */
+/** Map voice loudness (RMS, about 0..0.3) to a mouth opening 0..1. */
+export function mouthOpenFromLevel(rms) {
+  const x = Math.max(0, Math.min(1, (rms - 0.012) / 0.15));
+  return Math.pow(x, 0.75);
+}
+
+export class TalkingHead {
+  constructor(host, persona, { levelSource = null } = {}) {
+    this.host = host;
+    this.persona = persona;
+    this.levelSource = levelSource;
+    this.speaking = false;
+    this.ready = false;
+    this.open = 0;        // smoothed mouth opening 0..1
+    this.variant = 0;     // which of the mouth shapes of a level (changes per syllable)
+    this.frame = 0;       // current base-video frame
+    this.blinks = 0;
+    this.speechStart = 0;
+    this.nextBlink = performance.now() + 1500 + Math.random() * 2500;
+    this.blinkStart = -1e9;
+    this.doubleBlink = false;
+    const wrap = document.createElement('div');
+    wrap.className = 'photo-avatar talking-head';
+    let photoUrl = String(persona.photo);
+    try { photoUrl = new URL(photoUrl, document.baseURI).href; } catch { /* keep */ }
+    wrap.style.setProperty('--photo', `url("${photoUrl.replace(/"/g, '%22')}")`);
+    this.wrap = wrap;
+    this.img = new Image();
+    this.img.alt = `${persona.name}, interviewer`;
+    this.img.decoding = 'async';
+    this.img.src = persona.photo;
+    this.img.className = 'th-still';
+    wrap.appendChild(this.img);
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'th-canvas';
+    this.canvas.setAttribute('role', 'img');
+    this.canvas.setAttribute('aria-label', this.img.alt);
+    wrap.appendChild(this.canvas);
+    const v = document.createElement('video');
+    v.className = 'th-video';
+    v.muted = true; v.defaultMuted = true; v.loop = true; v.playsInline = true;
+    v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('aria-hidden', 'true');
+    this.video = v;
+    wrap.appendChild(v);
+    host.replaceChildren(wrap);
+    this._load();
+  }
+
+  async _load() {
+    try {
+      const r = this.persona.rig, ext = clipFormat();
+      const [meta, sprite, src] = await Promise.all([jsonOf(r.meta), imageOf(r.sprite), blobUrl(r.base + ext)]);
+      if (!this.host.contains(this.wrap)) return;
+      this.meta = meta; this.sprite = sprite;
+      this.canvas.width = meta.size; this.canvas.height = meta.size;
+      this.g = this.canvas.getContext('2d');
+      this.video.src = src;
+      await new Promise((res, rej) => { this.video.onloadeddata = res; this.video.onerror = rej; });
+      try { this.video.currentTime = Math.random() * Math.max(0, (this.video.duration || 0) - 1); } catch { /* fine */ }
+      await this.video.play().catch(() => {});
+      const onFrame = (now, md) => { this.frame = Math.round(md.mediaTime * meta.fps) % meta.frames.length; this._vfc = this.video.requestVideoFrameCallback(onFrame); };
+      if (this.video.requestVideoFrameCallback) this._vfc = this.video.requestVideoFrameCallback(onFrame);
+      this.ready = true;
+      this._raf = requestAnimationFrame(t => this._tick(t));
+    } catch { /* keep the still portrait */ }
+  }
+
+  /** Voice loudness 0..1 right now (real audio when available, otherwise a speech-like rhythm). */
+  _loudness(t) {
+    if (!this.speaking) return 0;
+    const real = this.levelSource ? this.levelSource() : null;
+    if (real !== null && real !== undefined) return mouthOpenFromLevel(real);
+    const s = (t - this.speechStart) / 1000;
+    const syll = Math.max(0, Math.sin(s * Math.PI * 8.6) * 0.65 + Math.sin(s * Math.PI * 5.1 + 1) * 0.35);
+    return syll * (0.55 + 0.45 * Math.sin(s * 1.7));
+  }
+
+  _tick(t) {
+    if (!this.wrap.isConnected) { this._stop(); return; }
+    const m = this.meta, g = this.g;
+    if (!this.video.requestVideoFrameCallback) this.frame = Math.round(this.video.currentTime * m.fps) % m.frames.length;
+    // mouth: opens quickly with a syllable, closes a little slower, like real speech
+    const target = this._loudness(t);
+    const prev = this.open;
+    this.open += (target - this.open) * (target > this.open ? 0.6 : 0.35);
+    if (prev < 0.12 && this.open >= 0.12) this.variant = Math.floor(Math.random() * 3); // new syllable, new shape
+    // blinks: natural rate, sometimes a double blink, a little less often while speaking
+    if (t > this.nextBlink) {
+      this.blinkStart = t; this.blinks++;
+      this.doubleBlink = Math.random() < 0.12;
+      this.nextBlink = t + (this.doubleBlink ? 420 : 0) + (this.speaking ? 3000 : 2500) + Math.random() * 4500;
+    }
+    let bt = t - this.blinkStart;
+    if (this.doubleBlink && bt > 240 && bt < 460) bt -= 240;
+    const eyeFrame = bt < 0 || bt > 190 ? -1 : bt < 40 ? 0 : bt < 75 ? 1 : bt < 120 ? 2 : bt < 155 ? 1 : 0;
+    // draw
+    const A = m.frames[this.frame] || m.frames[0];
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(this.video, 0, 0, m.size, m.size);
+    const lv = m.mouth.levels, x = this.open * (lv.length - 1);
+    const lo = Math.floor(x), hi = Math.min(lv.length - 1, lo + 1), f = x - lo;
+    this._patch(A, m.mouth.box, lv[lo][this.variant % lv[lo].length], 1);
+    if (f > 0.05 && hi !== lo) this._patch(A, m.mouth.box, lv[hi][this.variant % lv[hi].length], f);
+    if (eyeFrame >= 0) this._patch(A, m.eyes.box, m.eyes.seq[eyeFrame], 1);
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+    if (!this.wrap.classList.contains('th-ready')) this.wrap.classList.add('th-ready');
+    this.wrap.dataset.mouth = String(Math.round(this.open * 10));
+    this._raf = requestAnimationFrame(tt => this._tick(tt));
+  }
+
+  /** Draw one sprite cell (portrait coordinates `box`) onto the face of the current frame. */
+  _patch(A, [x, y, w, h], cell, alpha) {
+    const g = this.g, cw = this.meta.cell[0];
+    g.setTransform(A[0], A[1], A[2], A[3], A[4], A[5]);
+    g.globalAlpha = alpha;
+    g.drawImage(this.sprite, cell * cw, 0, w, h, x, y, w, h);
+  }
+
+  setExpression(name) { this.host.dataset.expression = name; }
+  nod() {}
+  setState(s) { this.host.dataset.state = s; if (s !== 'speaking') this.speaking = false; }
+  startSpeech() { this.speaking = true; this.speechStart = performance.now(); this.host.dataset.state = 'speaking'; }
+  syncToChar() {}
+  endSpeech() { this.speaking = false; }
+  _stop() {
+    cancelAnimationFrame(this._raf);
+    if (this._vfc && this.video.cancelVideoFrameCallback) this.video.cancelVideoFrameCallback(this._vfc);
+    try { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); } catch { /* ignore */ }
+  }
+  destroy() { this._stop(); this.host.replaceChildren(); }
+}
+
+/** The best avatar for a persona: the talking head when it has one, otherwise the still photo. */
 export function createAvatar(host, persona, opts = {}) {
-  if (persona.clips && clipFormat()) return new VideoAvatar(host, persona, opts);
+  if (persona.rig && clipFormat() && typeof HTMLCanvasElement !== 'undefined') return new TalkingHead(host, persona, opts);
   return new PhotoAvatar(host, persona, opts);
 }
 

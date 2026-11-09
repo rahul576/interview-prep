@@ -1,8 +1,13 @@
 # InterviewPro — V1.10
 
+## What's new in V1.12 – lips in sync with the voice
+- **Ananya's lips now follow her actual words.** While she speaks, the app measures the loudness of her voice many times a second and shows the real mouth shape (taken from her own animated footage) that matches it, so the mouth opens and closes with every syllable and closes in pauses.
+- **Natural blinking.** Blinks come every few seconds (sometimes a double blink) instead of the constant blinking of the V1.11 loops.
+- She keeps the calm, natural head movement of a person on a video call. Everything is still offline and small (about 0.4 MB). How it is made: `docs/interviewer-video.md`.
+
 ## What's new in V1.11 – a real-looking interviewer
 - **Ananya is now the default interviewer, with a natural female voice (Heart).** Existing users are moved to Ananya once; anyone who had picked a male voice is moved to Heart. You can still choose any interviewer and voice in Setup.
-- **She looks like a real person on a video call.** Her listening and talking are short video loops made from her portrait with LivePortrait, an open portrait-animation model: real blinks, small natural head movement and real speech mouth shapes. The app switches between them with a soft crossfade when she starts or stops speaking, and each sentence starts at a different point so it never looks repeated. Everything ships with the app (under 0.5 MB per format) and works offline. How the loops were made: `docs/interviewer-video.md`.
+- **She looks like a real person on a video call.** Her portrait was animated with LivePortrait, an open portrait-animation model (replaced in V1.12 by the talking head).
 - **No more shaking.** The still photos of the other interviewers no longer rotate, move or zoom.
 
 ## What's new in V1.10 – realistic interviewers and detailed answers
