@@ -1,4 +1,10 @@
-# InterviewPro — V1.8
+# InterviewPro — V1.9
+
+## What's new in V1.9 – recordings and question display
+- The question appears on screen as soon as the interviewer starts asking it, not after. Follow-ups show the follow-up text, with the main question underneath.
+- Recordings play at full length and can be seeked. Browsers save WebM without a duration, so the app now writes it in.
+- **Watch my answer**: the report lists every question as a chapter of the recording. You can jump to any question and optionally stop at the end of that answer.
+- Recordings are saved on the device and kept for **3 days** by default (1, 3, 7 or 30 days, under History). Older recordings are deleted automatically, and you can clear all recordings or delete one from its report.
 
 ## What's new in V1.8 – natural interviewer voices
 - Four human-like voices: **Heart** and **Bella** (female, US), **Michael** (male, US) and **George** (male, UK). The robotic **system voice** remains as a fifth option.

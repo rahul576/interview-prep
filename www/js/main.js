@@ -10,6 +10,7 @@ import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpee
 import { NATURAL_VOICES, SYSTEM_VOICE, isNaturalVoice } from './services/natural-voice.js';
 import { MediaService, isVirtualMic } from './services/media.js';
 import { AIInterviewer } from './services/ai.js';
+import { recordings, fixWebmDuration, fmtBytes, RETENTION_CHOICES, DEFAULT_RETENTION_DAYS } from './services/recordings.js';
 import { store } from './services/store.js';
 import { updateProgress, weakQuestions, markLearned, seenMap, progressStats, PASS_SCORE } from './engine/progress.js';
 
@@ -116,7 +117,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.8</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.9</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -379,7 +380,7 @@ function renderSetup() {
           <label class="toggle"><span><b style="font-size:15px">Start with \u201cTell me about yourself\u201d</b><br><span class="muted" style="font-size:13px">Off by default, so the interview goes straight to technical questions</span></span><input type="checkbox" id="includeIntro" ${s.includeIntro ? 'checked' : ''}></label>
           <label class="toggle"><span><b style="font-size:15px">Allow questions I\u2019ve already answered</b><br><span class="muted" style="font-size:13px">Off: you always get a fresh set of questions you have never seen</span></span><input type="checkbox" id="allowRepeats" ${s.allowRepeats ? 'checked' : ''}></label>
           <label class="toggle"><span><b style="font-size:15px">Follow-up questions</b><br><span class="muted" style="font-size:13px">Interviewer probes thin answers and digs deeper on strong ones</span></span><input type="checkbox" id="followUps" ${s.followUps ? 'checked' : ''}></label>
-          <label class="toggle"><span><b style="font-size:15px">Record my session</b><br><span class="muted" style="font-size:13px">Saved only in this session for playback in your report</span></span><input type="checkbox" id="record" ${s.record ? 'checked' : ''}></label>
+          <label class="toggle"><span><b style="font-size:15px">Record my session</b><br><span class="muted" style="font-size:13px">Kept on this device for ${retentionDays()} day${retentionDays() === 1 ? '' : 's'}, then deleted automatically</span></span><input type="checkbox" id="record" ${s.record ? 'checked' : ''}></label>
         </div>
       </div>
       <aside class="card summary" aria-live="polite" id="summary"></aside>
@@ -831,6 +832,14 @@ function renderRoom() {
   const roomLevel = media.hasAudio() ? media.levelMeter() : null; // lets the voice watchdog see that you are talking
   let recording = false;
   if (s.record && media.stream) recording = media.startRecording();
+  const recStart = performance.now();
+  const chapters = []; // where each question starts in the recording, for "watch this answer"
+  const markChapter = (q, index) => {
+    if (!recording) return;
+    const at = (performance.now() - recStart) / 1000;
+    if (chapters.length && chapters[chapters.length - 1].questionId === q.id) return; // retries / repeats stay in one chapter
+    chapters.push({ index, questionId: q.id, title: q.q, start: Math.max(0, at - 0.5) });
+  };
 
   // room-level state
   const started = performance.now();
@@ -873,6 +882,9 @@ function renderRoom() {
     if (ended && meta.kind !== 'closing') return;
     if (meta.kind === 'transition') { if (meta.score >= 70) { avatar.setExpression('pleased'); avatar.nod(); } else avatar.setExpression('neutral'); await sleep(FAST ? 10 : 500); }
     while (paused) await sleep(200);
+    // Show the question on screen as the interviewer starts asking it, not after.
+    if (meta.kind === 'question' && meta.question) markChapter(meta.question, meta.index);
+    if (meta.question && ['question', 'nudge', 'followup'].includes(meta.kind)) showQuestion(meta.question, meta.index, meta.kind === 'question' ? 'answer' : meta.kind, meta.kind === 'question' ? null : text);
     ui.stage.dataset.speaking = 'true';
     setTag('Speaking');
     if (captionsOn) ui.captions.textContent = text;
@@ -895,12 +907,16 @@ function renderRoom() {
     await sleep(FAST ? 30 : 350);
   };
 
-  const showQuestion = (q, i, kind) => {
+  let shown = null;
+  const showQuestion = (q, i, kind, prompt = null) => {
+    // getAnswer() calls this again after the interviewer finished; keep what is already on screen.
+    if (!prompt && shown && shown.id === q.id && shown.kind === kind) return;
+    shown = { id: q.id, kind };
     currentQ = q;
     $('#qcount').textContent = prep ? `Q ${i + 1}` : `Q ${i + 1}/${questions.length}`;
     const lv = q.levels.map(l => levelById(l).label.split(' ')[0]).join(', ');
     const label = kind === 'nudge' ? 'Follow-up · elaborate' : kind === 'followup' ? 'Follow-up' : q.type === 'intro' ? 'Introduction' : q.type === 'behavioral' ? 'Behavioural' : q.type === 'managerial' ? 'Managerial scenario' : q.type === 'design' ? 'Design' : q.type === 'scenario' ? 'Scenario' : 'Concept';
-    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${diffBadge(q)}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(q.q)}</div>`;
+    ui.qcard.innerHTML = `<div class="qmeta"><span class="tag">${esc(q.topic)}</span>${label !== q.topic ? `<span>${esc(label)}</span>` : ''}${diffBadge(q)}${q.cat !== 'common' ? `<span>· ${esc(lv)}</span>` : ''}</div><div class="qtext">${esc(prompt || q.q)}</div>${prompt ? `<div class="qsub">Main question: ${esc(q.q)}</div>` : ''}`;
   };
 
   const setMic = (on, text) => { ui.micState.classList.toggle('on', on); ui.micText.textContent = text; $('#selfview').dataset.mic = on ? 'active' : ''; };
@@ -1244,9 +1260,13 @@ function renderRoom() {
     const result = await session.run();
     if (result.audioCheck === 'end') { speech.stopListening(); if (recording) await media.stopRecording(); media.stop(); toast('Interview cancelled before it started.'); go('home'); return; }
     speech.stopListening();
-    const blob = recording ? await media.stopRecording() : null;
+    const recMs = performance.now() - recStart;
+    let blob = recording ? await media.stopRecording() : null;
     media.stop();
-    finishInterview({ result, questions, seed, pos, persona, blob, elapsed: Math.round((performance.now() - started - pausedTotal) / 1000) });
+    // Browsers save WebM without its length; add it so the video plays fully and can be seeked.
+    if (blob) { setTag('Saving recording'); blob = await fixWebmDuration(blob, recMs).catch(() => blob); }
+    const recChapters = chapters.map((c, k) => ({ ...c, end: k + 1 < chapters.length ? chapters[k + 1].start : recMs / 1000 }));
+    finishInterview({ result, questions, seed, pos, persona, blob, chapters: recChapters, recSec: recMs / 1000, elapsed: Math.round((performance.now() - started - pausedTotal) / 1000) });
   })().catch(err => {
     console.error(err);
     toast('Something went wrong. Returning home.');
@@ -1255,7 +1275,7 @@ function renderRoom() {
   });
 }
 
-function finishInterview({ result, seed, pos, persona, blob, elapsed }) {
+function finishInterview({ result, seed, pos, persona, blob, chapters = [], recSec = 0, elapsed }) {
   const s = state.setup;
   const items = result.items;
   const summary = summarize(items);
@@ -1282,6 +1302,12 @@ function finishInterview({ result, seed, pos, persona, blob, elapsed }) {
     store.setLastSessionIds(s.category, sessionRecord.items.map(i => i.questionId).filter(id => id !== 'hr-001'));
   }
   s.practiceIds = null;
+  if (blob) {
+    sessionRecord.recording = { chapters, durationSec: Math.round(recSec), size: blob.size };
+    if (items.length) store.saveSession(sessionRecord);
+    // Keep it on this device for the retention period (default 3 days).
+    recordings.save({ id: sessionRecord.id, profileId: store.activeProfile().id, blob, chapters, durationSec: recSec }).catch(() => toast('The recording could not be saved on this device (storage full?). Download it from the report.', 6000));
+  }
   go('report', { session: sessionRecord, videoUrl: blob ? URL.createObjectURL(blob) : null, videoType: blob ? blob.type : null });
 }
 
@@ -1319,6 +1345,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
         <div><h4>Your answer</h4><p class="quote">${it.answer ? esc(it.answer) : '<span class="muted">No answer given.</span>'}</p>
           ${it.nudge ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Interviewer: “${esc(it.nudge.prompt)}”</p><p class="quote">${esc(it.nudge.answer || '—')}</p>` : ''}
           ${it.followUp ? `<p class="muted" style="font-size:13px;margin:8px 0 4px">Follow-up: “${esc(it.followUp.prompt)}”</p><p class="quote">${esc(it.followUp.answer || '—')}</p>` : ''}
+          ${session.recording && (session.recording.chapters || []).some(c => c.questionId === it.questionId) ? `<button type="button" class="btn btn-sm no-print" data-watch="${esc(it.questionId)}" style="margin-top:8px">${ICONS.play} Watch my answer</button>` : ''}
         </div>
         <div><h4>Key points</h4><div class="chips">${r.matched.map(m => `<span class="chip ok">✓ ${esc(m.label)}</span>`).join('')}${r.missed.map(m => `<span class="chip bad">✕ ${esc(m.label)}</span>`).join('')}</div></div>
         ${r.tips.length ? `<div><h4>Coaching</h4><ul class="list-clean">${r.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
@@ -1364,7 +1391,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
       </section>
     </div>
 
-    ${videoUrl ? `<section class="card card-pad recording no-print" style="margin-top:16px"><h2 style="font-size:17px;margin-bottom:10px">Your recording</h2><video controls playsinline src="${videoUrl}"></video><div style="margin-top:10px"><a class="btn" href="${videoUrl}" download="interview-${session.id}.${(videoType || '').includes('mp4') ? 'mp4' : 'webm'}">Download recording</a> <span class="muted" style="font-size:13px">Recordings are not stored after you leave this page.</span></div></section>` : ''}
+    ${videoUrl || session.recording ? `<section class="card card-pad recording no-print" id="recSec" style="margin-top:16px"><h2 style="font-size:17px;margin-bottom:10px">Your recording</h2><div id="recBody">${videoUrl ? '' : '<p class="muted" style="margin:0">Loading the recording…</p>'}</div></section>` : ''}
 
     <section class="card" style="margin-top:16px;overflow:hidden">
       <div class="card-pad" style="padding-bottom:12px"><h2 style="font-size:17px">Question-by-question feedback</h2></div>
@@ -1376,6 +1403,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
   $('#printBtn').addEventListener('click', () => window.print());
   $('#retake').addEventListener('click', () => go('setup'));
   window.__ip.report = session;
+  mountRecording(session, videoUrl, videoType);
   if (!session.aiFeedback && !session.aiFeedbackTried && ai.active) {
     session.aiFeedbackTried = true;
     const items = session.items.map(it => ({ ...it, question: QUESTIONS.find(q => q.id === it.questionId) || it.question })).filter(it => it.question);
@@ -1387,6 +1415,56 @@ function renderReport({ session, videoUrl, videoType } = {}) {
     });
   }
 }
+
+/** Recording player with per-question chapters ("watch only this answer"), retention info and delete. */
+async function mountRecording(session, videoUrl, videoType) {
+  const body = $('#recBody');
+  if (!body) return;
+  let url = videoUrl, type = videoType, chapters = (session.recording && session.recording.chapters) || [];
+  if (!url) {
+    const rec = await recordings.get(session.id);
+    if (!$('#recBody')) return;
+    if (!rec) { body.innerHTML = `<p class="muted" style="margin:0">This recording is no longer on this device (recordings are kept for ${retentionDays()} day${retentionDays() === 1 ? '' : 's'}).</p>`; return; }
+    url = URL.createObjectURL(rec.blob); type = rec.type; chapters = rec.chapters || chapters;
+  }
+  const days = retentionDays();
+  body.innerHTML = `<video id="recVideo" controls playsinline preload="metadata" src="${url}"></video>
+    ${chapters.length ? `<div class="chapters" role="list">${chapters.map((c, k) => `<button type="button" class="chapter" role="listitem" data-ch="${k}"><span class="num">${k + 1}</span><span class="t">${esc(c.title)}</span><span class="muted">${fmtTime(c.start)}</span></button>`).join('')}</div>
+    <label class="muted" style="font-size:13px;display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="clipOnly" checked> Stop at the end of the chosen question</label>` : ''}
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center"><a class="btn" href="${url}" download="interview-${session.id}.${(type || '').includes('mp4') ? 'mp4' : 'webm'}">Download recording</a><button type="button" class="btn btn-ghost" id="recDelete">Delete recording</button>
+    <span class="muted" style="font-size:13px">Kept on this device for ${days} day${days === 1 ? '' : 's'}. Change this under History.</span></div>`;
+  const v = $('#recVideo');
+  // Older recordings without a stored duration: make the browser scan to the end once so the
+  // timeline shows the full length and seeking works.
+  v.addEventListener('loadedmetadata', () => {
+    if (v.duration === Infinity || Number.isNaN(v.duration)) {
+      const back = () => { v.removeEventListener('durationchange', back); v.currentTime = 0; };
+      v.addEventListener('durationchange', back);
+      v.currentTime = 1e101;
+    }
+  });
+  let clipEnd = null;
+  v.addEventListener('timeupdate', () => { if (clipEnd !== null && v.currentTime >= clipEnd) { v.pause(); clipEnd = null; } });
+  const playChapter = (k) => {
+    const c = chapters[k]; if (!c) return;
+    $$('.chapter').forEach((b, i) => b.setAttribute('aria-current', String(i === k)));
+    clipEnd = $('#clipOnly') && $('#clipOnly').checked ? c.end : null;
+    v.currentTime = c.start;
+    v.play().catch(() => {});
+    $('#recSec').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  $$('[data-ch]').forEach(b => b.addEventListener('click', () => playChapter(Number(b.dataset.ch))));
+  $$('[data-watch]').forEach(b => b.addEventListener('click', () => playChapter(chapters.findIndex(c => c.questionId === b.dataset.watch))));
+  $('#recDelete').addEventListener('click', async () => {
+    if (!FAST && !window.confirm('Delete this recording from this device?')) return;
+    await recordings.remove(session.id);
+    v.removeAttribute('src'); v.load();
+    body.innerHTML = '<p class="muted" style="margin:0">Recording deleted.</p>';
+    $$('[data-watch]').forEach(b => b.remove());
+  });
+}
+
+const retentionDays = () => { const d = Number(store.prefs().recordingRetentionDays); return RETENTION_CHOICES.includes(d) ? d : DEFAULT_RETENTION_DAYS; };
 
 function aiFeedbackHtml(fb) {
   if (!fb) return '<h2 style="font-size:17px;margin-bottom:6px">Interviewer\u2019s feedback</h2><p class="muted" style="margin:0">Writing personalised feedback from your answers…</p>';
@@ -1430,6 +1508,14 @@ function renderHistory() {
   const hist = store.history();
   app.innerHTML = shell(`
     <div class="section-title" style="margin-top:0"><h2>Interview history</h2>${hist.length ? '<button class="btn" id="clear">Clear history</button>' : ''}</div>
+    <section class="card card-pad rec-settings" style="margin-bottom:16px">
+      <div class="profile-row">
+        <b>Recordings</b><span class="muted" id="recUsage">Checking…</span>
+        <label class="muted" for="recKeep" style="margin-left:auto">Keep for</label>
+        <select id="recKeep" class="field">${RETENTION_CHOICES.map(d => `<option value="${d}" ${d === retentionDays() ? 'selected' : ''}>${d} day${d === 1 ? '' : 's'}</option>`).join('')}</select>
+        <button class="btn btn-ghost" id="recClear" type="button">Clear all recordings</button>
+      </div>
+    </section>
     <section class="card" style="overflow:hidden">
       ${hist.length ? hist.map(h => `
         <button class="hist-row" data-open="${h.id}">
@@ -1440,6 +1526,10 @@ function renderHistory() {
     </section>`, 'history');
   bindNav();
   $$('[data-open]').forEach(b => b.addEventListener('click', () => go('report', { session: store.getSession(b.dataset.open) })));
+  const usage = async () => { const u = await recordings.usage(); if ($('#recUsage')) $('#recUsage').textContent = u.count ? `${u.count} saved · ${fmtBytes(u.bytes)}` : 'None saved'; };
+  usage();
+  $('#recKeep').addEventListener('change', async (e) => { store.savePrefs({ recordingRetentionDays: Number(e.target.value) }); const n = await recordings.purge(retentionDays()); toast(n ? `Removed ${n} older recording${n === 1 ? '' : 's'}.` : `Recordings are now kept for ${retentionDays()} days.`); usage(); });
+  $('#recClear').addEventListener('click', async () => { if (!FAST && !window.confirm('Delete all saved recordings on this device?')) return; await recordings.clear(); toast('All recordings deleted.'); usage(); });
   const c = $('#clear');
   if (c) c.addEventListener('click', () => { if (window.confirm('Delete all saved interview results on this device?')) { store.clearHistory(); go('history'); } });
 }
@@ -1496,7 +1586,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.8.0', speech, fast: FAST };
+window.__ip = { go, state, store, version: '1.9.0', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
@@ -1514,3 +1604,5 @@ if (isNative()) {
   try { window.Capacitor.Plugins.SplashScreen && window.Capacitor.Plugins.SplashScreen.hide(); } catch { /* optional */ }
 }
 go('home');
+// Delete recordings older than the retention period (default 3 days).
+recordings.purge(retentionDays()).catch(() => {});

@@ -649,6 +649,93 @@ try {
   await ctx.close();
 } catch (e) { failures++; log('FAIL  profiles/topic practice', e.message); }
 
+// V1.9: question shown while it is being asked; recording plays fully with per-question chapters; retention
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['camera', 'microphone'] });
+  const page = await ctx.newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  page.on('dialog', d => d.accept());
+  await page.goto(`http://localhost:${PORT}/?fast=1&seed=901`);
+
+  // 1) WebM duration fix on a real browser recording
+  const dur = await page.evaluate(async () => {
+    const { fixWebmDuration } = await import('./js/services/recordings.js');
+    const c = document.createElement('canvas'); c.width = 160; c.height = 120; const g = c.getContext('2d');
+    const stream = c.captureStream(15); const rec = new MediaRecorder(stream, { mimeType: 'video/webm' }); const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data); rec.start(250);
+    const t0 = performance.now(); let n = 0;
+    await new Promise(r => { const iv = setInterval(() => { g.fillStyle = `hsl(${n++ * 20},80%,50%)`; g.fillRect(0, 0, 160, 120); if (performance.now() - t0 > 2600) { clearInterval(iv); r(); } }, 60); });
+    await new Promise(r => { rec.onstop = r; rec.stop(); });
+    const raw = new Blob(chunks, { type: 'video/webm' });
+    const probe = (blob) => new Promise(r => { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => r(v.duration); v.onerror = () => r(-1); v.src = URL.createObjectURL(blob); });
+    const before = await probe(raw);
+    const fixed = await fixWebmDuration(raw, performance.now() - t0);
+    const after = await probe(fixed);
+    return { before: String(before), after };
+  });
+  assert.equal(dur.before, 'Infinity', 'raw browser recordings have no duration');
+  assert.ok(dur.after > 2 && dur.after < 4, `fixed recording has its real duration (${dur.after}s)`);
+
+  // 2) Run a short interview with recording on and a slow interviewer voice
+  await page.click('.role-card [data-role="java-backend"]');
+  await page.click('[data-style="interview"]'); await page.click('[data-mode="technical"]'); await page.click('[data-count="5"]');
+  assert.equal(await page.isChecked('#record'), true);
+  await page.click('#toCheck');
+  await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
+  await page.evaluate(() => { const sp = window.__ip.speech; const orig = sp.speak.bind(sp); sp.speak = async (t, o) => { if (/\?$/.test(t.trim())) { o && o.onStart && o.onStart(1200); await new Promise(r => setTimeout(r, 1200)); return; } return orig(t, o); }; });
+  await page.click('#start'); await confirmAudio(page);
+  const q1 = await page.evaluate(() => window.__ip.questions[0]);
+  await page.waitForFunction(() => document.querySelector('#stage')?.dataset.speaking === 'true' && document.querySelector('.qtext'), null, { timeout: 15000 });
+  const whileSpeaking = await page.evaluate(() => ({ speaking: document.querySelector('#stage').dataset.speaking, text: document.querySelector('.qtext')?.textContent || '' }));
+  const q1text = QUESTIONS.find(q => q.id === q1).q;
+  assert.ok(whileSpeaking.text.includes(q1text.slice(0, 40)), 'question is on screen while the interviewer is still asking it');
+  // answer until question 3 is reached (short answers may get an "elaborate" follow-up first)
+  for (const until = Date.now() + 40000; Date.now() < until;) {
+    if ((await page.textContent('#qcount')).startsWith('Q 3/')) break;
+    if (await page.$('#doneBtn:not([disabled])')) { await page.fill('#answer', 'An answer about the topic with some detail, covering the main idea and an example.'); await page.click('#doneBtn'); }
+    await page.waitForTimeout(250);
+  }
+  assert.ok((await page.textContent('#qcount')).startsWith('Q 3/'), 'reached question 3');
+  await page.click('#endBtn');
+  await page.waitForSelector('#reportHead');
+  await page.waitForSelector('#recVideo');
+  const ch = await page.$$eval('.chapter', els => els.length);
+  assert.ok(ch >= 2, `chapters per question (${ch})`);
+  const watch = await page.$$('[data-watch]');
+  assert.ok(watch.length >= 2, 'watch-my-answer buttons on questions');
+  const d2 = await page.$eval('#recVideo', v => new Promise(r => { if (v.readyState >= 1) r(v.duration); else v.onloadedmetadata = () => r(v.duration); }));
+  assert.ok(Number.isFinite(d2) && d2 > 1, `interview recording has a real duration (${d2})`);
+  await page.click('.chapter >> nth=1');
+  const t = await page.$eval('#recVideo', v => v.currentTime);
+  const sess = await page.evaluate(() => window.__ip.report);
+  assert.ok(Math.abs(t - sess.recording.chapters[1].start) < 1.5, 'chapter jumps to that question');
+  await page.screenshot({ path: new URL('recording-chapters.png', OUT).pathname });
+
+  // 3) Saved on the device: reopen from history after reload
+  await page.reload(); await page.click('[data-nav="history"] >> nth=0');
+  await page.click('[data-open] >> nth=0');
+  await page.waitForSelector('#recVideo', { timeout: 15000 });
+  // 4) Retention: default 3 days; an old recording is purged; clear all works
+  await page.click('[data-nav="history"] >> nth=0');
+  assert.equal(await page.$eval('#recKeep', s => s.value), '3');
+  const purged = await page.evaluate(async () => {
+    const r = window.__ip.recordings; const list = await r.list(); const rec = await r.get(list[0].id);
+    await r.save({ ...rec, id: 'old', blob: rec.blob }); // re-save then age it
+    const db = await new Promise(res => { const q = indexedDB.open('interviewpro-recordings', 1); q.onsuccess = () => res(q.result); });
+    await new Promise(res => { const tx = db.transaction('recordings', 'readwrite'); const st = tx.objectStore('recordings'); const g = st.get('old'); g.onsuccess = () => { const v = g.result; v.createdAt = Date.now() - 4 * 86400000; st.put(v); }; tx.oncomplete = res; });
+    db.close();
+    const n = await r.purge(3);
+    return { n, left: (await r.list()).map(x => x.id) };
+  });
+  assert.equal(purged.n, 1, 'recording older than 3 days removed');
+  assert.ok(!purged.left.includes('old'));
+  await page.click('#recClear');
+  await page.waitForFunction(() => /None saved/.test(document.querySelector('#recUsage')?.textContent || ''));
+  assert.deepEqual(errors, []);
+  log('PASS  question shown while asked; recording full length + chapters; saved 3 days; clear');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  recording/question display', e.message); }
+
 await browser.close();
 server.close();
 log(failures ? `\n${failures} E2E scenario(s) failed` : '\nAll E2E scenarios passed. Screenshots in test-results/');
