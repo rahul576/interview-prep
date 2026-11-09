@@ -372,6 +372,11 @@ export class PhotoAvatar {
     this.speechStart = 0;
     const wrap = document.createElement('div');
     wrap.className = 'photo-avatar';
+    // blurred copy of the photo fills the space around the portrait in wide video areas
+    // (absolute URL: a relative one would resolve against the stylesheet's folder)
+    let photoUrl = String(persona.photo);
+    try { photoUrl = new URL(photoUrl, document.baseURI).href; } catch { /* data: URLs etc. */ }
+    wrap.style.setProperty('--photo', `url("${photoUrl.replace(/"/g, '%22')}")`);
     this.wrap = wrap;
     this.img = new Image();
     this.img.alt = `${persona.name}, interviewer`;
