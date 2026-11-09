@@ -262,8 +262,21 @@ function currentPosition() {
   return cat.positions.find(p => p.id === state.setup.positionId) || cat.positions.find(p => p.level === expLevel) || cat.positions[0];
 }
 
+/** Topic selection is remembered per role (null = all topics). */
+function savedTopics(category) {
+  const saved = (store.prefs().topicsByRole || {})[category];
+  if (!Array.isArray(saved)) return null;
+  const valid = new Set(topicsFor(category).map(t => t.topic));
+  const kept = saved.filter(t => valid.has(t));
+  return kept.length === valid.size ? null : kept;
+}
+function saveTopics(category, topics) {
+  store.savePrefs({ topicsByRole: { ...(store.prefs().topicsByRole || {}), [category]: topics } });
+}
+
 function renderSetup() {
   const s = state.setup;
+  if (s.topicsFor !== s.category) { s.topics = savedTopics(s.category); s.topicsFor = s.category; }
   const cat = categoryById(s.category);
   const pos = currentPosition();
   s.positionId = pos.id;
@@ -491,10 +504,10 @@ function renderSetup() {
     const cur = new Set(s.topics || allTopicNames);
     if (cur.has(b.dataset.topic)) cur.delete(b.dataset.topic); else cur.add(b.dataset.topic);
     s.topics = cur.size === allTopicNames.length ? null : allTopicNames.filter(t => cur.has(t));
-    syncChips(); update();
+    saveTopics(s.category, s.topics); syncChips(); update();
   }));
-  $('#topicsAll').addEventListener('click', () => { s.topics = null; syncChips(); update(); });
-  $('#topicsNone').addEventListener('click', () => { s.topics = []; syncChips(); update(); });
+  $('#topicsAll').addEventListener('click', () => { s.topics = null; saveTopics(s.category, null); syncChips(); update(); });
+  $('#topicsNone').addEventListener('click', () => { s.topics = []; saveTopics(s.category, []); syncChips(); update(); });
   update();
 }
 
@@ -1608,7 +1621,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.10.2', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.10.3', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

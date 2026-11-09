@@ -759,6 +759,29 @@ try {
   await ctx.close();
 } catch (e) { failures++; log('FAIL  recording/question display', e.message); }
 
+// V1.10.3: topic choices are remembered per role
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await ctx.newPage();
+  await page.goto(`http://localhost:${PORT}/?fast=1`);
+  await page.click('.role-card [data-role="devops"]');
+  await page.click('[data-topic="Kafka"]'); await page.click('[data-topic="Elasticsearch"]');
+  const pressed = () => page.$$eval('[data-topic]', els => Object.fromEntries(els.map(e => [e.dataset.topic, e.getAttribute('aria-pressed')])));
+  const before = await pressed();
+  assert.equal(before.Kafka, 'false');
+  await page.reload();
+  await page.click('.role-card [data-role="devops"]');
+  assert.deepEqual(await pressed(), before, 'DevOps topic choice remembered after reload');
+  await page.click('[data-nav="home"] >> nth=0');
+  await page.click('.role-card [data-role="java-backend"]');
+  assert.ok((await page.$$eval('[data-topic]', els => els.every(e => e.getAttribute('aria-pressed') === 'true'))), 'other role keeps its own (default all) selection');
+  await page.click('[data-nav="home"] >> nth=0');
+  await page.click('.role-card [data-role="devops"]');
+  assert.deepEqual(await pressed(), before, 'switching roles does not lose the choice');
+  log('PASS  topic choices remembered per role');
+  await ctx.close();
+} catch (e) { failures++; log('FAIL  topic memory', e.message); }
+
 await browser.close();
 server.close();
 log(failures ? `\n${failures} E2E scenario(s) failed` : '\nAll E2E scenarios passed. Screenshots in test-results/');
