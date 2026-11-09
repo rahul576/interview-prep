@@ -1,3 +1,4 @@
+import { NaturalVoice, isNaturalVoice, naturalVoiceById, defaultNaturalVoice, SYSTEM_VOICE } from './natural-voice.js';
 // Text-to-speech and speech-to-text with one API for:
 //  - browsers (Web Speech API), and
 //  - the Capacitor native apps (Android/iOS) via community plugins.
@@ -82,7 +83,8 @@ export class SpeechService {
     this.fast = fast;
     this.lang = 'en-US';
     this.rate = 0.96; // slightly slower than default sounds more conversational
-    this.voiceName = null; // user-chosen voice (null = best available)
+    this.voiceName = null; // 'kokoro:<voice>' (natural), 'system' (robotic system voice), or null = natural default
+    this.natural = new NaturalVoice();
     this.voices = [];
     this.native = isNative();
     this.tts = this.native ? nativePlugin('TextToSpeech') : null;
@@ -112,7 +114,7 @@ export class SpeechService {
 
   /** Is the best voice we would use a natural-sounding one? */
   hasNaturalVoice(gender = 'female') {
-    const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
+    const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
     return !!v && voiceQuality(v) >= 8;
   }
 
@@ -159,9 +161,24 @@ export class SpeechService {
    * Speak text. Calls onStart(durationEstimate), onBoundary(charIndex) for lip-sync.
    * Always resolves (with a timeout fallback) so the interview never stalls.
    */
+  /** The voice that will actually be used: a natural voice id, or 'system'. */
+  resolveVoice(gender = 'female') {
+    if (this.voiceName === SYSTEM_VOICE) return SYSTEM_VOICE;
+    return isNaturalVoice(this.voiceName) && naturalVoiceById(this.voiceName) ? this.voiceName : defaultNaturalVoice(gender);
+  }
+
   async speak(text, { gender = 'female', onStart, onBoundary, rate = null } = {}) {
     const token = ++this._speakToken;
     const r = rate || this.rate;
+    // Natural (neural) voice when chosen and loaded; the system voice is the fallback.
+    const id = this.resolveVoice(gender);
+    if (!this.fast && !this.native && id !== SYSTEM_VOICE && this.natural.ready) {
+      try {
+        await this.natural.speak(text, { voice: naturalVoiceById(id).voice, speed: Math.max(0.8, Math.min(1.4, r / this.rate)), onStart, onBoundary });
+        return;
+      } catch (e) { if (token !== this._speakToken) return; /* fall through to the system voice */ }
+    }
+    if (!this.fast && !this.native && id !== SYSTEM_VOICE && this.natural.state === 'idle') this.natural.load();
     const est = estimateDurationMs(text, r) * (this.fast ? 0.08 : 1);
     if (!this.ttsAvailable()) {
       onStart && onStart(est);
@@ -188,7 +205,7 @@ export class SpeechService {
   async _speakChunk(chunk, gender, onBoundary, rate = this.rate) {
     const fallback = estimateDurationMs(chunk, rate) * 1.7 + 2500;
     if (this.native) {
-      const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
+      const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
       const voiceIndex = voice ? this.voices.indexOf(voice) : undefined;
       let handle;
       try {
@@ -205,7 +222,7 @@ export class SpeechService {
     }
     await new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(chunk);
-      const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this.voiceName });
+      const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
       if (v) { u.voice = v; u.lang = v.lang; } else u.lang = this.lang;
       u.rate = rate;
       u.pitch = gender === 'male' ? 0.95 : 1.05;
@@ -223,6 +240,7 @@ export class SpeechService {
 
   stopSpeaking() {
     this._speakToken++;
+    this.natural.stop();
     try {
       if (this.native && this.tts) this.tts.stop();
       else if ('speechSynthesis' in window) speechSynthesis.cancel();

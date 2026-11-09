@@ -1,4 +1,11 @@
-# InterviewPro — V1.7
+# InterviewPro — V1.8
+
+## What's new in V1.8 – natural interviewer voices
+- Four human-like voices: **Heart** and **Bella** (female, US), **Michael** (male, US) and **George** (male, UK). The robotic **system voice** remains as a fifth option.
+- The voices use Kokoro-82M, an open-weight neural text-to-speech model that runs inside the browser (WebGPU, or WebAssembly on devices without WebGPU). They are free and private, and work offline after a one-time download of about 325 MB (about 90 MB on the WebAssembly fallback), cached by the browser.
+- It works the same on GitHub Pages and on any machine with a modern Chrome, Edge or Safari. Until the download finishes, or on a device that cannot run the model, the app uses the system voice automatically.
+- Speech starts after the first sentence is generated, and the next sentences are generated while it plays. The avatar's lips follow the audio.
+- App updates no longer delete the downloaded voice model.
 
 ## What's new in V1.7
 - **Difficulty badges**: every technical question is labelled Beginner, Intermediate, Advanced or Expert. The badge shows in the interview, the report, the revision list and the topic picker, and hovering a topic chip shows its difficulty mix.

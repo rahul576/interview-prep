@@ -7,6 +7,7 @@ import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/ses
 import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
+import { NATURAL_VOICES, SYSTEM_VOICE, isNaturalVoice } from './services/natural-voice.js';
 import { MediaService, isVirtualMic } from './services/media.js';
 import { AIInterviewer } from './services/ai.js';
 import { store } from './services/store.js';
@@ -115,7 +116,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.7</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.8</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -534,6 +535,7 @@ async function renderCheck() {
         <div id="voiceBox" hidden>
           <label class="eyebrow" for="voiceSel" style="display:block;margin-bottom:8px">Interviewer voice</label>
           <select id="voiceSel" class="field"></select>
+          <div class="nv-bar" id="nvBar" hidden><i id="nvFill"></i></div>
           <p class="muted" id="voiceTip" style="font-size:12px;margin:8px 0 0"></p>
         </div>
         <button class="btn" id="testVoice">${ICONS.play} Test interviewer voice</button>
@@ -548,13 +550,33 @@ async function renderCheck() {
   await speech.init();
   speech.voiceName = store.prefs().voiceName || null;
   const persona0 = interviewerById(s.interviewerId);
-  const ranked = rankedVoices(speech.voices, { gender: persona0.gender, lang: s.lang });
-  if (ranked.length && !isNative()) {
+  if (!isNative()) {
+    // Four natural (neural) voices plus the system voice. Natural voices download once per browser.
     $('#voiceBox').hidden = false;
-    $('#voiceSel').innerHTML = `<option value="">Auto — most natural available</option>` + ranked.map(v => `<option value="${esc(v.name)}" ${v.name === speech.voiceName ? 'selected' : ''}>${v.natural ? '★ ' : ''}${esc(v.name)} (${esc(v.lang)})${v.robotic ? ' — robotic' : ''}</option>`).join('');
-    const tip = () => { $('#voiceTip').innerHTML = speech.hasNaturalVoice(persona0.gender) ? '★ = natural, human-like voice.' : 'Only basic voices were found, so the interviewer may sound robotic. For a human-like voice open this site in <b>Microsoft Edge</b> (free natural voices), or on a Mac add a Premium voice: System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. Ava or Zoe Premium), then reload.'; };
-    tip();
-    $('#voiceSel').addEventListener('change', (e) => { speech.voiceName = e.target.value || null; store.savePrefs({ voiceName: speech.voiceName }); tip(); speech.speak('Hi, this is how I will sound in your interview.', { gender: persona0.gender }); });
+    const current = speech.resolveVoice(persona0.gender);
+    $('#voiceSel').innerHTML = NATURAL_VOICES.map(v => `<option value="${v.id}" ${v.id === current ? 'selected' : ''}>${esc(v.label)} \u2014 ${esc(v.desc)} (natural)</option>`).join('')
+      + `<option value="${SYSTEM_VOICE}" ${current === SYSTEM_VOICE ? 'selected' : ''}>System voice (robotic, no download)</option>`;
+    const paint = (st = speech.natural.status()) => {
+      if (!$('#voiceTip')) return;
+      const natural = isNaturalVoice(speech.resolveVoice(persona0.gender));
+      $('#nvBar').hidden = !(natural && st.state === 'loading');
+      $('#nvFill').style.width = `${Math.round((st.progress || 0) * 100)}%`;
+      $('#voiceTip').innerHTML = !natural ? 'The built-in system voice. It sounds robotic but needs no download.'
+        : st.state === 'ready' ? '\u2713 Natural voice ready. It runs on this device and works offline.'
+        : st.state === 'loading' ? `Downloading the natural voice, one time only: ${Math.round((st.progress || 0) * 100)}%. You can start now; the system voice is used until it is ready.`
+        : st.state === 'unsupported' ? 'This browser cannot run the natural voice, so the system voice is used.'
+        : st.state === 'failed' ? `The natural voice could not load (${esc(st.error || 'network')}), so the system voice is used. Check your internet connection and reload.`
+        : 'The natural voice downloads once (about 325 MB) and then works offline.';
+    };
+    speech.natural.onChange(paint);
+    paint();
+    if (isNaturalVoice(current)) speech.natural.load();
+    $('#voiceSel').addEventListener('change', async (e) => {
+      speech.voiceName = e.target.value; store.savePrefs({ voiceName: speech.voiceName });
+      paint();
+      if (isNaturalVoice(speech.voiceName)) await speech.natural.load();
+      speech.speak('Hi, this is how I will sound in your interview.', { gender: persona0.gender });
+    });
   }
   const sttOk = speech.sttAvailable();
   // Offline recognition is more reliable for long answers; set it up (and download the model) in the background.
@@ -723,6 +745,7 @@ function renderRoom() {
   const prep = s.style === 'prep';
   const levelLabel = levelById(pos.level).label;
   speech.voiceName = store.prefs().voiceName || null;
+  if (!isNative() && isNaturalVoice(speech.resolveVoice(interviewerById(s.interviewerId).gender))) speech.natural.load();
   const progressNow = store.progress();
   let questions;
   if (prep && !s.practiceIds && s.source === 'topic') {
@@ -1473,7 +1496,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.7.2', fast: FAST };
+window.__ip = { go, state, store, version: '1.8.0', speech, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
