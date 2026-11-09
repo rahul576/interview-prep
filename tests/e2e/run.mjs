@@ -794,8 +794,8 @@ try {
   assert.equal(prefs.interviewerId, 'ananya'); assert.equal(prefs.voiceName, 'kokoro:af_heart');
   await page.waitForSelector('#heroAvatar .talking-head.th-ready', { timeout: 15000 });
   await page.waitForTimeout(600);
-  const hero = await page.$eval('#heroAvatar .talking-head', w => ({ playing: !w.querySelector('.th-video').paused, mouth: w.dataset.mouth, op: getComputedStyle(w.querySelector('.th-canvas')).opacity }));
-  assert.ok(hero.playing && hero.mouth === '0' && hero.op === '1', `home: listening, mouth closed (${JSON.stringify(hero)})`);
+  const hero = await page.$eval('#heroAvatar .talking-head', w => ({ still: w.querySelector('.th-video').paused, mouth: w.dataset.mouth, op: getComputedStyle(w.querySelector('.th-canvas')).opacity }));
+  assert.ok(hero.still && hero.mouth === '0' && hero.op === '1', `home: listening = head still, mouth closed (${JSON.stringify(hero)})`);
   await page.screenshot({ path: new URL('talking-head-home.png', OUT).pathname });
   // interview: the mouth moves only while she speaks
   await page.click('.role-card [data-role="devops"]');
@@ -807,12 +807,15 @@ try {
   await page.waitForFunction(() => document.querySelector('#stage')?.dataset.speaking === 'true');
   const seen = await page.evaluate(async () => { const w = document.querySelector('#ivAvatar .talking-head'); const s = new Set(); for (let i = 0; i < 40; i++) { s.add(w.dataset.mouth); await new Promise(r => setTimeout(r, 40)); } return [...s]; });
   assert.ok(seen.length >= 4, `mouth opens and closes while speaking (${seen})`);
+  assert.equal(await page.$eval('#ivAvatar .th-video', v => v.paused), false, 'head moves naturally while she speaks');
   const t = await page.$eval('#ivAvatar .talking-head', w => [...w.querySelectorAll('img,canvas')].map(e => getComputedStyle(e).transform));
   assert.ok(t.every(x => x === 'none'), 'picture is never rotated, moved or scaled');
   await page.screenshot({ path: new URL('talking-head-speaking.png', OUT).pathname });
   await page.waitForFunction(() => /^Q 1\//.test(document.querySelector('#qcount')?.textContent || '') && document.querySelector('#stage')?.dataset.speaking === 'false', null, { timeout: 30000 });
   await page.waitForTimeout(800);
   assert.equal(await page.$eval('#ivAvatar .talking-head', w => w.dataset.mouth), '0', 'mouth closed while listening');
+  assert.equal(await page.$eval('#ivAvatar .th-video', v => v.paused), true, 'head still while listening (only blinks)');
+  await page.screenshot({ path: new URL('talking-head-listening.png', OUT).pathname });
   assert.deepEqual(errors, []);
   log('PASS  talking head: Ananya default, mouth follows speech, still picture');
   await ctx.close();

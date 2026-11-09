@@ -1,5 +1,9 @@
 # InterviewPro — V1.10
 
+## What's new in V1.13.1 – professional listening
+- **While listening, Ananya keeps a neutral, attentive face and only blinks.** Her head stays still; the natural head movement plays only while she speaks.
+- **No more constant smile.** Her mouth corners were lowered with a small, smooth warp on the real mouth frames (`scripts/avatar/neutral-mouth.py`), so her resting expression is neutral and her speaking expression is professional instead of grinning.
+
 ## What's new in V1.13 – smooth, natural lip sync
 - **No more vibrating lips.** V1.12 switched between mouth pictures taken from unrelated moments, which flickered. Now the mouth comes from one continuous real opening movement of Ananya's, and the app blends neighbouring frames (33 ms apart in the real movement), so the lips open and close smoothly with every syllable.
 - **Jaw-like timing.** The voice loudness is smoothed like a real jaw (opens fast, closes a little slower, about 4 syllable movements per second), tuned on real recordings of her voice. In a browser test with real speech, frame-to-frame change around the mouth halved and fast open/close flicker dropped from 5 to 2 per second, close to the natural head movement alone.

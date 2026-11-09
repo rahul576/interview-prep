@@ -553,6 +553,7 @@ export class TalkingHead {
     this.env = 0;         // jaw-like smoothed voice loudness
     this.open = 0;        // mouth opening 0..1
     this.lastT = 0;
+    this._pauseAt = 0;
     this.frame = 0;       // current base-video frame
     this.blinks = 0;
     this.speechStart = 0;
@@ -597,8 +598,9 @@ export class TalkingHead {
       this.g = this.canvas.getContext('2d');
       this.video.src = src;
       await new Promise((res, rej) => { this.video.onloadeddata = res; this.video.onerror = rej; });
-      try { this.video.currentTime = Math.random() * Math.max(0, (this.video.duration || 0) - 1); } catch { /* fine */ }
-      await this.video.play().catch(() => {});
+      // Listening: head still (paused on a frame), only blinks. Speaking: natural head movement plays.
+      await new Promise((res) => { this.video.onseeked = res; try { this.video.currentTime = Math.random() * Math.max(0, (this.video.duration || 0) - 1); } catch { res(); } setTimeout(res, 1500); });
+      if (this.speaking) this.video.play().catch(() => {});
       const onFrame = (now, md) => { this.frame = Math.round(md.mediaTime * meta.fps) % meta.frames.length; this._vfc = this.video.requestVideoFrameCallback(onFrame); };
       if (this.video.requestVideoFrameCallback) this._vfc = this.video.requestVideoFrameCallback(onFrame);
       this.ready = true;
@@ -619,7 +621,8 @@ export class TalkingHead {
   _tick(t) {
     if (!this.wrap.isConnected) { this._stop(); return; }
     const m = this.meta, g = this.g;
-    if (!this.video.requestVideoFrameCallback) this.frame = Math.round(this.video.currentTime * m.fps) % m.frames.length;
+    if (!this.video.requestVideoFrameCallback || this.video.paused) this.frame = Math.round(this.video.currentTime * m.fps) % m.frames.length;
+    if (!this.speaking && !this.video.paused && t > this._pauseAt) this.video.pause();   // she is listening again
     // mouth: jaw-like envelope of the voice -> opening -> blend of two neighbouring real frames
     const dt = Math.min(0.1, Math.max(0.001, (t - (this.lastT || t - 16)) / 1000));
     this.lastT = t;
@@ -659,10 +662,13 @@ export class TalkingHead {
 
   setExpression(name) { this.host.dataset.expression = name; }
   nod() {}
-  setState(s) { this.host.dataset.state = s; if (s !== 'speaking') this.speaking = false; }
-  startSpeech() { this.speaking = true; this.speechStart = performance.now(); this.host.dataset.state = 'speaking'; }
+  setState(s) { this.host.dataset.state = s; if (s !== 'speaking' && this.speaking) this.endSpeech(); }
+  startSpeech() {
+    this.speaking = true; this.speechStart = performance.now(); this.host.dataset.state = 'speaking';
+    if (this.ready && this.video.paused) this.video.play().catch(() => {});
+  }
   syncToChar() {}
-  endSpeech() { this.speaking = false; }
+  endSpeech() { this.speaking = false; this._pauseAt = performance.now() + 350; /* let the mouth close first */ }
   _stop() {
     cancelAnimationFrame(this._raf);
     if (this._vfc && this.video.cancelVideoFrameCallback) this.video.cancelVideoFrameCallback(this._vfc);

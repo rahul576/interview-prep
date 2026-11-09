@@ -34,3 +34,10 @@ voice. Blinks happen every 2.5 to 7 seconds and last about 0.2 s, sometimes as a
    `python3 scripts/avatar/build.py PORTRAIT.jpg an.json calm.mp4 talking.mp4 OUT/`.
 4. Encode `OUT/base.avi` to H.264 MP4 and VP9 WebM, copy the files to `www/img/interviewers/`, add
    them to `www/sw.js` and add `rig: { base, sprite, meta }` to the interviewer in `www/js/data/meta.js`.
+
+## Professional expression (V1.13.1)
+The portrait and all LivePortrait footage carry a soft smile. `scripts/avatar/neutral-mouth.py`
+lowers the two mouth corners of every mouth frame by about 9 px with a smooth Gaussian displacement
+(sigma 12 px), and widens the soft mask so the original raised corners of the base video never show
+through. While listening the base video is paused (head still) and only the blink frames are drawn;
+the head movement plays while she speaks.
