@@ -1168,7 +1168,7 @@ function renderRoom() {
       <div class="chips">${r.matched.map(m => `<span class="chip ok">✓ ${esc(m.label)}</span>`).join('')}${r.missed.map(m => `<span class="chip bad">✕ ${esc(m.label)}</span>`).join('')}</div>
       ${r.tips.length ? `<ul class="tips">${r.tips.slice(0, 3).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
       <details open><summary>Model answer</summary><p>${esc(q.ideal)}</p></details>
-      <div class="answer-actions">
+      <div class="answer-actions review-actions">
         <button class="btn" id="retryBtn">Try again</button>
         <button class="btn" id="listenBtn">${ICONS.play} Hear it</button>
         <button class="btn" data-explain="${esc(q.id)}">${ICONS.book} Read in detail</button>
@@ -1608,7 +1608,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.10.1', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.10.2', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
