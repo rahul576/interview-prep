@@ -4,7 +4,8 @@ import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.
 import { selectQuestions, targetLevels, planSlots, availableCount, topicQuestions, difficultyOf, DIFFICULTIES } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/session.js';
-import { InterviewerAvatar, PhotoAvatar } from './ui/avatar.js';
+import { PhotoAvatar } from './ui/avatar.js';
+import { openExplain } from './ui/explain.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
 import { NATURAL_VOICES, SYSTEM_VOICE, isNaturalVoice } from './services/natural-voice.js';
@@ -26,6 +27,8 @@ const avatars = new Set();
 const ICONS = {
   java: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18h11a3 3 0 0 0 0-6h-1"/><path d="M5 12h10v6a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><path d="M8 3c1 1.2-1 2 0 3.5M11 2c1.2 1.5-1.2 2.6 0 4.5"/></svg>',
   devops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17"/><path d="M15 3h6v6"/><path d="m21 3-6 6"/></svg>',
+  book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M8 7h8M8 11h6"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
   mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>',
@@ -49,7 +52,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 function clearAvatars() { avatars.forEach(a => a.destroy()); avatars.clear(); }
-function mountAvatar(host, persona) { const a = persona.photo ? new PhotoAvatar(host, persona) : new InterviewerAvatar(host, persona); avatars.add(a); return a; }
+function mountAvatar(host, persona) { const a = new PhotoAvatar(host, persona, { levelSource: () => speech.natural.level() }); avatars.add(a); return a; }
 
 /** Custom interviewer from the user's own photo (stored on this device only). */
 function customInterviewer() {
@@ -102,7 +105,7 @@ const state = {
     allowRepeats: prefs.allowRepeats ?? false, // off: only questions this user has never answered
     practiceTopic: prefs.practiceTopic || null, // preparation mode: one topic, all its questions
     speakFeedback: prefs.speakFeedback ?? true, // preparation mode: interviewer reads the feedback aloud
-    interviewerId: prefs.interviewerId || 'ananya',
+    interviewerId: prefs.interviewerId || 'vikram',
     candidateName: prefs.candidateName || '',
     lang: prefs.lang || 'en-US',
     followUps: prefs.followUps ?? true,
@@ -117,7 +120,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.9</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.10</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -1168,6 +1171,7 @@ function renderRoom() {
       <div class="answer-actions">
         <button class="btn" id="retryBtn">Try again</button>
         <button class="btn" id="listenBtn">${ICONS.play} Hear it</button>
+        <button class="btn" data-explain="${esc(q.id)}">${ICONS.book} Read in detail</button>
         <button class="btn btn-primary" id="nextBtn">${isLast ? 'Finish' : 'Next question'}</button>
       </div>`;
     box.hidden = false;
@@ -1191,7 +1195,15 @@ function renderRoom() {
     } else fixedFeedback();
     $('#retryBtn').onclick = () => done('retry');
     $('#nextBtn').onclick = () => done('next');
-    $('#listenBtn').onclick = async (e) => { e.currentTarget.disabled = true; await say(q.ideal, { kind: 'model' }); const b = $('#listenBtn'); if (b) b.disabled = false; };
+    // "Hear it" toggles: while the model answer is being read, the same button stops it.
+    let hearing = false;
+    const hearLabel = () => { const b = $('#listenBtn'); if (b) b.innerHTML = hearing ? `${ICONS.stop} Stop` : `${ICONS.play} Hear it`; };
+    $('#listenBtn').onclick = async () => {
+      if (hearing) { hearing = false; speech.stopSpeaking(); hearLabel(); return; }
+      hearing = true; hearLabel();
+      await say(q.ideal, { kind: 'model' });
+      hearing = false; hearLabel();
+    };
   });
 
   // controls
@@ -1349,7 +1361,7 @@ function renderReport({ session, videoUrl, videoType } = {}) {
         </div>
         <div><h4>Key points</h4><div class="chips">${r.matched.map(m => `<span class="chip ok">✓ ${esc(m.label)}</span>`).join('')}${r.missed.map(m => `<span class="chip bad">✕ ${esc(m.label)}</span>`).join('')}</div></div>
         ${r.tips.length ? `<div><h4>Coaching</h4><ul class="list-clean">${r.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
-        <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p></div>
+        <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p><button type="button" class="btn btn-sm no-print" data-explain="${esc(q.id)}">${ICONS.book} Read in detail</button></div>
       </div>
     </details>`;
   }).join('');
@@ -1464,6 +1476,16 @@ async function mountRecording(session, videoUrl, videoType) {
   });
 }
 
+/** Open the detailed explanation popup for a question id. */
+function explainQuestion(id) {
+  const q = QUESTIONS.find(x => x.id === id);
+  if (!q) return;
+  const role = CATEGORIES.find(c => belongsTo(q, c.id));
+  speech.stopSpeaking();
+  openExplain(q, { ai, bank: QUESTIONS, roleLabel: role ? role.title || role.short || 'technical' : 'technical', diffBadge, speech });
+}
+document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-explain]'); if (b) { e.preventDefault(); explainQuestion(b.dataset.explain); } });
+
 const retentionDays = () => { const d = Number(store.prefs().recordingRetentionDays); return RETENTION_CHOICES.includes(d) ? d : DEFAULT_RETENTION_DAYS; };
 
 function aiFeedbackHtml(fb) {
@@ -1557,7 +1579,7 @@ function renderRevision({ role = null } = {}) {
           <div class="qa-body">
             <div><h4>Your last answer</h4><p class="quote">${w.lastAnswer ? esc(w.lastAnswer) : '<span class="muted">No answer given.</span>'}</p></div>
             ${w.missed && w.missed.length ? `<div><h4>Missed key points</h4><div class="chips">${w.missed.map(m => `<span class="chip bad">✕ ${esc(m)}</span>`).join('')}</div></div>` : ''}
-            <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p></div>
+            <div><h4>Model answer</h4><p class="quote ideal">${esc(q.ideal)}</p><button type="button" class="btn btn-sm no-print" data-explain="${esc(q.id)}">${ICONS.book} Read in detail</button></div>
             <div><button class="btn" data-learned="${w.id}">${ICONS.check} Mark as learned</button></div>
           </div>
         </details>`;
@@ -1586,7 +1608,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.9.0', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.10.0', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

@@ -99,6 +99,25 @@ export class NaturalVoice {
     return this.ctx;
   }
 
+  _analyser(ctx) {
+    if (!this.analyser) {
+      this.analyser = ctx.createAnalyser();
+      this.analyser.fftSize = 512;
+      this.analyser.connect(ctx.destination);
+      this._buf = new Float32Array(this.analyser.fftSize);
+    }
+    return this.analyser;
+  }
+
+  /** Loudness (RMS, about 0..0.4) of what is playing now, or null when nothing plays. Drives lip-sync. */
+  level() {
+    if (!this._src || !this.analyser) return null;
+    this.analyser.getFloatTimeDomainData(this._buf);
+    let sum = 0;
+    for (let i = 0; i < this._buf.length; i++) sum += this._buf[i] * this._buf[i];
+    return Math.sqrt(sum / this._buf.length);
+  }
+
   /** Optional: send audio to a specific speaker (Chrome/Edge). */
   async setOutput(deviceId) {
     try { const c = this._context(); if (c.setSinkId) await c.setSinkId(deviceId || ''); } catch { /* keep default */ }
@@ -117,7 +136,7 @@ export class NaturalVoice {
       buf.copyToChannel(samples, 0);
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(ctx.destination);
+      src.connect(this._analyser(ctx));
       this._src = src;
       const dur = samples.length / rate;
       const start = ctx.currentTime;

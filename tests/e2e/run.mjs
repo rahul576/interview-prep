@@ -103,7 +103,9 @@ async function runInterview(vp, sc, idx) {
       page.waitForSelector('#reportHead', { timeout: 20000 }).then(() => 'report'),
     ]);
     if (state === 'report') break;
-    const qtext = (await page.textContent('#qcard .qtext')).trim();
+    // follow-ups show the follow-up text, with the main question underneath
+    const sub = await page.$('#qcard .qsub');
+    const qtext = sub ? (await sub.textContent()).replace(/^Main question:\s*/, '').trim() : (await page.textContent('#qcard .qtext')).trim();
     const meta = (await page.textContent('#qcard .qmeta')).trim();
     const q = byText.get(qtext);
     assert.ok(q, `${tag}: unknown question on screen: ${qtext}`);
@@ -557,6 +559,7 @@ try {
     const text = body.messages[0].content;
     prompts.push(text);
     let reply;
+    if (/interview question in depth/.test(text)) return route.fulfill({ json: { content: [{ type: 'text', text: '## In one line\nAI deep dive line.\n\n## Detailed explanation\nLong **explanation** here with enough words to pass the minimum length check for a detailed answer, explaining the concept fully and clearly.\n\n## Example\n```java\nMap<String,Integer> m = new HashMap<>();\n```\n\n## Comparison\n| A | B |\n|---|---|\n| x | y |\n\n## Common mistakes\n- Forgetting equals' }] } });
     if (/Coach the candidate/.test(text)) reply = { say: 'AI coach: you named buckets, now explain hashCode and equals.' };
     else if (/personalised feedback/.test(text)) reply = { summary: 'AI summary: honest about gaps, solid on basics.', strengths: ['Honest'], improvements: ['Learn HashMap internals'], studyTopics: ['Collections'] };
     else if (/LATEST ANSWER: "I really don.t know/.test(text)) reply = { intent: 'dont_know', action: 'next', say: 'AI: no problem at all, this is about hashing keys into buckets.' };
@@ -583,6 +586,20 @@ try {
     await page.waitForTimeout(150);
   }
   await page.waitForFunction(() => /AI summary: honest about gaps/.test(document.querySelector('#aiFeedback')?.textContent || ''), null, { timeout: 15000 });
+  // detailed answer popup written by AI: sections, code block, table; cached for next time
+  await page.click('[data-explain] >> nth=0');
+  await page.waitForFunction(() => /AI deep dive line/.test(document.querySelector('.ex-body')?.textContent || ''), null, { timeout: 15000 });
+  assert.ok(await page.$('.ex-code pre code'), 'code block rendered');
+  assert.ok(await page.$('.ex-table table'), 'table rendered');
+  assert.ok(await page.$('.ex-md h3[data-kind="example"]'), 'coloured section headers');
+  await page.screenshot({ path: new URL('explain-ai.png', OUT).pathname });
+  const calls = prompts.length;
+  await page.keyboard.press('Escape');
+  assert.equal(await page.$('.ex-overlay'), null, 'Escape closes');
+  await page.click('[data-explain] >> nth=0');
+  await page.waitForFunction(() => /AI deep dive line/.test(document.querySelector('.ex-body')?.textContent || ''));
+  assert.equal(prompts.length, calls, 'second open is served from the device cache');
+  await page.click('#exClose');
   await page.screenshot({ path: new URL('ai-report.png', OUT).pathname });
 
   // Preparation mode: AI coach explains the answer
@@ -710,6 +727,12 @@ try {
   const sess = await page.evaluate(() => window.__ip.report);
   assert.ok(Math.abs(t - sess.recording.chapters[1].start) < 1.5, 'chapter jumps to that question');
   await page.screenshot({ path: new URL('recording-chapters.png', OUT).pathname });
+  // detailed answer popup without AI: structured built-in answer
+  await page.click('[data-explain] >> nth=0');
+  await page.waitForSelector('.ex-overlay .ex-md'); await page.waitForTimeout(300);
+  assert.match(await page.textContent('.ex-body'), /What a strong answer covers/);
+  await page.screenshot({ path: new URL('explain-offline.png', OUT).pathname });
+  await page.click('#exClose');
 
   // 3) Saved on the device: reopen from history after reload
   await page.reload(); await page.click('[data-nav="history"] >> nth=0');

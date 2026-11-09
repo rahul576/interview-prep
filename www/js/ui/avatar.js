@@ -347,44 +347,147 @@ export class InterviewerAvatar {
  * The photo gets subtle breathing/sway, nods while listening, a speaking glow
  * and expression-dependent framing; captions carry the words.
  */
+/**
+ * Photo interviewer. With `persona.face` landmarks (pixel positions in the photo) the photo really
+ * talks: the jaw opens with the loudness of the voice, a mouth opening appears behind the lips,
+ * the eyes blink and the head moves a little. Without landmarks only the head moves.
+ *
+ * Loudness comes from `levelSource()` (the natural voice's audio analyser). For voices without
+ * audio access (the system voice) a syllable-like rhythm is synthesised while speaking.
+ */
 export class PhotoAvatar {
-  constructor(host, persona) {
+  constructor(host, persona, { levelSource = null } = {}) {
     this.host = host;
     this.persona = persona;
+    this.face = persona.face || null;
+    this.levelSource = levelSource;
     this.state = 'idle';
     this.exprName = 'warm';
     this.speaking = false;
+    this.open = 0; // smoothed jaw opening in source pixels
     this.nodStart = -1e9;
     this.nextNod = performance.now() + 3000;
+    this.nextBlink = performance.now() + 1500 + Math.random() * 2500;
+    this.blinkStart = -1e9;
+    this.speechStart = 0;
     const wrap = document.createElement('div');
     wrap.className = 'photo-avatar';
-    const img = document.createElement('img');
-    img.src = persona.photo;
-    img.alt = `${persona.name}, interviewer`;
-    wrap.appendChild(img);
+    this.wrap = wrap;
+    this.img = new Image();
+    this.img.alt = `${persona.name}, interviewer`;
+    this.img.decoding = 'async';
+    this.img.src = persona.photo;
+    if (this.face) {
+      this.canvas = document.createElement('canvas');
+      this.canvas.setAttribute('role', 'img');
+      this.canvas.setAttribute('aria-label', this.img.alt);
+      this.g = this.canvas.getContext('2d');
+      wrap.appendChild(this.canvas);
+      this.img.onload = () => { this.canvas.width = this.img.naturalWidth; this.canvas.height = this.img.naturalHeight; this._draw(0); };
+    } else wrap.appendChild(this.img);
     host.replaceChildren(wrap);
-    this.wrap = wrap; this.img = img;
+    this.el = this.canvas || this.img;
     this._raf = requestAnimationFrame(t => this._tick(t));
   }
   setExpression(name) { this.exprName = name; this.host.dataset.expression = name; }
   nod() { this.nodStart = performance.now(); }
   setState(s) { this.state = s; this.host.dataset.state = s; if (s === 'listening') this.setExpression('listening'); if (s === 'thinking') this.setExpression('thinking'); }
-  startSpeech(text) { this.speaking = true; this.host.dataset.state = 'speaking'; this.setExpression(/\?\s*$/.test(text) ? 'curious' : 'warm'); }
-  syncToChar() { /* no lip-sync on photos */ }
+  startSpeech(text) { this.speaking = true; this.speechStart = performance.now(); this.host.dataset.state = 'speaking'; this.setExpression(/\?\s*$/.test(text) ? 'curious' : 'warm'); }
+  syncToChar() { this.lastBoundary = performance.now(); }
   endSpeech() { this.speaking = false; }
+
+  /** Loudness 0..1 of the voice right now. */
+  _level(t) {
+    if (!this.speaking) return 0;
+    const real = this.levelSource ? this.levelSource() : null;
+    if (real !== null && real !== undefined) return Math.min(1, real * 3.2);
+    // Synthesised rhythm: ~4.5 syllables per second with pauses, like speech.
+    const s = (t - this.speechStart) / 1000;
+    const syll = Math.max(0, Math.sin(s * Math.PI * 9.2) * 0.6 + Math.sin(s * Math.PI * 5.3 + 1) * 0.4);
+    const phrase = 0.55 + 0.45 * Math.sin(s * 1.7);
+    return syll * phrase;
+  }
+
   _tick(t) {
     if (!this.wrap.isConnected) return;
     const s = t / 1000;
-    let rot = Math.sin(s * 0.6) * (this.speaking ? 0.9 : 0.4);
-    let dy = Math.sin(s * 1.5) * 1.2;
-    let scale = 1.03 + Math.sin(s * 1.6) * 0.004 + (this.speaking ? Math.abs(Math.sin(s * 9)) * 0.004 : 0);
+    // Jaw follows loudness: opens fast, closes a little slower (like real speech).
+    const target = this.face ? this._level(t) * this.face.maxOpen : 0;
+    this.open += (target - this.open) * (target > this.open ? 0.55 : 0.32);
+    if (!this.speaking && this.open < 0.05) this.open = 0;
+    // Head: gentle sway, more alive while talking, small emphasis with loud syllables.
+    let rot = Math.sin(s * 0.6) * (this.speaking ? 0.7 : 0.35) + (this.speaking ? Math.sin(s * 2.3) * 0.25 : 0);
+    let dy = Math.sin(s * 1.5) * 1.0 - (this.face ? this.open * 0.12 : 0);
+    const scale = 1.03 + Math.sin(s * 1.6) * 0.004;
     if (this.exprName === 'curious') rot += 0.8;
-    if (this.exprName === 'thinking') rot += 1.4;
+    if (this.exprName === 'thinking') rot += 1.2;
     if (this.state === 'listening' && t > this.nextNod) { this.nod(); this.nextNod = t + 4000 + Math.random() * 6000; }
     const nt = (t - this.nodStart) / 700;
     if (nt >= 0 && nt < 1) dy += Math.sin(nt * Math.PI * 2) * 4;
-    this.img.style.transform = `translateY(${dy.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${scale.toFixed(4)})`;
+    this.el.style.transform = `translateY(${dy.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${scale.toFixed(4)})`;
+    if (this.face && this.canvas.width) {
+      if (t > this.nextBlink) { this.blinkStart = t; this.nextBlink = t + 2500 + Math.random() * 4000 + (Math.random() < 0.15 ? -2000 : 0); }
+      const bt = (t - this.blinkStart) / 160; // a blink lasts ~160 ms
+      const blink = bt >= 0 && bt < 1 ? Math.sin(bt * Math.PI) : 0;
+      this._draw(this.open, blink);
+    }
     this._raf = requestAnimationFrame(tt => this._tick(tt));
+  }
+
+  /** Draw the photo with the jaw opened by `open` pixels and eyes closed by `blink` (0..1). */
+  _draw(open, blink = 0) {
+    const g = this.g, f = this.face, img = this.img;
+    if (!img.complete || !img.naturalWidth) return;
+    const W = img.naturalWidth, H = img.naturalHeight;
+    g.drawImage(img, 0, 0);
+    if (open > 0.3) {
+      const m = f.mouth;
+      const x0 = f.jaw.x0, x1 = f.jaw.x1, top = m.y, chin = f.chin, neck = f.neckEnd;
+      // How far each column of the jaw moves: full at the mouth centre, easing to 0 at the jaw edges.
+      const half = (x1 - x0) / 2, cx = m.x;
+      const weight = (x) => { const d = Math.min(1, Math.abs(x - cx) / half); return Math.pow(Math.cos(d * Math.PI / 2), 1.6); };
+      // 1) jaw: each 2px column from the lip seam down moves by its weight; the seam stretches (no gaps),
+      //    and the neck below compresses so everything stays attached
+      const step = 2, seam = top - 1;
+      for (let x = x0; x < x1; x += step) {
+        const off = open * weight(x + step / 2);
+        if (off < 0.15) continue;
+        g.drawImage(img, x, seam, step, chin - seam, x, seam, step, chin - seam + off);
+        g.drawImage(img, x, chin, step, neck - chin, x, chin + off, step, neck - chin - off);
+      }
+      // 2) the opening between the lips (dark, with a hint of upper teeth), soft-edged
+      const rx = m.w / 2 * (0.66 + 0.12 * Math.min(1, open / f.maxOpen));
+      g.save();
+      g.beginPath();
+      g.ellipse(m.x, m.y + open * 0.5, rx, open * 0.5, 0, 0, Math.PI * 2);
+      g.clip();
+      const grad = g.createRadialGradient(m.x, m.y + open * 0.5, 0.5, m.x, m.y + open * 0.5, rx);
+      grad.addColorStop(0, 'rgba(34,10,12,0.96)'); grad.addColorStop(0.65, 'rgba(60,20,22,0.92)'); grad.addColorStop(1, 'rgba(95,45,47,0.55)');
+      g.fillStyle = grad;
+      g.fillRect(m.x - rx, m.y - 1, rx * 2, open + 2);
+      if (open > 3) {
+        const th = Math.min(2.2, open * 0.22);
+        const tg = g.createLinearGradient(0, m.y, 0, m.y + th);
+        tg.addColorStop(0, 'rgba(225,214,204,0.45)'); tg.addColorStop(1, 'rgba(225,214,204,0)');
+        g.fillStyle = tg;
+        g.fillRect(m.x - rx * 0.55, m.y, rx * 1.1, th);
+      }
+      g.restore();
+    }
+    if (blink > 0.05 && f.eyes) {
+      // eyelids: slide the skin just above each eye down over it
+      for (const e of f.eyes) {
+        const lidH = (e.h + 2) * blink;
+        g.save();
+        g.beginPath(); g.ellipse(e.x, e.y, e.w / 2, e.h / 2 + 1.5, 0, 0, Math.PI * 2); g.clip(); // eye-shaped
+        g.drawImage(img, e.x - e.w / 2, e.y - e.h / 2 - 6, e.w, 5, e.x - e.w / 2, e.y - e.h / 2 - 1.5, e.w, lidH + 1);
+        if (blink > 0.6) { // lash line where the lids meet
+          g.strokeStyle = 'rgba(40,26,22,0.55)'; g.lineWidth = 1.1;
+          g.beginPath(); g.ellipse(e.x, e.y - e.h / 2 - 1.5 + lidH * 0.92, e.w * 0.46, 1.6, 0, 0, Math.PI); g.stroke();
+        }
+        g.restore();
+      }
+    }
   }
   destroy() { cancelAnimationFrame(this._raf); this.host.replaceChildren(); }
 }

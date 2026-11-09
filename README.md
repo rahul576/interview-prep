@@ -1,4 +1,10 @@
-# InterviewPro — V1.9
+# InterviewPro — V1.10
+
+## What's new in V1.10 – realistic interviewers and detailed answers
+- **New interviewer photos** (AI-generated portraits supplied by the owner) replace the drawn avatars everywhere: Vikram, Ananya, Daniel, Priya, Min-jun and Sarah. Vikram is the default interviewer.
+- **Vikram's photo talks**: the jaw opens and closes with the loudness of the actual voice audio, a mouth opening appears behind the lips, and he blinks naturally and moves his head slightly. Landmarks are stored per photo in `face` in `data/meta.js`, so other interviewers can be enabled the same way. The other interviewers still use the head-motion-only animation.
+- **Read in detail**: every question (review panel, report and revision list) has a button that opens a rich popup with sections, examples, code blocks, tables, common mistakes, how to answer, and likely follow-ups. The AI writes it (Claude or Chrome AI) and it is cached on the device. Without AI, a structured built-in version is shown.
+- **Hear it** turns into **Stop** while the model answer is being read aloud.
 
 ## What's new in V1.9 – recordings and question display
 - The question appears on screen as soon as the interviewer starts asking it, not after. Follow-ups show the follow-up text, with the main question underneath.

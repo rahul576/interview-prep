@@ -57,27 +57,19 @@ export function categoryById(id) {
   return CATEGORIES.find(c => c.id === id);
 }
 
+// Interviewer portraits are AI-generated images supplied by the project owner (not real people).
+// `face` holds pixel landmarks in the 500x500 photo so the photo can talk (jaw, mouth, blinks).
 export const INTERVIEWERS = [
+  { id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female', photo: 'img/interviewers/ananya.jpg' },
   {
-    id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female',
-    look: { skin: '#c68863', skinShade: '#a96e4c', hair: '#2a1d17', hairStyle: 'long', shirt: '#2f4566', blouse: '#a9c7e8', eyes: '#3a2416', lips: '#a4524a', glasses: true, glassesColor: '#3b2a22', necklace: true },
+    id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male', photo: 'img/interviewers/vikram.jpg',
+    face: { mouth: { x: 252, y: 271, w: 74, upper: 7 }, chin: 330, neckEnd: 372, jaw: { x0: 176, x1: 330 }, maxOpen: 7,
+      eyes: [{ x: 214, y: 192, w: 30, h: 12 }, { x: 298, y: 194, w: 30, h: 12 }] },
   },
-  {
-    id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male',
-    look: { skin: '#b97a55', skinShade: '#9a603f', hair: '#16110e', hairStyle: 'short', shirt: '#6f747c', blouse: '#f3f5f8', tie: '#25365c', eyes: '#2b1a10', lips: '#8e4a3e', glasses: true, beard: true },
-  },
-  {
-    id: 'sarah', name: 'Sarah Collins', title: 'Senior Technical Recruiter', gender: 'female',
-    look: { skin: '#f0c9a8', skinShade: '#d9a982', hair: '#8a5a32', hairStyle: 'bob', shirt: '#55708f', blouse: '#9fbde0', eyes: '#3d5a73', lips: '#c0605c', glasses: true, glassesColor: '#111111' },
-  },
-  {
-    id: 'daniel', name: 'Daniel Okafor', title: 'Head of Engineering', gender: 'male',
-    look: { skin: '#7a4a32', skinShade: '#5e3624', hair: '#120c09', hairStyle: 'short', shirt: '#80848b', blouse: '#e9eef5', tie: '#2d3b63', eyes: '#1d120c', lips: '#6e3a2e' },
-  },
-  {
-    id: 'minjun', name: 'Min-jun Park', title: 'Staff Software Engineer', gender: 'male',
-    look: { skin: '#eac5a0', skinShade: '#cfa47c', hair: '#14110f', hairStyle: 'short', shirt: '#e6e9ee', blouse: '#ffffff', eyes: '#24170f', lips: '#b06a5c', glasses: true, glassesColor: '#2b2b2b' },
-  },
+  { id: 'daniel', name: 'Daniel Hughes', title: 'Head of Engineering', gender: 'male', photo: 'img/interviewers/daniel.jpg' },
+  { id: 'priya', name: 'Priya Nair', title: 'HR Business Partner', gender: 'female', photo: 'img/interviewers/priya.jpg' },
+  { id: 'minjun', name: 'Min-jun Park', title: 'Staff Software Engineer', gender: 'male', photo: 'img/interviewers/minjun.jpg' },
+  { id: 'sarah', name: 'Sarah Collins', title: 'Senior Technical Recruiter', gender: 'female', photo: 'img/interviewers/sarah.jpg' },
 ];
 
 export function interviewerById(id) {

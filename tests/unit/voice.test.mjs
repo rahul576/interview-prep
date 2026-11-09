@@ -36,6 +36,7 @@ function fakeAudio() {
     constructor() { this.currentTime = 0; this.state = 'running'; this.destination = {}; }
     resume() { return Promise.resolve(); }
     createBuffer(ch, len, rate) { return { len, rate, copyToChannel() {} }; }
+    createAnalyser() { return { fftSize: 512, connect() {}, getFloatTimeDomainData(b) { b.fill(0.1); } }; }
     createBufferSource() { const src = { connect() {}, start() { played.push(src.buffer.len); setTimeout(() => src.onended && src.onended(), 5); }, stop() { src.onended && src.onended(); } }; return src; }
   }
   window.AudioContext = Ctx;
