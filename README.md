@@ -1,7 +1,12 @@
 # InterviewPro — V1.10
 
+## What's new in V1.11 – a real-looking interviewer
+- **Ananya is now the default interviewer, with a natural female voice (Heart).** Existing users are moved to Ananya once; anyone who had picked a male voice is moved to Heart. You can still choose any interviewer and voice in Setup.
+- **She looks like a real person on a video call.** Her listening and talking are short video loops made from her portrait with LivePortrait, an open portrait-animation model: real blinks, small natural head movement and real speech mouth shapes. The app switches between them with a soft crossfade when she starts or stops speaking, and each sentence starts at a different point so it never looks repeated. Everything ships with the app (under 0.5 MB per format) and works offline. How the loops were made: `docs/interviewer-video.md`.
+- **No more shaking.** The still photos of the other interviewers no longer rotate, move or zoom.
+
 ## What's new in V1.10 – realistic interviewers and detailed answers
-- **New interviewer photos** (AI-generated portraits supplied by the owner) replace the drawn avatars everywhere: Vikram, Ananya, Daniel, Priya, Min-jun and Sarah. Vikram is the default interviewer.
+- **New interviewer photos** (AI-generated portraits supplied by the owner) replace the drawn avatars everywhere: Vikram, Ananya, Daniel, Priya, Min-jun and Sarah. 
 - **Vikram's photo talks**: the jaw opens and closes with the loudness of the actual voice audio, a mouth opening appears behind the lips, and he blinks naturally and moves his head slightly. Landmarks are stored per photo in `face` in `data/meta.js`, so other interviewers can be enabled the same way. The other interviewers still use the head-motion-only animation.
 - **Read in detail**: every question (review panel, report and revision list) has a button that opens a rich popup with sections, examples, code blocks, tables, common mistakes, how to answer, and likely follow-ups. The AI writes it (Claude or Chrome AI) and it is cached on the device. Without AI, a structured built-in version is shown.
 - **Hear it** turns into **Stop** while the model answer is being read aloud.

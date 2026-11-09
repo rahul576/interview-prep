@@ -4,7 +4,7 @@ import { QUESTIONS, BANK_VERSION, topicsFor, belongsTo } from './data/questions.
 import { selectQuestions, targetLevels, planSlots, availableCount, topicQuestions, difficultyOf, DIFFICULTIES } from './engine/select.js';
 import { summarize, selectionChance } from './engine/score.js';
 import { InterviewSession, hearingCheckLine, feedbackSpeech } from './engine/session.js';
-import { PhotoAvatar } from './ui/avatar.js';
+import { createAvatar } from './ui/avatar.js';
 import { openExplain } from './ui/explain.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
@@ -52,7 +52,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 function clearAvatars() { avatars.forEach(a => a.destroy()); avatars.clear(); }
-function mountAvatar(host, persona) { const a = new PhotoAvatar(host, persona, { levelSource: () => speech.natural.level() }); avatars.add(a); return a; }
+function mountAvatar(host, persona) { const a = createAvatar(host, persona, { levelSource: () => speech.natural.level() }); avatars.add(a); return a; }
 
 /** Custom interviewer from the user's own photo (stored on this device only). */
 function customInterviewer() {
@@ -87,6 +87,12 @@ function toast(msg, ms = 2600) {
 }
 
 // ---------------------------------------------------------------- state
+// V1.11: Ananya (real video interviewer, clear female voice) becomes the default once for everyone.
+if (!store.prefs().ivDefault111) {
+  const p0 = store.prefs();
+  const male = typeof p0.voiceName === 'string' && /^kokoro:(am|bm)_/.test(p0.voiceName);
+  store.savePrefs({ ivDefault111: true, interviewerId: 'ananya', ...(male ? { voiceName: 'kokoro:af_heart' } : {}) });
+}
 const prefs = store.prefs();
 const state = {
   screen: 'home',
@@ -105,7 +111,7 @@ const state = {
     allowRepeats: prefs.allowRepeats ?? false, // off: only questions this user has never answered
     practiceTopic: prefs.practiceTopic || null, // preparation mode: one topic, all its questions
     speakFeedback: prefs.speakFeedback ?? true, // preparation mode: interviewer reads the feedback aloud
-    interviewerId: prefs.interviewerId || 'vikram',
+    interviewerId: prefs.interviewerId || 'ananya',
     candidateName: prefs.candidateName || '',
     lang: prefs.lang || 'en-US',
     followUps: prefs.followUps ?? true,
@@ -120,7 +126,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.10</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.11</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -234,7 +240,7 @@ function renderHome() {
     state.setup.practiceIds = null;
     go('setup');
   }));
-  const a = mountAvatar($('#heroAvatar'), interviewerById('vikram'));
+  const a = mountAvatar($('#heroAvatar'), interviewerById('ananya'));
   a.setState('listening');
   $('#profileSel').addEventListener('change', (e) => { const p = store.switchProfile(e.target.value); state.setup.candidateName = p.name === 'Me' ? state.setup.candidateName : p.name; toast(`Switched to ${p.name}`); go('home'); });
   $('#profileNew').addEventListener('click', () => { $('#profileNewBox').hidden = false; $('#profileName').focus(); });
@@ -1621,7 +1627,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.10.3', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.11.0', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

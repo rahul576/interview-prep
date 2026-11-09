@@ -420,16 +420,8 @@ export class PhotoAvatar {
     const target = this.face ? this._level(t) * this.face.maxOpen : 0;
     this.open += (target - this.open) * (target > this.open ? 0.55 : 0.32);
     if (!this.speaking && this.open < 0.05) this.open = 0;
-    // Head: gentle sway, more alive while talking, small emphasis with loud syllables.
-    let rot = Math.sin(s * 0.6) * (this.speaking ? 0.7 : 0.35) + (this.speaking ? Math.sin(s * 2.3) * 0.25 : 0);
-    let dy = Math.sin(s * 1.5) * 1.0 - (this.face ? this.open * 0.12 : 0);
-    const scale = 1.03 + Math.sin(s * 1.6) * 0.004;
-    if (this.exprName === 'curious') rot += 0.8;
-    if (this.exprName === 'thinking') rot += 1.2;
-    if (this.state === 'listening' && t > this.nextNod) { this.nod(); this.nextNod = t + 4000 + Math.random() * 6000; }
-    const nt = (t - this.nodStart) / 700;
-    if (nt >= 0 && nt < 1) dy += Math.sin(nt * Math.PI * 2) * 4;
-    this.el.style.transform = `translateY(${dy.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${scale.toFixed(4)})`;
+    // V1.11: the photo itself never moves (rotating/scaling a still photo looks like shaking, not a person).
+    void s;
     if (this.face && this.canvas.width) {
       if (t > this.nextBlink) { this.blinkStart = t; this.nextBlink = t + 2500 + Math.random() * 4000 + (Math.random() < 0.15 ? -2000 : 0); }
       const bt = (t - this.blinkStart) / 160; // a blink lasts ~160 ms
@@ -495,6 +487,127 @@ export class PhotoAvatar {
     }
   }
   destroy() { cancelAnimationFrame(this._raf); this.host.replaceChildren(); }
+}
+
+// ------------------------------------------------------------------ V1.11 video interviewer
+// Real-looking interviewer: short video loops made offline from the interviewer's portrait with
+// LivePortrait (an open, MIT-licensed portrait animation model). One loop is the interviewer
+// listening (blinks, small natural head motion, slight smile), the other is her talking. The app
+// crossfades between them as she starts and stops speaking. Nothing is generated at run time, so it
+// works offline on any device that can play a video, and the picture is never moved or warped.
+
+const clipCache = new Map();
+/** Fetch a clip once and share it as a blob URL (works offline from the service worker cache and
+ *  avoids video range-request issues in Safari). */
+export function loadClip(url) {
+  if (!clipCache.has(url)) {
+    clipCache.set(url, fetch(url)
+      .then(r => { if (!r.ok) throw new Error(`clip ${r.status}`); return r.blob(); })
+      .then(b => URL.createObjectURL(b))
+      .catch((e) => { clipCache.delete(url); throw e; }));
+  }
+  return clipCache.get(url);
+}
+
+const FADE_MS = 220;
+
+export class VideoAvatar {
+  /** persona.clips = { listen, talk } (video URLs); persona.photo is shown until they load. */
+  constructor(host, persona, { levelSource = null } = {}) {
+    this.host = host;
+    this.persona = persona;
+    this.levelSource = levelSource;
+    this.state = 'idle';
+    this.speaking = false;
+    this.ready = false;
+    const wrap = document.createElement('div');
+    wrap.className = 'photo-avatar video-avatar';
+    let photoUrl = String(persona.photo);
+    try { photoUrl = new URL(photoUrl, document.baseURI).href; } catch { /* keep */ }
+    wrap.style.setProperty('--photo', `url("${photoUrl.replace(/"/g, '%22')}")`);
+    this.wrap = wrap;
+    // still portrait underneath: visible until the videos are ready, and if they cannot play
+    this.img = new Image();
+    this.img.alt = `${persona.name}, interviewer`;
+    this.img.decoding = 'async';
+    this.img.src = persona.photo;
+    this.img.className = 'va-still';
+    wrap.appendChild(this.img);
+    const mk = (cls) => {
+      const v = document.createElement('video');
+      v.className = `va-clip ${cls}`;
+      v.muted = true; v.defaultMuted = true; v.loop = true; v.playsInline = true;
+      v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('aria-hidden', 'true');
+      v.preload = 'auto';
+      wrap.appendChild(v);
+      return v;
+    };
+    this.listenV = mk('va-listen');
+    this.talkV = mk('va-talk');
+    host.replaceChildren(wrap);
+    this._load();
+  }
+
+  async _load() {
+    try {
+      const ext = clipFormat();
+      const [l, t] = await Promise.all([loadClip(this.persona.clips.listen + ext), loadClip(this.persona.clips.talk + ext)]);
+      if (!this.host.contains(this.wrap)) return;
+      this.listenV.src = l; this.talkV.src = t;
+      await new Promise((res, rej) => { this.listenV.onloadeddata = res; this.listenV.onerror = rej; });
+      // start the listening loop at a random point so several avatars on one page are not in sync
+      try { this.listenV.currentTime = Math.random() * Math.max(0, (this.listenV.duration || 0) - 1); } catch { /* fine */ }
+      await this.listenV.play().catch(() => {});
+      this.ready = true;
+      this.wrap.classList.add('va-ready');
+      this._apply();
+    } catch { /* keep the still portrait */ }
+  }
+
+  _apply() {
+    if (!this.ready) return;
+    const talk = this.speaking;
+    this.wrap.classList.toggle('va-talking', talk);
+    if (talk) {
+      if (this.talkV.paused) {
+        // each sentence starts at a different place in the talking loop, so it never looks repeated
+        try { this.talkV.currentTime = Math.random() * Math.max(0, (this.talkV.duration || 0) - 2); } catch { /* fine */ }
+        this.talkV.play().catch(() => {});
+      }
+      clearTimeout(this._pauseTimer);
+    } else {
+      if (this.listenV.paused) this.listenV.play().catch(() => {});
+      clearTimeout(this._pauseTimer);
+      this._pauseTimer = setTimeout(() => { if (!this.speaking) this.talkV.pause(); }, FADE_MS + 60);
+    }
+  }
+
+  setExpression(name) { this.host.dataset.expression = name; }
+  nod() {}
+  setState(s) { this.state = s; this.host.dataset.state = s; if (s !== 'speaking' && this.speaking) { this.speaking = false; this._apply(); } }
+  startSpeech() { this.speaking = true; this.host.dataset.state = 'speaking'; this._apply(); }
+  syncToChar() {}
+  endSpeech() { this.speaking = false; this._apply(); }
+  destroy() {
+    clearTimeout(this._pauseTimer);
+    for (const v of [this.listenV, this.talkV]) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* ignore */ } }
+    this.host.replaceChildren();
+  }
+}
+
+/** File extension of the clip format this browser plays: H.264 MP4 (Safari, Chrome, Edge) or VP9 WebM. */
+export function clipFormat() {
+  if (typeof document === 'undefined') return null;
+  const v = document.createElement('video');
+  if (v.canPlayType('video/mp4; codecs="avc1.4D401E"')) return '.mp4';
+  if (v.canPlayType('video/webm; codecs="vp9"')) return '.webm';
+  return null;
+}
+
+/** The best avatar for a persona: real video loops when it has them, otherwise the still photo. */
+export function createAvatar(host, persona, opts = {}) {
+  if (persona.clips && clipFormat()) return new VideoAvatar(host, persona, opts);
+  return new PhotoAvatar(host, persona, opts);
 }
 
 /** Lighten (+) or darken (-) a hex colour by percent. */

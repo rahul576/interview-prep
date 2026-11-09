@@ -60,7 +60,11 @@ export function categoryById(id) {
 // Interviewer portraits are AI-generated images supplied by the project owner (not real people).
 // `face` holds pixel landmarks in the 500x500 photo so the photo can talk (jaw, mouth, blinks).
 export const INTERVIEWERS = [
-  { id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female', photo: 'img/interviewers/ananya.jpg' },
+  {
+    id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female', photo: 'img/interviewers/ananya.jpg',
+    // V1.11: real video loops made from her portrait with LivePortrait (see docs/interviewer-video.md)
+    clips: { listen: 'img/interviewers/ananya-listen', talk: 'img/interviewers/ananya-talk' }, // .mp4 (H.264) and .webm (VP9)
+  },
   {
     id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male', photo: 'img/interviewers/vikram.jpg',
     face: { mouth: { x: 252, y: 271, w: 74, upper: 7 }, chin: 330, neckEnd: 372, jaw: { x0: 176, x1: 330 }, maxOpen: 7,
