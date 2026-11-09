@@ -1,4 +1,4 @@
-# Talking-head interviewer (V1.12)
+# Talking-head interviewer (V1.12, lip sync reworked in V1.13)
 
 Ananya speaks with her lips following her actual voice, blinks at a natural rate, and moves her head
 calmly like a person on a video call. It is made once, offline, from her portrait and shipped as
@@ -8,11 +8,19 @@ three small files, so nothing heavy runs during an interview and it works offlin
 | --- | --- |
 | `ananya-base.mp4` / `.webm` | Her portrait animated by **LivePortrait** (KwaiVGI, MIT licence) with calm head movement, mouth closed and no blinks; 6.1 s played forward then backward (12.2 s seamless loop). |
 | `ananya-rig.json` | For each of the 366 base frames, an affine transform from the portrait to the frame (where the face is), found with OpenCV image alignment (ECC) on the brows/eyes/nose area. |
-| `ananya-face.webp` | Real mouth shapes taken from her LivePortrait footage at 7 opening levels (3 variants each), and 3 eyelid frames (half, mostly, fully closed), aligned to the portrait, with soft edges. |
+| `ananya-face.webp` | One continuous real mouth-opening movement from her LivePortrait footage (8 frames, 33 ms apart, closed to open, same expression and teeth), and 3 eyelid frames (half, mostly, fully closed), aligned to the portrait, with soft edges. |
 
 At run time (`TalkingHead` in `www/js/ui/avatar.js`) each video frame is drawn to a canvas. The
-mouth for the current loudness of the voice is placed onto the face with that frame's transform,
-blending between neighbouring levels, so the lips open and close with every syllable. The loudness
+voice loudness goes through a jaw-like envelope follower (opens with a 35 ms time constant, closes
+with 80 ms) and becomes a mouth opening; the two neighbouring frames of the real opening movement
+are blended and placed onto the face with that frame's transform.
+
+Why one continuous movement (V1.13): V1.12 picked mouth pictures from different moments of the
+footage (different smile, teeth and light) and changed them every frame, which looked like
+vibrating lips. Neighbouring frames of one real movement only differ by the motion itself, so
+blending them looks like real motion. The smoothing constants were tuned
+(`scripts/avatar/tune-voice.py`) on real Kokoro speech for about 4 syllable movements per second with
+the same frame-to-frame change as her real footage. The loudness
 comes from the natural voice's audio (Kokoro), and a speech-like rhythm is used with the system
 voice. Blinks happen every 2.5 to 7 seconds and last about 0.2 s, sometimes as a double blink.
 

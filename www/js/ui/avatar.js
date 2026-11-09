@@ -489,19 +489,20 @@ export class PhotoAvatar {
   destroy() { cancelAnimationFrame(this._raf); this.host.replaceChildren(); }
 }
 
-// ------------------------------------------------------------------ V1.12 talking head
+// ------------------------------------------------------------------ V1.12 talking head (V1.13 lip sync)
 // A real-looking interviewer that speaks in sync with her voice. Everything was made offline from
 // the interviewer's portrait (see docs/interviewer-video.md):
 //  - base video: the portrait animated by LivePortrait (an open portrait-animation model) with calm,
 //    natural head movement and no blinks, played as a seamless loop;
 //  - rig.json: for every frame of that video, where the face is (an affine transform from the
-//    portrait to the frame, measured with image alignment);
-//  - sprite: real mouth shapes from her animated footage, from closed to wide open (3 variants each),
-//    and three eyelid frames (half closed, mostly closed, closed), all with soft edges.
-// At run time each video frame is drawn to a canvas and the mouth that matches the loudness of the
-// voice playing at that moment is placed on the face, so the lips open and close with every syllable.
-// Blinks are added on a natural schedule (every 2.5 to 7 seconds). Works offline, no model at run time.
-
+//    portrait to the frame, measured with image alignment, smoothed over time);
+//  - face sprite: one continuous real mouth-opening movement from her animated footage (closed ->
+//    open, frames 33 ms apart, so neighbouring shapes match in expression, teeth and light) and three
+//    eyelid frames, all with soft edges.
+// At run time the loudness of the voice is smoothed like a real jaw (fast to open, slower to close,
+// about 4 syllable movements per second) and turned into a mouth opening; the two neighbouring real
+// frames are blended, so the lips move smoothly with every syllable and never flicker between
+// unrelated shapes. Blinks are added every 2.5 to 7 seconds. Works offline, no model at run time.
 const assetCache = new Map();
 function cached(key, make) {
   if (!assetCache.has(key)) assetCache.set(key, make().catch((e) => { assetCache.delete(key); throw e; }));
@@ -520,10 +521,26 @@ export function clipFormat() {
   return null;
 }
 
-/** Map voice loudness (RMS, about 0..0.3) to a mouth opening 0..1. */
-export function mouthOpenFromLevel(rms) {
-  const x = Math.max(0, Math.min(1, (rms - 0.012) / 0.15));
-  return Math.pow(x, 0.75);
+/** Voice smoothing tuned on real interviewer speech (see docs/interviewer-video.md). */
+export const VOICE_SMOOTHING = { tauA: 0.035, tauR: 0.08, floor: 0.01, range: 0.14, gamma: 1.0 };
+
+/** Smoothed voice envelope -> mouth opening 0..1. */
+export function mouthOpenFromLevel(env, P = VOICE_SMOOTHING) {
+  return Math.pow(Math.max(0, Math.min(1, (env - P.floor) / P.range)), P.gamma);
+}
+
+/** One step of the jaw-like envelope follower (dt in seconds): opens fast, closes a bit slower. */
+export function followEnvelope(env, level, dt, P = VOICE_SMOOTHING) {
+  const tau = level > env ? P.tauA : P.tauR;
+  return env + (level - env) * (1 - Math.exp(-dt / tau));
+}
+
+/** Which two ladder frames to blend for opening x, and how much of the second. */
+export function ladderBlend(open, x) {
+  let k = 0;
+  while (k < open.length - 2 && x >= open[k + 1]) k++;
+  const f = Math.max(0, Math.min(1, (x - open[k]) / (open[k + 1] - open[k])));
+  return [k, f];
 }
 
 export class TalkingHead {
@@ -533,8 +550,9 @@ export class TalkingHead {
     this.levelSource = levelSource;
     this.speaking = false;
     this.ready = false;
-    this.open = 0;        // smoothed mouth opening 0..1
-    this.variant = 0;     // which of the mouth shapes of a level (changes per syllable)
+    this.env = 0;         // jaw-like smoothed voice loudness
+    this.open = 0;        // mouth opening 0..1
+    this.lastT = 0;
     this.frame = 0;       // current base-video frame
     this.blinks = 0;
     this.speechStart = 0;
@@ -571,6 +589,7 @@ export class TalkingHead {
   async _load() {
     try {
       const r = this.persona.rig, ext = clipFormat();
+      // (sprite cells are laid out in one row, cell[0] wide)
       const [meta, sprite, src] = await Promise.all([jsonOf(r.meta), imageOf(r.sprite), blobUrl(r.base + ext)]);
       if (!this.host.contains(this.wrap)) return;
       this.meta = meta; this.sprite = sprite;
@@ -587,25 +606,26 @@ export class TalkingHead {
     } catch { /* keep the still portrait */ }
   }
 
-  /** Voice loudness 0..1 right now (real audio when available, otherwise a speech-like rhythm). */
-  _loudness(t) {
+  /** Loudness (RMS) of the voice right now: real audio when available, otherwise a speech-like rhythm. */
+  _level(t) {
     if (!this.speaking) return 0;
     const real = this.levelSource ? this.levelSource() : null;
-    if (real !== null && real !== undefined) return mouthOpenFromLevel(real);
+    if (real !== null && real !== undefined) return real;
     const s = (t - this.speechStart) / 1000;
-    const syll = Math.max(0, Math.sin(s * Math.PI * 8.6) * 0.65 + Math.sin(s * Math.PI * 5.1 + 1) * 0.35);
-    return syll * (0.55 + 0.45 * Math.sin(s * 1.7));
+    const syl = Math.max(0, Math.sin(2 * Math.PI * 4.2 * s + Math.sin(s * 1.9) * 1.2));
+    return 0.17 * Math.pow(syl, 0.8) * (0.65 + 0.35 * Math.sin(s * 1.3)) * (Math.sin(s * 0.9) > -0.85 ? 1 : 0.1);
   }
 
   _tick(t) {
     if (!this.wrap.isConnected) { this._stop(); return; }
     const m = this.meta, g = this.g;
     if (!this.video.requestVideoFrameCallback) this.frame = Math.round(this.video.currentTime * m.fps) % m.frames.length;
-    // mouth: opens quickly with a syllable, closes a little slower, like real speech
-    const target = this._loudness(t);
-    const prev = this.open;
-    this.open += (target - this.open) * (target > this.open ? 0.6 : 0.35);
-    if (prev < 0.12 && this.open >= 0.12) this.variant = Math.floor(Math.random() * 3); // new syllable, new shape
+    // mouth: jaw-like envelope of the voice -> opening -> blend of two neighbouring real frames
+    const dt = Math.min(0.1, Math.max(0.001, (t - (this.lastT || t - 16)) / 1000));
+    this.lastT = t;
+    const P = m.voice || VOICE_SMOOTHING;
+    this.env = followEnvelope(this.env, this._level(t), dt, P);
+    this.open = this.speaking || this.env > 0.002 ? mouthOpenFromLevel(this.env, P) : 0;
     // blinks: natural rate, sometimes a double blink, a little less often while speaking
     if (t > this.nextBlink) {
       this.blinkStart = t; this.blinks++;
@@ -619,10 +639,9 @@ export class TalkingHead {
     const A = m.frames[this.frame] || m.frames[0];
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.drawImage(this.video, 0, 0, m.size, m.size);
-    const lv = m.mouth.levels, x = this.open * (lv.length - 1);
-    const lo = Math.floor(x), hi = Math.min(lv.length - 1, lo + 1), f = x - lo;
-    this._patch(A, m.mouth.box, lv[lo][this.variant % lv[lo].length], 1);
-    if (f > 0.05 && hi !== lo) this._patch(A, m.mouth.box, lv[hi][this.variant % lv[hi].length], f);
+    const [k, f] = ladderBlend(m.mouth.open, this.open);
+    this._patch(A, m.mouth.box, m.mouth.ladder[k], 1);
+    if (f > 0.01) this._patch(A, m.mouth.box, m.mouth.ladder[k + 1], f);
     if (eyeFrame >= 0) this._patch(A, m.eyes.box, m.eyes.seq[eyeFrame], 1);
     g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
     if (!this.wrap.classList.contains('th-ready')) this.wrap.classList.add('th-ready');

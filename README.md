@@ -1,5 +1,9 @@
 # InterviewPro — V1.10
 
+## What's new in V1.13 – smooth, natural lip sync
+- **No more vibrating lips.** V1.12 switched between mouth pictures taken from unrelated moments, which flickered. Now the mouth comes from one continuous real opening movement of Ananya's, and the app blends neighbouring frames (33 ms apart in the real movement), so the lips open and close smoothly with every syllable.
+- **Jaw-like timing.** The voice loudness is smoothed like a real jaw (opens fast, closes a little slower, about 4 syllable movements per second), tuned on real recordings of her voice. In a browser test with real speech, frame-to-frame change around the mouth halved and fast open/close flicker dropped from 5 to 2 per second, close to the natural head movement alone.
+
 ## What's new in V1.12 – lips in sync with the voice
 - **Ananya's lips now follow her actual words.** While she speaks, the app measures the loudness of her voice many times a second and shows the real mouth shape (taken from her own animated footage) that matches it, so the mouth opens and closes with every syllable and closes in pauses.
 - **Natural blinking.** Blinks come every few seconds (sometimes a double blink) instead of the constant blinking of the V1.11 loops.
