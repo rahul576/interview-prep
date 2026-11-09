@@ -196,7 +196,7 @@ function renderHome() {
       </div>
       <div class="hero-stage" aria-hidden="true">
         <div class="avatar-host" id="heroAvatar"></div>
-        <div class="hero-caption"><span class="live-dot"></span><b>Vikram:</b> How does HashMap work internally?</div>
+        <div class="hero-caption"><span class="live-dot"></span><b>Ananya:</b> How does HashMap work internally?</div>
       </div>
     </section>
 
@@ -1627,7 +1627,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.11.0', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.11.1', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {
