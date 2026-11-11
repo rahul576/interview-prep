@@ -21,8 +21,16 @@ import { DEVOPS_V16B } from './questions-devops-v16b.js';
 import { DEVOPS_V16C } from './questions-devops-v16c.js';
 import { DEVOPS_V16D } from './questions-devops-v16d.js';
 import { TOPIC_BANKS_DEVOPS } from './topics/index.js';
+import { V115_A } from './questions-v115-a.js';
+import { V115_B } from './questions-v115-b.js';
+import { V115_C } from './questions-v115-c.js';
+import { V115_D } from './questions-v115-d.js';
+import { V115_E } from './questions-v115-e.js';
+import { V115_F } from './questions-v115-f.js';
+import { V115_G } from './questions-v115-g.js';
+import { V115_H } from './questions-v115-h.js';
 
-export const BANK_VERSION = '1.6.0';
+export const BANK_VERSION = '1.15.0';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -38,6 +46,8 @@ export const QUESTIONS = Object.freeze([
   ...withCat(JB_RUNTIME, 'java-backend'),
   ...withCat(JB_SPRING, 'java-backend'),
   ...withCat(JB_ARCH, 'java-backend'),
+  // V1.15: owner question set 2 (357 questions; CI/CD, cloud, Agile and GenAI ones are shared with DevOps)
+  ...withCat([...V115_A, ...V115_B, ...V115_C, ...V115_D, ...V115_E, ...V115_F, ...V115_G, ...V115_H], 'java-backend'),
   ...withCat(DEVOPS_QUESTIONS, 'devops'),
   ...withCat(DEVOPS_MORE, 'devops'),
   ...withCat(AZURE, 'devops'),

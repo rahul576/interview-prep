@@ -49,7 +49,7 @@ test('NO REPEATS: consecutive sessions never repeat a question while unseen ones
       let progress = {};
       let last = [];
       const asked = new Set();
-      const pool = QUESTIONS.filter(q => belongsTo(q, role) && TECH_TYPES.includes(q.type) && q.levels.includes(pos)).length;
+      const pool = new Set(QUESTIONS.filter(q => belongsTo(q, role) && TECH_TYPES.includes(q.type) && q.levels.includes(pos)).map(q => q.sameAs || q.id)).size; // a linked pair (sameAs) is one question
       const rounds = Math.floor(pool / 8);
       for (let r = 0; r < rounds; r++) {
         const qs = selectQuestions({ bank: QUESTIONS, category: role, positionLevel: pos, experienceLevel: exp, count: 8, mode: 'technical', seed: r + 1, seen: seenMap(progress), recentIds: last });

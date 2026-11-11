@@ -49,9 +49,10 @@ export function byDifficulty(a, b) {
  * Questions already answered are left out unless allowRepeats is true.
  */
 export function topicQuestions({ bank, category, topic, seen = {}, allowRepeats = false }) {
-  return bank
+  ({ seen } = withTwins(bank, seen, []));
+  return dropTwins(bank
     .filter(q => TECH_TYPES.includes(q.type) && belongsTo(q, category) && topicGroup(q.topic) === topic && (allowRepeats || !seen[q.id]))
-    .sort(byDifficulty);
+    .sort(byDifficulty));
 }
 
 /**
@@ -132,8 +133,30 @@ export function freshFirst(pool, n, seen = {}, lastSession = new Set()) {
  * @param {Object<string,number>} [p.seen] - question id -> last asked timestamp
  * @param {string[]} [p.recentIds] - ids asked in the previous session (never repeated if avoidable)
  */
+/** Questions linked with sameAs (the same question in two banks) count as one. */
+const twinKey = (q) => q.sameAs || q.id;
+/** seen/recent sets extended so answering one of a linked pair marks both as seen. */
+function withTwins(bank, seen, recentIds) {
+  const s = { ...seen }, last = new Set(recentIds);
+  for (const q of bank) {
+    if (!q.sameAs) continue;
+    const t = Math.max(seen[q.id] || 0, seen[q.sameAs] || 0);
+    if (t) { s[q.id] = t; s[q.sameAs] = t; }
+    if (last.has(q.id) || last.has(q.sameAs)) { last.add(q.id); last.add(q.sameAs); }
+  }
+  return { seen: s, recentIds: [...last] };
+}
+/** Keep only one question of each linked pair (a random one when rand is given, otherwise the first). */
+export function dropTwins(list, rand = null) {
+  const order = rand ? shuffle([...list], rand) : list;
+  const keep = new Set(), out = new Set();
+  for (const q of order) { const k = twinKey(q); if (!keep.has(k)) { keep.add(k); out.add(q); } }
+  return list.filter(q => out.has(q));
+}
+
 export function selectQuestions({ bank, category, positionLevel, experienceLevel, count = 6, mode = 'mixed', topics = null, seed = Date.now(), seen = {}, recentIds = [], includeIntro = false, allowRepeats = true }) {
   const rand = mulberry32(seed);
+  ({ seen, recentIds } = withTwins(bank, seen, recentIds));
   const levels = targetLevels(positionLevel, experienceLevel);
   const rank = Math.max(...levels.map(l => levelById(l).rank));
   const slots = planSlots(count, mode, rank, includeIntro);
@@ -158,7 +181,7 @@ export function selectQuestions({ bank, category, positionLevel, experienceLevel
   else if (atLevel.filter(q => !last.has(q.id)).length >= n) candidates = freshFirst(atLevel, n, seen, last);
   else candidates = freshFirst([...atLevel, ...near, ...far], n, seen, last);
   // Easiest first, so a session warms up like a real interview.
-  const technical = pickDiverse(candidates, n, rand, positionLevel).sort(byDifficulty);
+  const technical = pickDiverse(dropTwins(candidates, rand), n, rand, positionLevel).sort(byDifficulty);
 
   // Intro + behavioural / managerial (managerial preferred for senior and lead)
   const common = bank.filter(q => q.cat === 'common' && belongsTo(q, category) && overlaps(q));

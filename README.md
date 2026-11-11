@@ -1,5 +1,11 @@
 # InterviewPro — V1.10
 
+## What's new in V1.15 – 357 new questions and new categories
+- **357 questions from the owner's second collection**, each with a model answer, key points used for scoring, a follow-up question and a difficulty level. The bank now has 1,270 questions.
+- **New categories:** Modern Java (11-21), Coding Exercises (Stream API product exercise), AI/ML & GenAI (Generative AI tools, prompt engineering, MCP), Agile & Scrum, and Project Experience. The rest extend existing categories: Java 8+ Features, Concurrency, Collections, DSA, Design Patterns, JVM & Performance, Spring, REST & Security, Microservices, Databases & SQL, Testing, CI/CD and Cloud.
+- **Shared with DevOps:** CI/CD and deployment, Docker, Kubernetes and cloud (AWS Lambda, SQS, AKS, serverless), Agile & Scrum, and Generative AI / MCP questions also appear for the DevOps role, which gains the AI/ML & GenAI and Agile & Scrum categories.
+- **No duplicates in a session:** 8 new questions overlap closely with existing ones; they are linked, so an interview never asks both and answering one counts as having seen the other.
+
 ## What's new in V1.14 – interviewer on the call, Teams style
 - **No more video or lip animation.** The interviewer appears like a Teams call with the camera off: a small round, face-centred picture on a dark tile, with her name.
 - **Speaking ring.** While she speaks, a soft purple ring around the picture follows her voice; while she listens nothing moves.
