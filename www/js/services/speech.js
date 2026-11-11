@@ -55,6 +55,26 @@ export function pickVoice(voices, { gender = 'female', lang = 'en-US', preferred
   return en.slice().sort((a, b) => score(b) - score(a))[0];
 }
 
+/** Browser (Web Speech) voices chosen in the picker are stored as "browser:<voice name>". */
+export const BROWSER_PREFIX = 'browser:';
+export const isBrowserVoice = (id) => typeof id === 'string' && id.startsWith(BROWSER_PREFIX);
+export const browserVoiceName = (id) => (isBrowserVoice(id) ? id.slice(BROWSER_PREFIX.length) : null);
+
+/**
+ * Voices for the picker (V1.16): English browser voices grouped as Google voices (Chrome, online)
+ * and other voices on this device, best sounding first.
+ */
+export function browserVoiceOptions(voices) {
+  const en = voices.filter(v => /^en([-_]|$)/i.test(v.lang || ''));
+  const seen = new Set();
+  const uniq = en.filter(v => !seen.has(v.name) && seen.add(v.name));
+  const sort = (a, b) => voiceQuality(b) - voiceQuality(a) || (a.lang || '').localeCompare(b.lang || '') || a.name.localeCompare(b.name);
+  const google = uniq.filter(v => /^google\b/i.test(v.name)).sort(sort);
+  const other = uniq.filter(v => !/^google\b/i.test(v.name)).sort(sort);
+  const opt = (v) => ({ id: BROWSER_PREFIX + v.name, name: v.name, lang: v.lang, online: v.localService === false });
+  return { google: google.map(opt), other: other.map(opt) };
+}
+
 /** English voices ranked for display in a picker. */
 export function rankedVoices(voices, { gender = 'female', lang = 'en-US' } = {}) {
   return voices.filter(v => /^en([-_]|$)/i.test(v.lang || '')).map(v => ({ v, q: voiceQuality(v) }))
@@ -114,7 +134,7 @@ export class SpeechService {
 
   /** Is the best voice we would use a natural-sounding one? */
   hasNaturalVoice(gender = 'female') {
-    const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
+    const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this._browserPreferred() });
     return !!v && voiceQuality(v) >= 8;
   }
 
@@ -164,7 +184,16 @@ export class SpeechService {
   /** The voice that will actually be used: a natural voice id, or 'system'. */
   resolveVoice(gender = 'female') {
     if (this.voiceName === SYSTEM_VOICE) return SYSTEM_VOICE;
+    // a browser voice (Google or device voice) that exists in this browser
+    const bn = browserVoiceName(this.voiceName) || (this.voiceName && !isNaturalVoice(this.voiceName) ? this.voiceName : null);
+    if (bn && (this.voices || []).some(v => v.name === bn)) return BROWSER_PREFIX + bn;
     return isNaturalVoice(this.voiceName) && naturalVoiceById(this.voiceName) ? this.voiceName : defaultNaturalVoice(gender);
+  }
+
+  /** Name of the browser voice the user chose, if any (also accepts names saved by older versions). */
+  _browserPreferred() {
+    if (isBrowserVoice(this.voiceName)) return browserVoiceName(this.voiceName);
+    return isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName;
   }
 
   async speak(text, { gender = 'female', onStart, onBoundary, rate = null } = {}) {
@@ -172,13 +201,13 @@ export class SpeechService {
     const r = rate || this.rate;
     // Natural (neural) voice when chosen and loaded; the system voice is the fallback.
     const id = this.resolveVoice(gender);
-    if (!this.fast && !this.native && id !== SYSTEM_VOICE && this.natural.ready) {
+    if (!this.fast && !this.native && isNaturalVoice(id) && this.natural.ready) {
       try {
         await this.natural.speak(text, { voice: naturalVoiceById(id).voice, speed: Math.max(0.8, Math.min(1.4, r / this.rate)), onStart, onBoundary });
         return;
       } catch (e) { if (token !== this._speakToken) return; /* fall through to the system voice */ }
     }
-    if (!this.fast && !this.native && id !== SYSTEM_VOICE && this.natural.state === 'idle') this.natural.load();
+    if (!this.fast && !this.native && isNaturalVoice(id) && this.natural.state === 'idle') this.natural.load();
     const est = estimateDurationMs(text, r) * (this.fast ? 0.08 : 1);
     if (!this.ttsAvailable()) {
       onStart && onStart(est);
@@ -205,7 +234,7 @@ export class SpeechService {
   async _speakChunk(chunk, gender, onBoundary, rate = this.rate) {
     const fallback = estimateDurationMs(chunk, rate) * 1.7 + 2500;
     if (this.native) {
-      const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
+      const voice = pickVoice(this.voices, { gender, lang: this.lang, preferred: this._browserPreferred() });
       const voiceIndex = voice ? this.voices.indexOf(voice) : undefined;
       let handle;
       try {
@@ -222,7 +251,7 @@ export class SpeechService {
     }
     await new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(chunk);
-      const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: isNaturalVoice(this.voiceName) || this.voiceName === SYSTEM_VOICE ? null : this.voiceName });
+      const v = pickVoice(this.voices, { gender, lang: this.lang, preferred: this._browserPreferred() });
       if (v) { u.voice = v; u.lang = v.lang; } else u.lang = this.lang;
       u.rate = rate;
       u.pitch = gender === 'male' ? 0.95 : 1.05;

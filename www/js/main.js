@@ -9,6 +9,7 @@ import { openExplain } from './ui/explain.js';
 import { driftCheck, interruptionLine } from './engine/drift.js';
 import { SpeechService, isNative, sleep, rankedVoices, sttErrorHelp, browserSpeechNote } from './services/speech.js';
 import { NATURAL_VOICES, SYSTEM_VOICE, isNaturalVoice } from './services/natural-voice.js';
+import { browserVoiceOptions, isBrowserVoice, browserVoiceName } from './services/speech.js';
 import { MediaService, isVirtualMic } from './services/media.js';
 import { AIInterviewer } from './services/ai.js';
 import { recordings, fixWebmDuration, fmtBytes, RETENTION_CHOICES, DEFAULT_RETENTION_DAYS } from './services/recordings.js';
@@ -126,7 +127,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.15</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.16</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -574,17 +575,32 @@ async function renderCheck() {
   speech.voiceName = store.prefs().voiceName || null;
   const persona0 = interviewerById(s.interviewerId);
   if (!isNative()) {
-    // Four natural (neural) voices plus the system voice. Natural voices download once per browser.
+    // Four natural (neural) voices, the browser voices (Google voices in Chrome, device voices), and the
+    // automatic system voice. Natural voices download once per browser.
     $('#voiceBox').hidden = false;
+    const fillVoices = () => {
+      const current = speech.resolveVoice(persona0.gender);
+      const { google, other } = browserVoiceOptions(speech.voices || []);
+      const o = (id, label) => `<option value="${esc(id)}" ${id === current ? 'selected' : ''}>${esc(label)}</option>`;
+      const lang = (v) => (v.lang || '').replace('_', '-');
+      $('#voiceSel').innerHTML =
+        `<optgroup label="Natural voices (best, download once)">${NATURAL_VOICES.map(v => o(v.id, `${v.label} \u2014 ${v.desc}`)).join('')}</optgroup>`
+        + (google.length ? `<optgroup label="Google voices (Chrome, need internet)">${google.map(v => o(v.id, `${v.name} (${lang(v)})`)).join('')}</optgroup>` : '')
+        + (other.length ? `<optgroup label="Other voices on this device">${other.map(v => o(v.id, `${v.name} (${lang(v)})${v.online ? ', online' : ''}`)).join('')}</optgroup>` : '')
+        + `<optgroup label="Automatic">${o(SYSTEM_VOICE, 'System voice (picked automatically, no download)')}</optgroup>`;
+    };
+    fillVoices();
+    try { speechSynthesis.addEventListener('voiceschanged', () => { speech.voices = speechSynthesis.getVoices(); fillVoices(); paint(); }); } catch { /* no Web Speech */ }
     const current = speech.resolveVoice(persona0.gender);
-    $('#voiceSel').innerHTML = NATURAL_VOICES.map(v => `<option value="${v.id}" ${v.id === current ? 'selected' : ''}>${esc(v.label)} \u2014 ${esc(v.desc)} (natural)</option>`).join('')
-      + `<option value="${SYSTEM_VOICE}" ${current === SYSTEM_VOICE ? 'selected' : ''}>System voice (robotic, no download)</option>`;
     const paint = (st = speech.natural.status()) => {
       if (!$('#voiceTip')) return;
       const natural = isNaturalVoice(speech.resolveVoice(persona0.gender));
       $('#nvBar').hidden = !(natural && st.state === 'loading');
       $('#nvFill').style.width = `${Math.round((st.progress || 0) * 100)}%`;
-      $('#voiceTip').innerHTML = !natural ? 'The built-in system voice. It sounds robotic but needs no download.'
+      const chosen = speech.resolveVoice(persona0.gender);
+      const bv = isBrowserVoice(chosen) ? (speech.voices || []).find(v => v.name === browserVoiceName(chosen)) : null;
+      $('#voiceTip').innerHTML = bv ? (/^google/i.test(bv.name) ? `${esc(bv.name)}: a Google voice built into Chrome. It needs an internet connection; if it is unavailable the system voice is used.` : `${esc(bv.name)}: a voice installed on this device. No download needed.`)
+        : !natural ? 'The built-in system voice. It sounds robotic but needs no download.'
         : st.state === 'ready' ? '\u2713 Natural voice ready. It runs on this device and works offline.'
         : st.state === 'loading' ? `Downloading the natural voice, one time only: ${Math.round((st.progress || 0) * 100)}%. You can start now; the system voice is used until it is ready.`
         : st.state === 'unsupported' ? 'This browser cannot run the natural voice, so the system voice is used.'
@@ -1627,7 +1643,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.15.0', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.16.0', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

@@ -1,5 +1,10 @@
 # InterviewPro — V1.10
 
+## What's new in V1.16 – Google voices are back
+- **Google voices in the voice picker.** In Chrome the picker now lists the Google voices (Google US English, Google UK English Female and Male, and others) in their own group, next to the natural voices. They sound clear and need no download, but need an internet connection.
+- **Other voices on this device** (for example Samantha or Rishi on a Mac) are listed in a separate group, and the automatic system voice is still available.
+- A voice picked in an older version is kept. If a chosen voice is not available in the current browser, the interviewer falls back to the natural voice.
+
 ## What's new in V1.15 – 357 new questions and new categories
 - **357 questions from the owner's second collection**, each with a model answer, key points used for scoring, a follow-up question and a difficulty level. The bank now has 1,270 questions.
 - **New categories:** Modern Java (11-21), Coding Exercises (Stream API product exercise), AI/ML & GenAI (Generative AI tools, prompt engineering, MCP), Agile & Scrum, and Project Experience. The rest extend existing categories: Java 8+ Features, Concurrency, Collections, DSA, Design Patterns, JVM & Performance, Spring, REST & Security, Microservices, Databases & SQL, Testing, CI/CD and Cloud.
