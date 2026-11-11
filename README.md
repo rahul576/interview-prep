@@ -1,5 +1,10 @@
 # InterviewPro — V1.10
 
+## What's new in V1.14 – interviewer on the call, Teams style
+- **No more video or lip animation.** The interviewer appears like a Teams call with the camera off: a small round, face-centred picture on a dark tile, with her name.
+- **Speaking ring.** While she speaks, a soft purple ring around the picture follows her voice; while she listens nothing moves.
+- Same look on the home page and in the interviewer picker. The talking-head video files were removed, so the app is smaller.
+
 ## What's new in V1.13.1 – professional listening
 - **While listening, Ananya keeps a neutral, attentive face and only blinks.** Her head stays still; the natural head movement plays only while she speaks.
 - **No more constant smile.** Her mouth corners were lowered with a small, smooth warp on the real mouth frames (`scripts/avatar/neutral-mouth.py`), so her resting expression is neutral and her speaking expression is professional instead of grinning.

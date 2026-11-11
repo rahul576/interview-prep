@@ -58,22 +58,15 @@ export function categoryById(id) {
 }
 
 // Interviewer portraits are AI-generated images supplied by the project owner (not real people).
-// `face` holds pixel landmarks in the 500x500 photo so the photo can talk (jaw, mouth, blinks).
+// V1.14: shown like a Teams call without video: a round, face-centred picture (`avatar`, 320x320).
+const iv = (id, name, title, gender) => ({ id, name, title, gender, photo: `img/interviewers/${id}.jpg`, avatar: `img/interviewers/${id}-avatar.jpg` });
 export const INTERVIEWERS = [
-  {
-    id: 'ananya', name: 'Ananya Rao', title: 'Engineering Manager', gender: 'female', photo: 'img/interviewers/ananya.jpg',
-    // V1.12: talking head made from her portrait (see docs/interviewer-video.md); base is .mp4 or .webm
-    rig: { base: 'img/interviewers/ananya-base', sprite: 'img/interviewers/ananya-face.webp', meta: 'img/interviewers/ananya-rig.json' },
-  },
-  {
-    id: 'vikram', name: 'Vikram Mehta', title: 'Principal Engineer', gender: 'male', photo: 'img/interviewers/vikram.jpg',
-    face: { mouth: { x: 252, y: 271, w: 74, upper: 7 }, chin: 330, neckEnd: 372, jaw: { x0: 176, x1: 330 }, maxOpen: 7,
-      eyes: [{ x: 214, y: 192, w: 30, h: 12 }, { x: 298, y: 194, w: 30, h: 12 }] },
-  },
-  { id: 'daniel', name: 'Daniel Hughes', title: 'Head of Engineering', gender: 'male', photo: 'img/interviewers/daniel.jpg' },
-  { id: 'priya', name: 'Priya Nair', title: 'HR Business Partner', gender: 'female', photo: 'img/interviewers/priya.jpg' },
-  { id: 'minjun', name: 'Min-jun Park', title: 'Staff Software Engineer', gender: 'male', photo: 'img/interviewers/minjun.jpg' },
-  { id: 'sarah', name: 'Sarah Collins', title: 'Senior Technical Recruiter', gender: 'female', photo: 'img/interviewers/sarah.jpg' },
+  iv('ananya', 'Ananya Rao', 'Engineering Manager', 'female'),
+  iv('vikram', 'Vikram Mehta', 'Principal Engineer', 'male'),
+  iv('daniel', 'Daniel Hughes', 'Head of Engineering', 'male'),
+  iv('priya', 'Priya Nair', 'HR Business Partner', 'female'),
+  iv('minjun', 'Min-jun Park', 'Staff Software Engineer', 'male'),
+  iv('sarah', 'Sarah Collins', 'Senior Technical Recruiter', 'female'),
 ];
 
 export function interviewerById(id) {

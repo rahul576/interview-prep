@@ -126,7 +126,7 @@ function shell(content, active = 'home') {
   return `
   <header class="topbar">
     <button class="logo" data-nav="home" aria-label="InterviewPro home">
-      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.13</span>
+      <span class="logo-mark" aria-hidden="true">${ICONS.mic}</span> InterviewPro <span class="badge">V1.14</span>
     </button>
     <nav aria-label="Main">
       <button class="navbtn user-chip" data-nav="home" title="Switch user">${ICONS.user} ${esc(store.activeProfile().name)}</button>
@@ -802,7 +802,7 @@ function renderRoom() {
       <span class="pill-dark" id="elapsed">00:00</span>
     </div>
     <div class="room-main">
-      <section class="stage has-captions" id="stage" aria-label="Interviewer video">
+      <section class="stage has-captions" id="stage" aria-label="Interviewer">
         <div class="avatar-host" id="ivAvatar"></div>
         <div class="nameplate"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>${esc(persona.name)}</div>
         <div class="state-tag" id="stateTag">Connecting…</div>
@@ -1627,7 +1627,7 @@ function renderRevision({ role = null } = {}) {
 }
 
 // ---------------------------------------------------------------- boot
-window.__ip = { go, state, store, version: '1.13.1', speech, recordings, fast: FAST };
+window.__ip = { go, state, store, version: '1.14.0', speech, recordings, fast: FAST };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.screen !== 'room') speech.stopSpeaking(); });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) {

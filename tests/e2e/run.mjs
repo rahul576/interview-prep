@@ -782,44 +782,40 @@ try {
   await ctx.close();
 } catch (e) { failures++; log('FAIL  topic memory', e.message); }
 
-// V1.12: talking head (Ananya, default): mouth follows the voice, natural blink rate, picture never moved
+// V1.14: interviewer shown like a Teams call with the camera off (round picture, voice ring)
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['camera', 'microphone'] });
   const page = await ctx.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  // an existing user who had chosen Vikram and a male voice moves to Ananya + Heart once
   await page.addInitScript(() => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('interviewpro.prefs.v1', JSON.stringify({ interviewerId: 'vikram', voiceName: 'kokoro:am_michael' })); } });
   await page.goto(`http://localhost:${PORT}/?fast=1`);
   const prefs = await page.evaluate(() => JSON.parse(localStorage.getItem('interviewpro.prefs.v1')));
   assert.equal(prefs.interviewerId, 'ananya'); assert.equal(prefs.voiceName, 'kokoro:af_heart');
-  await page.waitForSelector('#heroAvatar .talking-head.th-ready', { timeout: 15000 });
-  await page.waitForTimeout(600);
-  const hero = await page.$eval('#heroAvatar .talking-head', w => ({ still: w.querySelector('.th-video').paused, mouth: w.dataset.mouth, op: getComputedStyle(w.querySelector('.th-canvas')).opacity }));
-  assert.ok(hero.still && hero.mouth === '0' && hero.op === '1', `home: listening = head still, mouth closed (${JSON.stringify(hero)})`);
-  await page.screenshot({ path: new URL('talking-head-home.png', OUT).pathname });
-  // interview: the mouth moves only while she speaks
+  await page.waitForFunction(() => document.querySelector('#heroAvatar .ca-photo')?.complete);
+  const hero = await page.$eval('#heroAvatar', h => { const c = h.querySelector('.ca-circle').getBoundingClientRect(); const img = h.querySelector('.ca-photo'); return { round: getComputedStyle(img).borderRadius, w: c.width, h: c.height, src: img.getAttribute('src'), media: h.querySelectorAll('video,canvas').length, loaded: img.naturalWidth }; });
+  assert.ok(hero.round === '50%' && Math.abs(hero.w - hero.h) < 1 && hero.w < 200 && hero.loaded === 320, `home: small round picture (${JSON.stringify(hero)})`);
+  assert.equal(hero.src, 'img/interviewers/ananya-avatar.jpg'); assert.equal(hero.media, 0, 'no video or canvas');
+  await page.screenshot({ path: new URL('call-avatar-home.png', OUT).pathname });
   await page.click('.role-card [data-role="devops"]');
   await page.click('#toCheck');
   await page.waitForFunction(() => /Camera is working/.test(document.querySelector('#checks')?.textContent || ''));
-  await page.evaluate(() => { const sp = window.__ip.speech; sp.speak = async (t, o) => { o && o.onStart && o.onStart(3000); await new Promise(r => setTimeout(r, 3000)); }; });
+  await page.screenshot({ path: new URL('call-avatar-setup.png', OUT).pathname, fullPage: true });
+  await page.evaluate(() => { const sp = window.__ip.speech; sp.speak = async (t, o) => { o && o.onStart && o.onStart(2500); await new Promise(r => setTimeout(r, 2500)); }; });
   await page.click('#start'); await confirmAudio(page);
-  await page.waitForSelector('#ivAvatar .talking-head.th-ready', { timeout: 15000 });
   await page.waitForFunction(() => document.querySelector('#stage')?.dataset.speaking === 'true');
-  const seen = await page.evaluate(async () => { const w = document.querySelector('#ivAvatar .talking-head'); const s = new Set(); for (let i = 0; i < 40; i++) { s.add(w.dataset.mouth); await new Promise(r => setTimeout(r, 40)); } return [...s]; });
-  assert.ok(seen.length >= 4, `mouth opens and closes while speaking (${seen})`);
-  assert.equal(await page.$eval('#ivAvatar .th-video', v => v.paused), false, 'head moves naturally while she speaks');
-  const t = await page.$eval('#ivAvatar .talking-head', w => [...w.querySelectorAll('img,canvas')].map(e => getComputedStyle(e).transform));
-  assert.ok(t.every(x => x === 'none'), 'picture is never rotated, moved or scaled');
-  await page.screenshot({ path: new URL('talking-head-speaking.png', OUT).pathname });
+  await page.waitForTimeout(400);
+  const sp = await page.$eval('#ivAvatar', h => ({ state: h.dataset.state, ring: getComputedStyle(h.querySelector('.ca-circle')).boxShadow, lv: +getComputedStyle(h.querySelector('.call-avatar')).getPropertyValue('--lv'), t: getComputedStyle(h.querySelector('.ca-photo')).transform, media: h.querySelectorAll('video,canvas').length }));
+  assert.ok(sp.state === 'speaking' && sp.ring !== 'none' && sp.lv > 0.2 && sp.t === 'none' && sp.media === 0, `speaking: ring around the still picture (${JSON.stringify(sp)})`);
+  await page.screenshot({ path: new URL('call-avatar-speaking.png', OUT).pathname });
   await page.waitForFunction(() => /^Q 1\//.test(document.querySelector('#qcount')?.textContent || '') && document.querySelector('#stage')?.dataset.speaking === 'false', null, { timeout: 30000 });
   await page.waitForTimeout(800);
-  assert.equal(await page.$eval('#ivAvatar .talking-head', w => w.dataset.mouth), '0', 'mouth closed while listening');
-  assert.equal(await page.$eval('#ivAvatar .th-video', v => v.paused), true, 'head still while listening (only blinks)');
-  await page.screenshot({ path: new URL('talking-head-listening.png', OUT).pathname });
+  const ls = await page.$eval('#ivAvatar', h => ({ ring: getComputedStyle(h.querySelector('.ca-circle')).boxShadow }));
+  assert.equal(ls.ring, 'none', 'no ring while listening');
+  await page.screenshot({ path: new URL('call-avatar-listening.png', OUT).pathname });
   assert.deepEqual(errors, []);
-  log('PASS  talking head: Ananya default, mouth follows speech, still picture');
+  log('PASS  call avatar: round picture, voice ring while speaking, nothing moves');
   await ctx.close();
-} catch (e) { failures++; log('FAIL  talking head', e.message); }
+} catch (e) { failures++; log('FAIL  call avatar', e.message); }
 
 await browser.close();
 server.close();
