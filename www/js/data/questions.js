@@ -29,8 +29,9 @@ import { V115_E } from './questions-v115-e.js';
 import { V115_F } from './questions-v115-f.js';
 import { V115_G } from './questions-v115-g.js';
 import { V115_H } from './questions-v115-h.js';
+import { V117 } from './v117/index.js';
 
-export const BANK_VERSION = '1.15.0';
+export const BANK_VERSION = '1.17.0';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -48,6 +49,7 @@ export const QUESTIONS = Object.freeze([
   ...withCat(JB_ARCH, 'java-backend'),
   // V1.15: owner question set 2 (357 questions; CI/CD, cloud, Agile and GenAI ones are shared with DevOps)
   ...withCat([...V115_A, ...V115_B, ...V115_C, ...V115_D, ...V115_E, ...V115_F, ...V115_G, ...V115_H], 'java-backend'),
+  ...withCat(V117, 'devops'),
   ...withCat(DEVOPS_QUESTIONS, 'devops'),
   ...withCat(DEVOPS_MORE, 'devops'),
   ...withCat(AZURE, 'devops'),
@@ -84,7 +86,7 @@ const GROUPS = {
   'Troubleshooting': 'Troubleshooting',
   'Low-Level Design': 'System Design & Architecture',
   'DSA: Arrays & Strings': 'DSA', 'DSA: Lists, Stacks & Queues': 'DSA', 'DSA: Trees & Graphs': 'DSA', 'DSA: Algorithms & DP': 'DSA',
-  'Azure': 'Azure', 'Azure DevOps & Pipelines': 'Azure', 'Azure Kubernetes (AKS)': 'Azure',
+  'Azure': 'Azure', 'Azure DevOps & Pipelines': 'Azure', 'Azure Kubernetes (AKS)': 'Azure', 'Azure AI & Foundry': 'Azure',
   'DevOps & CI/CD': 'CI/CD & Git', 'CI/CD Tools': 'CI/CD & Git', 'Git': 'CI/CD & Git',
   'Infrastructure as Code': 'IaC & Config Management', 'Configuration Management': 'IaC & Config Management',
   'Observability & SRE': 'Observability & SRE', 'Reliability & DR': 'Observability & SRE',

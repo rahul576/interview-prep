@@ -17,7 +17,17 @@ try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require(
 const PORT = 5321;
 const OUT = new URL('../../test-results/', import.meta.url);
 await mkdir(OUT, { recursive: true });
-const byText = new Map(QUESTIONS.map(q => [q.q, q]));
+// Linked twin questions (sameAs) can share the same text, so keep every match per text.
+const byText = new Map();
+for (const q of QUESTIONS) byText.set(q.q, [...(byText.get(q.q) || []), q]);
+const levelsFor = (sc) => targetLevels({ 'java-senior': 'senior', 'devops-lead': 'lead' }[sc.position], sc.years >= 8 ? 'lead' : sc.years >= 5 ? 'senior' : sc.years >= 2 ? 'mid' : 'entry');
+/** Resolve on-screen text to a question; for twins prefer the one that fits this role and level. */
+function resolveText(text, sc) {
+  const list = byText.get(text) || [];
+  if (list.length < 2 || !sc) return list[0];
+  const lv = levelsFor(sc);
+  return list.find(q => belongsTo(q, sc.role) && q.levels.some(l => lv.includes(l))) || list.find(q => belongsTo(q, sc.role)) || list[0];
+}
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1440, height: 900 },
@@ -107,7 +117,7 @@ async function runInterview(vp, sc, idx) {
     const sub = await page.$('#qcard .qsub');
     const qtext = sub ? (await sub.textContent()).replace(/^Main question:\s*/, '').trim() : (await page.textContent('#qcard .qtext')).trim();
     const meta = (await page.textContent('#qcard .qmeta')).trim();
-    const q = byText.get(qtext);
+    const q = resolveText(qtext, sc);
     assert.ok(q, `${tag}: unknown question on screen: ${qtext}`);
     const isFollow = meta.includes('Follow-up');
     let text;

@@ -1,5 +1,14 @@
 # InterviewPro — V1.10
 
+## What's new in V1.17 – 720 new questions, focused on AI/ML
+Researched from interview question collections and current documentation (Kubernetes 1.33–1.35, Terraform 1.10–1.14, AKS, the MCP 2026-07-28 specification and current LLM, agent and MLOps practice). About a third are real production scenarios or design questions.
+- **Kubernetes (100):** troubleshooting scenarios (Terminating pods, DNS delays, CPU throttling, OOMKilled JVMs, drain and upgrade problems), Gateway API, native sidecars, in-place resize, DRA and GPUs, AI workloads.
+- **Terraform (100), new category:** import, moved, removed and check blocks, ephemeral resources, Stacks, terraform query, OIDC in CI, state and drift scenarios, AzureRM 4, Azure Verified Modules, AI-assisted Terraform.
+- **Azure (100):** core services, networking, governance, Azure DevOps pipelines, AKS (Automatic, node auto provisioning, CNI Overlay, NGINX retirement) and Azure OpenAI / Microsoft Foundry.
+- **MCP Servers (100), new category:** protocol, transports, the stateless 2026 revision, building servers in Python, TypeScript and Spring AI, OAuth authorization, tool poisoning and other security risks, production scenarios.
+- **AI/ML focus (320 more):** MLOps (85), LLMOps & RAG (90), AI Agents & AIOps (85) and 60 new AI/ML fundamentals in AI/ML & GenAI.
+- MCP, LLMOps, agents and AI/ML fundamentals are offered in both the DevOps and the Java Backend interviews.
+
 ## What's new in V1.16 – Google voices are back
 - **Google voices in the voice picker.** In Chrome the picker now lists the Google voices (Google US English, Google UK English Female and Male, and others) in their own group, next to the natural voices. They sound clear and need no download, but need an internet connection.
 - **Other voices on this device** (for example Samantha or Rishi on a Mac) are listed in a separate group, and the automatic system voice is still available.
