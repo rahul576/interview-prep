@@ -20,7 +20,7 @@ await mkdir(OUT, { recursive: true });
 // Linked twin questions (sameAs) can share the same text, so keep every match per text.
 const byText = new Map();
 for (const q of QUESTIONS) byText.set(q.q, [...(byText.get(q.q) || []), q]);
-const levelsFor = (sc) => targetLevels({ 'java-senior': 'senior', 'devops-lead': 'lead' }[sc.position], sc.years >= 8 ? 'lead' : sc.years >= 5 ? 'senior' : sc.years >= 2 ? 'mid' : 'entry');
+const levelsFor = (sc) => targetLevels({ 'java-senior': 'senior', 'devops-lead': 'lead', 'sd-senior': 'senior' }[sc.position], sc.years >= 8 ? 'lead' : sc.years >= 5 ? 'senior' : sc.years >= 2 ? 'mid' : 'entry');
 /** Resolve on-screen text to a question; for twins prefer the one that fits this role and level. */
 function resolveText(text, sc) {
   const list = byText.get(text) || [];
@@ -40,6 +40,7 @@ const VIEWPORTS = [
 const SCENARIOS = [
   { role: 'java-backend', position: 'java-senior', years: 6, mode: 'mixed', count: 8, policy: 'mixed' },
   { role: 'devops', position: 'devops-lead', years: 9, mode: 'technical', count: 5, policy: 'strong', topics: ['Azure', 'Kafka', 'Kubernetes'] },
+  { role: 'system-design', position: 'sd-senior', years: 6, mode: 'mixed', count: 8, policy: 'mixed' },
 ];
 
 const server = createServer().listen(PORT);
@@ -88,7 +89,7 @@ async function runInterview(vp, sc, idx) {
   if (sc.mode === 'mixed') await page.check('#includeIntro');
   // all categories selected by default
   const pressed = await page.$$eval('[data-topic]', els => els.map(e => e.getAttribute('aria-pressed')));
-  assert.ok(pressed.length >= 10 && pressed.every(p => p === 'true'), `${tag}: all topics should be selected by default`);
+  assert.ok(pressed.length >= 8 && pressed.every(p => p === 'true'), `${tag}: all topics should be selected by default`);
   if (sc.topics) {
     await page.click('#topicsNone');
     assert.ok(await page.$eval('#toCheck', b => b.disabled), `${tag}: continue disabled with no topics`);
@@ -145,7 +146,7 @@ async function runInterview(vp, sc, idx) {
   // ---- correctness checks
   assert.equal(asked.length, sc.count, `${tag}: asked ${asked.length} questions, expected ${sc.count}`);
   assert.equal(new Set(asked.map(q => q.id)).size, sc.count, `${tag}: duplicate questions`);
-  const posLevel = { 'java-senior': 'senior', 'devops-lead': 'lead' }[sc.position];
+  const posLevel = { 'java-senior': 'senior', 'devops-lead': 'lead', 'sd-senior': 'senior' }[sc.position];
   const expLevel = sc.years >= 8 ? 'lead' : sc.years >= 5 ? 'senior' : sc.years >= 2 ? 'mid' : 'entry';
   const lv = targetLevels(posLevel, expLevel);
   for (const q of asked) {
@@ -174,7 +175,7 @@ async function runInterview(vp, sc, idx) {
   assert.equal(report.summary.overall, sum.overall, `${tag}: summary overall`);
   const chanceShown = Number((await page.textContent('#chance .chance-top b')).split('/')[0]);
   assert.equal(chanceShown, report.chance.score, `${tag}: chance on screen`);
-  const rank = { 'java-senior': 3, 'devops-lead': 4 }[sc.position];
+  const rank = { 'java-senior': 3, 'devops-lead': 4, 'sd-senior': 3 }[sc.position];
   assert.equal(report.chance.score, selectionChance(items.map((x, k) => ({ ...x, hintUsed: report.items[k].hintUsed, attempts: report.items[k].attempts })), { mode: 'interview', levelRank: rank }).score, `${tag}: chance recomputed`);
   const ringVal = Number((await page.textContent('.ring .val b')).trim());
   assert.equal(ringVal, sum.overall, `${tag}: ring shows ${ringVal}, expected ${sum.overall}`);

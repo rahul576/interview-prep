@@ -51,6 +51,20 @@ export const CATEGORIES = [
       { id: 'devops-lead', title: 'DevOps Lead / Platform Architect', level: 'lead' },
     ],
   },
+  {
+    id: 'system-design',
+    title: 'System Design Interview',
+    short: 'System Design',
+    blurb: 'Scalability, databases, caching, distributed systems, classic design problems and AI/ML systems.',
+    accent: '#7c4dcc',
+    icon: 'design',
+    positions: [
+      { id: 'sd-junior', title: 'Software Engineer (System Design round)', level: 'entry' },
+      { id: 'sd-eng', title: 'Senior Software Engineer', level: 'mid' },
+      { id: 'sd-senior', title: 'Staff Engineer / Senior Architect', level: 'senior' },
+      { id: 'sd-architect', title: 'Principal Engineer / Solutions Architect', level: 'lead' },
+    ],
+  },
 ];
 
 export function categoryById(id) {

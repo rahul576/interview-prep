@@ -12,7 +12,7 @@ test('every question has a valid schema', () => {
   for (const q of QUESTIONS) {
     assert.ok(q.id && !ids.has(q.id), `duplicate or missing id ${q.id}`);
     ids.add(q.id);
-    assert.ok(['java-backend', 'devops', 'common', 'shared'].includes(q.cat), `${q.id} cat`);
+    assert.ok(['java-backend', 'devops', 'system-design', 'common', 'shared'].includes(q.cat), `${q.id} cat`);
     if (q.cat === 'shared') assert.ok(Array.isArray(q.roles) && q.roles.length, `${q.id} shared needs roles`);
     assert.ok(q.topic, `${q.id} topic`);
     assert.ok(Array.isArray(q.levels) && q.levels.length, `${q.id} levels`);

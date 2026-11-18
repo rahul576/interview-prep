@@ -1,5 +1,18 @@
 # InterviewPro — V1.10
 
+## What's new in V1.18 – System Design role
+
+- **New role: System Design**, beside Java Backend and DevOps, with four positions from a new-grad system design round up to Principal Engineer / Solutions Architect.
+- **100 new System Design questions**, mostly scenario and "design X" questions:
+  - Fundamentals: approach, estimation, CAP/PACELC, consistency models, consistent hashing, idempotency, API styles.
+  - Data and storage: SQL vs NoSQL, sharding, replication, slow-query diagnosis, isolation levels, sagas, outbox, CDC.
+  - Classic problems: YouTube, Uber, Google Docs, Dropbox, Ticketmaster, Kafka, key-value store, Zoom, web crawler, flash sale and more.
+  - Scalability and reliability: caching strategies, stampedes, retries, backpressure, multi-region, DR, cell-based architecture.
+  - Distributed systems: leader election, Raft, distributed locks, clocks, exactly-once, event sourcing and CQRS.
+  - AI/ML system design: RAG at scale, LLM serving, recommendations, ML platforms, agent and MCP tool platforms, LLM gateways, fraud detection, LLM evaluation.
+  - Architecture trade-offs: monolith vs microservices, build vs buy, cost, GDPR residency, serverless vs containers, handling interviewer pushback.
+- The 22 existing Java system design and architecture questions are now offered in the System Design role too.
+
 ## What's new in V1.17 – 720 new questions, focused on AI/ML
 Researched from interview question collections and current documentation (Kubernetes 1.33–1.35, Terraform 1.10–1.14, AKS, the MCP 2026-07-28 specification and current LLM, agent and MLOps practice). About a third are real production scenarios or design questions.
 - **Kubernetes (100):** troubleshooting scenarios (Terminating pods, DNS delays, CPU throttling, OOMKilled JVMs, drain and upgrade problems), Gateway API, native sidecars, in-place resize, DRA and GPUs, AI workloads.
