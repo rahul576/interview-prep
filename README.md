@@ -12,6 +12,7 @@
   - AI/ML system design: RAG at scale, LLM serving, recommendations, ML platforms, agent and MCP tool platforms, LLM gateways, fraud detection, LLM evaluation.
   - Architecture trade-offs: monolith vs microservices, build vs buy, cost, GDPR residency, serverless vs containers, handling interviewer pushback.
 - The 22 existing Java system design and architecture questions are now offered in the System Design role too.
+- V1.18.1: 8 more Kubernetes scenario questions (node replacement, stateful storage, Pending pods, failing health checks, manual scaling, high CPU, NetworkPolicies, GPU node scheduling).
 
 ## What's new in V1.17 – 720 new questions, focused on AI/ML
 Researched from interview question collections and current documentation (Kubernetes 1.33–1.35, Terraform 1.10–1.14, AKS, the MCP 2026-07-28 specification and current LLM, agent and MLOps practice). About a third are real production scenarios or design questions.

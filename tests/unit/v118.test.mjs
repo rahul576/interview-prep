@@ -42,3 +42,10 @@ test('Interviews for every System Design level draw from the System Design pool'
     for (const q of qs) assert.ok(belongsTo(q, 'system-design'), `${level} ${q.id}`);
   }
 });
+
+test('V1.18.1 adds 8 owner-suggested Kubernetes scenarios for DevOps', () => {
+  const ks = QUESTIONS.filter(q => /^k8s-10[1-8]$/.test(q.id));
+  assert.equal(ks.length, 8);
+  for (const q of ks) { assert.equal(q.type, 'scenario'); assert.ok(belongsTo(q, 'devops')); }
+  assert.equal(topicsFor('devops').find(t => t.topic === 'Kubernetes').count, 140);
+});

@@ -31,8 +31,9 @@ import { V115_G } from './questions-v115-g.js';
 import { V115_H } from './questions-v115-h.js';
 import { V117 } from './v117/index.js';
 import { SYSDESIGN } from './sysdesign/index.js';
+import { K8S_E } from './v117/k8s-e.js';
 
-export const BANK_VERSION = '1.18.0';
+export const BANK_VERSION = '1.18.1';
 
 // Questions that already declare a cat (e.g. 'shared') keep it.
 const withCat = (list, cat) => list.map(q => Object.freeze({ cat, ...q }));
@@ -54,6 +55,7 @@ export const QUESTIONS = Object.freeze(shareSD([
   // V1.15: owner question set 2 (357 questions; CI/CD, cloud, Agile and GenAI ones are shared with DevOps)
   ...withCat([...V115_A, ...V115_B, ...V115_C, ...V115_D, ...V115_E, ...V115_F, ...V115_G, ...V115_H], 'java-backend'),
   ...withCat(V117, 'devops'),
+  ...withCat(K8S_E, 'devops'),
   ...withCat(SYSDESIGN, 'system-design'),
   ...withCat(DEVOPS_QUESTIONS, 'devops'),
   ...withCat(DEVOPS_MORE, 'devops'),
