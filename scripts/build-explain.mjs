@@ -43,11 +43,30 @@ if (isMain) {
   const { QUESTIONS } = await import('../www/js/data/questions.js');
   const known = new Set(QUESTIONS.map(q => q.id));
   const { ids, problems } = scan(known);
+  if (process.argv.includes('--validate-only')) {
+    const only = process.argv.slice(2).filter(a => !a.startsWith('--'));
+    const shown = only.length ? problems.filter(p => only.some(id => p.startsWith(`${id}.html:`))) : problems;
+    console.log(shown.length ? shown.join('\n') : `OK (${only.length || ids.length} checked)`);
+    process.exit(shown.length ? 1 : 0);
+  }
   if (problems.length) { console.error(problems.join('\n')); process.exit(1); }
   const data = JSON.stringify({ version: 2, ids }) + '\n';
+  // Backlog: older questions still waiting for a written answer. New questions must never be added here;
+  // they must ship with www/explain/<id>.html (enforced by tests/unit/explain-pack.test.mjs).
+  const blPath = join(ROOT, 'scripts', 'explain-backlog.json');
+  const has = new Set(ids);
+  const prevBacklog = existsSync(blPath) ? JSON.parse(readFileSync(blPath, 'utf8')) : null;
+  const backlog = (prevBacklog || [...known]).filter(id => known.has(id) && !has.has(id)).sort();
+  const blData = JSON.stringify(backlog, null, 0).replace(/","/g, '",\n"') + '\n';
+  const blSame = existsSync(blPath) && readFileSync(blPath, 'utf8') === blData;
   const p = join(DIR, 'index.json');
   const same = existsSync(p) && readFileSync(p, 'utf8') === data;
-  if (process.argv.includes('--check')) { if (!same) { console.error('stale: www/explain/index.json (run node scripts/build-explain.mjs)'); process.exit(1); } }
-  else if (!same) writeFileSync(p, data);
+  if (process.argv.includes('--check')) {
+    if (!same) { console.error('stale: www/explain/index.json (run node scripts/build-explain.mjs)'); process.exit(1); }
+    if (!blSame) { console.error('stale: scripts/explain-backlog.json (run node scripts/build-explain.mjs)'); process.exit(1); }
+  } else {
+    if (!same) writeFileSync(p, data);
+    if (!blSame) writeFileSync(blPath, blData);
+  }
   console.log(`${ids.length} explanations (${known.size - ids.length} questions still use the built-in summary)`);
 }

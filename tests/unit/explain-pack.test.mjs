@@ -28,3 +28,13 @@ test('authoring helper produces a valid standalone page', () => {
   assert.ok(validate('sd-001', html.replace('<h2>Example</h2>', ''), null).some(e => e.includes('Example')));
   assert.ok(validate('sd-002', html, null).some(e => e.includes('data-id')));
 });
+
+test('RULE: every new question ships with a formatted Read-in-detail answer', () => {
+  const backlog = new Set(JSON.parse(readFileSync('scripts/explain-backlog.json', 'utf8')));
+  const { ids } = scan(null);
+  const has = new Set(ids);
+  const missing = QUESTIONS.filter(q => !has.has(q.id) && !backlog.has(q.id)).map(q => q.id);
+  assert.deepEqual(missing, [], `These questions need www/explain/<id>.html (sections: In one line, Detailed explanation, `
+    + `How it works, Example, Common mistakes, How to answer in the interview, Likely follow-up questions). `
+    + `Write them in Markdown and run: node scripts/md-to-explain.mjs drafts.md && node scripts/build-explain.mjs`);
+});

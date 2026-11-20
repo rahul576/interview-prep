@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-084 · Card authorisations must be approved or declined within 100 milliseconds. Architect the risk-scoring path, including what happens when it is slow.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-084" data-topic="AI &amp; ML System Design">
+<h1>Card authorisations must be approved or declined within 100 milliseconds. Architect the risk-scoring path, including what happens when it is slow.</h1>
+<p class="ex-meta">AI &amp; ML System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Real-time fraud scoring sits <strong>synchronously in the authorisation path</strong>: fetch <strong>low-latency features</strong> (profile, device, <strong>streaming aggregates</strong>) from an online store, combine a <strong>rules engine with an ML model</strong>, decide <strong>approve / decline / step-up</strong>, apply a <strong>conservative fallback</strong> when slow, log everything, and <strong>retrain from delayed chargeback labels</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Card networks give the issuer or merchant only ~100 ms for the whole decision, so every component has a tight budget (e.g. features 15 ms, model 10 ms).</p>
+<p><strong>Features</strong> fall into three groups:</p>
+<ul>
+  <li><strong>Static/profile:</strong> account age, usual countries, typical spend, merchant risk.</li>
+  <li><strong>Device/session:</strong> fingerprint, IP reputation, emulator detection.</li>
+  <li><strong>Velocity aggregates:</strong> transactions in the last 10 min/1 h/24 h, distinct merchants, distance and time from the last transaction (&quot;impossible travel&quot;). Computed continuously by <strong>Flink/Kafka Streams</strong> and written to an <strong>online store</strong> (Redis, Aerospike, DynamoDB).</li>
+</ul>
+<p><strong>Rules</strong> encode explicit policies and fast-moving patterns (block a compromised BIN range now). <strong>Models</strong> (gradient-boosted trees for speed, sometimes graph features for fraud rings) produce a risk score. A decision layer maps score + amount + context to <strong>approve</strong>, <strong>decline</strong> or <strong>step-up</strong> (3-D Secure, OTP).</p>
+<p><strong>Fallback:</strong> if features or model time out, apply simple rules (approve low amounts, step-up high ones) rather than failing payments.</p>
+<p><strong>Labels arrive late</strong> (chargebacks can take weeks), so training uses matured windows, plus faster proxy labels (customer reports). New models run in <strong>shadow mode</strong> before taking decisions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Auth request → fraud API (deadline 80 ms).</li>
+  <li>Parallel feature fetches → rules → model → decision.</li>
+  <li>Response + decision log (features snapshot) → Kafka.</li>
+  <li>Outcomes (chargebacks, confirmations) joined later → training data.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">txn: ₹48,000, new device, IP country ≠ card country, 6 txns in 10 min
+rules: velocity_high → +0.3     model score: 0.82
+decision: STEP_UP (OTP) because amount &gt; ₹10k and score in [0.6, 0.9)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Computing aggregates at request time with DB queries.</li>
+  <li>Training on labels that haven't matured.</li>
+  <li>No fallback → payment outages when the scorer is slow.</li>
+  <li>Not logging the exact features used at decision time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The fraud service is called synchronously with a hard deadline. It fetches profile, device and velocity features, with velocity aggregates precomputed by a streaming job into an online store, runs rules plus a fast gradient-boosted model, and returns approve, decline or step-up. If it's slow, a conservative fallback applies. Every decision is logged with its features, chargeback labels arrive later for retraining, and new models start in shadow mode.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Delayed labels?</strong> Matured training windows, proxy labels, semi-supervised methods.</li>
+  <li><strong>Fraud rings?</strong> Graph features linking devices, cards, addresses.</li>
+  <li><strong>False positives cost?</strong> Tune thresholds by expected loss vs customer friction.</li>
+</ul>
+</article>
+</body>
+</html>

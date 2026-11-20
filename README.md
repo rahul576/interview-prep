@@ -9,6 +9,7 @@
 - Questions without a written answer yet show a summary built from the model answer.
 - "✨ Ask AI" is still available on request, and its answer is saved on the device.
 - Answers are written in batches, starting with System Design.
+- **Rule:** every new question must ship with its formatted answer file. `npm test` fails otherwise; see `CLAUDE.md`. Older questions waiting for answers are listed in `scripts/explain-backlog.json`, which only shrinks.
 
 ## What's new in V1.18 – System Design role
 
