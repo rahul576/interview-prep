@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-040 · Design a distributed cache cluster like Redis Cluster or Memcached at large scale.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-040" data-topic="Classic Design Problems">
+<h1>Design a distributed cache cluster like Redis Cluster or Memcached at large scale.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A distributed cache partitions keys (<strong>hash slots</strong> or <strong>consistent hashing</strong>), routes via <strong>smart clients or a proxy</strong>, uses <strong>replicas with failover</strong>, bounds memory with <strong>eviction (LRU/LFU) and TTLs</strong>, mitigates <strong>hot keys</strong> with local caches or key splitting, and is <strong>never the source of truth</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Redis Cluster</strong> divides keys into 16,384 hash slots (<code>CRC16(key) mod 16384</code>) assigned to primaries; resharding moves slots. <strong>Memcached</strong> keeps nodes independent and relies on client-side consistent hashing. Clients either know the topology (smart clients follow <code>MOVED</code> redirects) or talk to a <strong>proxy</strong> (Envoy, Twemproxy) that hides it.</p>
+<p>Each primary has replicas; on failure a replica is promoted. Replication is asynchronous, so a few writes may be lost: acceptable for a cache.</p>
+<p>Memory is finite: TTLs on every key plus an <strong>eviction policy</strong> (<code>allkeys-lru</code>, <code>allkeys-lfu</code>). <strong>Hot keys</strong> overload one shard; mitigate with a short-TTL <strong>in-process cache</strong>, or <strong>key replication</strong> (store <code>hot:key#1..#10</code>, read a random one). <strong>Big keys</strong> (huge hashes/lists) block the single-threaded server; split them.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App computes key → slot → node (or proxy does).</li>
+  <li>Cache-aside read: hit → return; miss → DB → set with TTL.</li>
+  <li>Writes → DB → delete cache key.</li>
+  <li>Monitoring: hit ratio, evictions, memory, latency, hot keys (<code>--hotkeys</code>).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">CLUSTER KEYSLOT user:{42}:profile   # hash tags {42} keep related keys in one slot
+SET user:{42}:profile &quot;&lt;json&gt;&quot; EX 3600</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Redis Cluster</th><th>Memcached</th></tr></thead>
+<tbody>
+<tr><td>Data types</td><td>Rich</td><td>Strings</td></tr>
+<tr><td>Replication</td><td>Built-in</td><td>None (client-side)</td></tr>
+<tr><td>Sharding</td><td>Hash slots</td><td>Client consistent hashing</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No TTLs (memory fills with stale data).</li>
+  <li>Treating cache data as durable.</li>
+  <li>Multi-key operations across slots (use hash tags).</li>
+  <li>Cold cache after failover causing a DB stampede.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd run a Redis Cluster: keys map to hash slots spread across primaries with replicas and automatic failover; clients route by slot. Every key has a TTL and LFU eviction bounds memory. For hot keys I add a tiny in-process cache or replicate the key under several names. The database stays the source of truth, so the app must tolerate misses and node loss, with stampede protection.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Warm a new cluster?</strong> Replay recent read keys, or dual-read from old cluster during migration.</li>
+  <li><strong>Hash tags?</strong> <code>{…}</code> part decides the slot so related keys co-locate.</li>
+  <li><strong>LRU vs LFU?</strong> LFU better keeps consistently popular keys.</li>
+</ul>
+</article>
+</body>
+</html>

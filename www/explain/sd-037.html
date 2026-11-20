@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-037 · Design a stock exchange order matching engine.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-037" data-topic="Classic Design Problems">
+<h1>Design a stock exchange order matching engine.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>An exchange matching engine keeps an <strong>in-memory order book per symbol</strong> with <strong>price-time priority</strong>, runs <strong>single-threaded and deterministic</strong>, receives orders through a <strong>sequencer</strong> that writes an <strong>event log</strong>, and uses <strong>hot standbys replaying the same log</strong> for instant failover; <strong>risk checks</strong> happen before orders reach it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Requirements are unusual: microsecond latency, strict fairness (who was first matters legally), no lost orders and full auditability.</p>
+<p>The <strong>order book</strong> holds buy orders (bids) sorted by highest price and sell orders (asks) by lowest; within a price level, orders queue by arrival time. An incoming buy at ₹101 matches the best ask ≤ ₹101, oldest first, possibly across several levels.</p>
+<p><strong>Single-threaded matching</strong> per symbol avoids locks and context switches, gives predictable latency and makes the engine <strong>deterministic</strong>: the same input sequence always produces the same trades. That enables <strong>state machine replication</strong>: the sequencer assigns a global sequence number and persists each input to the event log; primary and standby engines consume the identical log, so a standby can take over within milliseconds, and any state can be rebuilt by replay.</p>
+<p>Patterns like the <strong>LMAX Disruptor</strong> (ring buffer, mechanical sympathy) and kernel-bypass networking push throughput to millions of orders per second.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gateway: authenticate, validate, <strong>pre-trade risk checks</strong> (limits, margin).</li>
+  <li>Sequencer: stamp sequence number, persist/replicate to event log.</li>
+  <li>Matching engine: update book, emit fills/acks in order.</li>
+  <li>Outputs: trade confirmations, market data (often UDP multicast), clearing feed.</li>
+  <li>Standby replays log; failover on heartbeat loss.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Asks: 101.0 × 300 (t1), 101.0 × 200 (t2), 101.5 × 500
+Incoming BUY 400 @ 101.0 → fills 300 @ t1, 100 @ t2; remaining ask 101.0 × 100 (t2)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Multi-threaded matching on the same book with locks.</li>
+  <li>Using wall-clock timestamps from different servers for priority.</li>
+  <li>Relying on databases in the hot path.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Orders pass risk checks in the gateway, then a sequencer stamps and durably logs them, defining the official order. Per symbol, a single-threaded in-memory engine applies price-time priority, which is fast and deterministic. Because it's deterministic, hot standbys consume the same event log and can take over immediately, and we can rebuild state by replay. Fills and market data are published from the engine's output stream.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why single-threaded is faster?</strong> No locks/contention, cache-friendly, predictable.</li>
+  <li><strong>Order types?</strong> Limit, market, IOC, FOK, stop: handled in the engine logic.</li>
+  <li><strong>How to scale?</strong> Shard symbols across engines.</li>
+</ul>
+</article>
+</body>
+</html>

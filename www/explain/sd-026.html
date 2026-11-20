@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-026 · Design a video streaming platform like YouTube.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-026" data-topic="Classic Design Problems">
+<h1>Design a video streaming platform like YouTube.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>A YouTube-like platform: <strong>resumable uploads to object storage → a parallel transcoding pipeline → adaptive bitrate streaming (HLS/DASH) via CDN</strong>, with metadata, search, views and recommendations handled separately and asynchronously.</p>
+
+<h2>Detailed explanation</h2>
+<p>Two flows with very different needs. <strong>Upload/processing</strong> is write-heavy, compute-heavy and can take minutes. <strong>Playback</strong> is extremely read-heavy and latency-sensitive: it must start fast and never stall.</p>
+<p>Raw uploads are huge, so clients upload in chunks directly to object storage. A <strong>transcoding pipeline</strong> splits the video into segments, transcodes each in parallel into several resolutions and codecs (H.264, VP9, AV1), creates thumbnails and manifests. Workers scale with queue depth, often on spot instances.</p>
+<p>For playback, <strong>adaptive bitrate streaming</strong> cuts video into 2–6 second segments listed in a manifest (<code>.m3u8</code> for HLS, <code>.mpd</code> for DASH). The player measures bandwidth and picks the quality per segment, so it degrades gracefully instead of buffering. Segments are perfect for <strong>CDN</strong> caching. Popular videos are served almost entirely from edges; the long tail goes back to origin.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>POST /videos</code> → metadata row, pre-signed multipart URLs.</li>
+  <li>Upload complete → event → split into chunks → transcode jobs on a queue (DAG of tasks).</li>
+  <li>Outputs: segments per rendition + manifest + thumbnails → object storage; status <code>READY</code>.</li>
+  <li>Watch page: metadata from DB/cache, manifest + segments from CDN.</li>
+  <li>View events → Kafka → aggregated counts, watch history, recommendation features.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">master.m3u8
+ ├─ 1080p/index.m3u8 → seg_0001.ts, seg_0002.ts …
+ ├─ 720p/index.m3u8
+ └─ 360p/index.m3u8</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Serving video from app servers.</li>
+  <li>Transcoding a whole file sequentially on one machine.</li>
+  <li>Updating view counts synchronously on each view in the main DB.</li>
+  <li>Storing every rendition for every video forever (cost); use tiers and on-demand renditions for cold content.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Uploads go directly to object storage with resumable multipart uploads. A queue-driven pipeline splits the video and transcodes chunks in parallel into multiple bitrates, producing HLS/DASH segments and manifests. Playback is adaptive bitrate through a CDN, so quality adjusts to bandwidth. Metadata lives in a sharded DB with a search index, and views and likes flow through Kafka for asynchronous aggregation and recommendations.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you reduce cost for unpopular videos?</strong> Fewer renditions, colder storage tiers, transcode on demand.</li>
+  <li><strong>How do you count views at scale?</strong> Events to Kafka, aggregate in streams, approximate counts shown live.</li>
+  <li><strong>Live streaming differences?</strong> Ingest via RTMP/SRT, low-latency HLS, real-time transcoding.</li>
+</ul>
+</article>
+</body>
+</html>

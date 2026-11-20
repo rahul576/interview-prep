@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-035 · Design a proximity service like Yelp that finds nearby restaurants.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-035" data-topic="Classic Design Problems">
+<h1>Design a proximity service like Yelp that finds nearby restaurants.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A proximity service splits a <strong>business service</strong> (profiles, reviews) from a read-optimised <strong>location search service</strong> that uses a <strong>geospatial index</strong> (geohash, quadtree, PostGIS/Elasticsearch), searches the user's cell <strong>plus neighbours</strong>, then filters and <strong>ranks</strong>; heavy <strong>caching and replicas</strong> handle the read load.</p>
+
+<h2>Detailed explanation</h2>
+<p>Businesses change rarely; searches happen constantly. That asymmetry allows a small, in-memory, heavily replicated index.</p>
+<p><strong>Geohash</strong> encodes latitude/longitude into a base-32 string; nearby points share prefixes, and precision depends on length (6 chars ≈ 1.2 km × 0.6 km). Querying only the user's cell misses results just across the border, so you also query the <strong>eight neighbouring cells</strong>. A <strong>quadtree</strong> subdivides space adaptively, so dense cities get small cells and deserts big ones. Managed options: PostGIS <code>ST_DWithin</code>, Elasticsearch <code>geo_distance</code>, Redis <code>GEOSEARCH</code>.</p>
+<p>With ~200M businesses × ~100 bytes for the index, everything fits in memory on each replica.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Business updates → business DB → event → index rebuild/update (minutes of delay acceptable).</li>
+  <li>Search <code>(lat, lng, radius, filters)</code> → compute geohash precision from radius → fetch candidates from cell + neighbours.</li>
+  <li>Compute exact distance, filter by category/open now, rank by distance, rating, relevance.</li>
+  <li>Cache results for popular cells and queries.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT id, name FROM places
+WHERE ST_DWithin(geom::geography, ST_MakePoint(77.5946, 12.9716)::geography, 2000)
+  AND category = 'restaurant'
+ORDER BY geom &lt;-&gt; ST_MakePoint(77.5946, 12.9716) LIMIT 20;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Index</th><th>Pros</th><th>Cons</th></tr></thead>
+<tbody>
+<tr><td>Geohash</td><td>Simple, cacheable keys</td><td>Edge effects, fixed grid</td></tr>
+<tr><td>Quadtree</td><td>Adapts to density</td><td>In-memory build, harder to shard</td></tr>
+<tr><td>PostGIS/ES</td><td>Built-in, rich queries</td><td>Heavier infra</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Searching only one geohash cell.</li>
+  <li>Using straight <code>lat BETWEEN … AND lng BETWEEN …</code> on unindexed columns.</li>
+  <li>Real-time writes to the index for data that changes rarely.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd separate the business CRUD service from a read-only location search service. The search service keeps an in-memory geohash or quadtree index replicated across many nodes. A query searches the user's cell and its neighbours, computes exact distances, filters and ranks by distance and rating. Business updates propagate asynchronously, and popular areas are cached.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Moving objects like drivers?</strong> Frequent updates → in-memory index updated per ping, not batch rebuilds.</li>
+  <li><strong>How to pick geohash precision?</strong> Based on the search radius.</li>
+  <li><strong>Why neighbours?</strong> A point near a cell border may be closer to results in the adjacent cell.</li>
+</ul>
+</article>
+</body>
+</html>

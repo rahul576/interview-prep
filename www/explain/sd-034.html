@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-034 · Design a distributed message queue like Kafka.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-034" data-topic="Classic Design Problems">
+<h1>Design a distributed message queue like Kafka.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A Kafka-like queue stores each topic as <strong>partitioned, replicated, append-only logs</strong>; ordering is <strong>per partition</strong>, consumers in a <strong>group</strong> split partitions and track <strong>offsets</strong>, and throughput comes from <strong>sequential I/O, batching, page cache and zero-copy</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The log abstraction is the key insight. Appending to a file sequentially is extremely fast even on spinning disks, and readers simply remember a position (<strong>offset</strong>). Messages aren't deleted when consumed; they're kept for a <strong>retention</strong> period, so many independent consumer groups can read the same data and replay it.</p>
+<p><strong>Partitions</strong> give parallelism: a topic with 50 partitions spreads across brokers, and up to 50 consumers in a group can process in parallel. The producer chooses the partition by key, so all events for <code>order-42</code> land in one partition, preserving their order.</p>
+<p><strong>Replication:</strong> each partition has a leader and followers; the <strong>in-sync replica (ISR)</strong> set are followers caught up with the leader. With <code>acks=all</code> and <code>min.insync.replicas=2</code>, an acknowledged message survives a broker loss. A controller (KRaft/Raft in modern Kafka) handles leader election.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer batches + compresses messages, sends to partition leader.</li>
+  <li>Leader appends to its log segment; followers fetch and append.</li>
+  <li>Ack after ISR replicated (acks=all).</li>
+  <li>Consumers poll from offsets; commit offsets after processing.</li>
+  <li>Old segments deleted by time/size, or <strong>compacted</strong> to keep the last value per key.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties">acks=all
+enable.idempotence=true
+min.insync.replicas=2
+replication.factor=3</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Kafka-style log</th><th>Classic queue (RabbitMQ/SQS)</th></tr></thead>
+<tbody>
+<tr><td>Retained, replayable</td><td>Deleted after ack</td></tr>
+<tr><td>Many consumer groups</td><td>Competing consumers</td></tr>
+<tr><td>Order per partition</td><td>Order per queue (often weak)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Too few partitions (limits consumer parallelism; increasing later reshuffles keys).</li>
+  <li>Committing offsets before processing (data loss) or never (reprocessing storms).</li>
+  <li><code>acks=1</code> for critical data.</li>
+  <li>Expecting global ordering across partitions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each topic is split into partitions, each an append-only log replicated across brokers with a leader and in-sync followers. Producers key messages so per-entity order is preserved. Consumer groups divide partitions and commit offsets, which enables replay. It's fast because of sequential disk writes, batching, compression, the OS page cache and zero-copy transfers. Retention is time- or size-based, with log compaction for keyed state.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Exactly-once?</strong> Idempotent producer + transactions + read-process-write with offsets in the transaction.</li>
+  <li><strong>How many partitions?</strong> Based on target throughput per consumer and future growth.</li>
+  <li><strong>What is log compaction?</strong> Keep only the latest record per key.</li>
+</ul>
+</article>
+</body>
+</html>

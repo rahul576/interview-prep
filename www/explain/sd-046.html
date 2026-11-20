@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-046 · Design an email service like Gmail at a high level.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-046" data-topic="Classic Design Problems">
+<h1>Design an email service like Gmail at a high level.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Email = <strong>SMTP ingress with SPF/DKIM/DMARC checks and spam/virus filtering</strong>, <strong>mailbox storage partitioned by user</strong>, <strong>deduplicated attachments in object storage</strong>, a <strong>per-user search index</strong>, a <strong>queued outbound path with retries and reputation management</strong>, and <strong>sync via IMAP/APIs/push</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Almost all access is within one user's mailbox, which makes <strong>partitioning by user</strong> natural: messages keyed by <code>(user_id, message_id)</code> in a wide-column store (Gmail used Bigtable), with labels/folders and thread IDs as metadata.</p>
+<p><strong>Inbound:</strong> MX records point to SMTP servers that accept mail, verify sender authenticity (SPF: allowed IPs; DKIM: signature; DMARC: policy), then run spam and malware filtering (ML classifiers, reputation, attachment sandboxing) before delivery.</p>
+<p><strong>Attachments</strong> go to object storage keyed by content hash, so a 10 MB file sent to 500 colleagues is stored once.</p>
+<p><strong>Search:</strong> each user has an inverted index over subject, body, sender, labels, updated on delivery; with billions of users this is a huge but embarrassingly parallel index sharded by user.</p>
+<p><strong>Outbound:</strong> messages queue for delivery; remote servers may be slow or reject temporarily (4xx), so retries with backoff for up to days, bounce handling, and <strong>IP reputation</strong> management so mail isn't marked as spam.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Receive via SMTP → auth checks → spam/virus → store message + attachment refs → index → notify clients.</li>
+  <li>Clients: web/mobile APIs with push; third-party via IMAP/POP; sync tokens for incremental changes.</li>
+  <li>Send: API → outbound queue → DKIM sign → SMTP to recipient MX → retries/bounces.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">DNS: example.com TXT &quot;v=spf1 include:_spf.mailprovider.com -all&quot;
+     selector._domainkey.example.com TXT &quot;v=DKIM1; p=MIIBI...&quot;
+     _dmarc.example.com TXT &quot;v=DMARC1; p=quarantine&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Global search index not partitioned by user.</li>
+  <li>Storing duplicate attachments per recipient.</li>
+  <li>No retry/backoff for temporary SMTP failures.</li>
+  <li>Ignoring sender authentication.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Inbound SMTP servers verify SPF, DKIM and DMARC and run spam and malware filters. Mailboxes are partitioned by user in a wide-column store, attachments are deduplicated in object storage, and each user has their own search index updated on delivery. Outbound mail goes through a queue with retries, signing and reputation management. Clients sync through APIs with push, or IMAP.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Fast search across 15 years?</strong> Per-user inverted index, recent data hot, older tiers cold.</li>
+  <li><strong>Large mailing lists?</strong> Fan-out on send with batching and per-domain throttling.</li>
+  <li><strong>Threading?</strong> Group by References/In-Reply-To headers and subject heuristics.</li>
+</ul>
+</article>
+</body>
+</html>

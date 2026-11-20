@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-039 · Design live comments for a live streaming event with millions of viewers.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-039" data-topic="Classic Design Problems">
+<h1>Design live comments for a live streaming event with millions of viewers.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Live comments use <strong>persistent connections to gateway servers</strong>, publish each moderated comment to a <strong>pub/sub channel per live video</strong>, let <strong>gateways subscribe and fan out locally</strong>, <strong>sample/throttle</strong> for huge streams, and <strong>store comments asynchronously</strong> for replay.</p>
+
+<h2>Detailed explanation</h2>
+<p>A live stream can have millions of viewers and thousands of comments per second. Sending every comment to every viewer from one server is impossible; the fan-out must be distributed.</p>
+<p>Viewers connect via <strong>WebSockets or SSE</strong> to a fleet of stateless-ish <strong>gateway</strong> servers (each holding, say, 100k connections). When a viewer joins video V, their gateway subscribes to channel V (Redis pub/sub, NATS, Kafka-backed fan-out, or a custom service). A posted comment goes to the comment service, which runs <strong>moderation</strong> and <strong>spam</strong> checks, then publishes to channel V. Each subscribed gateway receives it <strong>once</strong> and pushes it to its local viewers.</p>
+<p>Humans can't read 5,000 comments/s, so for huge streams the system <strong>samples</strong>: each viewer receives a subset, prioritising friends, verified users, top-reacted comments and their own comments.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Viewer → gateway (WS); gateway subscribes to <code>live:V</code> if first local viewer.</li>
+  <li>Comment → comment service → moderation → publish <code>live:V</code> → async write to DB.</li>
+  <li>Gateways → local connections (with per-connection rate limit/sampling).</li>
+  <li>Gateway crash: clients reconnect (with jittered backoff) to other gateways, re-subscribe, fetch last N comments.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Viewer A ──WS──▶ gateway-17 ─┐            ┌─▶ gateway-17 ──▶ 80,000 local viewers
+Viewer B ──WS──▶ gateway-42 ─┤ subscribe  │
+                              └─ live:V ◀─┤ publish (once)
+POST comment ─▶ comment-svc ─▶ moderation ┘─▶ gateway-42 ──▶ 95,000 local viewers</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Fan-out cost</th></tr></thead>
+<tbody>
+<tr><td>Single server pushes all</td><td>O(viewers) on one node</td></tr>
+<tr><td>Gateways subscribe per video</td><td>O(gateways) messages, local O(viewers)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing to the DB synchronously before broadcasting.</li>
+  <li>All gateways subscribing to all channels.</li>
+  <li>Thundering-herd reconnects after a gateway failure (use jitter).</li>
+  <li>No sampling for celebrity streams.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Viewers hold WebSocket connections to gateway servers. Each gateway subscribes to the pub/sub channel of the videos its viewers are watching. A new comment is moderated, published once to that channel, and each gateway fans it out locally, so the work is spread across the fleet. For massive streams we sample what each viewer sees, and comments are stored asynchronously for replay.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Gateway crash with 100k viewers?</strong> Jittered reconnects, load balancer spreads them, clients fetch recent comments.</li>
+  <li><strong>Ordering?</strong> Approximate order is fine; sequence per channel if needed.</li>
+  <li><strong>Reactions/hearts?</strong> Aggregate counts per second instead of individual messages.</li>
+</ul>
+</article>
+</body>
+</html>

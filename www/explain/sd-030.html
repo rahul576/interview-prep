@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-030 · Design a ticket booking system like Ticketmaster for high-demand concerts.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-030" data-topic="Classic Design Problems">
+<h1>Design a ticket booking system like Ticketmaster for high-demand concerts.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>A high-demand ticketing system serves browsing from <strong>caches/CDN</strong>, protects booking with a <strong>virtual waiting room</strong>, uses <strong>temporary seat holds with expiry</strong> and <strong>atomic conditional updates</strong> to prevent double booking, and confirms after <strong>payment within the hold window</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Hundreds of thousands of fans arrive at 10:00 for 40,000 seats. The read side (event pages, seat maps) is cached aggressively; seat availability on the map can be slightly stale. The write side must be <strong>strictly correct</strong>: one seat, one buyer.</p>
+<p>The <strong>waiting room</strong> (queue-it style) admits users at a rate the booking system can handle and gives fairness (randomised or first-come positions). Once admitted, selecting seats creates a <strong>hold</strong>: a conditional update <code>status = HELD, holder = u, expires_at = now()+10 min WHERE status = AVAILABLE</code>. Only one transaction can win. Payment must complete before expiry; then the seat becomes <code>SOLD</code>. Expired holds return to <code>AVAILABLE</code> via a sweeper or lazy check.</p>
+<p>Seats are partitioned by event (and section) so contention stays local. <strong>Bot protection</strong> (rate limits, device fingerprinting, verified fan programmes, CAPTCHAs) keeps scalpers from grabbing inventory.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User joins waiting room → gets token when admitted.</li>
+  <li>Seat map from cache (refreshed every few seconds / pushed deltas).</li>
+  <li>Hold seats atomically (DB conditional update or Redis <code>SET NX EX</code>).</li>
+  <li>Pay with idempotency key → confirm booking in a transaction (<code>HELD by u → SOLD</code>).</li>
+  <li>Release on expiry or payment failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">UPDATE seats SET status='HELD', holder=$user, hold_expires=now()+interval '10 min'
+WHERE event_id=$e AND seat_id = ANY($seats) AND status='AVAILABLE';
+-- if rows updated &lt; requested seats → roll back and tell user some seats are taken</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking availability then updating in two steps (race).</li>
+  <li>No expiry on holds (inventory locked forever).</li>
+  <li>Letting the full spike hit the database.</li>
+  <li>Exact real-time seat maps for everyone (very expensive; approximate is fine).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Reads are cached; the hard part is the write spike and correctness. A virtual waiting room meters users in. Selecting seats places a time-limited hold using an atomic conditional update, so two users can't hold the same seat. Payment must finish within the hold window, then the seat is marked sold; otherwise it's released. Seats are partitioned per event and bots are filtered with rate limits and verification.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keep seat maps fresh cheaply?</strong> Cache with short TTL, push deltas over WebSockets, show 'selected seats may be taken'.</li>
+  <li><strong>Payment succeeded but hold expired?</strong> Extend holds during payment or refund automatically.</li>
+  <li><strong>General admission vs reserved seats?</strong> GA is a counter decrement; reserved needs per-seat state.</li>
+</ul>
+</article>
+</body>
+</html>

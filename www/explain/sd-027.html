@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-027 · Design a ride-hailing service like Uber.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-027" data-topic="Classic Design Problems">
+<h1>Design a ride-hailing service like Uber.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Ride-hailing combines <strong>high-frequency driver location updates</strong> in an in-memory <strong>geospatial index</strong>, a <strong>matching service</strong> that finds and offers nearby drivers with <strong>strongly consistent assignment</strong>, a <strong>trip state machine</strong>, and <strong>real-time updates</strong> over WebSockets/push.</p>
+
+<h2>Detailed explanation</h2>
+<p>With ~1M active drivers each sending a location every 4 seconds, that's ~250,000 writes/s, mostly overwriting the previous position. A relational DB is the wrong tool; an in-memory structure partitioned by city/region is right (Redis GEO, or custom services on geohash/<strong>H3</strong> cells, as Uber does).</p>
+<p>Finding nearby drivers means looking up the rider's cell and neighbouring cells, then ranking candidates by <strong>ETA</strong> (road network, not straight-line distance), rating, vehicle type. Assignment is the consistency-critical step: a driver must never get two trips, so use a conditional update or short lock on the driver's state (<code>AVAILABLE → OFFERED</code>).</p>
+<p>Trips are a <strong>state machine</strong> persisted durably: requested → driver assigned → arriving → in progress → completed → paid. Pricing (including surge), ETA, maps, payments and notifications are separate services.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Driver app → location service (via gateway) every few seconds → geo index (latest position) + Kafka (history, analytics).</li>
+  <li>Rider requests → matching service queries geo index for nearby available drivers.</li>
+  <li>Offer to best driver with timeout; on accept, atomically set driver busy and trip assigned.</li>
+  <li>Both apps subscribe to trip updates via WebSocket; driver location relayed to rider.</li>
+  <li>Trip end → pricing → payment → receipts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">SET driver:123 state AVAILABLE -&gt; OFFERED  IF state == AVAILABLE   (compare-and-set)
+GEOSEARCH drivers:blr FROMLONLAT 77.59 12.97 BYRADIUS 3 km ASC COUNT 20</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing every location update in a relational DB.</li>
+  <li>Matching by straight-line distance only.</li>
+  <li>Non-atomic assignment leading to double booking.</li>
+  <li>One global geo index instead of partitioning by region.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Drivers stream locations into an in-memory geospatial index partitioned by city, with history going to Kafka. Matching looks up nearby cells, ranks drivers by ETA, and offers the trip; assignment is a compare-and-set on driver state so a driver can't be double booked. Trips are a persisted state machine, both apps get live updates over WebSockets, and pricing, ETA and payments are separate services.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Demand spike after a concert?</strong> Surge pricing, batching requests, widening search radius, pre-positioning drivers.</li>
+  <li><strong>Why H3 hexagons?</strong> Uniform neighbour distances and easy multi-resolution aggregation.</li>
+  <li><strong>What if the driver's app disconnects mid-trip?</strong> Trip state is server-side; resume on reconnect, buffer GPS on device.</li>
+</ul>
+</article>
+</body>
+</html>

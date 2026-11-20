@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-029 · Design a file sync and storage service like Dropbox or OneDrive.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-029" data-topic="Classic Design Problems">
+<h1>Design a file sync and storage service like Dropbox or OneDrive.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>File sync splits files into <strong>content-hashed chunks</strong>, uploads only <strong>new or changed chunks</strong> (delta sync + dedup), stores chunks in <strong>object storage</strong> and file versions in a <strong>metadata service</strong>, and notifies other devices to pull changes, keeping <strong>conflicted copies</strong> on concurrent edits.</p>
+
+<h2>Detailed explanation</h2>
+<p>Re-uploading a 2 GB file because one paragraph changed is wasteful. Chunking (fixed-size, or <strong>content-defined chunking</strong> so an insert doesn't shift every later chunk) lets the client compute hashes and upload only unknown chunks. The same hash across users or versions means the chunk is stored once (<strong>deduplication</strong>).</p>
+<p>The <strong>metadata service</strong> is the brain: a sharded relational DB with namespaces, file paths, versions, permissions and, per version, the ordered list of chunk hashes. Committing a version is a transaction, so a file never points to missing chunks.</p>
+<p>Other devices learn about changes through a <strong>notification service</strong> (long polling or WebSockets with a per-user cursor), fetch the changed metadata and download only missing chunks. If two devices change the same file from the same base version, the second commit conflicts; rather than lose data, the server keeps both and creates a &quot;conflicted copy&quot;.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client watcher detects change → chunk + hash.</li>
+  <li><code>POST /commit {path, base_version, chunk_hashes}</code> → server replies with missing hashes.</li>
+  <li>Upload missing chunks (pre-signed URLs) → commit version.</li>
+  <li>Notification → other devices <code>GET /changes?cursor=…</code> → download missing chunks → rebuild file.</li>
+  <li>Conflict: base version is stale → create conflicted copy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">file v7 = [h1, h2, h3, h4]
+edit middle → v8 = [h1, h2', h3, h4]  → upload only h2'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Uploading whole files on each change.</li>
+  <li>Fixed-size chunking only (an insert at the start invalidates all chunks).</li>
+  <li>Silent last-writer-wins on conflicts.</li>
+  <li>Notification service holding the data instead of just signalling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The client splits files into content-hashed chunks and asks the server which hashes it lacks, so only changed chunks upload, with dedup for free. Chunks live in object storage; a sharded metadata DB stores versions as ordered chunk lists, committed transactionally. Other devices get notified, fetch metadata and pull missing chunks. Concurrent edits from the same base create a conflicted copy, never silent loss.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>First sync of 50 GB?</strong> Parallel chunk uploads, resumable, prioritise small files, LAN sync between devices.</li>
+  <li><strong>Why content-defined chunking?</strong> Boundaries depend on content, so inserts only change nearby chunks.</li>
+  <li><strong>Sharing folders?</strong> Namespaces with ACLs in metadata; chunks shared by hash.</li>
+</ul>
+</article>
+</body>
+</html>
