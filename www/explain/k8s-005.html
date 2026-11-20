@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-005 · What happens step by step when a pod is deleted, and how do you shut an application down gracefully?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-005" data-topic="Kubernetes">
+<h1>What happens step by step when a pod is deleted, and how do you shut an application down gracefully?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>On deletion the pod is marked <strong>Terminating</strong>; <strong>in parallel</strong> it is removed from <strong>EndpointSlices</strong> and the kubelet runs the <strong>preStop hook</strong>, then sends <strong>SIGTERM</strong>; after <strong>terminationGracePeriodSeconds</strong> (default 30 s, counted from the start) remaining processes get <strong>SIGKILL</strong>. A graceful app stops taking new work, finishes in-flight work and exits.</p>
+
+<h2>Detailed explanation</h2>
+<p>Whether the deletion comes from <code>kubectl delete</code>, a rollout, a scale-down or a drain, the sequence is the same. The API server sets <code>deletionTimestamp</code> and the grace period on the pod. From there, two independent chains run at the same time:</p>
+<ul>
+  <li><strong>Network chain:</strong> the EndpointSlice controller removes the pod from the Service's endpoints; kube-proxy on every node, ingress controllers, service mesh proxies and cloud load balancers then stop routing to it. Each picks up the change on its own schedule, often within a second, sometimes several.</li>
+  <li><strong>Kubelet chain:</strong> the kubelet on the node sees the deletion, runs each container's <strong>preStop</strong> hook (exec command, HTTP call or the built-in sleep action), then sends <strong>SIGTERM</strong> to the container's main process (PID 1). The grace period clock started at deletion and <strong>includes</strong> the preStop time. When it expires, the runtime sends <strong>SIGKILL</strong>.</li>
+</ul>
+<p>Because the chains are not coordinated, an app that exits immediately on SIGTERM can still receive new requests for a moment, causing errors. Hence the common pattern of a short <strong>preStop sleep</strong> (5-10 s) so the network catches up before the app begins shutting down.</p>
+<p>The app's job on SIGTERM: stop accepting new connections or consuming new messages, let in-flight HTTP requests finish, commit or nack queue messages, close database pools, flush logs and metrics, and exit with code 0. PID 1 must actually receive the signal: shell-form <code>ENTRYPOINT</code> runs <code>/bin/sh -c</code>, which doesn't forward SIGTERM, so use exec form or a tiny init such as tini.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Delete request → <code>deletionTimestamp</code> set, pod shows Terminating.</li>
+  <li>Pod removed from EndpointSlices; proxies and LBs update asynchronously.</li>
+  <li>Kubelet runs preStop hooks.</li>
+  <li>Kubelet sends SIGTERM to PID 1 of each container.</li>
+  <li>App drains and exits; otherwise SIGKILL at the end of the grace period.</li>
+  <li>Pod object removed from the API.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  terminationGracePeriodSeconds: 60
+  containers:
+  - name: api
+    image: registry.example.com/api:3.2
+    command: [&quot;/app/server&quot;]            # exec form, receives SIGTERM directly
+    lifecycle:
+      preStop:
+        sleep: { seconds: 10 }</code></pre>
+<pre><code class="language-go">sig := make(chan os.Signal, 1)
+signal.Notify(sig, syscall.SIGTERM)
+&lt;-sig
+ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+defer cancel()
+srv.Shutdown(ctx) // stop listening, wait for in-flight requests</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shell-form entrypoints that swallow SIGTERM, so every shutdown waits for SIGKILL.</li>
+  <li>preStop plus drain time longer than the grace period.</li>
+  <li>Exiting instantly on SIGTERM while traffic is still routed.</li>
+  <li>Queue workers that drop messages instead of finishing or returning them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When a pod is deleted, the API server marks it Terminating, and two things happen in parallel: it's removed from the Service EndpointSlices, which proxies and load balancers pick up asynchronously, and the kubelet runs the preStop hook and then sends SIGTERM to PID 1. The app has terminationGracePeriodSeconds, 30 by default and including preStop, before SIGKILL. A graceful app fails readiness, stops new work, finishes in-flight requests or messages, closes connections and flushes logs. Because endpoint removal is asynchronous, I add a short preStop sleep so new requests stop arriving before the app stops listening.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a shell-form ENTRYPOINT break SIGTERM handling?</strong> <code>sh -c</code> is PID 1 and doesn't forward signals to the child.</li>
+  <li><strong>How long should the grace period be?</strong> Longer than preStop plus the longest normal request or message processing time.</li>
+  <li><strong>What about long-running batch work?</strong> Checkpoint progress, or make work resumable and idempotent.</li>
+</ul>
+</article>
+</body>
+</html>

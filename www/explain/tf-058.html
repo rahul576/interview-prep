@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-058 · How would you write a custom Terraform provider, and when is it justified?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-058" data-topic="Terraform">
+<h1>How would you write a custom Terraform provider, and when is it justified?</h1>
+<p class="ex-meta">Terraform · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>custom provider</strong> is justified when an <strong>internal API or platform</strong> has no provider and teams need to manage it as code; you write it in <strong>Go</strong> with the <strong>Terraform Plugin Framework</strong>, define <strong>schemas</strong> and <strong>CRUD plus import</strong> per resource, make <strong>Read detect drift and handle not found</strong>, and ship it with <strong>acceptance tests</strong> and <strong>signed releases</strong> to a registry.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before writing one, check alternatives: an existing community provider, the generic <strong>REST API provider</strong>, or calling the API from your platform's own tooling. A provider is a long-term product with maintenance, versioning and support. It pays off when many teams manage objects in an internal system (an IPAM, a developer portal, a feature-flag service) and you want the full Terraform workflow: plans, drift detection, reviews and state.</p>
+<p>Providers are Go binaries that Terraform runs as plugins over gRPC. New providers should use the <strong>Terraform Plugin Framework</strong>, which replaced <strong>SDKv2</strong> as the recommended library; HashiCorp's scaffolding repository gives a starting point.</p>
+<p>For each <strong>resource</strong> you implement:</p>
+<ul>
+  <li><strong>Schema</strong>: attributes, their types, <code>Required</code>, <code>Optional</code>, <code>Computed</code>, <code>Sensitive</code>, plus <strong>plan modifiers</strong> such as <code>RequiresReplace</code> for force-new and <code>UseStateForUnknown</code> for stable computed IDs, and validators.</li>
+  <li><strong>Create, Read, Update, Delete</strong> and <strong>ImportState</strong>.</li>
+</ul>
+<p><strong>Read is the most important function.</strong> It must fetch the real object and write the actual values into state, so Terraform can show drift. If the API returns 404, Read must <strong>remove the resource from state</strong> rather than error, so the next plan proposes a re-create. Values must be normalised consistently, otherwise users get perpetual diffs or &quot;inconsistent result after apply&quot; errors.</p>
+<p>You can also add <strong>data sources</strong> and <strong>provider functions</strong>. Quality comes from <strong>acceptance tests</strong> with <code>terraform-plugin-testing</code> that create, update, import and destroy real objects, generated docs (<code>tfplugindocs</code>), and releases built with GoReleaser and <strong>GPG-signed</strong> for the public or a private registry.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm no existing provider or generic option fits.</li>
+  <li>Scaffold with the Plugin Framework; define the provider configuration.</li>
+  <li>For each resource, define the schema and plan modifiers.</li>
+  <li>Implement CRUD and import against the API client.</li>
+  <li>Make Read handle drift and not-found correctly.</li>
+  <li>Write acceptance tests, generate docs, sign and publish.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-go">func (r *dnsRecordResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+    var state dnsRecordModel
+    resp.Diagnostics.Append(req.State.Get(ctx, &amp;state)...)
+
+    rec, err := r.client.GetRecord(ctx, state.ID.ValueString())
+    if errors.Is(err, api.ErrNotFound) {
+        resp.State.RemoveResource(ctx) // deleted outside Terraform
+        return
+    }
+    if err != nil {
+        resp.Diagnostics.AddError(&quot;read failed&quot;, err.Error())
+        return
+    }
+    state.Value = types.StringValue(rec.Value) // reflect real value: drift shows in plan
+    resp.Diagnostics.Append(resp.State.Set(ctx, &amp;state)...)
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Read returning the configured value instead of the real one, hiding drift.</li>
+  <li>Erroring on 404 instead of removing from state.</li>
+  <li>Missing <code>RequiresReplace</code> where the API cannot update a field.</li>
+  <li>No import support, so existing objects cannot be adopted.</li>
+  <li>Breaking schema changes without a major version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd only write a provider when we have an internal API that teams need to manage as code and nothing existing fits, including the generic REST provider. I'd use Go with the Terraform Plugin Framework, which succeeded SDKv2. For each resource I define the schema, required, optional, computed, and which fields force replacement, and implement create, read, update, delete and import. Read is critical: it fetches the real object so drift shows up, and removes the resource from state on not found. Then acceptance tests against real objects, generated docs and signed releases to a registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What makes a provider behave badly?</strong> Perpetual diffs, unhandled 404s, missing import and inconsistent values after apply.</li>
+  <li><strong>Plugin Framework or SDKv2?</strong> Framework for new work; SDKv2 is maintained for existing providers.</li>
+  <li><strong>Private distribution?</strong> A private registry or a network mirror.</li>
+</ul>
+</article>
+</body>
+</html>

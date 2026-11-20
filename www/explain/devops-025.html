@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-025 · What is the difference between a ConfigMap and a Secret, and how do you manage secrets securely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-025" data-topic="Kubernetes">
+<h1>What is the difference between a ConfigMap and a Secret, and how do you manage secrets securely?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>ConfigMaps</strong> hold non-sensitive configuration; <strong>Secrets</strong> hold sensitive data but are only <strong>base64-encoded</strong> by default, so secure them with <strong>etcd encryption at rest (KMS)</strong>, <strong>tight RBAC</strong>, mounting as <strong>files rather than env vars</strong>, keeping them <strong>out of Git</strong>, and preferably an <strong>external secret manager</strong> synced by <strong>External Secrets Operator</strong> or the <strong>Secrets Store CSI driver</strong> (or <strong>Sealed Secrets</strong> for GitOps).</p>
+
+<h2>Detailed explanation</h2>
+<p>Both objects inject configuration into pods as environment variables or mounted files, and both are stored in etcd. The difference is intent and handling: Secrets are treated a little more carefully, but <strong>base64 is encoding, not encryption</strong>. Anyone with <code>get</code> on Secrets in a namespace, anyone who can create pods there (they can mount the secret), and anyone with etcd or backup access can read them.</p>
+<p><strong>Hardening Secrets in the cluster.</strong></p>
+<ul>
+  <li><strong>Encryption at rest</strong> for Secrets in etcd, ideally with a <strong>KMS provider</strong> (envelope encryption with a cloud KMS key). Managed services offer this as a setting.</li>
+  <li><strong>RBAC</strong>: very few subjects get <code>get/list/watch</code> on Secrets; <code>list</code> reveals all values.</li>
+  <li><strong>Mount as files</strong> rather than environment variables: env vars leak via crash dumps, <code>/proc</code>, child processes and debug output, and they do not update when the Secret changes. Mounted volumes (without <code>subPath</code>) are refreshed by the kubelet.</li>
+</ul>
+<p><strong>Keep the source of truth outside.</strong> Store secrets in <strong>HashiCorp Vault</strong>, <strong>AWS Secrets Manager</strong>, <strong>Azure Key Vault</strong> or <strong>GCP Secret Manager</strong>. The <strong>External Secrets Operator</strong> syncs them into Kubernetes Secrets on an interval; the <strong>Secrets Store CSI driver</strong> mounts them directly into pods. Pods authenticate with <strong>workload identity</strong> (IRSA or EKS Pod Identity, Azure Workload Identity, GKE Workload Identity), so there are no static cloud keys. When secrets must live in Git for GitOps, <strong>Sealed Secrets</strong> or <strong>SOPS</strong> encrypt them so only the cluster (or KMS) can decrypt.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Secret stored in AWS Secrets Manager, rotated there.</li>
+  <li>ExternalSecret resource references it; ESO uses a workload identity role to read it.</li>
+  <li>ESO creates and refreshes a Kubernetes Secret.</li>
+  <li>Pod mounts the Secret as a file; app reloads on change.</li>
+  <li>etcd encryption and RBAC protect the in-cluster copy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: db-credentials, namespace: shop }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { name: aws-secrets, kind: ClusterSecretStore }
+  target: { name: db-credentials }
+  data:
+    - secretKey: password
+      remoteRef: { key: prod/shop/db, property: password }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing base64 Secret manifests to Git, believing they are encrypted.</li>
+  <li>Granting <code>list secrets</code> widely.</li>
+  <li>Using env vars and expecting rotated values to appear.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A ConfigMap holds non-sensitive configuration like URLs or feature settings. A Secret is meant for passwords and tokens, but by default it's only base64 encoded, so anyone who can read it via the API, create pods in the namespace or access etcd can decode it. So I enable encryption at rest with a KMS provider, restrict RBAC tightly, mount secrets as files instead of env vars, and keep them out of Git. I prefer an external manager like Vault or AWS Secrets Manager, synced with the External Secrets Operator or mounted with the CSI driver using workload identity, or Sealed Secrets when they must live in Git.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you rotate a DB password without downtime?</strong> Two valid credentials during rotation, update the secret, let mounted files refresh or roll the pods, then revoke the old one.</li>
+  <li><strong>Why not env vars?</strong> They don't update and leak more easily.</li>
+  <li><strong>Who can read a Secret without RBAC on Secrets?</strong> Anyone who can create a pod that mounts it in that namespace.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-054 · How do you test Ansible roles with Molecule?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-054" data-topic="Configuration Management">
+<h1>How do you test Ansible roles with Molecule?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Molecule</strong> tests Ansible roles by creating disposable instances (containers or VMs), <strong>converging</strong> the role, running an <strong>idempotence</strong> check, <strong>verifying</strong> the result with Ansible asserts or Testinfra, and destroying everything, typically in CI on every pull request.</p>
+
+<h2>Detailed explanation</h2>
+<p>Roles are code shared across teams, and like any code they regress: a variable rename, a new OS version, a task that is not idempotent. Molecule gives roles a repeatable test harness. A <strong>scenario</strong> (<code>molecule/default/</code>) describes the <strong>platforms</strong> to test on, the <strong>driver</strong> that creates them (Docker or Podman containers, or VMs/cloud instances via plugins), the playbook that applies the role (<code>converge.yml</code>) and how results are checked (<code>verify.yml</code>).</p>
+<p><code>molecule test</code> runs the full sequence: dependency (install collections/roles), destroy any leftovers, syntax check, <strong>create</strong>, prepare, <strong>converge</strong>, <strong>idempotence</strong>, side effect, <strong>verify</strong>, and <strong>destroy</strong>. During development you use the individual steps: <code>molecule converge</code> repeatedly, <code>molecule login</code> to look inside, <code>molecule verify</code>, and <code>molecule destroy</code> at the end.</p>
+<p>The <strong>idempotence</strong> step is the most valuable: it applies the role a second time and fails if any task reports <code>changed</code>. A role that always changes something will restart services on every run and hide real drift. <strong>Verification</strong> asserts outcomes, not tasks: &quot;nginx is listening on port 80 and serves the health page&quot;, written as Ansible tasks (the default verifier in current Molecule) or Python Testinfra tests.</p>
+<p>Containers are fast but lack a real init system and kernel features; roles that manage systemd units, sysctl or firewalls often need privileged systemd-enabled images or VMs. In recent Molecule versions linting is no longer part of the sequence, so <code>ansible-lint</code> runs as a separate CI step. A CI matrix (for example Ubuntu 24.04 and Rocky 9) catches distro differences.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>molecule init scenario</code> creates <code>molecule.yml</code>, <code>converge.yml</code> and <code>verify.yml</code>.</li>
+  <li>The driver creates the platform instances.</li>
+  <li>Converge applies the role; failures stop the run.</li>
+  <li>Idempotence reruns converge and fails on any <code>changed</code> task.</li>
+  <li>Verify runs assertions; destroy cleans up.</li>
+  <li>CI runs <code>ansible-lint</code> and <code>molecule test</code> per platform on every PR.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># molecule/default/molecule.yml
+driver:
+  name: podman
+platforms:
+  - name: ubuntu2404
+    image: docker.io/geerlingguy/docker-ubuntu2404-ansible
+    command: /lib/systemd/systemd
+    privileged: true
+verifier:
+  name: ansible</code></pre>
+<pre><code class="language-yaml"># molecule/default/verify.yml
+- hosts: all
+  tasks:
+    - ansible.builtin.uri:
+        url: http://localhost/health
+        status_code: 200</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing only &quot;the playbook ran&quot; instead of verifying real behaviour.</li>
+  <li>Skipping the idempotence step or masking it with <code>changed_when: false</code> everywhere.</li>
+  <li>Using plain containers for roles that need systemd, then fighting false failures.</li>
+  <li>Testing one OS while the role claims to support five.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use Molecule. A scenario defines the platforms, usually Podman or Docker containers, or VMs when the role needs systemd or kernel features. <code>molecule test</code> creates the instances, converges the role, runs it a second time as an idempotence check, which fails if anything reports changed, then verifies the outcome with Ansible assertions or Testinfra, for example that nginx answers on port 80, and destroys everything. In CI I run ansible-lint plus a Molecule matrix across the supported distros on every pull request, so shared roles don't regress.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is the idempotence step valuable?</strong> It proves reruns are safe and that &quot;changed&quot; really means something changed.</li>
+  <li><strong>Testinfra or Ansible verifier?</strong> Ansible verifier needs no extra language; Testinfra gives richer Python assertions.</li>
+  <li><strong>How do you test roles needing cloud APIs?</strong> Use a cloud or delegated driver against a sandbox account, or mock at the boundary.</li>
+</ul>
+</article>
+</body>
+</html>

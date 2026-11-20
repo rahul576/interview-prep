@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-034 · A VM in a spoke VNet suddenly cannot reach the internet after a network change. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-034" data-topic="Azure">
+<h1>A VM in a spoke VNet suddenly cannot reach the internet after a network change. How do you troubleshoot it?</h1>
+<p class="ex-meta">Azure · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>Network Watcher</strong>: <strong>IP flow verify</strong> for NSG decisions, <strong>next hop</strong> and <strong>effective routes</strong> (often a new <strong>0.0.0.0/0 UDR to the hub firewall</strong>), <strong>effective security rules</strong>, then the <strong>firewall rules and logs</strong>, <strong>DNS</strong> settings, <strong>Connection troubleshoot</strong>, and finally compare with the <strong>Activity Log / IaC change</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Cannot reach the internet&quot; after a network change usually has one of four causes: <strong>routing</strong>, <strong>NSG rules</strong>, <strong>firewall policy</strong>, or <strong>DNS</strong>. Work through them in the order packets travel.</p>
+<p><strong>Routing:</strong> check <strong>effective routes</strong> on the VM's NIC. A new route table associated with the subnet might send <code>0.0.0.0/0</code> to the <strong>Azure Firewall private IP</strong> (forced tunnelling), or to an NVA that is down, or to <strong>None</strong> (drop). <strong>Next hop</strong> in Network Watcher shows exactly where a packet to, say, 8.8.8.8 goes. Also remember <strong>default outbound access</strong> is being retired for new VNets, so a subnet with no NAT gateway, public IP or firewall may have no egress at all.</p>
+<p><strong>NSGs:</strong> <strong>IP flow verify</strong> tests a specific 5-tuple and reports the rule that allowed or denied it. <strong>Effective security rules</strong> show the merged NSGs from subnet and NIC, including new deny rules or rules referencing service tags.</p>
+<p><strong>Firewall:</strong> if traffic now goes through Azure Firewall, it needs <strong>network or application rules</strong> (FQDNs such as <code>*.ubuntu.com</code>) to allow it. Firewall logs (<code>AZFWNetworkRule</code>, <code>AZFWApplicationRule</code> tables) show denied flows. Asymmetric routing (traffic in through one path, out through another) also breaks connections.</p>
+<p><strong>DNS:</strong> if the VNet's DNS servers were changed to custom servers or a DNS Private Resolver, names may fail to resolve, which looks like no internet. Test with <code>nslookup</code> vs <code>curl https://1.1.1.1</code>.</p>
+<p><strong>Connection troubleshoot</strong> tests end to end from the VM, and <strong>VNet flow logs</strong> with traffic analytics show allowed and denied flows. Finally, the <strong>Activity Log</strong> or Git history of the IaC shows what changed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce from the VM: DNS lookup vs connection by IP.</li>
+  <li>Next hop and effective routes.</li>
+  <li>IP flow verify and effective security rules.</li>
+  <li>Firewall rule match and logs.</li>
+  <li>DNS server configuration on the VNet/NIC.</li>
+  <li>Review the change and roll back or fix.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az network watcher show-next-hop -g rg-spoke --vm vm-app-01 \
+  --source-ip 10.2.1.4 --dest-ip 8.8.8.8
+az network nic show-effective-route-table -g rg-spoke -n vm-app-01-nic -o table
+az network watcher test-ip-flow -g rg-spoke --vm vm-app-01 --direction Outbound \
+  --protocol TCP --local 10.2.1.4:50000 --remote 13.107.42.14:443</code></pre>
+<pre><code class="language-kusto">AZFWApplicationRule | where SourceIp == &quot;10.2.1.4&quot; and Action == &quot;Deny&quot; | take 20</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking only NSGs and ignoring routes.</li>
+  <li>Testing with ping (ICMP is often blocked anyway).</li>
+  <li>Forgetting DNS when &quot;the internet is down&quot;.</li>
+  <li>Fixing in the portal while IaC reverts it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use Network Watcher. Next hop and the NIC's effective routes show where internet traffic goes; after a change it's often a new route table sending 0.0.0.0/0 to the hub firewall. IP flow verify and effective security rules tell me whether an NSG blocks the flow and which rule. If traffic goes through the firewall, I check its rules and logs for denies. I also test DNS, because a custom DNS change looks like no internet. Connection troubleshoot confirms end to end, and the Activity Log or IaC commits show exactly what changed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Prevent one route table change breaking many VNets?</strong> IaC with PR review and what-if, staged rollout, Virtual Network Manager, and policy.</li>
+  <li><strong>What are VNet flow logs?</strong> The successor to NSG flow logs, recording flows at VNet level.</li>
+  <li><strong>Asymmetric routing?</strong> Return traffic bypasses the firewall, so stateful inspection drops it.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-007 · How do consumers commit offsets, and what goes wrong with auto-commit?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-007" data-topic="Kafka">
+<h1>How do consumers commit offsets, and what goes wrong with auto-commit?</h1>
+<p class="ex-meta">Kafka · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A committed offset is the <strong>next record to read</strong>; <strong>auto-commit</strong> commits on a timer regardless of processing, risking <strong>loss or duplicates on crash</strong>, so critical consumers <strong>disable it and commit manually after processing</strong> with <strong>commitSync/commitAsync</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Consumers store their position in the internal <strong><code>__consumer_offsets</code></strong> topic, keyed by group, topic and partition. By convention the committed value is the offset of the <strong>next</strong> record to consume, so after processing offset 41 you commit 42. When a consumer restarts or a partition moves in a rebalance, the new owner resumes from the committed offset.</p>
+<p>With <strong>enable.auto.commit=true</strong> (the plain Java client default), the client commits the offsets returned by the previous <code>poll()</code> every <strong>auto.commit.interval.ms</strong> (5 s by default), as part of later poll calls. This is simple and fine when you process records synchronously inside the poll loop and duplicates are acceptable. Problems appear when processing is asynchronous or slow. If you hand records to another thread and the timer commits before they are done, a crash <strong>loses</strong> those records. If the consumer crashes after processing but before the next commit, the new owner <strong>reprocesses</strong> them, producing duplicates. Either way you get at-most-once or at-least-once by accident rather than by design.</p>
+<p>For control, set <code>enable.auto.commit=false</code> and commit after processing. <strong>commitSync</strong> blocks and retries until success, so it is safe but adds latency; <strong>commitAsync</strong> does not block or retry, so it is used in the loop with a final <strong>commitSync</strong> on shutdown and in the rebalance listener's <code>onPartitionsRevoked</code>. The result is <strong>at-least-once</strong>, so handlers should also be <strong>idempotent</strong>. Note that Spring Kafka disables client auto-commit by default and commits per batch (AckMode.BATCH) on its own.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>poll()</code> returns records from the current position.</li>
+  <li>Process records (and write results).</li>
+  <li>Commit offset of last processed record plus one.</li>
+  <li>On rebalance revoke, commit synchronously.</li>
+  <li>On restart, resume from committed offset.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">props.put(&quot;enable.auto.commit&quot;, &quot;false&quot;);
+try {
+  while (running) {
+    var records = consumer.poll(Duration.ofMillis(500));
+    for (var r : records) handle(r);          // idempotent handler
+    consumer.commitAsync();
+  }
+} finally {
+  consumer.commitSync();
+  consumer.close();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Guarantee</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Auto-commit</td><td>Accidental</td><td>Easy, risky with async work</td></tr>
+<tr><td>Commit after processing</td><td>At-least-once</td><td>Needs idempotent handler</td></tr>
+<tr><td>Commit before processing</td><td>At-most-once</td><td>Loss on crash</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Auto-commit with asynchronous processing threads.</li>
+  <li>Committing the processed offset instead of offset plus one.</li>
+  <li>Committing per record synchronously, killing throughput.</li>
+  <li>Not committing on partition revocation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The committed offset is the next message the group will read, stored in the consumer offsets topic. Auto-commit commits periodically, every five seconds by default, whether or not my processing has finished, so a crash can lose messages that were committed but not processed, or duplicate those processed but not committed. When correctness matters I turn it off and commit after processing, using commitAsync in the loop and commitSync on shutdown and rebalance, and I make handlers idempotent because that gives at-least-once.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Spring Kafka AckMode?</strong> BATCH by default; RECORD, MANUAL and MANUAL_IMMEDIATE give finer control.</li>
+  <li><strong>Why not commit every record?</strong> Commit cost; batch commits are enough with idempotency.</li>
+  <li><strong>Where are offsets stored?</strong> The compacted <code>__consumer_offsets</code> topic.</li>
+</ul>
+</article>
+</body>
+</html>

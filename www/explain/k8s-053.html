@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-053 · You deleted a namespace and it has been stuck in Terminating. What causes this and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-053" data-topic="Kubernetes">
+<h1>You deleted a namespace and it has been stuck in Terminating. What causes this and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A namespace only disappears after the <strong>namespace controller deletes everything inside it</strong>; it gets stuck when objects have <strong>finalizers whose controller is gone</strong> or an <strong>unavailable aggregated APIService</strong> breaks discovery. Read the <strong>namespace status conditions</strong> and <strong>fix the cause</strong> rather than blindly stripping the namespace's finalizer.</p>
+
+<h2>Detailed explanation</h2>
+<p>Deleting a namespace sets it to <strong>Terminating</strong> with the <code>kubernetes</code> finalizer in <code>spec.finalizers</code>. The namespace controller then discovers every namespaced resource type the API server knows about, lists them in that namespace, and deletes them. Only when all are gone does it remove its finalizer and the namespace vanishes.</p>
+<p>Two things commonly break this. First, objects with <strong>finalizers</strong> that never get removed: custom resources whose <strong>operator was uninstalled first</strong> (so nobody processes the finalizer), a <code>Service</code> of type LoadBalancer whose cloud controller cannot delete the cloud LB, or PVCs held by <code>kubernetes.io/pvc-protection</code> while a pod still uses them. Second, <strong>discovery failures</strong>: if an aggregated API such as <code>v1beta1.metrics.k8s.io</code> points to a service that is down, the controller cannot list all resource types, so it refuses to finish, because it cannot prove the namespace is empty.</p>
+<p>The namespace <strong>status.conditions</strong> explain exactly which: <code>NamespaceDeletionDiscoveryFailure</code>, <code>NamespaceContentRemaining</code>, or <code>NamespaceFinalizersRemaining</code>, with the resource types and finalizer names.</p>
+<p>You can force it by calling the <code>finalize</code> subresource with an empty finalizer list, but that only removes the namespace object: leftover objects may remain in etcd, and external resources such as cloud load balancers, DNS records or buckets created by operators can leak and keep costing money.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get ns &lt;ns&gt; -o yaml</code> and read <code>status.conditions</code>.</li>
+  <li>If discovery failure: <code>kubectl get apiservices</code> and fix or remove the broken one.</li>
+  <li>If content remains: list remaining objects and their finalizers.</li>
+  <li>Reinstall or repair the owning controller so it can clean up properly.</li>
+  <li>If the controller is gone for good, clean up external resources, then remove that object's finalizer.</li>
+  <li>The namespace controller finishes on its own.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get ns team-x -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{&quot;\n&quot;}{end}'
+kubectl get apiservices | grep False
+kubectl api-resources --verbs=list --namespaced -o name \
+  | xargs -n1 kubectl get -n team-x --ignore-not-found --show-kind -o name
+kubectl -n team-x patch kafkatopic orders --type=merge -p '{&quot;metadata&quot;:{&quot;finalizers&quot;:[]}}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Uninstalling an operator before deleting its custom resources.</li>
+  <li>Calling the finalize API immediately and leaking cloud resources.</li>
+  <li>Ignoring a broken metrics-server APIService that affects the whole cluster.</li>
+  <li>Recreating a namespace with the same name while the old one is stuck.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Deleting a namespace makes the controller delete everything inside first. It gets stuck when some objects can't be deleted, usually custom resources with finalizers whose operator was uninstalled, or a LoadBalancer Service whose cloud cleanup fails. Another classic cause is an unavailable aggregated API like a broken metrics-server APIService, which stops discovery. The namespace status conditions tell me which. I fix the cause, repair the controller or remove a specific orphaned finalizer after cleaning up its external resource. Forcing the namespace finalizer away works but can leak resources.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What order to remove an operator?</strong> Delete its custom resources first, wait for cleanup, then uninstall the operator and CRDs.</li>
+  <li><strong>Why does an APIService block deletion?</strong> The controller cannot enumerate all types, so it cannot prove the namespace is empty.</li>
+  <li><strong>How do you prevent it?</strong> Uninstall runbooks, monitor APIService availability, and GitOps ordering.</li>
+</ul>
+</article>
+</body>
+</html>

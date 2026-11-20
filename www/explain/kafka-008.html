@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-008 · How do you handle poison messages and failures in a Kafka consumer?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-008" data-topic="Kafka">
+<h1>How do you handle poison messages and failures in a Kafka consumer?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Retry <strong>transient</strong> failures with <strong>backoff</strong>, send <strong>poison messages</strong> to a <strong>dead letter topic</strong> after retries so they <strong>never block the partition</strong>, use <strong>non-blocking retry topics</strong> when ordering allows, and handle <strong>deserialization errors</strong> explicitly.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kafka consumers process a partition in order, so one record that keeps failing stops everything behind it. That is fine for a few seconds of retry during a downstream blip, but fatal for a record that can never succeed, such as malformed JSON or a reference to a deleted entity. So you must classify failures.</p>
+<p><strong>Transient errors</strong> (timeouts, 503s, deadlocks) deserve a few retries with <strong>exponential backoff</strong>. <strong>Permanent errors</strong> (validation failures, unknown schema, business rule violations) should not be retried at all. After retries are exhausted or for non-retryable exceptions, publish the record to a <strong>dead letter topic (DLT)</strong> with headers describing the original topic, partition, offset, exception class and message, commit the offset, and move on. Alert on DLT traffic, and build a <strong>replay</strong> tool so fixed records can be republished.</p>
+<p><strong>Blocking retries</strong> keep ordering but stall the partition. <strong>Non-blocking retry topics</strong> (for example <code>orders-retry-10s</code>, <code>orders-retry-1m</code>, then <code>orders-dlt</code>) move the failed record aside so the main partition keeps flowing, at the cost of <strong>per-key ordering</strong>: a later event for the same key may be processed before the retried one.</p>
+<p><strong>Deserialization errors</strong> happen before your listener runs, so a bad payload can crash-loop the consumer. In Spring Kafka, wrap the deserializer with <strong>ErrorHandlingDeserializer</strong> so the error reaches the error handler and the record goes to the DLT. Spring's <strong>DefaultErrorHandler</strong> with a <strong>DeadLetterPublishingRecoverer</strong> and <code>@RetryableTopic</code> implement all of this.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Listener throws an exception.</li>
+  <li>Error handler checks if it is retryable; if so, back off and retry.</li>
+  <li>After max attempts, recoverer publishes to <code>topic-dlt</code> with headers.</li>
+  <li>Offset is committed; partition continues.</li>
+  <li>Alert fires; engineer inspects and replays.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+DefaultErrorHandler errorHandler(KafkaTemplate&lt;Object, Object&gt; t) {
+  var h = new DefaultErrorHandler(new DeadLetterPublishingRecoverer(t),
+      new ExponentialBackOff(1000L, 2.0) {{ setMaxElapsedTime(30_000L); }});
+  h.addNotRetryableExceptions(ValidationException.class);
+  return h;
+}
+
+@RetryableTopic(attempts = &quot;4&quot;, backoff = @Backoff(delay = 10_000, multiplier = 3))
+@KafkaListener(topics = &quot;orders&quot;)
+void onOrder(Order o) { service.process(o); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Infinite retries on a poison message, freezing the partition.</li>
+  <li>DLT records without error headers, making triage impossible.</li>
+  <li>Using non-blocking retries where strict per-key order is required.</li>
+  <li>No alerting or replay process for the DLT.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I separate transient from permanent failures. Transient ones like a downstream timeout get a few retries with exponential backoff. A poison message must never block the partition, so after retries, or immediately for validation errors, it goes to a dead letter topic with headers about the error, the offset is committed, and an alert fires so someone can fix and replay it. In Spring Kafka that is DefaultErrorHandler with DeadLetterPublishingRecoverer, RetryableTopic for non-blocking retries, and ErrorHandlingDeserializer for bad payloads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Ordering with retry topics?</strong> Lost per key; use blocking retries or park the whole key if order matters.</li>
+  <li><strong>How do you replay from a DLT?</strong> A tool or connector republishes after a fix, with idempotent handlers.</li>
+  <li><strong>What if the DLT publish fails?</strong> Do not commit; retry or stop the consumer and alert.</li>
+</ul>
+</article>
+</body>
+</html>

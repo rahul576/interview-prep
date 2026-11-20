@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-056 · How do you perform rolling updates with Ansible?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-056" data-topic="Configuration Management">
+<h1>How do you perform rolling updates with Ansible?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>serial</code></strong> to update hosts in batches, take each host <strong>out of the load balancer</strong> with <strong><code>delegate_to</code></strong>, update it, <strong>health-check</strong> it before putting it back, stop with <strong><code>max_fail_percentage</code></strong>, and use <strong><code>run_once</code></strong> for once-per-rollout steps like migrations.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default Ansible runs each task on all hosts in parallel (limited by <code>forks</code>), which for an application deployment means every server restarts at roughly the same time. <strong><code>serial</code></strong> changes the play so that <em>all tasks</em> run on one batch before the next batch starts. It accepts a number, a percentage or a list, for example <code>[1, &quot;25%&quot;, &quot;100%&quot;]</code>, giving a natural <strong>canary</strong>: one host first, then a quarter, then the rest.</p>
+<p>Inside each batch the pattern is drain, update, verify, restore. <strong><code>pre_tasks</code></strong> remove the host from the load balancer. Because that API call must run on the load balancer or the control node rather than on the web server, the task uses <strong><code>delegate_to</code></strong>. The update runs, then <strong><code>post_tasks</code></strong> wait for the application: <code>wait_for</code> on the port and <code>uri</code> with <code>until</code>/<code>retries</code> against a health endpoint. Only a healthy host goes back into the pool.</p>
+<p>Failure handling is crucial. <strong><code>max_fail_percentage</code></strong> aborts the play when more than the given share of a batch fails, so the remaining hosts stay on the old, working version. <code>any_errors_fatal: true</code> is stricter: any failure stops everything. <strong><code>run_once</code></strong> (often with <code>delegate_to</code>) runs a task a single time, for example a backward-compatible database migration in the first batch. Connection draining time should match the longest request, and application changes must tolerate old and new versions running side by side.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Play has <code>serial: [1, &quot;25%&quot;, &quot;100%&quot;]</code> and <code>max_fail_percentage: 0</code>.</li>
+  <li>Pre-task: disable host in the load balancer (delegated), wait for connections to drain.</li>
+  <li>Tasks: deploy the new version and restart the service.</li>
+  <li>Post-task: wait for port and health endpoint to pass.</li>
+  <li>Post-task: re-enable the host in the load balancer.</li>
+  <li>Next batch starts; a failure stops the rollout.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- hosts: web
+  serial: [1, &quot;25%&quot;, &quot;100%&quot;]
+  max_fail_percentage: 0
+  pre_tasks:
+    - name: Drain from HAProxy
+      community.general.haproxy:
+        state: disabled
+        host: &quot;{{ inventory_hostname }}&quot;
+        backend: app
+        drain: true
+      delegate_to: &quot;{{ item }}&quot;
+      loop: &quot;{{ groups['lb'] }}&quot;
+  roles:
+    - app_deploy
+  post_tasks:
+    - name: Wait for health
+      ansible.builtin.uri:
+        url: &quot;http://{{ inventory_hostname }}:8080/health&quot;
+      register: h
+      until: h.status == 200
+      retries: 20
+      delay: 5
+      delegate_to: localhost
+    - name: Back into pool
+      community.general.haproxy:
+        state: enabled
+        host: &quot;{{ inventory_hostname }}&quot;
+        backend: app
+      delegate_to: &quot;{{ item }}&quot;
+      loop: &quot;{{ groups['lb'] }}&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>delegate_to</code>, so the LB call runs on the web host.</li>
+  <li>Health checks that only test the port, not the application.</li>
+  <li>No failure threshold, so a broken release rolls through the whole fleet.</li>
+  <li><code>run_once</code> tasks that are not backward compatible with hosts still on the old version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use <code>serial</code> so the play runs in batches, often a list like one host, then 25 percent, then the rest, which gives me a canary for free. For each batch, pre-tasks drain the host from the load balancer using <code>delegate_to</code> so the call runs on the LB or control node, then the role deploys, and post-tasks wait for the health endpoint with <code>uri</code> and retries before re-enabling the host. <code>max_fail_percentage</code> stops the rollout if a batch fails, leaving the rest on the old version, and one-off steps like migrations use <code>run_once</code>.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you canary on one host first?</strong> <code>serial: [1, ...]</code> or a separate play with <code>--limit canary</code> and a pause or approval.</li>
+  <li><strong><code>serial</code> vs <code>throttle</code>?</strong> <code>serial</code> batches the whole play; <code>throttle</code> limits concurrency of a single task.</li>
+  <li><strong>What about <code>forks</code>?</strong> It caps parallel connections overall; <code>serial</code> defines batch membership.</li>
+</ul>
+</article>
+</body>
+</html>

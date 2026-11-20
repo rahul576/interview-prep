@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-066 · How do you publish values from Terraform for applications and other teams to consume?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-066" data-topic="Terraform">
+<h1>How do you publish values from Terraform for applications and other teams to consume?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>outputs</strong> for humans and the calling pipeline, but publish values for applications and other teams to a <strong>dedicated store</strong> (SSM Parameter Store, Azure App Configuration, <strong>Key Vault</strong> for secrets) that consumers read with <strong>data sources</strong> or at runtime, instead of <strong><code>terraform_remote_state</code></strong>, which <strong>couples</strong> them to your state and exposes <strong>all of it</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Outputs</strong> are the natural interface of a configuration: the pipeline can read <code>terraform output -json</code> and pass values to the next step, and humans can see endpoints after an apply. Within one team, that is often enough.</p>
+<p>Across teams and applications, outputs read via <strong><code>terraform_remote_state</code></strong> cause problems. The consumer needs <strong>read access to the whole state file</strong>, which contains every attribute of every resource, including secrets such as generated passwords and keys. Consumers also become coupled to your <strong>backend location and output names</strong>; if you split or move your state, their code breaks. And applications at runtime should not depend on Terraform at all.</p>
+<p>A better contract is to <strong>publish</strong> values explicitly. Terraform writes non-secret values like endpoints, resource IDs, queue names and subnet IDs into <strong>AWS SSM Parameter Store</strong>, <strong>Azure App Configuration</strong> or a well-named set of Key Vault entries, with a clear hierarchy such as <code>/prod/orders/db-endpoint</code>. <strong>Secrets</strong> go only into a secret store (Key Vault, Secrets Manager), ideally generated so they never pass through humans. Consumers then use <strong>data sources</strong> (<code>aws_ssm_parameter</code>, <code>azurerm_app_configuration_key</code>) in their own Terraform, and applications read them at runtime with their <strong>workload identity</strong>, with permissions scoped to exactly the keys they need.</p>
+<p>For Kubernetes workloads, values flow into <strong>ConfigMaps</strong> via GitOps, and secrets via the <strong>External Secrets Operator</strong> or the Secrets Store CSI driver reading Key Vault, so no secret is ever committed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide the contract: which values are shared, names and owners.</li>
+  <li>Terraform writes them to the parameter store or secret store.</li>
+  <li>Grant consumers read access to specific paths only.</li>
+  <li>Other configurations read via data sources.</li>
+  <li>Applications read at runtime with workload identity.</li>
+  <li>Keep outputs for the pipeline and human visibility.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Producer (database team)
+resource &quot;aws_ssm_parameter&quot; &quot;db_endpoint&quot; {
+  name  = &quot;/prod/orders/db-endpoint&quot;
+  type  = &quot;String&quot;
+  value = aws_db_instance.orders.address
+}
+
+# Consumer (application team, separate state)
+data &quot;aws_ssm_parameter&quot; &quot;db_endpoint&quot; {
+  name = &quot;/prod/orders/db-endpoint&quot;
+}
+
+resource &quot;aws_ecs_task_definition&quot; &quot;api&quot; {
+  # ... uses data.aws_ssm_parameter.db_endpoint.value in the container environment
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting every team read access to production state for remote_state.</li>
+  <li>Publishing secrets as plain parameters or outputs.</li>
+  <li>No naming convention, so parameters become an unstructured dump.</li>
+  <li>Breaking consumers by renaming parameters without a deprecation period.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Outputs are the basic mechanism and work well for humans and the pipeline that ran Terraform. For applications and other teams I publish values to a dedicated store instead: endpoints and IDs into SSM Parameter Store or App Configuration with clear names like /prod/orders/db-endpoint, and secrets only into Key Vault or Secrets Manager. Other configurations read them with data sources and apps read them at runtime with workload identity. That avoids coupling to my state structure and avoids giving read access to the whole state, which contains secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is remote_state access risky?</strong> It exposes the entire state, including secrets and full infrastructure details.</li>
+  <li><strong>How do you version the contract?</strong> Treat names as an API; add new keys before removing old ones.</li>
+  <li><strong>What about HCP Terraform?</strong> <code>tfe_outputs</code> reads only outputs, which is safer than full state access.</li>
+</ul>
+</article>
+</body>
+</html>

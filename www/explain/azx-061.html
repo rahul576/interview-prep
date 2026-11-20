@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-061 · What are container jobs and service containers in Azure Pipelines?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-061" data-topic="Azure DevOps &amp; Pipelines">
+<h1>What are container jobs and service containers in Azure Pipelines?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>container job</strong> runs <strong>all steps of a job inside a specified container image</strong>, giving a <strong>reproducible build environment</strong>; <strong>service containers</strong> start <strong>sidecar dependencies</strong> (PostgreSQL, Redis, brokers) for the job's lifetime, reachable <strong>by service name</strong> (container job) or <strong>mapped localhost ports</strong> (host job); both need <strong>Docker on the agent</strong>, mainly <strong>Linux</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Container jobs:</strong> with <code>container: mcr.microsoft.com/dotnet/sdk:8.0</code> on a job, the agent pulls the image, starts it, mounts the workspace, and runs every step inside it. The exact SDK, compiler and tool versions are defined by the image, which developers can also use locally or in dev containers, so &quot;works on my machine&quot; problems shrink. Different jobs can use different images on the same agent pool, avoiding tool conflicts on shared self-hosted agents. Images can come from ACR or Docker Hub via a <strong>container resource</strong> with an endpoint. Requirements: Docker on the agent, Linux agents (Windows container jobs are possible but limited), and images that can run the agent's Node-based task handlers (most standard images work; minimal images may need tweaks). Some steps (like host-level Docker builds) are harder from inside a container.</p>
+<p><strong>Service containers:</strong> declared under <code>resources.containers</code> and attached to a job with <code>services:</code>. Azure Pipelines starts them before the job and stops them after, creating a Docker network:</p>
+<ul>
+  <li>If the <strong>job runs in a container</strong>, services are reachable by their <strong>name</strong> (<code>postgres:5432</code>).</li>
+  <li>If the job runs <strong>on the host</strong>, map ports (<code>5432:5432</code>) and connect to <code>localhost</code>.</li>
+</ul>
+<p>This is ideal for <strong>integration tests</strong> against a real database, cache or message broker without shared test environments.</p>
+<p><strong>Reliability tips:</strong> services may start before they're ready, so wait for readiness (a health check loop or <code>pg_isready</code>), use pinned image tags, seed data in a setup step, and keep tests isolated (fresh schema per run). For bigger setups, <strong>Testcontainers</strong> in the test code or <code>docker compose</code> steps are alternatives.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent pulls the job image and service images.</li>
+  <li>Creates a Docker network and starts services.</li>
+  <li>Starts the job container with workspace mounted.</li>
+  <li>Runs steps inside the job container.</li>
+  <li>Tears down containers after the job.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resources:
+  containers:
+  - container: pg
+    image: postgres:16
+    env: { POSTGRES_PASSWORD: test }
+  - container: redis
+    image: redis:7
+jobs:
+- job: integration
+  pool: { vmImage: ubuntu-latest }
+  container: mcr.microsoft.com/dotnet/sdk:8.0
+  services:
+    postgres: pg
+    cache: redis
+  steps:
+  - script: |
+      until (echo &gt; /dev/tcp/postgres/5432) 2&gt;/dev/null; do sleep 1; done
+      dotnet test tests/Integration --logger trx
+    env:
+      ConnectionStrings__Db: Host=postgres;Username=postgres;Password=test
+      Redis__Host: cache:6379</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Not waiting for the service to be ready, causing flaky tests.</li>
+  <li>Using <code>localhost</code> from a container job (use the service name).</li>
+  <li><code>latest</code> tags for service images.</li>
+  <li>Expecting container jobs on macOS or most Windows agents.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A container job specifies an image, and the agent runs every step inside that container instead of on the host, which gives a reproducible environment with exact SDK and tool versions that developers can use locally too. Service containers are extra containers started alongside the job for dependencies like PostgreSQL or Redis during integration tests; they live for the job and are reachable by service name when the job runs in a container, or through mapped ports on the host. Both need Docker on the agent, so they're mainly for Linux agents. I make tests reliable by waiting for readiness and pinning image versions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Reliable DB integration tests in CI?</strong> Readiness checks, pinned images, fresh schema per run, migrations as part of the test.</li>
+  <li><strong>Container job vs Docker build step?</strong> Container job is the execution environment; a Docker step builds images.</li>
+  <li><strong>Testcontainers?</strong> Manages containers from test code; works on any Docker-capable agent.</li>
+</ul>
+</article>
+</body>
+</html>

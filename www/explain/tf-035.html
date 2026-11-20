@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-035 · You want Terraform to create the storage account that will hold its own remote state. How do you solve this chicken-and-egg problem?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-035" data-topic="Terraform">
+<h1>You want Terraform to create the storage account that will hold its own remote state. How do you solve this chicken-and-egg problem?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use a small <strong>bootstrap configuration</strong> that creates the state storage with <strong>local state</strong>, then add the backend and run <strong><code>terraform init -migrate-state</code></strong> to move its own state there; or create the backend <strong>outside Terraform</strong> (script, CLI, management account), and in all cases <strong>protect the state store</strong> heavily and <strong>document the one-time bootstrap</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A remote backend must <strong>exist before <code>terraform init</code></strong> can use it, but you want the storage account or S3 bucket itself to be managed as code with proper settings. That is the chicken-and-egg problem.</p>
+<p><strong>Option 1: bootstrap with local state, then migrate.</strong> A dedicated <code>bootstrap/</code> configuration creates the state storage: an S3 bucket (versioning, encryption, public access block, bucket policy, optionally Object Lock), or an Azure resource group, storage account and container (blob versioning, soft delete, private endpoint, RBAC, <code>CanNotDelete</code> lock). It runs <strong>once with local state</strong>, since no backend exists yet. Then you add a backend block pointing to the new storage, with its own key such as <code>bootstrap/terraform.tfstate</code>, and run <strong><code>terraform init -migrate-state</code></strong>. Terraform copies the local state into the bucket, and from then on the bootstrap is managed like any other configuration, including changes through pull requests.</p>
+<p><strong>Option 2: create the backend outside Terraform.</strong> A script with the AWS or Azure CLI, a CloudFormation stack, or an account-vending process creates the storage, often in a separate <strong>management or &quot;tooling&quot; account/subscription</strong>. This avoids the circular dependency entirely; you can later import the resources into Terraform if you want them in code.</p>
+<p>Either way, the state store is the <strong>most sensitive part</strong> of the setup: it holds the map of all infrastructure and often secrets. Protect it with <strong>versioning or soft delete</strong>, <strong>encryption</strong>, <strong>private network access</strong>, <strong>very restricted write permissions</strong> (pipelines only), <strong>deletion locks</strong> and access logging. Document the bootstrap as a <strong>rare, one-time runbook</strong>, including how to recover.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write <code>bootstrap/</code> configuration for the state storage.</li>
+  <li><code>terraform init &amp;&amp; terraform apply</code> with local state.</li>
+  <li>Add backend block (<code>key = &quot;bootstrap/terraform.tfstate&quot;</code>).</li>
+  <li><code>terraform init -migrate-state</code>; confirm copy.</li>
+  <li>Delete local state; verify <code>terraform plan</code> shows no changes.</li>
+  <li>Other configurations use the new backend with their own keys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># bootstrap/main.tf
+resource &quot;aws_s3_bucket&quot; &quot;state&quot; {
+  bucket = &quot;acme-tfstate-prod&quot;
+  lifecycle { prevent_destroy = true }
+}
+
+resource &quot;aws_s3_bucket_versioning&quot; &quot;state&quot; {
+  bucket = aws_s3_bucket.state.id
+  versioning_configuration { status = &quot;Enabled&quot; }
+}
+
+resource &quot;aws_s3_bucket_public_access_block&quot; &quot;state&quot; {
+  bucket                  = aws_s3_bucket.state.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# added after the first apply:
+terraform {
+  backend &quot;s3&quot; {
+    bucket       = &quot;acme-tfstate-prod&quot;
+    key          = &quot;bootstrap/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    use_lockfile = true
+  }
+}</code></pre>
+<pre><code class="language-bash">terraform init -migrate-state</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving the bootstrap state on a laptop forever.</li>
+  <li>No versioning, so a corrupted state cannot be recovered.</li>
+  <li>Broad write access to the state bucket.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use a small bootstrap configuration that creates the state storage, like a storage account with a container or an S3 bucket, with versioning, encryption and access policies. It first runs with local state because the backend doesn't exist yet. Once the storage exists, I add the backend block and run <code>terraform init -migrate-state</code>, so even the bootstrap state lives remotely under its own key. Some teams instead create the backend with a script or in a separate management account, which avoids the circular dependency. Either way the state store gets strong protection: deletion locks, versioning or soft delete, private access and very restricted permissions, and the bootstrap is documented as a one-time process.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Recovering if the state storage were deleted?</strong> Recover the account or bucket if possible, restore state from backups or replicas, otherwise re-import resources.</li>
+  <li><strong>Should the bootstrap use the same bucket?</strong> Commonly yes, under its own key, or a separate management account.</li>
+  <li><strong>How do you protect state from ransomware?</strong> Versioning with Object Lock or immutability, separate account, cross-region copies.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-023 · What is disaggregated serving, separating prefill and decode, and why is it gaining attention?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-023" data-topic="LLMOps &amp; RAG">
+<h1>What is disaggregated serving, separating prefill and decode, and why is it gaining attention?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Disaggregated serving</strong> runs <strong>compute-bound prefill</strong> and <strong>memory-bound decode</strong> on <strong>separate GPU pools</strong>, <strong>transferring the KV cache</strong> between them, so long prefills <strong>no longer stall decodes</strong> and each pool <strong>scales independently</strong>, improving latency consistency and goodput; it powers frameworks like <strong>llm-d, NVIDIA Dynamo</strong>, and vLLM/SGLang disaggregation.</p>
+
+<h2>Detailed explanation</h2>
+<p>Prefill and decode have opposite profiles. <strong>Prefill</strong> processes thousands of prompt tokens at once: compute-bound, bursty, and it determines <strong>TTFT</strong>. <strong>Decode</strong> generates one token per step for many sequences: memory-bandwidth-bound, steady, and it determines <strong>inter-token latency</strong>. On a shared GPU, a big prefill arriving mid-stream occupies the GPU for that step, so every ongoing decode stalls, causing <strong>latency spikes</strong>. Chunked prefill reduces but does not eliminate this interference, and you cannot pick one batch size, parallelism layout or GPU type that is optimal for both phases.</p>
+<p><strong>Disaggregation</strong> splits them. A request goes first to a <strong>prefill worker</strong>, which computes the prompt's KV cache and the first token. The <strong>KV cache is transferred</strong> to a <strong>decode worker</strong> over a high-bandwidth interconnect (NVLink, InfiniBand or RoCE using RDMA, via libraries such as <strong>NIXL</strong>), and the decode worker continues generation. Benefits:</p>
+<ul>
+  <li>No prefill-decode interference, so <strong>ITL is stable</strong> and TTFT more predictable.</li>
+  <li>Each pool uses its own <strong>parallelism and batching</strong> settings, possibly different hardware.</li>
+  <li>Pools <strong>scale independently</strong>: RAG workloads with long prompts need more prefill capacity; chat with long answers needs more decode capacity.</li>
+  <li>Better <strong>goodput</strong> under SLOs at large scale.</li>
+</ul>
+<p>It fits into a broader architecture: <strong>KV-cache-aware routing</strong> in an inference gateway (prefer the worker that already holds a request's prefix), <strong>tiered KV caching</strong> across GPU, CPU and storage, and global scheduling. Open-source frameworks include <strong>llm-d</strong> (Kubernetes-native, built on vLLM and the Gateway API Inference Extension), <strong>NVIDIA Dynamo</strong>, and disaggregated prefill support in <strong>vLLM</strong> and <strong>SGLang</strong>.</p>
+<p>The cost is <strong>complexity</strong>: more components, KV transfer bandwidth requirements, failure handling between stages and tuning of the prefill-to-decode ratio. For a few GPUs or short prompts, a well-tuned single pool with chunked prefill is usually better; disaggregation pays off at <strong>large scale with long prompts</strong> and strict SLOs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gateway receives a request; picks a prefill worker (prefix-aware).</li>
+  <li>Prefill computes KV cache and first token.</li>
+  <li>KV blocks transfer to a decode worker via RDMA.</li>
+  <li>Decode worker streams remaining tokens.</li>
+  <li>Autoscalers scale prefill and decode pools on their own metrics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Cluster: 16 x H100
+Prefill pool: 4 GPUs, TP=4, large token budget per step
+Decode pool: 12 GPUs, 3 replicas TP=4, large max-num-seqs
+Router: KV-aware; KV transfer over InfiniBand (NIXL)
+Workload: RAG, 8K-token prompts, 300-token answers → prefill-heavy; rebalance ratio from metrics</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adopting disaggregation for a small cluster where it only adds overhead.</li>
+  <li>Underestimating KV transfer bandwidth needs.</li>
+  <li>Fixed prefill:decode ratios that ignore workload shifts.</li>
+  <li>Ignoring failure modes between stages.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Prefill is compute-bound and bursty, while decode is memory-bound and steady. On the same GPUs a long prefill can stall everyone's decoding and cause latency spikes, and no single configuration suits both. Disaggregated serving runs them on separate GPU pools: a prefill worker computes the KV cache, transfers it over fast networking to a decode worker, which generates the tokens. Each pool scales and is tuned independently, which improves latency consistency and goodput. With KV-aware inference gateways, this is the direction of llm-d, NVIDIA Dynamo and vLLM and SGLang. It adds complexity, so it pays off mainly at large scale.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why high-bandwidth networking?</strong> KV caches are gigabytes for long prompts; slow transfer erases the TTFT gain.</li>
+  <li><strong>How choose the pool ratio?</strong> From prompt and output length distributions and per-pool queue metrics.</li>
+  <li><strong>Alternative at small scale?</strong> Chunked prefill and priority scheduling on a single pool.</li>
+</ul>
+</article>
+</body>
+</html>

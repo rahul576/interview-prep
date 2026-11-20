@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-038 · You need to move part of a large Terraform configuration into a separate state owned by another team without recreating anything. How do you do it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-038" data-topic="Terraform">
+<h1>You need to move part of a large Terraform configuration into a separate state owned by another team without recreating anything. How do you do it?</h1>
+<p class="ex-meta">Terraform · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Split state by <strong>planning the cut and the new interfaces</strong>, then use <strong>import blocks</strong> in the new configuration and <strong>removed blocks with <code>destroy = false</code></strong> in the old one, requiring <strong>both plans to show no creates or destroys</strong>, under a short <strong>change freeze</strong> with <strong>state backups</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Moving resources between states is a pure bookkeeping operation: the real cloud objects must not change. The risk is that one side thinks a resource is new (create) or gone (destroy). Since Terraform 1.5 <strong>import blocks</strong> and since 1.7 <strong>removed blocks</strong> let you do this declaratively, reviewed in a pull request and visible in plans, instead of running <code>terraform state rm</code> and <code>terraform import</code> by hand.</p>
+<p>The design part matters as much as the commands. Resources that move often had <strong>direct references</strong> from resources that stay, such as a subnet ID used by a VM. After the split those references cross a state boundary, so you need an interface: <strong>outputs</strong> consumed via <code>terraform_remote_state</code>, or better, <strong>data sources</strong> or published values in a parameter store. Decide this first, because it determines what code changes on both sides.</p>
+<p>Ordering is important. <strong>Import into the new state first</strong>, so the resources are always managed by at least one state. Then apply the old configuration with removed blocks so it forgets them. Two states briefly managing the same object is acceptable for minutes during a freeze, never longer. Applying the old side first leaves a window where nothing manages the resources, and a mistake there (removed block without <code>destroy = false</code>) would destroy them.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List the resources that move and their cloud IDs; define the new cross-state interfaces.</li>
+  <li>Announce a change freeze; back up both states (<code>terraform state pull &gt; backup.tfstate</code>).</li>
+  <li>In the new configuration, write matching code plus <code>import</code> blocks.</li>
+  <li>In the old configuration, delete that code and add <code>removed</code> blocks with <code>destroy = false</code>; replace references with data sources.</li>
+  <li>Plan both: new shows only imports; old shows only &quot;will no longer be managed&quot;.</li>
+  <li>Apply new first, then old; re-plan both and confirm they are clean.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># new-team/network.tf
+import {
+  to = azurerm_subnet.app
+  id = &quot;/subscriptions/.../resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-prod/subnets/snet-app&quot;
+}
+resource &quot;azurerm_subnet&quot; &quot;app&quot; { /* matching configuration */ }
+
+# old-config/main.tf
+removed {
+  from = azurerm_subnet.app
+  lifecycle { destroy = false }
+}
+data &quot;azurerm_subnet&quot; &quot;app&quot; {
+  name                 = &quot;snet-app&quot;
+  virtual_network_name = &quot;vnet-prod&quot;
+  resource_group_name  = &quot;rg-net&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>destroy = false</code>, which makes the removed block destroy the resources.</li>
+  <li>Applying the old state first, leaving resources unmanaged or destroyed.</li>
+  <li>Accepting a plan with &quot;update in-place&quot; in the new state; the code does not match reality yet.</li>
+  <li>Skipping backups before touching state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with design: which resources move and how the two states will share values afterwards, usually data sources instead of direct references. I freeze changes and back up both states. In the new configuration I add the code and import blocks with the cloud IDs; in the old one I delete the code and add removed blocks with destroy set to false. Both plans must show zero creates and destroys: imports on one side, no longer managed on the other. I apply the new state first, then the old, and confirm both plans are clean.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if the old state is applied first?</strong> Resources become unmanaged, or destroyed if <code>destroy = false</code> is missing.</li>
+  <li><strong>Can moved blocks do this?</strong> No, moved works only within one state.</li>
+  <li><strong>How do you import many resources?</strong> Import blocks support <code>for_each</code> since Terraform 1.7.</li>
+</ul>
+</article>
+</body>
+</html>

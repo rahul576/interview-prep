@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-097 · A service that consumes from a queue falls far behind during peaks. How do you make it scale properly on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-097" data-topic="Kubernetes">
+<h1>A service that consumes from a queue falls far behind during peaks. How do you make it scale properly on Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Scale queue consumers on <strong>backlog or consumer lag</strong>, not CPU, using <strong>KEDA</strong> or an <strong>external-metrics HPA</strong>, while respecting <strong>partition limits</strong>, ensuring <strong>node capacity and fast startup</strong>, <strong>shutting down gracefully</strong>, and <strong>protecting downstream systems</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Queue consumers are usually <strong>I/O-bound</strong>: they wait on the broker, a database or an API. CPU stays low while millions of messages pile up, so a CPU-based HPA never adds replicas. The signal that matters is the <strong>backlog</strong>: messages waiting in RabbitMQ, SQS or Service Bus, or <strong>consumer group lag</strong> in Kafka.</p>
+<p><strong>KEDA</strong> is the standard tool. A <code>ScaledObject</code> points at a Deployment and a scaler (Kafka, RabbitMQ, SQS, Azure Service Bus and many more); KEDA exposes the metric to the HPA and can also <strong>scale to zero</strong> when the queue is empty. You set a target such as 100 messages of lag per replica, and replicas = backlog / target, capped by min and max. A plain HPA with an external metric from Prometheus Adapter works too.</p>
+<p>There are limits. In <strong>Kafka, each partition is consumed by at most one consumer in a group</strong>, so replicas beyond the partition count sit idle; you may need more partitions (planned carefully, as it changes key ordering). New replicas need <strong>nodes</strong>, so the cluster autoscaler or Karpenter and <strong>fast container startup</strong> decide how quickly backlog drains. <strong>Scale-down</strong> must be graceful: on SIGTERM a consumer stops fetching, finishes in-flight messages, commits offsets or acks, then exits, otherwise messages are lost or reprocessed. Finally, consumers often write to a database; scaling them twentyfold can just <strong>move the bottleneck</strong>, so set <code>maxReplicaCount</code>, connection pool limits or rate limits.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Expose backlog or lag as a metric (KEDA scaler or Prometheus).</li>
+  <li>Define target lag per replica and min/max replicas.</li>
+  <li>HPA computes desired replicas from the metric.</li>
+  <li>Autoscaler adds nodes if pods are Pending.</li>
+  <li>On scale-down, consumers drain and commit before exiting.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: orders-consumer }
+spec:
+  scaleTargetRef: { name: orders-consumer }
+  minReplicaCount: 2
+  maxReplicaCount: 24          # = partition count, and DB can take it
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: orders
+        topic: orders
+        lagThreshold: &quot;500&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scaling on CPU for an I/O-bound consumer.</li>
+  <li>Setting max replicas above the partition count.</li>
+  <li>No graceful shutdown, causing duplicates or losses during scale-down.</li>
+  <li>Unlimited scaling that overloads the database.</li>
+  <li>Ignoring slow startup, so scale-out arrives after the peak.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A queue consumer is usually I/O-bound, so CPU stays low while the backlog grows and a CPU HPA never reacts. I scale on the backlog itself, using KEDA with the Kafka, RabbitMQ, SQS or Service Bus scaler, or an HPA on an external metric, with a target lag per replica. For Kafka, partitions cap the useful number of consumers. New replicas need node capacity and fast startup. Scale-down must be graceful, committing offsets or acknowledging messages before exit. And I cap replicas or rate-limit, because scaling consumers can simply move the bottleneck to the database.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you pick the target lag per replica?</strong> Measure throughput per replica and divide by acceptable drain time; for example 50 msg/s and 10 s gives 500.</li>
+  <li><strong>Scale to zero?</strong> Fine for batch-like queues; adds cold-start latency for the first messages.</li>
+  <li><strong>How do you avoid flapping?</strong> Use HPA stabilisation windows and KEDA cooldown periods.</li>
+</ul>
+</article>
+</body>
+</html>

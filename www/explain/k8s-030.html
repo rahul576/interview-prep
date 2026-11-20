@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-030 · How have service account tokens changed, and how do pods get cloud permissions with workload identity?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-030" data-topic="Kubernetes">
+<h1>How have service account tokens changed, and how do pods get cloud permissions with workload identity?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Service accounts moved from <strong>long-lived token Secrets</strong> to <strong>bound, projected tokens</strong> from the <strong>TokenRequest API</strong>: <strong>audience-bound, pod-bound, expiring</strong> and <strong>auto-rotated</strong> by the kubelet. The same signed tokens enable <strong>workload identity</strong>: cloud IAM trusts the cluster's <strong>OIDC issuer</strong> and exchanges tokens for <strong>short-lived cloud credentials</strong> (IRSA / EKS Pod Identity, Azure Workload Identity, GKE Workload Identity).</p>
+
+<h2>Detailed explanation</h2>
+<p>Originally, every ServiceAccount got a Secret containing a JWT that <strong>never expired</strong> and wasn't tied to any pod. Anyone who copied it, from a pod, a backup or a log, had that identity forever.</p>
+<p>Modern clusters use <strong>bound service account tokens</strong>:</p>
+<ul>
+  <li>The kubelet requests a token through the <strong>TokenRequest API</strong> and mounts it via a <strong>projected volume</strong> at <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>.</li>
+  <li>The token has an <strong>audience</strong> (who may accept it), an <strong>expiry</strong> (about an hour by default for the API audience, refreshed by the kubelet before expiry) and is <strong>bound to the pod</strong>: deleting the pod invalidates it.</li>
+  <li>Since 1.24, token Secrets are no longer auto-created, and unused legacy ones are later cleaned up; long-lived tokens must be created explicitly, which should be rare.</li>
+  <li>Set <strong><code>automountServiceAccountToken: false</code></strong> on pods or ServiceAccounts that don't call the Kubernetes API, reducing what an attacker gets from a compromised container.</li>
+</ul>
+<p><strong>Workload identity</strong> reuses these tokens for the cloud. The cluster's service account issuer publishes an <strong>OIDC discovery document and public keys</strong>. You configure cloud IAM to trust that issuer for a specific subject, <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>, and audience. The pod gets a projected token with that audience; the cloud SDK exchanges it (for example AWS STS <code>AssumeRoleWithWebIdentity</code>, Microsoft Entra federated credentials, GCP STS) for short-lived cloud credentials. Implementations: <strong>IRSA</strong> and <strong>EKS Pod Identity</strong> on AWS (Pod Identity uses an agent and associations instead of per-cluster OIDC trust), <strong>Microsoft Entra Workload ID</strong> on AKS, <strong>Workload Identity Federation for GKE</strong>. No cloud keys are stored in Secrets, and access is scoped per service account.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod uses ServiceAccount <code>orders</code> annotated or associated with a cloud role.</li>
+  <li>Kubelet requests a projected token with the cloud audience.</li>
+  <li>SDK reads the token file and calls the cloud token service.</li>
+  <li>Cloud validates signature via the OIDC keys and checks the subject.</li>
+  <li>Short-lived credentials returned; kubelet refreshes the token before expiry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orders
+  namespace: shop
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/shop-orders   # IRSA
+automountServiceAccountToken: false
+---
+# In the pod spec, mount only what is needed
+spec:
+  serviceAccountName: orders
+  automountServiceAccountToken: true</code></pre>
+<pre><code class="language-json">&quot;Condition&quot;: { &quot;StringEquals&quot;: {
+  &quot;oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE:sub&quot;: &quot;system:serviceaccount:shop:orders&quot;,
+  &quot;oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE:aud&quot;: &quot;sts.amazonaws.com&quot; } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trust policies matching any service account in the cluster (wildcard subject).</li>
+  <li>Creating legacy long-lived token Secrets for CI out of habit.</li>
+  <li>Mounting tokens into every pod by default.</li>
+  <li>Storing cloud access keys in Secrets when workload identity is available.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Service accounts used to get a long-lived token in a Secret that never expired. Since 1.24 pods get bound, projected tokens from the TokenRequest API: audience-bound, tied to the pod, expiring and auto-rotated by the kubelet, and legacy token secrets aren't created automatically. Pods that don't call the API set automountServiceAccountToken false. Workload identity uses those tokens: the cluster publishes an OIDC issuer, cloud IAM trusts tokens for a specific namespace and service account and exchanges them for short-lived credentials, with IRSA or EKS Pod Identity, Azure Workload Identity or GKE Workload Identity. No cloud keys live in the cluster.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why scope to one namespace and service account?</strong> Otherwise any pod in the cluster could assume the role.</li>
+  <li><strong>IRSA vs EKS Pod Identity?</strong> Pod Identity avoids per-cluster OIDC trust setup and simplifies role reuse across clusters.</li>
+  <li><strong>Can tokens be used outside the cluster?</strong> Yes, which is why short expiry and audience binding matter.</li>
+</ul>
+</article>
+</body>
+</html>

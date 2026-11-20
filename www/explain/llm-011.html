@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-011 · What is prompt caching or prefix caching, and how do you design prompts to benefit from it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-011" data-topic="LLMOps &amp; RAG">
+<h1>What is prompt caching or prefix caching, and how do you design prompts to benefit from it?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Prompt (prefix) caching</strong> reuses the <strong>computed KV cache for an identical prompt prefix</strong>, skipping that prefill work to cut <strong>latency and cost</strong>; design prompts with <strong>stable content first</strong> (system prompt, tools, documents) and <strong>variable content last</strong>, and keep traffic steady because caches <strong>expire after minutes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Most production prompts repeat a large identical beginning: a long system prompt, tool definitions, few-shot examples, a policy document, or the earlier turns of a conversation. Recomputing that prefill for every call wastes GPU time and makes <strong>time to first token</strong> grow with prompt length.</p>
+<p>With <strong>prefix caching</strong>, the server keeps the KV blocks for previously seen prefixes. When a new request starts with exactly the same tokens, the engine reuses those blocks and only prefills the new suffix. Self-hosted engines do this automatically: <strong>vLLM's automatic prefix caching</strong> hashes KV blocks, and <strong>SGLang's RadixAttention</strong> keeps a radix tree of prefixes. Hosted APIs offer it too, with pricing incentives: <strong>Anthropic</strong> uses explicit <code>cache_control</code> breakpoints, charges a premium on cache writes and a large discount (around 90 percent) on cache reads; <strong>OpenAI</strong> caches automatically for prompts above about 1,024 tokens with discounted cached input; <strong>Google Gemini</strong> offers implicit caching plus explicit context caches. Prices change; check current docs.</p>
+<p>Matching is <strong>exact and prefix-based</strong>: a single changed token invalidates everything after it. Prompt design therefore matters:</p>
+<ul>
+  <li>Put <strong>stable content first, in a fixed order</strong>: instructions, tool schemas, reference documents, examples.</li>
+  <li>Then <strong>conversation history</strong>, which grows by appending, so each turn reuses the previous turn's prefix.</li>
+  <li>Put <strong>variable content last</strong>: the latest user question, retrieved chunks that differ per request, timestamps, user names.</li>
+  <li>Keep serialisation deterministic (stable JSON key order, same tool list order).</li>
+</ul>
+<p>Caches are evicted after a period of inactivity (often about 5 minutes on APIs, with options for longer TTLs on some) or under memory pressure, so steady traffic benefits most. On self-hosted clusters, <strong>prefix-aware routing</strong> sends similar requests to the replica that holds the cache.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives; engine hashes prompt blocks.</li>
+  <li>Longest matching cached prefix is found.</li>
+  <li>Cached KV blocks are reused; only the suffix is prefilled.</li>
+  <li>New blocks are cached for future requests.</li>
+  <li>Inactive entries expire or are evicted (LRU).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">resp = client.messages.create(
+    model=MODEL,
+    max_tokens=800,
+    system=[{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: LONG_POLICY_AND_INSTRUCTIONS,
+             &quot;cache_control&quot;: {&quot;type&quot;: &quot;ephemeral&quot;}}],
+    tools=TOOLS,                      # stable order
+    messages=history + [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}],
+)
+print(resp.usage.cache_read_input_tokens, resp.usage.cache_creation_input_tokens)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting the current date or request ID at the top of the system prompt.</li>
+  <li>Reordering tools or JSON keys between requests.</li>
+  <li>Inserting per-request retrieved context before the stable instructions.</li>
+  <li>Assuming caching works for prompts shorter than the provider's minimum.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Many requests share a long identical beginning, like the system prompt, tool definitions or a document. Prefix caching stores the KV cache for that prefix and reuses it, skipping that prefill, which cuts time to first token and cost; APIs from Anthropic, OpenAI and Google discount cached tokens heavily, and vLLM and SGLang do it automatically. To benefit, I put stable content first in a fixed order, then conversation history, and variable parts like the user's question or a timestamp at the end, because one changed token breaks the cache from that point. Caches expire after minutes, so steady traffic benefits most.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Verify cache hits in production?</strong> Log cached-token fields from API usage or engine prefix-hit metrics.</li>
+  <li><strong>Does caching change output?</strong> No, the KV values are the same computation.</li>
+  <li><strong>Multi-replica self-hosting?</strong> Use prefix-aware routing so requests reach the replica with the cache.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-004 · What are native sidecar containers in Kubernetes, and what problems did they fix?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-004" data-topic="Kubernetes">
+<h1>What are native sidecar containers in Kubernetes, and what problems did they fix?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Native sidecars</strong> are <strong>init containers with <code>restartPolicy: Always</code></strong>: they <strong>start before</strong> the app containers, <strong>keep running</strong> alongside them, are <strong>stopped after</strong> them on shutdown, and no longer stop <strong>Jobs</strong> from completing; the feature is <strong>GA since Kubernetes 1.33</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Sidecars such as service mesh proxies, log shippers, secret agents and Cloud SQL proxies used to be ordinary entries in <code>containers</code>. Kubernetes treated all regular containers as equals, which caused three long-standing problems:</p>
+<ol>
+  <li><strong>Start-up order:</strong> the app could start before the proxy was ready and fail its first network calls.</li>
+  <li><strong>Jobs never finished:</strong> a Job is complete when all containers exit; the sidecar kept running, so the pod never reached Completed.</li>
+  <li><strong>Shutdown order:</strong> on termination all containers got SIGTERM together, so the proxy could exit while the app was still draining requests.</li>
+</ol>
+<p>The native design reuses init containers. A container in <code>initContainers</code> with <code>restartPolicy: Always</code> is a <strong>sidecar</strong>. The kubelet starts it in order like other init containers but does <strong>not wait for it to exit</strong>; it waits only for it to be started (and for its startupProbe, if defined), then moves on to the next init container and eventually the app containers. It is restarted if it crashes, can have readiness and liveness probes, and contributes to pod readiness. When the main containers finish (a Job) or the pod is terminated, sidecars are <strong>stopped after the main containers</strong>, in reverse order.</p>
+<p>The feature was beta and enabled by default from 1.29 and graduated to stable in 1.33. Istio and other projects use it when the cluster supports it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Regular init containers run to completion.</li>
+  <li>Sidecar init container starts; startupProbe passes.</li>
+  <li>App containers start, with the proxy already available.</li>
+  <li>Sidecar runs for the pod's lifetime and restarts on failure.</li>
+  <li>App exits (Job) or pod terminates → app stops first.</li>
+  <li>Sidecars receive SIGTERM afterwards.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata: { name: nightly-export }
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: log-shipper
+        image: fluent/fluent-bit:3.1
+        restartPolicy: Always          # makes it a native sidecar
+        volumeMounts: [ { name: logs, mountPath: /logs } ]
+      containers:
+      - name: export
+        image: registry.example.com/export:2.0
+        volumeMounts: [ { name: logs, mountPath: /logs } ]
+      volumes: [ { name: logs, emptyDir: {} } ]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Still putting sidecars in <code>containers</code> on modern clusters.</li>
+  <li>No startupProbe, so the app starts before the sidecar is really ready.</li>
+  <li>Forgetting the sidecar's resources count for the whole pod lifetime.</li>
+  <li>Assuming old clusters (pre-1.29 defaults) support it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Native sidecars are init containers with restartPolicy Always. The kubelet starts them in order before the app containers but doesn't wait for them to exit; they keep running for the pod's lifetime and restart if they crash. On shutdown they're stopped after the main containers, so a mesh proxy or log shipper is still there while the app drains. That fixed the old problems: apps starting before the proxy was ready, Jobs never completing because the sidecar kept running, and bad shutdown ordering. It's GA since 1.33, and Istio and logging agents use it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Old workarounds for Jobs?</strong> The app wrote a file or called the proxy's quit endpoint (for example Istio's <code>/quitquitquit</code>) when done.</li>
+  <li><strong>Do sidecars affect pod readiness?</strong> Yes, their readiness probes count towards the pod being Ready.</li>
+  <li><strong>How are sidecar resources counted?</strong> They're added to the app containers' requests for scheduling, since they run concurrently.</li>
+</ul>
+</article>
+</body>
+</html>

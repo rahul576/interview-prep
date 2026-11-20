@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-037 · Azure Policy automatically adds tags to resources, and now every Terraform plan shows tag changes. How do you handle it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-037" data-topic="Terraform">
+<h1>Azure Policy automatically adds tags to resources, and now every Terraform plan shows tag changes. How do you handle it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Azure Policy</strong> with a <strong>modify</strong> effect adds tags outside Terraform, so every plan tries to remove them; the best fix is to <strong>define the same tags in Terraform</strong> so policy has nothing to do, and otherwise <strong>ignore those tag keys</strong>, after agreeing <strong>who owns which tags</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform considers the <code>tags</code> map in code to be the complete desired set. When Azure Policy (modify or append-style effects), AWS automation or a tag-inheritance rule adds <code>CostCenter</code> or <code>Owner</code> after creation, the real resource has more tags than the code. The plan shows them being removed, an apply removes them, and the policy remediation adds them back. That loop creates <strong>noise in every plan</strong> and hides real changes.</p>
+<p>The strongest fix is to make Terraform the <strong>source of the same tags</strong>. Put the organisation's mandatory tags in a common <code>locals</code> map, merge it into every resource, or on AWS use provider-level <strong><code>default_tags</code></strong> so every resource gets them automatically. Then policy finds nothing to change and acts only as a <strong>safety net</strong> for resources created outside Terraform.</p>
+<p>When some tags are genuinely owned by the platform team (for example a tag stamped by a governance process), tell Terraform to leave them alone. Terraform supports ignoring individual map keys, such as <code>ignore_changes = [tags[&quot;CostCenter&quot;]]</code>, which is better than ignoring all tags. On AWS the provider also has an <strong><code>ignore_tags</code></strong> block with <code>keys</code> and <code>key_prefixes</code>, which applies across every resource. Many teams also prefer a <strong>deny</strong> or <strong>audit</strong> policy over modify: deny fails the apply with a clear message, so the code gets fixed at the source instead of being silently patched.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Look at the plan to identify which keys keep reappearing.</li>
+  <li>Find the policy assignment that adds them and its effect.</li>
+  <li>Agree ownership: application tags in code, governance tags either in code or explicitly platform-owned.</li>
+  <li>Add mandatory tags to a shared locals map or <code>default_tags</code>.</li>
+  <li>For platform-owned keys, add per-key <code>ignore_changes</code> or provider <code>ignore_tags</code>.</li>
+  <li>Confirm the plan is clean and the policy shows resources as compliant.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">locals {
+  common_tags = {
+    CostCenter  = var.cost_center
+    Environment = var.environment
+    Owner       = &quot;team-orders&quot;
+  }
+}
+
+resource &quot;azurerm_storage_account&quot; &quot;data&quot; {
+  name                     = &quot;stordersprod01&quot;
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = &quot;westeurope&quot;
+  account_tier             = &quot;Standard&quot;
+  account_replication_type = &quot;ZRS&quot;
+  tags                     = merge(local.common_tags, { Purpose = &quot;exports&quot; })
+
+  lifecycle {
+    ignore_changes = [tags[&quot;PolicyStamp&quot;]]   # set by platform policy only
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ignoring the whole <code>tags</code> attribute, so application teams can no longer manage their own tags.</li>
+  <li>Letting policy and Terraform fight forever and training reviewers to skim noisy plans.</li>
+  <li>Using different spellings or casing for the same key in code and policy.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The policy adds tags after creation, Terraform thinks they should not exist and removes them, then policy adds them again, so every plan is noisy. My first fix is to define those mandatory tags in Terraform itself, through a common tags local or AWS default_tags, so policy finds nothing to change and becomes a safety net. If a tag really belongs to the platform team, I ignore just that key with ignore_changes on tags with the key name, not all tags. Most importantly, I agree with the platform team which tags are owned by whom, and often prefer a deny policy so problems are fixed in code.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is deny sometimes better than modify?</strong> It fails fast and forces the fix in code instead of creating hidden drift.</li>
+  <li><strong>What about resource group tag inheritance?</strong> Same issue; either set the tags in code or ignore the inherited keys.</li>
+  <li><strong>Does default_tags show in plans?</strong> Yes, as <code>tags_all</code>, which includes provider default tags.</li>
+</ul>
+</article>
+</body>
+</html>

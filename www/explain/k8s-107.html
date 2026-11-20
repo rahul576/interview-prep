@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-107 · Your cluster runs many microservices and security asks you to restrict which services can talk to each other. How do you implement and verify it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-107" data-topic="Kubernetes">
+<h1>Your cluster runs many microservices and security asks you to restrict which services can talk to each other. How do you implement and verify it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>NetworkPolicies</strong> enforced by the <strong>CNI</strong> (Calico, Cilium, cloud network policy) with <strong>default deny ingress and egress</strong> per namespace and <strong>explicit allow rules</strong> per service, <strong>including DNS</strong>; add a <strong>service mesh or Cilium L7 policies</strong> for identity and HTTP-level rules; verify with <strong>test pods</strong> and roll out <strong>gradually</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default every pod can reach every other pod. A <strong>NetworkPolicy</strong> selects pods by <strong>labels</strong> and defines allowed <strong>ingress</strong> and <strong>egress</strong> peers by pod selectors, namespace selectors and IP blocks, plus ports.</p>
+<p>The policy is only enforced if the <strong>CNI plugin supports it</strong>: Calico, Cilium, Antrea, or the cloud offerings (Azure network policy or Cilium on AKS, VPC CNI network policy on EKS, Dataplane V2 on GKE). With a CNI that does not, policies are accepted by the API server and <strong>silently ignored</strong>, which is a classic false sense of security.</p>
+<p>The pattern is <strong>default deny</strong> for ingress and egress in each namespace, then explicit allows: orders pods accept traffic only from the <code>api-gateway</code> namespace on 8080 and may connect only to payments and the database. <strong>Egress must allow DNS</strong> to CoreDNS on UDP and TCP 53, or every lookup fails.</p>
+<p>NetworkPolicy is layer 3/4. For <strong>layer 7</strong> rules, such as allowing only <code>GET /prices</code>, and for <strong>identity-based</strong> security independent of IPs, use a <strong>service mesh</strong> like Istio with <strong>mTLS</strong> and AuthorizationPolicies, or Cilium's L7 and identity-aware policies. <strong>Verify</strong> with probe pods that test allowed and blocked paths, and roll out per namespace, using Calico staged policies, Cilium audit mode or Hubble flow logs to see what would be dropped.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm the CNI enforces NetworkPolicy.</li>
+  <li>Map real traffic flows (Hubble, flow logs, mesh telemetry).</li>
+  <li>Apply default deny ingress and egress per namespace.</li>
+  <li>Add allow rules per service, including DNS egress.</li>
+  <li>Add mesh mTLS and L7 authorisation where needed.</li>
+  <li>Test with probe pods and roll out namespace by namespace.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: orders }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: orders-allow, namespace: orders }
+spec:
+  podSelector: { matchLabels: { app: orders } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: api-gateway } }
+      ports: [{ port: 8080 }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to:
+        - podSelector: { matchLabels: { app: payments } }
+      ports: [{ port: 8443 }]</code></pre>
+<pre><code class="language-bash">kubectl -n orders run probe --rm -it --image=busybox -- wget -qO- -T 3 http://payments:8443</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing policies on a CNI that does not enforce them.</li>
+  <li>Default-deny egress without a DNS rule.</li>
+  <li>Inconsistent labels, so selectors match nothing or everything.</li>
+  <li>Big-bang rollout across all namespaces without observing flows.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The building block is NetworkPolicy, which selects pods by labels and namespaces and allows specific ingress and egress. It only works if the CNI enforces it, like Calico or Cilium, otherwise policies are silently ignored. I start with default deny for ingress and egress per namespace and add explicit allows per service, and egress must allow DNS to CoreDNS or everything breaks. Policies live in Git with consistent labels. For layer 7 rules and identity-based security I add a mesh like Istio with mTLS and authorisation policies, or Cilium's L7 features. I verify with test pods and roll out gradually using flow logs or audit modes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do egress default-deny policies often break apps?</strong> They block DNS, cloud metadata, external APIs and monitoring endpoints; map flows first and allow them explicitly.</li>
+  <li><strong>Can NetworkPolicy allow by domain name?</strong> Not natively; Cilium and Calico offer FQDN-based policies.</li>
+  <li><strong>How do you allow traffic from an ingress controller?</strong> Allow its namespace by the kubernetes.io/metadata.name label.</li>
+</ul>
+</article>
+</body>
+</html>

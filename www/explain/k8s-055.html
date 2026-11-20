@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-055 · Some pods see random 5-second delays on outbound calls. You suspect DNS. How do you prove it and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-055" data-topic="Kubernetes">
+<h1>Some pods see random 5-second delays on outbound calls. You suspect DNS. How do you prove it and fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>A delay of almost exactly <strong>5 seconds</strong> is the resolver <strong>timeout</strong> after a lost DNS packet; prove it by timing lookups and checking <strong>CoreDNS metrics</strong>, then fix the usual causes (<strong>ndots:5 search expansion</strong> and the <strong>conntrack race</strong> on parallel A/AAAA UDP queries) with <strong>NodeLocal DNSCache</strong>, resolver options, FQDNs and scaling CoreDNS.</p>
+
+<h2>Detailed explanation</h2>
+<p>glibc's resolver waits <strong>5 seconds</strong> by default before retrying an unanswered query. When latency spikes cluster at about 5 s (or 10 s), packets are being dropped, not just answered slowly.</p>
+<p>Two Kubernetes-specific factors cause most of it. First, <strong>ndots:5</strong>: pod <code>resolv.conf</code> lists search domains like <code>ns.svc.cluster.local</code>, <code>svc.cluster.local</code>, <code>cluster.local</code>, and any name with fewer than five dots is tried against each suffix first. A lookup of <code>api.stripe.com</code> can therefore produce several A and AAAA queries that return NXDOMAIN before the real one, multiplying load on CoreDNS and the chance of a drop.</p>
+<p>Second, a long-known <strong>Linux conntrack race</strong>: glibc sends the A and AAAA queries in parallel from the <strong>same UDP socket</strong>. Both packets go through DNAT to the CoreDNS Service IP at the same moment; when they race to create conntrack entries, one packet can be dropped. The client then waits for the timeout. musl (Alpine) behaves differently but has its own quirks.</p>
+<p><strong>NodeLocal DNSCache</strong> runs a caching agent on each node, listening on a link-local IP; pods query it without DNAT, and it talks to CoreDNS over TCP, which removes the race and cuts latency. Other mitigations: <code>options single-request-reopen</code> (glibc), lowering <code>ndots</code> to 2 or so via <code>dnsConfig</code>, using fully qualified names with a trailing dot for external hosts, enabling CoreDNS caching and <strong>scaling CoreDNS</strong> (replicas or autoscaler) with anti-affinity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce from an affected pod: loop <code>dig</code> or <code>getent hosts</code> with timing.</li>
+  <li>Check CoreDNS metrics: request rate, latency, errors, NXDOMAIN ratio.</li>
+  <li>Briefly enable the CoreDNS <code>log</code> plugin to see the search expansion.</li>
+  <li>Check node conntrack drop counters (<code>conntrack -S</code> insert_failed).</li>
+  <li>Apply fixes: NodeLocal DNSCache, dnsConfig options, FQDNs, more CoreDNS replicas.</li>
+  <li>Verify the 5-second tail disappears from p99 latency.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl exec -it deploy/orders -- sh -c 'for i in $(seq 50); do /usr/bin/time -f %e getent hosts api.stripe.com &gt;/dev/null; done' 2&gt;&amp;1 | sort -n | tail -3
+# 0.01  5.01  5.02   &lt;- timeouts</code></pre>
+<pre><code class="language-yaml">spec:
+  dnsConfig:
+    options:
+      - { name: ndots, value: &quot;2&quot; }
+      - { name: single-request-reopen }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Blaming the external API without checking DNS.</li>
+  <li>Only scaling CoreDNS when the drop is in conntrack on the client node.</li>
+  <li>Forgetting ndots when calling external domains in hot paths.</li>
+  <li>Rolling out NodeLocal DNSCache without a fallback.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Five seconds is the default resolver timeout, so it strongly suggests dropped DNS packets. I'd prove it by timing lookups in a loop from an affected pod and checking CoreDNS metrics and conntrack insert failures on the nodes. Two causes are typical: ndots:5, which expands every external name across all search domains and multiplies queries, and the conntrack race where glibc sends A and AAAA in parallel over one UDP socket and one is dropped. I'd deploy NodeLocal DNSCache, which avoids conntrack and caches locally, lower ndots or use trailing-dot FQDNs, add single-request-reopen and scale CoreDNS.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to roll out NodeLocal DNSCache safely?</strong> Canary on a node pool, keep CoreDNS as upstream, monitor DNS latency and errors.</li>
+  <li><strong>Why does the trailing dot help?</strong> It marks the name as fully qualified, skipping search domains.</li>
+  <li><strong>Does it affect Alpine images?</strong> musl resolves differently; test both base images.</li>
+</ul>
+</article>
+</body>
+</html>

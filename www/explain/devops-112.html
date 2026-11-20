@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-112 · How does storage work in Kubernetes? Explain PV, PVC and StorageClass.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-112" data-topic="Kubernetes">
+<h1>How does storage work in Kubernetes? Explain PV, PVC and StorageClass.</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>PersistentVolume (PV)</strong> is a piece of storage; a <strong>PersistentVolumeClaim (PVC)</strong> is a workload's <strong>request</strong> for size and <strong>access mode</strong>; a <strong>StorageClass</strong> lets a <strong>CSI driver</strong> <strong>provision volumes dynamically</strong>, with a <strong>reclaim policy</strong> and <strong>binding mode</strong> such as <strong><code>WaitForFirstConsumer</code></strong> for zone-aware placement.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers have ephemeral filesystems: when a pod is replaced, its data is gone. Kubernetes separates <strong>what storage a workload needs</strong> from <strong>how it is provided</strong>.</p>
+<p><strong>PersistentVolume.</strong> A cluster-scoped object representing real storage: an EBS volume, Azure Disk, GCE persistent disk, NFS share or local disk. It has a capacity, access modes, a reclaim policy and the driver details. Admins can create PVs statically, but usually they are created dynamically.</p>
+<p><strong>PersistentVolumeClaim.</strong> A namespaced request: &quot;10 GiB, ReadWriteOnce, class <code>gp3</code>&quot;. Kubernetes <strong>binds</strong> the claim to a matching PV one-to-one; pods reference the claim, not the PV, so manifests stay portable.</p>
+<p><strong>StorageClass.</strong> Describes a type of storage and the <strong>provisioner</strong> (a <strong>CSI driver</strong> such as <code>ebs.csi.aws.com</code> or <code>disk.csi.azure.com</code>) plus parameters (disk type, IOPS, encryption). When a PVC names a class, or uses the <strong>default</strong> class, the CSI driver creates a volume and PV automatically. <code>allowVolumeExpansion: true</code> allows growing claims.</p>
+<p><strong>Access modes.</strong> <strong>ReadWriteOnce</strong> (one node read-write, typical for block disks), <strong>ReadWriteOncePod</strong> (one pod only), <strong>ReadOnlyMany</strong> and <strong>ReadWriteMany</strong> (many nodes, needs file storage such as EFS, Azure Files or NFS).</p>
+<p><strong>Reclaim policy.</strong> <code>Delete</code> removes the underlying disk when the PVC is deleted (default for dynamic provisioning); <code>Retain</code> keeps it for manual recovery, wise for important data.</p>
+<p><strong>Binding mode.</strong> With <code>Immediate</code>, the disk is created as soon as the PVC exists, possibly in a zone where the pod cannot run. <strong><code>WaitForFirstConsumer</code></strong> delays provisioning until the pod is scheduled, then creates the disk in that node's zone. Block volumes are zonal, so a pod cannot later move to another zone without its data being moved too.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>StatefulSet or pod spec references a PVC with class <code>gp3</code>.</li>
+  <li>Pod is scheduled; with WaitForFirstConsumer the zone is now known.</li>
+  <li>CSI controller creates the disk; a PV is created and bound to the PVC.</li>
+  <li>Kubelet and CSI node plugin attach and mount the volume into the pod.</li>
+  <li>On PVC deletion the reclaim policy deletes or retains the disk.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: { name: gp3 }
+provisioner: ebs.csi.aws.com
+parameters: { type: gp3, encrypted: &quot;true&quot; }
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: data, namespace: shop }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3
+  resources: { requests: { storage: 20Gi } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting ReadWriteMany from block storage.</li>
+  <li><code>Immediate</code> binding in multi-zone clusters, creating disks in the wrong zone.</li>
+  <li><code>Delete</code> reclaim policy on critical data without backups (VolumeSnapshots).</li>
+  <li>Missing CSI driver or default StorageClass after a cluster upgrade.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A PersistentVolume represents real storage, like a cloud disk. A PersistentVolumeClaim is a workload's request for a size and access mode, and pods reference the claim. A StorageClass enables dynamic provisioning: when a PVC references it, the CSI driver creates the volume and PV automatically. Access modes include ReadWriteOnce for a single node, ReadWriteOncePod, and ReadWriteMany for shared file storage. The reclaim policy decides whether the disk is deleted or retained when the claim goes away, and WaitForFirstConsumer creates the disk in the same zone as the scheduled pod.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a pod be stuck Pending with an unbound PVC?</strong> No default or wrong StorageClass, missing CSI driver, no matching static PV, quota limits, or zone conflicts; <code>kubectl describe pvc</code> shows events.</li>
+  <li><strong>How do you back up volumes?</strong> CSI VolumeSnapshots or tools like Velero.</li>
+  <li><strong>Can you resize a PVC?</strong> Yes, if the class allows expansion and the driver supports it.</li>
+</ul>
+</article>
+</body>
+</html>

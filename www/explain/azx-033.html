@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-033 · Messages keep ending up in the Azure Service Bus dead-letter queue. How do you investigate and handle them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-033" data-topic="Azure">
+<h1>Messages keep ending up in the Azure Service Bus dead-letter queue. How do you investigate and handle them?</h1>
+<p class="ex-meta">Azure · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Service Bus dead-letters a message when it <strong>exceeds MaxDeliveryCount</strong>, its <strong>TTL expires</strong> (with dead-lettering on expiration enabled) or a consumer <strong>explicitly dead-letters</strong> it; investigate by reading <strong>DeadLetterReason</strong> and <strong>DeadLetterErrorDescription</strong>, fix the root cause (poison data, bug, dependency), <strong>resubmit</strong> through a controlled, <strong>idempotent</strong> replay, and <strong>alert</strong> on the DLQ count.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every queue and subscription has a <strong>dead-letter subqueue</strong> (<code>&lt;queue&gt;/$deadletterqueue</code>). Messages go there for clear reasons:</p>
+<ul>
+  <li><strong>MaxDeliveryCountExceeded:</strong> in peek-lock mode the consumer abandoned the message, threw an exception, or let the lock expire, so it was redelivered until the count (default 10) was reached.</li>
+  <li><strong>TTLExpiredException:</strong> the message's time to live passed and <strong>dead-lettering on message expiration</strong> is enabled.</li>
+  <li><strong>Explicit dead-letter:</strong> the consumer called <code>DeadLetterMessageAsync</code> with a reason, for example a schema validation failure.</li>
+  <li>Filter evaluation errors on subscriptions, or header size limits.</li>
+</ul>
+<p>Investigation means <strong>looking at the data</strong>, not guessing. Peek DLQ messages with <strong>Service Bus Explorer</strong> in the portal or a script, group by reason and error description, and correlate with Application Insights traces from the consumer using the message ID or correlation ID. Typical causes: a <strong>poison message</strong> (malformed payload, unexpected nulls), a <strong>bug in a new release</strong>, a <strong>schema change</strong> by the producer, a <strong>downstream dependency</strong> failing (all messages fail), or processing slower than the <strong>lock duration</strong> so locks expire.</p>
+<p>After fixing the cause, <strong>resubmit</strong>: read from the DLQ, optionally repair, send to the main queue, then complete the DLQ copy. Consumers must be <strong>idempotent</strong>, because some messages may have been partly processed. Never resubmit poison messages blindly in a loop.</p>
+<p>Prevention: <strong>retry with backoff</strong> inside the handler for transient errors, explicit dead-lettering with clear reasons for permanent errors, renewing locks for long processing, and <strong>alerts</strong> on the <code>DeadletteredMessages</code> metric.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Alert fires on dead-letter count &gt; 0 (or a rising trend).</li>
+  <li>Peek messages; group by DeadLetterReason and description.</li>
+  <li>Correlate with consumer logs and recent deployments.</li>
+  <li>Fix code, data contract or dependency.</li>
+  <li>Replay with a tool, at a controlled rate, to an idempotent consumer.</li>
+  <li>Track remaining unprocessable messages for manual handling.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-csharp">var receiver = client.CreateReceiver(&quot;orders&quot;, new ServiceBusReceiverOptions {
+    SubQueue = SubQueue.DeadLetter });
+var sender = client.CreateSender(&quot;orders&quot;);
+foreach (var msg in await receiver.ReceiveMessagesAsync(50)) {
+    Console.WriteLine($&quot;{msg.MessageId} {msg.DeadLetterReason} {msg.DeadLetterErrorDescription}&quot;);
+    if (IsFixable(msg)) {
+        await sender.SendMessageAsync(new ServiceBusMessage(msg));   // copy body and properties
+        await receiver.CompleteMessageAsync(msg);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Nobody monitors the DLQ, so messages sit there for weeks.</li>
+  <li>Catching exceptions and completing the message, silently losing data.</li>
+  <li>Resubmitting everything to a non-idempotent consumer.</li>
+  <li>Lock duration shorter than processing time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A message is dead-lettered when it exceeds the max delivery count, when its TTL expires with dead-lettering on expiry enabled, or when the consumer dead-letters it explicitly. I peek the DLQ with Service Bus Explorer or a script and group by DeadLetterReason and the error description, then correlate with consumer logs and recent releases. Usually it's a poison message, a bug, a schema change or a failing dependency. After the fix I replay messages in a controlled way to an idempotent consumer, and I alert on the dead-letter count so we notice in minutes, not days.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Sessions and ordering?</strong> A failed message blocks its session; dead-lettering breaks order, so the consumer may need to park the whole session.</li>
+  <li><strong>Abandon vs dead-letter?</strong> Abandon for transient errors (retry), dead-letter for permanent ones.</li>
+  <li><strong>Scheduled retries?</strong> Re-send with ScheduledEnqueueTime for delayed retry.</li>
+</ul>
+</article>
+</body>
+</html>

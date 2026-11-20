@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-008 · A server has high load average but low CPU usage. What could cause this and how do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-008" data-topic="Linux">
+<h1>A server has high load average but low CPU usage. What could cause this and how do you investigate?</h1>
+<p class="ex-meta">Linux · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On Linux the <strong>load average counts runnable and uninterruptible (D state) processes</strong>, so high load with idle CPU usually means processes are <strong>blocked on I/O</strong>: slow disks, saturated network storage or a hung NFS mount; confirm with <strong>top's wa, iostat, vmstat, iotop and ps state D</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many people read load average as &quot;CPU usage&quot;, but on Linux it is the average number of tasks that are either <strong>running or waiting for a CPU (R)</strong> or in <strong>uninterruptible sleep (D)</strong>. D-state tasks usually wait on <strong>disk or network storage I/O</strong> and cannot be interrupted, even by SIGKILL. So a load of 20 on an 8-core server with CPUs 90% idle tells you lots of tasks are stuck waiting, not computing.</p>
+<p>Investigation follows the I/O path. In <strong>top</strong>, the <code>wa</code> (iowait) value shows the share of time CPUs were idle while I/O was outstanding. <strong>vmstat 1</strong> shows <code>r</code> (runnable) and <strong><code>b</code> (blocked)</strong> columns; a high <code>b</code> with low <code>r</code> confirms I/O blocking, and <code>si</code>/<code>so</code> show swapping. <strong>iostat -x 1</strong> shows per-device <strong>%util</strong>, <strong>r_await/w_await</strong> latency and queue size; a cloud disk at its IOPS or throughput limit shows high await. <strong>iotop</strong> or <code>pidstat -d 1</code> identifies which processes do the I/O. <strong><code>ps -eo pid,stat,wchan:30,cmd | awk '$2 ~ /D/'</code></strong> lists D-state processes and the kernel function they wait in, often pointing to NFS (<code>nfs_</code>), a filesystem or a block device.</p>
+<p>Typical causes: a <strong>hung NFS or network mount</strong> after the server became unreachable, a <strong>failing disk</strong> (check <code>dmesg</code> for I/O errors and SMART), a cloud volume <strong>throttled</strong> at its provisioned IOPS, heavy <strong>swapping</strong> due to memory pressure, or an application doing excessive synchronous writes or logging. Fixes: faster or provisioned storage, reducing I/O, more memory for page cache, or repairing or remounting the hung mount.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compare load average with core count (<code>uptime</code>, <code>nproc</code>).</li>
+  <li>Check CPU breakdown: low us/sy, high wa.</li>
+  <li><code>vmstat 1</code>: many blocked (b) processes?</li>
+  <li><code>iostat -x</code>: which device has high util and await?</li>
+  <li><code>ps</code> for D-state processes and their wait channel.</li>
+  <li>Fix the storage, mount, memory or application cause.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">uptime            # load average: 21.4, 19.8, 15.2
+nproc             # 8
+vmstat 1 5        # r=1 b=18 wa=65
+iostat -x 1 3     # nvme1n1 %util 99.8 w_await 180ms
+ps -eo pid,stat,wchan:30,cmd | awk '$2 ~ /D/'
+dmesg -T | grep -iE &quot;nfs|i/o error|timeout&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming high load means a CPU shortage and adding cores.</li>
+  <li>Trying to kill D-state processes, which does not work.</li>
+  <li>Ignoring cloud volume IOPS limits.</li>
+  <li>Missing swap activity as the source of I/O.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On Linux the load average counts not only runnable processes but also those in uninterruptible sleep, D state, which usually means waiting for disk or network storage. So high load with idle CPU points to I/O. I check the wa value in top, vmstat for blocked processes and swapping, iostat -x for device utilisation and latency, and iotop for which processes do I/O. ps with the state column shows which processes are stuck in D, often on an NFS mount or a failing disk. The fix may be faster storage, less I/O, more memory for cache, or repairing a hung mount.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does swapping show up in these tools?</strong> Non-zero si/so in vmstat, swap used in free, and high I/O on the swap device.</li>
+  <li><strong>Can you kill a D-state process?</strong> Not until the I/O completes or fails; fix the underlying storage.</li>
+  <li><strong>What is PSI?</strong> Pressure Stall Information in /proc/pressure shows time stalled on CPU, memory and I/O.</li>
+</ul>
+</article>
+</body>
+</html>

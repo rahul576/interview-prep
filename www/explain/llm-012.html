@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-012 · What do you need to consider when streaming LLM responses through gateways and backend services?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-012" data-topic="LLMOps &amp; RAG">
+<h1>What do you need to consider when streaming LLM responses through gateways and backend services?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Stream tokens with <strong>server-sent events or chunked responses</strong>, and make the path stream-safe: <strong>disable proxy buffering</strong>, allow <strong>long-lived connections and timeouts</strong>, handle <strong>errors after a 200 status</strong>, apply <strong>moderation to partial output</strong>, capture <strong>token usage at the end</strong>, and use <strong>non-blocking I/O</strong> in relays.</p>
+
+<h2>Detailed explanation</h2>
+<p>Streaming makes a 15-second answer feel fast because the first words appear in under a second. Most LLM APIs use <strong>Server-Sent Events (SSE)</strong>: an HTTP response with <code>Content-Type: text/event-stream</code> carrying <code>data:</code> lines per chunk. Every hop between the model and the browser must cooperate.</p>
+<p><strong>Buffering.</strong> NGINX, ingress controllers, API gateways, CDNs and some frameworks buffer responses or compress them, so the client receives everything at the end. Disable buffering for streaming routes (<code>proxy_buffering off</code>, <code>X-Accel-Buffering: no</code>), avoid gzip on event streams, and flush after each event.</p>
+<p><strong>Timeouts and connections.</strong> A stream can last minutes. Load balancer idle timeouts (often 60 s by default), gateway request timeouts and serverless limits must allow that, and the server should send periodic <strong>keep-alive comments</strong> during long tool calls or reasoning phases. Each open stream holds a connection, so capacity planning counts concurrent streams, not requests per second.</p>
+<p><strong>Errors mid-stream.</strong> The HTTP status is 200 as soon as streaming starts. Rate limits, model errors or upstream disconnects then arrive as <strong>error events</strong> or simply a closed connection. Clients must detect incomplete responses (no final <code>[DONE]</code> or stop reason), show a sensible state, and retry carefully without <strong>duplicating text</strong> already shown, typically by regenerating the whole message.</p>
+<p><strong>Safety.</strong> Moderation and guardrails must operate on <strong>partial outputs</strong>; providers filter chunks and may cut a stream. Your own PII or policy filters need a buffer-and-check window.</p>
+<p><strong>Metering.</strong> Token <strong>usage arrives at the end</strong> of the stream (with OpenAI you request it via <code>stream_options.include_usage</code>). If the client disconnects, you still want usage recorded, so the backend should finish reading or estimate. <strong>Cancellation</strong> should propagate upstream to stop generation and save cost.</p>
+<p><strong>Backend relays</strong> should use non-blocking I/O, such as Spring WebFlux with <code>Flux&lt;ServerSentEvent&gt;</code> or Node streams, so thousands of concurrent streams do not pin thousands of threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Browser opens an SSE or fetch stream to the backend.</li>
+  <li>Backend calls the LLM with <code>stream: true</code>.</li>
+  <li>Each chunk is forwarded and flushed immediately.</li>
+  <li>Errors become error events; client handles them.</li>
+  <li>Final event carries usage; backend logs cost and closes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@GetMapping(value = &quot;/chat/stream&quot;, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+Flux&lt;ServerSentEvent&lt;String&gt;&gt; stream(@RequestParam String q) {
+  return llmClient.streamChat(q)                         // Flux&lt;String&gt; of deltas
+      .map(d -&gt; ServerSentEvent.builder(d).event(&quot;delta&quot;).build())
+      .concatWith(Flux.just(ServerSentEvent.builder(&quot;&quot;).event(&quot;done&quot;).build()))
+      .onErrorResume(e -&gt; Flux.just(ServerSentEvent.builder(e.getMessage()).event(&quot;error&quot;).build()));
+}</code></pre>
+<pre><code class="language-nginx">location /chat/stream { proxy_pass http://backend; proxy_buffering off; proxy_read_timeout 600s; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Gateways buffering the whole response, killing the benefit.</li>
+  <li>60-second idle timeouts cutting long answers.</li>
+  <li>Treating HTTP 200 as success without checking the final event.</li>
+  <li>Not cancelling upstream generation when the user leaves.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Streaming improves perceived latency, usually via server-sent events. The infrastructure must not break it: I disable buffering on proxies, gateways and ingress for those routes, and raise idle and request timeouts so connections can live for minutes, with keep-alives. Error handling changes because the stream starts with 200, so clients handle error events and incomplete responses and retry without duplicating text. Moderation has to work on partial output, token usage arrives at the end so metering must handle interrupted streams, and relays should use non-blocking I/O such as WebFlux.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>SSE vs WebSockets?</strong> SSE is simpler, one-way over HTTP; WebSockets suit bidirectional sessions.</li>
+  <li><strong>How to cancel generation?</strong> Abort the client request and propagate cancellation to the upstream call.</li>
+  <li><strong>Streaming with tool calls?</strong> Stream argument deltas, then execute tools and resume streaming.</li>
+</ul>
+</article>
+</body>
+</html>

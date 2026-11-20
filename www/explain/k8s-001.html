@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-001 · Explain the ownership chain from a Deployment to a ReplicaSet to a Pod, and why Services select pods by label instead of IP.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-001" data-topic="Kubernetes">
+<h1>Explain the ownership chain from a Deployment to a ReplicaSet to a Pod, and why Services select pods by label instead of IP.</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>Deployment</strong> owns one <strong>ReplicaSet per pod-template revision</strong>, each <strong>ReplicaSet</strong> owns the <strong>pods</strong> that make up its replica count, and <strong>ownerReferences</strong> tie them together for <strong>garbage collection</strong>; <strong>Services</strong> select pods by <strong>label</strong> because pods are ephemeral and their IPs keep changing, while <strong>EndpointSlices</strong> track the current ready pods.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>Deployment</strong> manages rollouts, not pods. When you change the pod template (new image, new env var), the Deployment controller computes a template hash and creates a new <strong>ReplicaSet</strong> labelled with <code>pod-template-hash</code>. During a rolling update it scales the new ReplicaSet up and the old one down, within <code>maxSurge</code> and <code>maxUnavailable</code>. Old ReplicaSets are kept at zero replicas (up to <code>revisionHistoryLimit</code>, default 10), which is what <code>kubectl rollout undo</code> uses.</p>
+<p>A <strong>ReplicaSet</strong> only ensures that N pods matching its selector exist: it creates pods when there are too few and deletes them when there are too many. Each pod gets <code>metadata.ownerReferences</code> pointing to its ReplicaSet, and each ReplicaSet points to its Deployment. The <strong>garbage collector</strong> uses these links: deleting a Deployment cascades to its ReplicaSets and pods (background or foreground propagation), or with <code>--cascade=orphan</code> leaves them running.</p>
+<p><strong>Services</strong> do not know about Deployments at all. They hold a <strong>label selector</strong>. Pods are disposable: rescheduled, replaced in rollouts, scaled by an HPA, and each new pod gets a new IP. If clients used IPs, they would break constantly. Instead the <strong>EndpointSlice controller</strong> continuously finds pods that match the selector and are <strong>Ready</strong>, and writes their IPs and ports into EndpointSlices; kube-proxy or the CNI programmes routing for the Service's stable <strong>ClusterIP</strong>, and DNS gives a stable name. Because selection is by label, one Service can even span pods from two Deployments, which is how blue-green and canary setups work.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>You apply a Deployment with template labels <code>app: orders</code>.</li>
+  <li>Deployment controller creates ReplicaSet <code>orders-6b7c9</code>.</li>
+  <li>ReplicaSet creates three pods with ownerReferences.</li>
+  <li>Service with selector <code>app: orders</code> gets EndpointSlices listing ready pod IPs.</li>
+  <li>You change the image: new ReplicaSet scales up, old scales down; EndpointSlices update as pods become ready or terminate.</li>
+  <li>Deleting the Deployment garbage-collects ReplicaSets and pods.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get deploy,rs,pods -l app=orders
+kubectl get pod orders-6b7c9-abc12 -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}'
+# ReplicaSet/orders-6b7c9
+kubectl get endpointslices -l kubernetes.io/service-name=orders
+kubectl rollout history deploy/orders</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Editing a ReplicaSet or pod directly; the Deployment or ReplicaSet will override it.</li>
+  <li>A Service selector that also matches unrelated pods with the same label.</li>
+  <li>Changing a Deployment's selector, which is immutable.</li>
+  <li>Assuming a pod keeps its IP after restart.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Deployment doesn't create pods directly. For each revision of its pod template it creates a ReplicaSet, and during a rollout it scales the new ReplicaSet up and the old one down; old ReplicaSets stay at zero for rollbacks. The ReplicaSet keeps the right number of pods running. Children carry ownerReferences to their parents, so deleting a Deployment garbage-collects everything. Services select pods by label because pods are ephemeral and get new IPs; the EndpointSlice controller keeps the list of ready matching pods current, so clients use one stable virtual IP and DNS name.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if you edit a pod owned by a ReplicaSet?</strong> Most fields are immutable; deleting it just gets it recreated from the template.</li>
+  <li><strong>What if you change a pod's labels?</strong> It leaves the ReplicaSet (orphaned) and a replacement is created; useful for debugging.</li>
+  <li><strong>Endpoints vs EndpointSlices?</strong> EndpointSlices shard large endpoint lists and replaced the legacy Endpoints API.</li>
+</ul>
+</article>
+</body>
+</html>

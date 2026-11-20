@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-063 · One node keeps evicting pods because of DiskPressure. How do you investigate and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-063" data-topic="Kubernetes">
+<h1>One node keeps evicting pods because of DiskPressure. How do you investigate and fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>DiskPressure</strong> means the kubelet saw <strong>nodefs</strong> or <strong>imagefs</strong> drop below its <strong>eviction threshold</strong>; find what fills the disk (usually <strong>container logs</strong>, <strong>emptyDir or writable-layer writes</strong>, or <strong>unused images</strong>) and fix it with <strong>log rotation</strong>, <strong>ephemeral-storage requests and limits</strong>, <strong>image GC tuning</strong> and right-sized disks.</p>
+
+<h2>Detailed explanation</h2>
+<p>The kubelet monitors two filesystems: <strong>nodefs</strong> (kubelet root dir, pod volumes such as emptyDir, and logs) and <strong>imagefs</strong> (container runtime images and writable layers; often the same disk). Default hard eviction thresholds include <code>nodefs.available&lt;10%</code> and <code>imagefs.available&lt;15%</code>. When crossed, the node gets the <strong>DiskPressure</strong> condition and a <code>NoSchedule</code> taint, and the kubelet first tries to reclaim space by <strong>garbage collecting dead containers and unused images</strong>. If that is not enough it <strong>evicts pods</strong>, ranked by whether they exceed their ephemeral-storage requests and by priority, then usage.</p>
+<p>Typical culprits: an application writing huge amounts to <strong>stdout</strong> (for example debug logging in a tight loop), with kubelet log rotation (<code>containerLogMaxSize</code>, <code>containerLogMaxFiles</code>) left at defaults or a sidecar log shipper that falls behind; pods writing caches, uploads or temp files into <strong>emptyDir</strong> or the container's <strong>writable layer</strong> without limits; and many large images accumulating because <strong>image GC thresholds</strong> (<code>imageGCHighThresholdPercent</code>, <code>imageGCLowThresholdPercent</code>) are too loose or the disk is too small for the image churn.</p>
+<p>The key fix is accountability: set <strong>ephemeral-storage requests and limits</strong> (and <code>sizeLimit</code> on emptyDir). Then the scheduler accounts for disk, and a pod exceeding its limit is evicted on its own rather than the kubelet evicting random neighbours. Also tune log rotation, reduce noisy logging, and size disks for genuine needs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe node</code>: DiskPressure condition and eviction events.</li>
+  <li>On the node: <code>df -h</code>, <code>du</code> on <code>/var/log/pods</code>, <code>/var/lib/kubelet/pods</code>, <code>/var/lib/containerd</code>.</li>
+  <li><code>crictl images</code> and <code>crictl stats</code> to find big images and writable layers.</li>
+  <li>Identify the offending pod or image.</li>
+  <li>Set ephemeral-storage limits, emptyDir <code>sizeLimit</code>, log rotation and GC thresholds.</li>
+  <li>Increase disk size if the workload legitimately needs it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">sudo du -sh /var/log/pods/* | sort -h | tail -5
+sudo du -sh /var/lib/kubelet/pods/*/volumes/kubernetes.io~empty-dir/* | sort -h | tail -5
+sudo crictl images | sort -k4 -h | tail</code></pre>
+<pre><code class="language-yaml">resources:
+  requests: { ephemeral-storage: 1Gi }
+  limits: { ephemeral-storage: 4Gi }
+volumes:
+  - name: scratch
+    emptyDir: { sizeLimit: 2Gi }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting files by hand and never fixing the source.</li>
+  <li>No ephemeral-storage limits, so innocent pods are evicted.</li>
+  <li>Debug logging left on in production.</li>
+  <li>Tiny root disks on nodes with large images.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;DiskPressure means the kubelet saw nodefs or imagefs fall below its eviction threshold. On the node I check what's using space with du and crictl: usually container logs from a noisy app, pods writing heavily to emptyDir or their writable layer, or lots of unused images when garbage collection thresholds are loose. Fixes are kubelet log rotation, making the noisy app log less, ephemeral-storage requests and limits and emptyDir size limits so the kubelet evicts the offender rather than random pods, tuning image GC, and bigger disks if needed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is ephemeral-storage forgotten?</strong> It is not set by default and disk is invisible until it runs out; most templates only cover CPU and memory.</li>
+  <li><strong>Does memory-backed emptyDir count?</strong> <code>medium: Memory</code> counts against memory, not disk.</li>
+  <li><strong>What is soft eviction?</strong> Thresholds with a grace period before evicting, configured in the kubelet.</li>
+</ul>
+</article>
+</body>
+</html>

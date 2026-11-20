@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-049 · On a kubeadm cluster, kubectl suddenly fails with certificate errors one year after installation. What is wrong and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-049" data-topic="Kubernetes">
+<h1>On a kubeadm cluster, kubectl suddenly fails with certificate errors one year after installation. What is wrong and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>kubeadm</strong> issues control plane certificates valid for <strong>one year</strong> (the CA for ten); if the cluster was never upgraded they expire, so check with <strong>kubeadm certs check-expiration</strong>, renew with <strong>kubeadm certs renew all</strong> on every control plane node, <strong>restart the static pods</strong> and <strong>update kubeconfig</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>kubeadm creates a cluster <strong>CA</strong> (10 years by default) and leaf certificates for the API server, API server to kubelet and etcd clients, front-proxy, etcd server and peer, and the client certificates embedded in <code>admin.conf</code>, <code>controller-manager.conf</code> and <code>scheduler.conf</code>. These leaf certificates default to <strong>one year</strong>. Every <code>kubeadm upgrade apply</code> renews them automatically, which is why clusters upgraded regularly never see this problem. A cluster left alone for a year hits it all at once.</p>
+<p>Symptoms: <code>kubectl</code> fails with <code>x509: certificate has expired or is not yet valid</code>, the controller manager and scheduler cannot talk to the API server, and nothing reconciles. Running workloads usually keep running because containers do not need the control plane, but nothing new can be scheduled, scaled or healed.</p>
+<p>Renewal is done per control plane node with <code>kubeadm certs renew all</code>, which reuses the existing CA. The control plane components run as <strong>static pods</strong> and only read certificates at start-up, so they must be restarted; the simple way is moving their manifests out of <code>/etc/kubernetes/manifests</code> for about 20 seconds and back. Then copy the new <code>admin.conf</code> to your kubeconfig. <strong>Kubelet client certificates</strong> normally rotate automatically via <code>rotateCertificates</code>, but check <code>/var/lib/kubelet/pki</code> if a node also went NotReady. Newer kubeadm configuration (v1beta4) also allows setting certificate validity periods.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm: <code>kubeadm certs check-expiration</code> on a control plane node.</li>
+  <li>Back up <code>/etc/kubernetes/pki</code> and the kubeconfig files.</li>
+  <li>Run <code>kubeadm certs renew all</code> on each control plane node.</li>
+  <li>Restart API server, controller manager, scheduler and etcd static pods.</li>
+  <li>Copy <code>/etc/kubernetes/admin.conf</code> to <code>~/.kube/config</code>; redistribute admin credentials.</li>
+  <li>Verify kubelet certificates and node status; add expiry monitoring.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">sudo kubeadm certs check-expiration
+sudo cp -r /etc/kubernetes/pki /root/pki-backup-$(date +%F)
+sudo kubeadm certs renew all
+sudo mkdir -p /tmp/manifests &amp;&amp; sudo mv /etc/kubernetes/manifests/*.yaml /tmp/manifests/
+sleep 20 &amp;&amp; sudo mv /tmp/manifests/*.yaml /etc/kubernetes/manifests/
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+kubectl get nodes</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Renewing on only one control plane node in an HA cluster.</li>
+  <li>Forgetting to restart static pods, so old certificates stay loaded.</li>
+  <li>Regenerating the CA, which breaks every kubelet and kubeconfig.</li>
+  <li>Keeping an old kubeconfig copy that still holds the expired client certificate.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kubeadm issues the control plane certificates, including the API server, etcd client and admin kubeconfig certs, for one year, while the CA lasts ten. If the cluster was never upgraded they expire and kubectl, the controller manager and scheduler fail with x509 expired errors. I confirm with kubeadm certs check-expiration, back up the pki directory, run kubeadm certs renew all on every control plane node, restart the static pods by moving their manifests out and back, and copy the new admin.conf. Kubelet certs normally rotate themselves. To prevent it, upgrade at least yearly, which renews certs, and alert thirty days before expiry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to detect expiry across many clusters?</strong> Export certificate expiry as metrics (for example an x509 certificate exporter or API server client certificate metrics) and alert centrally.</li>
+  <li><strong>Do workloads stop?</strong> Usually not immediately, but nothing new is scheduled or healed.</li>
+  <li><strong>What if the CA expires?</strong> That requires a full CA rotation, a much bigger planned operation.</li>
+</ul>
+</article>
+</body>
+</html>

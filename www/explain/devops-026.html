@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-026 · How does autoscaling work in Kubernetes at the pod and node level?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-026" data-topic="Kubernetes">
+<h1>How does autoscaling work in Kubernetes at the pod and node level?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>At pod level the <strong>HPA</strong> scales <strong>replica count</strong> on CPU/memory (relative to requests) or <strong>custom/external metrics</strong>, <strong>KEDA</strong> scales on <strong>event sources</strong> (even to zero), and the <strong>VPA</strong> adjusts <strong>requests</strong>; at node level the <strong>Cluster Autoscaler</strong> or <strong>Karpenter</strong> adds nodes for <strong>pending pods</strong> and removes underused ones; all depend on <strong>correct requests</strong> and need <strong>PodDisruptionBudgets</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Horizontal Pod Autoscaler (HPA).</strong> A controller that periodically reads metrics and computes <code>desired = ceil(current × currentMetric / target)</code>. Resource metrics (CPU, memory utilisation as a percentage of <strong>requests</strong>) come from <strong>metrics-server</strong>; <strong>custom metrics</strong> (requests per second per pod) and <strong>external metrics</strong> (queue length) come from adapters such as Prometheus Adapter.</p>
+<p><strong>KEDA</strong> builds on the HPA with dozens of <strong>scalers</strong>: Kafka consumer lag, SQS or Service Bus queue depth, Prometheus queries, cron schedules. It can scale deployments <strong>to zero</strong> and back, which is ideal for event-driven workers.</p>
+<p><strong>Vertical Pod Autoscaler (VPA).</strong> Recommends or applies better requests and limits based on observed usage. In update modes it recreates pods (newer versions can resize in place where the cluster supports it). Do not let VPA and HPA act on the <strong>same CPU/memory metric</strong>; a common combination is HPA on a custom metric with VPA on resources, or VPA in recommendation-only mode.</p>
+<p><strong>Node autoscaling.</strong> The <strong>Cluster Autoscaler</strong> watches for pods that are <strong>Pending</strong> because no node fits, simulates which <strong>node group</strong> could fit them, increases that group's size, and removes nodes whose pods can be moved elsewhere. <strong>Karpenter</strong> (AWS, and the basis of AKS node auto-provisioning) skips predefined groups: it looks at pending pods' requirements and launches <strong>right-sized instances</strong> directly, and <strong>consolidates</strong> by replacing underused nodes with cheaper ones.</p>
+<p>Autoscaling only works with <strong>accurate requests</strong>, sensible readiness probes, and <strong>PodDisruptionBudgets</strong> so scale-down and consolidation do not take too many replicas at once.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Load rises; HPA metric exceeds target; replicas increase.</li>
+  <li>New pods are Pending: no node has room for their requests.</li>
+  <li>Cluster Autoscaler/Karpenter launches nodes; pods schedule.</li>
+  <li>Load falls; HPA scales down after its stabilisation window.</li>
+  <li>Underused nodes are drained (respecting PDBs) and removed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 300 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No requests set, so HPA utilisation and node autoscaling misbehave.</li>
+  <li>HPA and VPA both driven by CPU.</li>
+  <li>No PDBs, so consolidation evicts all replicas at once.</li>
+  <li>Scaling on CPU for I/O-bound or queue-driven workloads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;At pod level the HPA changes the replica count based on metrics: CPU or memory utilisation relative to requests from metrics-server, or custom metrics like requests per second through an adapter. KEDA scales on event sources such as Kafka lag or queue depth, even to zero. The VPA adjusts requests and limits and shouldn't act on the same metric as the HPA. At node level the Cluster Autoscaler adds nodes when pods are pending and removes underused ones, while Karpenter provisions right-sized nodes directly and consolidates. It all depends on correct requests, and PodDisruptionBudgets keep scale-down from hurting availability.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Pods pending but no new nodes?</strong> Node group at max size, no group or instance type fits the requests, selectors or taints don't match, zone-bound volumes, or cloud quota limits; check autoscaler logs and pod events.</li>
+  <li><strong>Why do scale-ups feel slow?</strong> Node launch and image pull time; use over-provisioning placeholder pods or smaller images.</li>
+  <li><strong>Scale to zero with HPA?</strong> Not by default; KEDA handles it.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-009 · What is training-serving skew, and how do you prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-009" data-topic="MLOps">
+<h1>What is training-serving skew, and how do you prevent it?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Training-serving skew</strong> is a difference between the features a model was <strong>trained on</strong> and those it sees <strong>in production</strong>, caused by <strong>duplicate implementations, different data sources or timing</strong>; prevent it with <strong>shared transformation code or a feature store</strong>, and detect it by <strong>logging online features</strong> and <strong>monitoring distributions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A model learns relationships between inputs and outcomes. If production inputs are computed differently, the model receives values it was never trained on and <strong>silently performs worse</strong> than offline evaluation suggested.</p>
+<p><strong>Common causes</strong>:</p>
+<ul>
+  <li><strong>Two implementations</strong> of the same feature: Python or SQL in the training pipeline and Java or Go in the online service, differing in window boundaries (inclusive or exclusive), null handling, rounding, units, categorical encodings or <strong>time zones</strong>.</li>
+  <li><strong>Different data sources</strong>: training reads a cleaned, deduplicated warehouse table, while serving reads raw events or a cache with different semantics.</li>
+  <li><strong>Timing</strong>: training uses data that arrived late but was available by the time the table was built, while at prediction time it did not exist yet. This is closely related to leakage and is solved by point-in-time correct feature construction.</li>
+</ul>
+<p><strong>Prevention</strong> starts with design: use <strong>one implementation</strong> of each transformation for both paths, via shared libraries, a <strong>feature store</strong> that serves both offline and online, or by <strong>packaging preprocessing with the model</strong> (for example a scikit-learn Pipeline or transformations inside the model graph), so serving passes raw inputs and the artefact does the rest.</p>
+<p><strong>Verification</strong> makes skew measurable. <strong>Log the actual feature vectors</strong> used at inference with entity ID and timestamp, recompute the same features offline for the same entity and time, and compare them, reporting mismatch rates per feature. Also <strong>monitor production feature distributions</strong> against the training distribution with metrics such as PSI,.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify where each feature is computed for training and serving.</li>
+  <li>Consolidate into shared code, a feature store, or model-embedded preprocessing.</li>
+  <li>Log online feature vectors with keys and timestamps.</li>
+  <li>Recompute offline for the same keys and compare.</li>
+  <li>Monitor distributions and alert on skew thresholds.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python"># Preprocessing travels with the model, so serving cannot diverge
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
+
+prep = ColumnTransformer([
+    (&quot;num&quot;, StandardScaler(), [&quot;amount&quot;, &quot;spend_30d&quot;]),
+    (&quot;cat&quot;, OneHotEncoder(handle_unknown=&quot;ignore&quot;), [&quot;country&quot;, &quot;channel&quot;]),
+])
+model = Pipeline([(&quot;prep&quot;, prep), (&quot;clf&quot;, LogisticRegression(max_iter=1000))]).fit(X_raw, y)
+# serving: model.predict_proba(raw_request_df)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reimplementing features in the serving language by hand.</li>
+  <li>Trusting offline metrics without checking production inputs.</li>
+  <li>Confusing skew with drift and retraining when the bug is in serving code.</li>
+  <li>Not logging online features, so skew cannot be measured.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Training-serving skew means the features the model sees in production differ from those it was trained on, so it does worse than offline evaluation suggested. Common causes are features implemented twice, once in Python or SQL for training and again in another language for serving, with differences in windows, nulls or time zones; different data sources, like a cleaned warehouse table versus raw events; or timing, where late data was available in training but not at prediction time. I prevent it by sharing transformation code, a feature store or packaging preprocessing with the model, then verify by logging online features, comparing them with offline recomputation and monitoring distributions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you measure skew rather than debug it by inspection?</strong> Join logged online features with offline recomputed ones by entity and timestamp and report per-feature mismatch rates.</li>
+  <li><strong>How is skew different from drift?</strong> Skew is a pipeline difference; drift is the real world changing.</li>
+  <li><strong>What is PSI?</strong> Population Stability Index, a measure of how much a distribution has shifted.</li>
+</ul>
+</article>
+</body>
+</html>

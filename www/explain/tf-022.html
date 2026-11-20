@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-022 · How do you safely use the random provider for names and passwords in Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-022" data-topic="Terraform">
+<h1>How do you safely use the random provider for names and passwords in Terraform?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>random provider</strong> (<code>random_id</code>, <code>random_string</code>, <code>random_pet</code>, <code>random_password</code>) generates values <strong>once and stores them in state</strong>, so they are <strong>stable across runs</strong>; <strong><code>keepers</code></strong> force a new value when inputs change; random passwords are <strong>still in state</strong>, so prefer <strong>ephemeral random_password with write-only arguments</strong> or a <strong>vault</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform needs deterministic plans, so a function like <code>uuid()</code> that changes every run would cause permanent diffs. The <strong>random provider</strong> solves this by modelling randomness as <strong>resources</strong>: on create, the value is generated and <strong>persisted in state</strong>, and later plans reuse it. It only changes if the resource is replaced.</p>
+<p>Typical uses are <strong>unique names</strong> for globally unique resources: S3 buckets, Azure storage accounts (3-24 lowercase letters and digits), Key Vaults or DNS labels. <code>random_id</code> with <code>byte_length = 4</code> gives a short hex suffix; <code>random_string</code> lets you control character sets (<code>upper = false</code>, <code>special = false</code>) to match naming rules; <code>random_pet</code> produces readable names like <code>quick-otter</code>. Random values are also used for spreading resources across zones with <code>random_shuffle</code> or for one-off tokens.</p>
+<p><strong><code>keepers</code></strong> is a map of arbitrary values; if any value changes, the random resource is <strong>replaced</strong> and a new value generated. For example, tie a suffix to the resource group name, the AMI ID or an environment name, so renaming the environment produces a fresh, consistent name. Remember that replacing the random resource will usually <strong>replace every resource whose name uses it</strong>, so keepers should only contain values that justify that.</p>
+<p>For <strong>passwords</strong>, <code>random_password</code> marks <code>result</code> sensitive, but the value is stored <strong>in plain text in state</strong>. Anyone with state access sees the database password. With Terraform 1.10+ I prefer <strong><code>ephemeral &quot;random_password&quot;</code></strong> passed to <strong>write-only arguments</strong> (<code>password_wo</code>) and stored in a secret manager, or let the cloud manage the secret (for example RDS <code>manage_master_user_password</code> with Secrets Manager).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>First apply: provider generates the value; it is saved in state.</li>
+  <li>Subsequent plans read it from state; no change.</li>
+  <li>If a keeper changes, Terraform plans replacement and a new value.</li>
+  <li>Dependent resources referencing it get updated or replaced.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;random_string&quot; &quot;suffix&quot; {
+  length  = 6
+  upper   = false
+  special = false
+  keepers = {
+    resource_group = azurerm_resource_group.main.name
+  }
+}
+
+resource &quot;azurerm_storage_account&quot; &quot;logs&quot; {
+  name                     = &quot;acmelogs${random_string.suffix.result}&quot;
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = azurerm_resource_group.main.location
+  account_tier             = &quot;Standard&quot;
+  account_replication_type = &quot;ZRS&quot;
+}
+
+ephemeral &quot;random_password&quot; &quot;db&quot; {
+  length = 32
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>uuid()</code> or <code>timestamp()</code> in names, causing perpetual changes.</li>
+  <li>Putting frequently changing values in keepers, replacing resources unexpectedly.</li>
+  <li>Assuming <code>random_password</code> is secure because it is &quot;sensitive&quot;.</li>
+  <li>Character sets that violate the target resource's naming rules.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The random provider has resources like random_id, random_string, random_pet and random_password. Their values are generated once and stored in state, so they stay stable across runs, which is what makes them usable for names, like a unique suffix for storage accounts or S3 buckets. The keepers argument holds values that force a new random value when they change, such as tying a suffix to the resource group name. For passwords, random_password is marked sensitive but still stored in plain text in state, so with Terraform 1.10 or later I use an ephemeral random_password with write-only arguments, or let a vault or the cloud manage the secret.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to dependents when a keeper changes?</strong> The random value changes, so resources using it are updated or, for names, usually replaced.</li>
+  <li><strong>Why not <code>uuid()</code>?</strong> It changes on every plan.</li>
+  <li><strong>How do you import an existing name?</strong> Use the real name directly or import the random resource with its known value.</li>
+</ul>
+</article>
+</body>
+</html>

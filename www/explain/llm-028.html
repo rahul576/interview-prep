@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-028 · What are hybrid search and reranking, and why do they improve RAG quality?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-028" data-topic="LLMOps &amp; RAG">
+<h1>What are hybrid search and reranking, and why do they improve RAG quality?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Hybrid search</strong> combines <strong>BM25 keyword search</strong> (exact terms, codes, names) with <strong>vector search</strong> (meaning, paraphrases), merging results with <strong>reciprocal rank fusion</strong>; <strong>reranking</strong> then rescores a larger candidate set with a <strong>cross-encoder</strong> that reads query and passage together, keeping the best few, for big quality gains at <strong>some latency and cost</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Why two retrievers.</strong> Dense <strong>vector search</strong> shines when wording differs: &quot;how do I get my money back&quot; finds &quot;refund policy&quot;. It is weak on <strong>exact tokens</strong>: error codes like <code>ORA-12154</code>, SKUs, version numbers, acronyms, people's names and rare jargon, which embeddings blur. <strong>BM25</strong> keyword search is the opposite: excellent for exact matches and rare terms, blind to synonyms. Real queries mix both kinds, so using both improves recall substantially.</p>
+<p><strong>Fusion.</strong> Scores from BM25 and cosine similarity are on different scales, so <strong>reciprocal rank fusion (RRF)</strong> combines <strong>ranks</strong> instead: each document scores the sum of <code>1 / (k + rank)</code> across retrievers (k typically 60). Documents ranked well by either rise; documents found by both rise most. Alternatives are weighted score combination after normalisation. Elasticsearch, OpenSearch, Azure AI Search, Weaviate, Qdrant, Pinecone, Milvus and others support hybrid queries natively; with pgvector you can combine it with PostgreSQL full-text search.</p>
+<p><strong>Reranking.</strong> Embedding models are <strong>bi-encoders</strong>: query and document are embedded <strong>separately</strong>, which is fast but loses fine-grained interaction. A <strong>cross-encoder reranker</strong> takes the query and a passage <strong>together</strong> and outputs a relevance score, judging subtle relevance far more accurately. It is too slow to run over the whole corpus, so it is a second stage: retrieve 50 to 100 hybrid candidates, rerank them, keep the top 3 to 10 for the prompt. Options include <strong>Cohere Rerank</strong>, <strong>Voyage</strong> rerankers, Jina, open models like <strong>BGE reranker</strong> and other cross-encoders.</p>
+<p><strong>Trade-offs.</strong> Reranking adds tens to a few hundred milliseconds and per-query cost; candidate count is the main lever. The gains, fewer irrelevant chunks in the prompt and better answers with fewer tokens, usually justify it. Measure with recall at k and answer quality.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Run BM25 and vector search in parallel (top 50 each), with the same filters.</li>
+  <li>Fuse with RRF into one candidate list.</li>
+  <li>Cross-encoder scores each (query, passage) pair.</li>
+  <li>Sort by reranker score; keep top k above a threshold.</li>
+  <li>Send selected chunks to the LLM.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def rrf(result_lists, k=60):
+    scores = {}
+    for results in result_lists:
+        for rank, doc_id in enumerate(results, start=1):
+            scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+    return sorted(scores, key=scores.get, reverse=True)
+
+cands = rrf([bm25.search(q, 50), vectors.search(embed(q), 50)])[:60]
+scored = reranker.score(q, [docs[c].text for c in cands])
+top = [c for c, s in sorted(zip(cands, scored), key=lambda x: -x[1])[:6]]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pure vector search for a corpus full of identifiers.</li>
+  <li>Adding raw BM25 and cosine scores without normalisation.</li>
+  <li>Reranking only the top 5, which cannot recover missed documents.</li>
+  <li>Ignoring reranker latency in the overall budget.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Vector search finds passages with similar meaning even when words differ, but it is weak with exact terms like product codes, error messages and names. BM25 keyword search is the opposite. Hybrid search runs both and merges them, usually with reciprocal rank fusion, so documents ranked well by either rise; most search engines and vector databases support it natively. Reranking adds a second stage: retrieve maybe 50 candidates, score each with a cross-encoder that reads the query and passage together, which is much more accurate than comparing separate embeddings, and keep the top few. Both give big quality gains for some extra latency and cost.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How many to rerank?</strong> Enough to reach high recall, often 30 to 100; tune on a test set against latency.</li>
+  <li><strong>Why RRF?</strong> Rank-based, no score calibration needed, robust.</li>
+  <li><strong>Reranker threshold?</strong> Drop low-scoring chunks to avoid distracting context.</li>
+</ul>
+</article>
+</body>
+</html>

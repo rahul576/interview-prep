@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-060 · A Java pod is OOMKilled although the JVM heap is set well below the container memory limit. Why?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-060" data-topic="Kubernetes">
+<h1>A Java pod is OOMKilled although the JVM heap is set well below the container memory limit. Why?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>The memory limit applies to the <strong>whole process</strong>, not just the heap: <strong>metaspace, thread stacks, code cache, GC structures, direct buffers and native libraries</strong> add up, so the <strong>cgroup OOM killer</strong> ends it (<strong>exit code 137</strong>); measure with <strong>Native Memory Tracking</strong>, size heap with <strong>MaxRAMPercentage</strong> and leave headroom.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>-Xmx</code> limits only the Java <strong>heap</strong>. A JVM also uses <strong>metaspace</strong> for class metadata (large with frameworks like Spring), a <strong>stack per thread</strong> (often 512 KB to 1 MB reserved each, so 400 threads add hundreds of MB), the <strong>JIT code cache</strong>, <strong>GC data structures</strong> (G1 regions and remembered sets), <strong>direct ByteBuffers</strong> used by Netty, gRPC and NIO, memory-mapped files, and allocations by native libraries (compression, TLS, JNI). glibc malloc arenas can also inflate resident memory with many threads.</p>
+<p>The kernel accounts all of this, plus page cache for written files, against the container's <strong>cgroup memory limit</strong>. When the cgroup hits the limit and cannot reclaim, the kernel OOM killer terminates the process. Kubernetes reports <code>OOMKilled</code> with exit code <strong>137</strong> (128 + SIGKILL). The JVM never sees an <code>OutOfMemoryError</code>, which is why the heap &quot;looked fine&quot;.</p>
+<p>Modern JVMs (Java 10+, backported to 8u191) are <strong>container-aware</strong>: they read the cgroup limit. Instead of a fixed <code>-Xmx</code>, use <code>-XX:MaxRAMPercentage</code> around 70-75 percent of the limit, which scales automatically when the limit changes and leaves room for non-heap. Cap <code>-XX:MaxDirectMemorySize</code> and <code>-XX:MaxMetaspaceSize</code> where appropriate, and reduce oversized thread pools. <strong>Native Memory Tracking</strong> (<code>-XX:NativeMemoryTracking=summary</code> plus <code>jcmd &lt;pid&gt; VM.native_memory summary</code>) shows exactly where memory goes, and container metrics like <code>container_memory_working_set_bytes</code> show what the kernel sees.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm OOMKilled and exit code 137 in <code>kubectl describe pod</code>.</li>
+  <li>Compare working set over time with the limit.</li>
+  <li>Enable NMT and break down heap vs non-heap.</li>
+  <li>Set <code>MaxRAMPercentage</code>, cap direct memory, fix thread counts.</li>
+  <li>Set the memory request equal or close to the limit, with headroom above real peak.</li>
+  <li>Watch for steady growth that suggests a native leak.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">containers:
+  - name: orders
+    image: registry.example.com/orders:3.2
+    env:
+      - name: JAVA_TOOL_OPTIONS
+        value: &gt;-
+          -XX:MaxRAMPercentage=70 -XX:MaxDirectMemorySize=256m
+          -XX:NativeMemoryTracking=summary
+    resources:
+      requests: { memory: 3Gi, cpu: &quot;1&quot; }
+      limits: { memory: 3Gi }</code></pre>
+<pre><code class="language-bash">kubectl exec orders-6f9 -- jcmd 1 VM.native_memory summary | head -30</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting <code>-Xmx</code> equal to the container limit.</li>
+  <li>Ignoring thread count and direct buffers.</li>
+  <li>Raising the limit repeatedly without measuring.</li>
+  <li>Running Java versions that are not container-aware.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The cgroup limit applies to the whole JVM process, not just the heap. Besides the heap there's metaspace, a stack per thread, code cache, GC structures, direct buffers from Netty or NIO and native libraries. A 2 GB heap with hundreds of threads can need 3 GB, so the kernel OOM killer ends it with exit code 137 and the JVM never throws OutOfMemoryError. I'd measure with Native Memory Tracking and container working-set metrics, size the heap with MaxRAMPercentage around 70 percent, cap direct memory, trim thread pools and leave headroom in the limit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Leak or undersized limit?</strong> A leak keeps growing over time regardless of load; an undersized limit plateaus just above the limit under normal load.</li>
+  <li><strong>Why exit code 137?</strong> 128 plus signal 9, SIGKILL.</li>
+  <li><strong>Does page cache count?</strong> It is charged to the cgroup but is reclaimable; working set excludes inactive file cache.</li>
+</ul>
+</article>
+</body>
+</html>

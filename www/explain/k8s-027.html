@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-027 · What are CSI drivers and volume snapshots, and how do you use them for backups?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-027" data-topic="Kubernetes">
+<h1>What are CSI drivers and volume snapshots, and how do you use them for backups?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>CSI</strong> (Container Storage Interface) is the standard plugin model through which vendor <strong>drivers</strong> provision, attach and mount storage; a <strong>StorageClass</strong> names the provisioner for dynamic PVCs, <strong>VolumeSnapshot/VolumeSnapshotClass</strong> take storage-level snapshots, and you <strong>restore</strong> by creating a <strong>PVC with a snapshot <code>dataSource</code></strong>. Snapshots are <strong>crash-consistent</strong> unless you quiesce the app.</p>
+
+<h2>Detailed explanation</h2>
+<p>Storage drivers used to live inside Kubernetes (&quot;in-tree&quot;), tying vendors to Kubernetes releases. CSI moved them out: each vendor ships a driver, such as the AWS EBS CSI driver, Azure Disk, GCE PD, Ceph RBD, Longhorn or Portworx, and in-tree drivers were migrated to CSI. A driver typically has a <strong>controller</strong> component (create and delete volumes, snapshots, attach to nodes) running as a Deployment with sidecars like external-provisioner and external-snapshotter, and a <strong>node</strong> component as a DaemonSet that mounts volumes into pods.</p>
+<p><strong>Dynamic provisioning:</strong> a PVC references a <strong>StorageClass</strong> whose <code>provisioner</code> is the CSI driver; parameters choose disk type, IOPS or encryption. <code>volumeBindingMode: WaitForFirstConsumer</code> delays creation until the pod is scheduled, so the disk lands in the right zone. <code>allowVolumeExpansion</code> enables resizing.</p>
+<p><strong>Snapshots</strong> use the snapshot CRDs and controller: a <strong>VolumeSnapshotClass</strong> (driver, deletion policy) and a <strong>VolumeSnapshot</strong> pointing at a PVC; the driver takes a storage snapshot, represented by a <strong>VolumeSnapshotContent</strong>. To restore or clone, create a new PVC with <code>dataSource</code> pointing to the snapshot.</p>
+<p><strong>Consistency:</strong> a snapshot captures the disk as if power were cut: <strong>crash-consistent</strong>. Databases usually recover but may replay logs, and multi-volume apps can be inconsistent across volumes. For <strong>application-consistent</strong> backups, flush or freeze first (pre-snapshot hooks, <code>fsfreeze</code>, database backup mode) or use the database's own backup (pg_basebackup, WAL archiving). <strong>Velero</strong> orchestrates hooks, snapshots and Kubernetes object backup and can copy data to object storage in another region. A snapshot in the same account and region as the disk is not a real backup.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PVC → StorageClass → CSI controller creates the disk.</li>
+  <li>Pod scheduled → attach to node → node plugin mounts it.</li>
+  <li>VolumeSnapshot created → driver takes snapshot.</li>
+  <li>Restore: new PVC with <code>dataSource: VolumeSnapshot</code>.</li>
+  <li>Copy snapshots or backups off-site for real DR.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: { name: pg-data-2026-11-21, namespace: db }
+spec:
+  volumeSnapshotClassName: ebs-snapclass
+  source: { persistentVolumeClaimName: data-pg-0 }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: pg-restore, namespace: db }
+spec:
+  storageClassName: gp3
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 100Gi } }
+  dataSource:
+    apiGroup: snapshot.storage.k8s.io
+    kind: VolumeSnapshot
+    name: pg-data-2026-11-21</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating crash-consistent snapshots as database backups without testing recovery.</li>
+  <li>Snapshots only in the same region and account.</li>
+  <li>Forgetting the snapshot CRDs and controller are separate installs on some clusters.</li>
+  <li><code>Immediate</code> binding mode creating volumes in the wrong zone.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CSI is the standard storage plugin model: vendors ship drivers like the EBS or Azure Disk driver, and a StorageClass references the provisioner so PVCs get volumes dynamically. CSI also standardises snapshots: a VolumeSnapshotClass plus a VolumeSnapshot pointing at a PVC, and you restore by creating a PVC with the snapshot as its dataSource. Snapshots are crash-consistent, so for databases I quiesce first with hooks or rely on native database backups for application consistency. Velero orchestrates snapshots together with Kubernetes objects and copies data to another region.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a same-region snapshot not a backup?</strong> It shares the account, region and failure or compromise domain.</li>
+  <li><strong>How do you resize a PVC?</strong> Increase the request if the StorageClass allows expansion.</li>
+  <li><strong>What is WaitForFirstConsumer?</strong> Delays provisioning until scheduling, choosing the pod's zone.</li>
+</ul>
+</article>
+</body>
+</html>

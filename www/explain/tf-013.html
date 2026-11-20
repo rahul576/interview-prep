@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-013 · How do you configure a Terraform backend per environment, and how do you migrate state to a new backend?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-013" data-topic="Terraform">
+<h1>How do you configure a Terraform backend per environment, and how do you migrate state to a new backend?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Backend blocks <strong>cannot use variables</strong>, so use <strong>partial configuration</strong>: keep only the backend type in code and pass per-environment settings with <strong><code>-backend-config</code> files</strong>, each with a <strong>distinct state key</strong>; move state with <strong><code>terraform init -migrate-state</code></strong> after <strong>backing it up and stopping other runs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform initialises the backend during <code>terraform init</code>, before it evaluates variables, locals or anything else, so a backend block like <code>bucket = var.state_bucket</code> is not allowed. Copying the whole configuration per environment just to change the backend would be wasteful, so the standard solution is <strong>partial backend configuration</strong>.</p>
+<p>The code contains an almost empty block, for example <code>terraform { backend &quot;s3&quot; {} }</code> or <code>backend &quot;azurerm&quot; {}</code>. Each environment has a small file, <code>dev.backend.hcl</code>, <code>prod.backend.hcl</code>, with the bucket or storage account, container, region and, crucially, a <strong>unique key</strong> so environments never share state. The pipeline runs <code>terraform init -backend-config=prod.backend.hcl</code>. Values can also be passed as <code>-backend-config=&quot;key=value&quot;</code> pairs, and credentials should come from the environment (OIDC, managed identity), never from these files. Many teams also keep production state in a <strong>separate account or subscription</strong> with stricter access.</p>
+<p><strong>Migrating</strong> state happens when moving from local to remote, between buckets or storage accounts, or between backend types. The safe procedure: make sure <strong>no one else is running Terraform</strong> against this state (pause pipelines), take a <strong>backup</strong> with <code>terraform state pull &gt; backup.tfstate</code>, change the backend configuration, then run <code>terraform init -migrate-state</code>. Terraform detects the change, asks for confirmation and copies the state to the new backend. Finally run <code>terraform plan</code>; it must show <strong>no changes</strong>. If it proposes creating everything, Terraform is reading an empty or wrong state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the backend type in code with no environment-specific values.</li>
+  <li>Create one backend config file per environment with a unique key.</li>
+  <li><code>terraform init -backend-config=&lt;env&gt;.backend.hcl</code> in the pipeline.</li>
+  <li>For migration: lock out runs, back up, update config.</li>
+  <li><code>terraform init -migrate-state</code>, confirm copy.</li>
+  <li><code>terraform plan</code> must show no changes; then re-enable pipelines.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># backend.tf
+terraform {
+  backend &quot;azurerm&quot; {}
+}</code></pre>
+<pre><code class="language-hcl"># prod.backend.hcl
+resource_group_name  = &quot;rg-tfstate-prod&quot;
+storage_account_name = &quot;acmetfstateprod&quot;
+container_name       = &quot;tfstate&quot;
+key                  = &quot;platform/network/prod.tfstate&quot;
+use_azuread_auth     = true</code></pre>
+<pre><code class="language-bash">terraform state pull &gt; backup-$(date +%F).tfstate
+terraform init -backend-config=prod.backend.hcl -migrate-state
+terraform plan   # expect: No changes</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the same key for several environments.</li>
+  <li>Migrating while a pipeline is running.</li>
+  <li>Using <code>-reconfigure</code> when you meant to migrate, which ignores the old state.</li>
+  <li>Storing access keys in backend config files in Git.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Backend blocks are evaluated before variables, so they can't use them. I use partial configuration: the backend block only names the type, like azurerm or s3, and each environment has a small file such as prod.backend.hcl with the bucket or storage account and a distinct key, passed with <code>terraform init -backend-config</code>. To migrate state to a new backend, I make sure nobody is running Terraform, back up the current state with <code>terraform state pull</code>, change the backend configuration and run <code>terraform init -migrate-state</code>, which copies the state after confirmation. Then I verify with <code>terraform plan</code> that there are no changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Plan shows everything as new after migration?</strong> Wrong key, container or workspace prefix, so Terraform reads an empty state; fix config or restore backup.</li>
+  <li><strong><code>-reconfigure</code> versus <code>-migrate-state</code>?</strong> Reconfigure switches backends without copying state.</li>
+  <li><strong>Workspaces instead of keys?</strong> Possible, but separate keys or directories per environment are clearer.</li>
+</ul>
+</article>
+</body>
+</html>

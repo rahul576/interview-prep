@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-042 · How would you run AI training and inference workloads on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-042" data-topic="Kubernetes">
+<h1>How would you run AI training and inference workloads on Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Run <strong>training</strong> as queued batch work on <strong>separate, autoscaled GPU pools</strong> (with <strong>Kueue</strong>, <strong>gang scheduling</strong>, <strong>spot plus checkpointing</strong>) and <strong>inference</strong> as long-running services (<strong>KServe</strong>, <strong>vLLM</strong>, Triton) with <strong>cached model weights</strong> and autoscaling on <strong>concurrency or queue depth, not CPU</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Training and inference have opposite shapes. <strong>Training</strong> is batch: large, long jobs that need many GPUs at the same time and can be paused and resumed. <strong>Inference</strong> is latency-sensitive serving that must scale with traffic. Putting them on separate <strong>node pools</strong> prevents a big training job from starving production inference and lets each pool use the right instance types and purchasing model.</p>
+<p>For training, GPUs are scarce and shared between teams, so a queue is needed. <strong>Kueue</strong> adds <strong>ClusterQueues</strong> and <strong>LocalQueues</strong> with quotas, borrowing and fair sharing, and admits a job only when its whole resource set is available. That gives <strong>gang scheduling</strong> behaviour: a 16-worker PyTorch job starts all-or-nothing, instead of 10 workers holding GPUs idle while waiting for 6 more. Jobs run as Kubeflow Trainer jobs, <strong>JobSet</strong> or Ray clusters. <strong>Spot</strong> capacity cuts cost a lot, provided the job <strong>checkpoints</strong> to object storage and can resume.</p>
+<p>For inference, <strong>KServe</strong> or plain Deployments run engines such as <strong>vLLM</strong>, SGLang or Triton. The biggest operational issue is <strong>cold start</strong>: images and weights can be tens of gigabytes, so weights are cached on node-local NVMe, a shared read-only volume, or pre-pulled images, and models are kept warm. GPU-bound pods show low CPU, so autoscaling uses <strong>in-flight requests, queue depth, KV-cache utilisation or tokens per second</strong> via KEDA or custom metrics. Node pools scale with <strong>Karpenter</strong> or the cluster autoscaler, and <strong>DCGM exporter</strong> metrics show GPU utilisation for rightsizing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create tainted GPU node pools: training (spot allowed) and inference (on-demand base).</li>
+  <li>Install the GPU Operator and Kueue; define queues and team quotas.</li>
+  <li>Submit training as JobSet/PyTorch jobs to a LocalQueue; Kueue admits whole gangs.</li>
+  <li>Checkpoint regularly so preempted spot jobs resume.</li>
+  <li>Serve models with KServe or vLLM Deployments; cache weights locally.</li>
+  <li>Autoscale on concurrency or queue depth; scale nodes with Karpenter.</li>
+  <li>Monitor GPU utilisation, latency and cost per team.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata:
+  name: finetune-llm
+  labels:
+    kueue.x-k8s.io/queue-name: ml-team-a
+spec:
+  parallelism: 4
+  completions: 4
+  suspend: true          # Kueue unsuspends when quota for all 4 is available
+  template:
+    spec:
+      tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+      containers:
+        - name: train
+          image: registry.example.com/train:2.1
+          resources: { limits: { nvidia.com/gpu: 8 } }
+      restartPolicy: Never</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Autoscaling inference on CPU utilisation.</li>
+  <li>Pulling a 70 GB model from object storage on every pod start.</li>
+  <li>Running training on spot without checkpoints.</li>
+  <li>No quotas, so one team monopolises all GPUs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd separate training and inference onto different tainted GPU pools. Training is batch, so I use Kueue for queues, quotas and fair sharing, and its all-or-nothing admission gives gang scheduling, so a distributed job never holds half the GPUs idle. Training can use spot with checkpointing. Inference runs on KServe or vLLM deployments, with weights cached on local NVMe or a shared volume, because pulling tens of gigabytes per start is slow. I autoscale inference on concurrency or queue depth, not CPU, scale nodes with Karpenter, and watch DCGM metrics to rightsize.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle a 70 GB model cold start?</strong> Node-local cache or pre-pulled image, streaming loaders, and keeping minimum warm replicas.</li>
+  <li><strong>Why not CPU-based HPA?</strong> GPU-bound inference shows low CPU even when saturated.</li>
+  <li><strong>How do you share small GPUs for inference?</strong> MIG slices or DRA claims for small models.</li>
+</ul>
+</article>
+</body>
+</html>

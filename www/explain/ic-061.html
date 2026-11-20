@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-061 · What are the pitfalls of managing Kubernetes resources with Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-061" data-topic="Infrastructure as Code">
+<h1>What are the pitfalls of managing Kubernetes resources with Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Managing Kubernetes objects with Terraform causes <strong>provider bootstrap problems</strong> (the cluster must exist before the kubernetes/helm providers can plan), <strong>drift</strong> from controllers that mutate objects, <strong>CRD ordering</strong> issues and opaque Helm diffs; the common pattern is <strong>Terraform for the cluster and cloud dependencies, GitOps (Argo CD/Flux) for what runs inside</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Provider bootstrap.</strong> Provider configurations are resolved before resources are planned. If the <code>kubernetes</code> or <code>helm</code> provider takes its host and token from an <code>aws_eks_cluster</code> created in the same configuration, the very first plan has no endpoint; when the cluster is replaced, the provider points at something that is about to disappear. Terraform's own documentation warns against provider configuration that depends on resources managed in the same apply. Short-lived tokens make it worse: a token fetched at plan time can expire before a long apply finishes, so the exec-based auth plugin is preferred.</p>
+<p><strong>Drift from mutation.</strong> Kubernetes is full of controllers and admission webhooks that add labels, annotations, sidecars, default fields and status. Terraform sees the live object differ from code and either shows endless diffs or fights the controller.</p>
+<p><strong>CRDs and ordering.</strong> <code>kubernetes_manifest</code> needs the API server at plan time to fetch the schema, so a custom resource cannot be planned until its CRD (from an operator or Helm chart) is installed. That usually forces a two-stage apply.</p>
+<p><strong>Helm releases</strong> appear in the plan as a values blob; you do not see which Deployments or RBAC rules change, and a failed release can leave Helm and Terraform states disagreeing.</p>
+<p><strong>Ownership.</strong> Application teams deploy many times a day; routing that through Terraform state and locks is slow and couples them to the platform team.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stack 1 (Terraform): VPC, cluster, node groups, IAM roles for workloads, DNS zones, KMS keys.</li>
+  <li>Stack 1 also installs a minimal bootstrap: managed add-ons (CNI, CoreDNS) and Argo CD or Flux.</li>
+  <li>Terraform publishes cluster metadata (role ARNs, account IDs) for GitOps to consume.</li>
+  <li>GitOps repo defines add-ons (ingress controller, cert-manager, external-dns) and workloads.</li>
+  <li>Argo CD/Flux reconciles continuously, handling CRD ordering with sync waves or dependencies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Stack 2 (separate state) reads the existing cluster instead of creating it
+data &quot;aws_eks_cluster&quot; &quot;this&quot; { name = &quot;prod-eu&quot; }
+
+provider &quot;helm&quot; {
+  kubernetes {
+    host                   = data.aws_eks_cluster.this.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+    exec {
+      api_version = &quot;client.authentication.k8s.io/v1beta1&quot;
+      command     = &quot;aws&quot;
+      args        = [&quot;eks&quot;, &quot;get-token&quot;, &quot;--cluster-name&quot;, &quot;prod-eu&quot;]
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating the cluster and its Helm releases in one root module.</li>
+  <li>Fixing drift with ever-growing <code>ignore_changes</code> instead of rethinking ownership.</li>
+  <li>Letting Terraform and Argo CD both manage the same object.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The biggest problem is bootstrapping: the kubernetes and helm providers need the cluster endpoint and credentials at plan time, so putting the cluster and its contents in one configuration breaks on the first run and on cluster replacement. Controllers also mutate objects, so Terraform sees constant drift, custom resources need their CRDs installed before they can even be planned, and Helm releases are opaque in the plan. So I use Terraform for the cluster and its cloud dependencies like IAM and DNS, bootstrap Argo CD or Flux, and let GitOps manage add-ons and workloads inside the cluster.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where would you put add-ons like the ingress controller?</strong> In GitOps, with cloud-side IAM roles created by Terraform and passed as metadata.</li>
+  <li><strong>When is Terraform for Kubernetes fine?</strong> Small, stable cluster-level objects such as namespaces or a bootstrap secret, in a separate stack.</li>
+  <li><strong>How do you handle CRD ordering in Argo CD?</strong> Sync waves, or separate Applications for CRDs and custom resources.</li>
+</ul>
+</article>
+</body>
+</html>

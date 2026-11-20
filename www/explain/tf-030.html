@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-030 · You renamed a module call in your code and now the plan wants to destroy and recreate 40 resources. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-030" data-topic="Terraform">
+<h1>You renamed a module call in your code and now the plan wants to destroy and recreate 40 resources. How do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Renaming a module call <strong>changes every resource address</strong>, so Terraform sees old resources to destroy and new ones to create; add a <strong><code>moved</code> block</strong> from <code>module.old</code> to <code>module.new</code>, verify the plan shows <strong>only moves with zero destroys</strong>, and <strong>keep the block</strong> until every environment and consumer has applied.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform tracks objects by <strong>resource address</strong>, not by cloud ID or name. <code>module.network.azurerm_subnet.app</code> is a different address from <code>module.network_core.azurerm_subnet.app</code>. When you rename the module call, the configuration no longer contains the old addresses and contains new ones that are not in state, so Terraform plans to <strong>destroy 40 existing resources and create 40 new ones</strong>. For a network that means downtime; for databases, data loss.</p>
+<p>The fix is a <strong><code>moved</code> block</strong> (Terraform 1.1+): <code>moved { from = module.network  to = module.network_core }</code>. One block can move an <strong>entire module instance</strong>, including everything inside it. It also works for single resources, for adding or changing <code>for_each</code> keys (<code>from = aws_instance.web  to = aws_instance.web[&quot;a&quot;]</code>), for <code>count</code> to <code>for_each</code> conversions, and for moving resources into or out of child modules. During plan, Terraform updates addresses in state first, then compares; the plan output lists each resource as <strong>&quot;has moved to&quot;</strong>. The goal is <strong><code>0 to add, 0 to change, 0 to destroy</code></strong> plus the moves; if any destroy appears, something else differs and must be investigated before approving.</p>
+<p>The older alternative is <strong><code>terraform state mv module.network module.network_core</code></strong>. It works, but it is a manual, unreviewed operation that must be repeated in <strong>every workspace and environment</strong>, and someone always forgets one.</p>
+<p>Moved blocks are harmless once applied, so <strong>keep them</strong> until every environment using the configuration has applied. In <strong>shared modules</strong>, keep internal moved blocks for much longer, often a whole major version, because consumers upgrade at different times and each needs the move instructions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Rename the module call in code.</li>
+  <li>Add <code>moved { from = ..., to = ... }</code>.</li>
+  <li>Run plan: expect &quot;has moved to&quot; entries and no destroys.</li>
+  <li>Merge and apply in each environment.</li>
+  <li>Remove the moved block after all states are migrated.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">module &quot;network_core&quot; {
+  source = &quot;./modules/network&quot;
+  cidr   = &quot;10.10.0.0/16&quot;
+}
+
+moved {
+  from = module.network
+  to   = module.network_core
+}</code></pre>
+<pre><code class="language-text">  # module.network.azurerm_subnet.app has moved to module.network_core.azurerm_subnet.app
+  ...
+Plan: 0 to add, 0 to change, 0 to destroy.</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Approving a plan that still shows destroys.</li>
+  <li>Using <code>state mv</code> in one environment and forgetting others.</li>
+  <li>Removing moved blocks from shared modules too early.</li>
+  <li>Combining the rename with other changes in the same PR, making the plan hard to read.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform identifies resources by address, like <code>module.network.azurerm_subnet.app</code>. Renaming the module call to network_core changes every address inside it, so Terraform thinks the old resources should be destroyed and new ones created. The fix is a moved block from module.network to module.network_core, which moves the whole module at once. After adding it, the plan should show the resources as moved with zero destroys and zero creates, and I verify that before approving. The older alternative is <code>terraform state mv</code> per environment, which is manual and unreviewed. I keep the moved block until every environment has applied, and much longer in shared modules.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When can moved blocks not help?</strong> Moving between different state files or changing resource type, which needs removed plus import.</li>
+  <li><strong>Can moved handle count to for_each?</strong> Yes, with one moved block per index-to-key mapping.</li>
+  <li><strong>Do moved blocks change real infrastructure?</strong> No, only state addresses.</li>
+</ul>
+</article>
+</body>
+</html>

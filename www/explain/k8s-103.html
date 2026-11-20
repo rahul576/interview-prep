@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-103 · A newly deployed pod has been stuck in Pending for ten minutes. Walk through how you troubleshoot it step by step.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-103" data-topic="Kubernetes">
+<h1>A newly deployed pod has been stuck in Pending for ten minutes. Walk through how you troubleshoot it step by step.</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>Pending</strong> pod has not been <strong>scheduled</strong>, so read the <strong>FailedScheduling events</strong> in <code>kubectl describe pod</code>: usually <strong>insufficient CPU/memory</strong>, <strong>unsatisfiable selectors, affinity or taints</strong>, an <strong>unbound PVC</strong>, or an <strong>autoscaler that cannot add nodes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pending means the API server accepted the pod but the scheduler has not bound it to a node (or, less often, it is bound but images are still pulling, which shows as ContainerCreating rather than Pending in practice). The scheduler explains itself in events, for example <code>0/6 nodes are available: 3 Insufficient memory, 3 node(s) had untolerated taint {dedicated: gpu}</code>.</p>
+<p><strong>Resources</strong>: scheduling uses <strong>requests</strong>, not actual usage. If the pod asks for 4 CPU and no node has 4 CPU of free allocatable capacity, it waits, even if nodes look idle. Compare with <code>kubectl describe nodes</code> (Allocated resources); <code>kubectl top</code> shows usage, which is a different question.</p>
+<p><strong>Scheduling rules</strong>: a <code>nodeSelector</code> with a misspelt label, required <strong>node affinity</strong> nobody satisfies, <strong>pod anti-affinity</strong> needing more nodes than exist, <strong>topology spread</strong> with <code>DoNotSchedule</code>, or <strong>taints</strong> without matching tolerations.</p>
+<p><strong>Storage</strong>: a PVC that is <strong>unbound</strong> (missing StorageClass, provisioner failing) or a volume in another <strong>zone</strong> from all suitable nodes gives messages like <code>volume node affinity conflict</code>.</p>
+<p><strong>Capacity and nodes</strong>: nodes NotReady, or the <strong>cluster autoscaler or Karpenter</strong> not adding a node because the max size is reached, no node group matches the pod's requirements, or cloud quota is exhausted. <strong>ResourceQuota</strong> violations usually stop pod creation entirely, so you see errors on the ReplicaSet rather than a Pending pod.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe pod</code> and read the FailedScheduling event.</li>
+  <li>Resources message: compare requests with node allocatable.</li>
+  <li>Taint or affinity message: check node labels and tolerations.</li>
+  <li>Volume message: check PVC status and zones.</li>
+  <li>Check node readiness and autoscaler events or logs.</li>
+  <li>Apply the fix: right-size requests, fix labels, add tolerations, repair storage, add capacity.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pod report-6c9b | sed -n '/Events/,$p'
+# Warning FailedScheduling 0/6 nodes are available: 2 Insufficient cpu,
+#   4 node(s) didn't match Pod's node affinity/selector.
+kubectl get nodes -L workload
+kubectl get pod report-6c9b -o jsonpath='{.spec.nodeSelector}'
+# {&quot;workload&quot;:&quot;bach&quot;}   &lt;- typo, nodes are labelled workload=batch
+kubectl get pvc -n reports</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Looking at <code>kubectl top</code> usage instead of requests versus allocatable.</li>
+  <li>Deleting and recreating the pod without reading events.</li>
+  <li>Adding tolerations and expecting them to pull pods onto tainted nodes.</li>
+  <li>Forgetting the autoscaler's limits and node group constraints.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pending means the pod is accepted but not scheduled, so the answer is almost always in the scheduler events. I run kubectl describe pod and read FailedScheduling, which says how many nodes failed for which reason. Common causes are requests larger than any node's free allocatable capacity, scheduling rules nobody satisfies, such as a misspelt nodeSelector, required affinity or taints without tolerations, and unbound PVCs or zone conflicts. I also check that nodes are Ready and why the autoscaler did not add a node, like max size reached. The fix follows the cause.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do events differ when the autoscaler is about to add a node?</strong> You see a TriggeredScaleUp event or Karpenter nominating a node, followed by scheduling once it joins.</li>
+  <li><strong>Why does an idle cluster refuse a pod?</strong> Requests are reserved capacity, regardless of usage.</li>
+  <li><strong>What about pod priority?</strong> Higher-priority pods can preempt lower ones to get scheduled.</li>
+</ul>
+</article>
+</body>
+</html>

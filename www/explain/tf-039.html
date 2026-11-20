@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-039 · A data source in your plan fails because the resource it reads is created in the same apply. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-039" data-topic="Terraform">
+<h1>A data source in your plan fails because the resource it reads is created in the same apply. How do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Terraform reads <strong>data sources during plan</strong> when all their arguments are known, so a lookup for something created in the <strong>same apply</strong> fails; the fix is to <strong>reference the resource directly</strong>, add an explicit dependency only if truly needed, or <strong>split configurations</strong> when another team owns the object.</p>
+
+<h2>Detailed explanation</h2>
+<p>A data source is a read operation. If its arguments are literal strings or known variables, Terraform executes it during the <strong>plan phase</strong>, before anything is created. A data source such as <code>data &quot;azurerm_key_vault&quot; &quot;kv&quot; { name = &quot;kv-orders-prod&quot; }</code> therefore runs while the vault does not exist yet, and the plan fails with &quot;not found&quot;.</p>
+<p>The real problem is a <strong>design smell</strong>: you are using a data source to look up something this same configuration manages. The resource block already exposes every attribute, so <code>azurerm_key_vault.kv.id</code> gives you the value directly and also creates the correct <strong>implicit dependency</strong> in the graph.</p>
+<p>Sometimes a data source does have value. Then make the data source depend on the resource, either by passing an attribute such as <code>azurerm_kubernetes_cluster.main.name</code> (which is known only after create on first run) or with <strong><code>depends_on</code></strong>. Terraform then <strong>defers the read to apply time</strong>. The cost is that the data source results are <strong>unknown during plan</strong>, and anything that uses them shows &quot;known after apply&quot;; with <code>depends_on</code>, Terraform may defer the read on every plan whenever the dependency has pending changes, which can cascade into <strong>unexpected replacements</strong> in dependent resources.</p>
+<p>If the object belongs to another team or lifecycle, it does not belong in the same apply at all: create it in a separate configuration that runs earlier, and look it up with a data source afterwards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan starts; Terraform evaluates each data source whose arguments are known.</li>
+  <li>The provider calls the API; the object does not exist, so the read fails.</li>
+  <li>Replace the data source with direct resource references where possible.</li>
+  <li>If a data source is still needed, make its inputs depend on the resource so the read is deferred to apply.</li>
+  <li>For cross-team objects, move creation to an earlier, separate state.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Bad: fails on first plan because the vault is created in this run
+data &quot;azurerm_key_vault&quot; &quot;kv&quot; {
+  name                = &quot;kv-orders-prod&quot;
+  resource_group_name = &quot;rg-orders&quot;
+}
+
+# Good: reference the managed resource directly
+resource &quot;azurerm_key_vault_secret&quot; &quot;db&quot; {
+  name         = &quot;db-password&quot;
+  value        = random_password.db.result
+  key_vault_id = azurerm_key_vault.kv.id
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding <code>depends_on</code> to data sources by habit, causing perpetual &quot;known after apply&quot; values.</li>
+  <li>Running apply twice as a workaround instead of fixing the dependency.</li>
+  <li>Mixing resources owned by different teams in one configuration.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Data sources are read during plan when their arguments are known, so if one looks up a resource created in the same run, it fails with not found. The proper fix is not to use a data source for something I manage: I reference the resource attributes directly, which also creates the dependency. If I really need a data source, I make it depend on the resource so the read is deferred to apply, accepting unknown values in the plan. And if the object is owned by another team, it belongs in a separate configuration applied first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can deferred reads cause replacements?</strong> Unknown values flow into force-new arguments, so Terraform must plan a replacement.</li>
+  <li><strong>When are data sources the right tool?</strong> For objects managed elsewhere: shared networks, images, existing identities.</li>
+  <li><strong>How do you share values across states?</strong> Outputs, data sources or a parameter store.</li>
+</ul>
+</article>
+</body>
+</html>

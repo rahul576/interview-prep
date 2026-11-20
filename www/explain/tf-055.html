@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-055 · What are the serial and lineage fields in Terraform state, and why do they matter?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-055" data-topic="Terraform">
+<h1>What are the serial and lineage fields in Terraform state, and why do they matter?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Serial</strong> is a counter incremented on <strong>every state write</strong>; <strong>lineage</strong> is a <strong>unique ID</strong> assigned when a state is first created; Terraform and backends use them to <strong>refuse overwriting</strong> state with an <strong>older copy</strong> or an <strong>unrelated state</strong>, which matters most during <strong>state push and recovery</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Terraform state file is JSON with a few header fields: <code>version</code> (format), <code>terraform_version</code>, <strong><code>serial</code></strong>, <strong><code>lineage</code></strong> and then the resources and outputs.</p>
+<p><strong>Lineage</strong> is a UUID generated when the state is created, for example on the first apply in a new backend key. It stays the same for the whole life of that state, across thousands of applies. It identifies &quot;this particular state history&quot;.</p>
+<p><strong>Serial</strong> starts at 1 and increments every time Terraform writes a new version of the state. It orders versions within the same lineage.</p>
+<p>Together they are <strong>safety checks</strong>. When Terraform writes state, for instance with <code>terraform state push</code>, it compares the incoming file with the current one. A <strong>different lineage</strong> means you are about to replace this configuration's state with a state from a completely different configuration or a re-created one, so Terraform refuses. A <strong>lower serial</strong> with the same lineage means you are about to overwrite newer state with an older copy, losing record of resources created in between, so it refuses as well.</p>
+<p>These checks matter during recovery. If a state got corrupted and you restore a previous version from blob versioning or S3 versions, its serial is lower than the current one, so a push is rejected. You either bump the serial in a copy or use <strong><code>-force</code></strong>, but only after being completely sure it is the right file, because pushing the wrong state makes Terraform think real resources do not exist (it would try to create duplicates) or exist when they do not.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>First write: Terraform generates lineage and sets serial 1.</li>
+  <li>Each apply or state command increments the serial.</li>
+  <li>On push, Terraform compares lineage and serial with the remote state.</li>
+  <li>Mismatched lineage or lower serial is rejected.</li>
+  <li><code>-force</code> bypasses the checks, intentionally and rarely.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform state pull | jq '{serial, lineage, terraform_version}'
+# { &quot;serial&quot;: 412, &quot;lineage&quot;: &quot;6f1c2b9e-...&quot;, &quot;terraform_version&quot;: &quot;1.14.0&quot; }
+
+# Recovering an older version (serial 405): push is refused
+terraform state push restored.tfstate
+# Error: refused, because the pushed serial (405) is older than the current one (412)
+
+# Only after verification:
+terraform state push -force restored.tfstate
+terraform plan   # confirm it matches reality</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Editing state JSON by hand and breaking the structure or checksums.</li>
+  <li>Using <code>-force</code> as a reflex when a push is rejected.</li>
+  <li>Copying a state file between environments and wondering why lineage differs.</li>
+  <li>Not running a plan immediately after a recovery push.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every state has a serial, which increments on each write, and a lineage, a unique ID created with the state that never changes. Terraform uses them as safety checks: when pushing state, it refuses a lower serial or a different lineage, because that would overwrite newer state with an old copy or with an unrelated state. It matters in recovery, for example restoring a previous version after corruption: I may need to bump the serial or use -force, but only after verifying it's the right file, and I always run a plan afterwards.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid editing state JSON by hand?</strong> It is easy to break and bypasses all safety; use state commands, moved, import and removed blocks.</li>
+  <li><strong>Where do previous versions come from?</strong> Backend versioning, such as blob versioning or S3 object versions.</li>
+  <li><strong>Does HCP Terraform keep versions?</strong> Yes, every state version is stored and can be restored.</li>
+</ul>
+</article>
+</body>
+</html>

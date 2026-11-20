@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-015 · How do you guarantee per-customer ordering while still processing millions of events in parallel?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-015" data-topic="Kafka">
+<h1>How do you guarantee per-customer ordering while still processing millions of events in parallel?</h1>
+<p class="ex-meta">Kafka · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Key every event by customer ID</strong> so each customer's events go to <strong>one partition in order</strong>, while <strong>many partitions and consumers</strong> process different customers <strong>in parallel</strong>; watch for <strong>hot keys</strong>, and use <strong>key-level parallelism</strong> (such as the Confluent Parallel Consumer) to go beyond one thread per partition.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kafka orders records only within a partition, and the default partitioner sends the same <strong>key</strong> to the same partition. Using <code>customerId</code> as the key therefore gives exactly the guarantee we need: all events for customer 42 are in one partition, in the order they were produced, and are consumed by one consumer in that order. Different customers spread across, say, <strong>200 partitions</strong>, so 200 consumers can work concurrently. Throughput scales with partitions, while ordering stays per customer.</p>
+<p>Ordering can still break in a few places. On the <strong>producer</strong> side, retries with multiple in-flight requests could reorder batches; the <strong>idempotent producer</strong> (default since 3.0) preserves order with up to 5 in-flight requests. On the <strong>consumer</strong> side, handing records to a thread pool without keying the pool breaks order. <strong>Non-blocking retry topics</strong> also break order for the affected key. And <strong>adding partitions</strong> remaps keys.</p>
+<p><strong>Hot keys</strong> are the main scaling risk: one enterprise customer generating 30 percent of traffic overloads one partition and one consumer. Options include giving large tenants their own topic, or using <strong>sub-keys</strong> (customerId plus accountId) when ordering is only needed per account, not per customer.</p>
+<p>Within a partition, a single consumer thread is often the bottleneck when each event calls a slow service. The <strong>Confluent Parallel Consumer</strong> (open source) processes records concurrently with <code>KEY</code> ordering, so different keys from the same partition run in parallel while each key stays sequential, and it tracks offsets safely. You can build the same with a pool of single-threaded executors selected by <code>hash(key) % n</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer sends with key <code>customerId</code>; partition = hash(key) % 200.</li>
+  <li>Consumer group with up to 200 members, one owner per partition.</li>
+  <li>Inside each consumer, dispatch by key to ordered lanes.</li>
+  <li>Commit offsets only below the lowest unfinished record.</li>
+  <li>Monitor per-partition lag to spot hot keys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">var options = ParallelConsumerOptions.&lt;String, Event&gt;builder()
+    .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
+    .maxConcurrency(64)
+    .consumer(kafkaConsumer)
+    .build();
+ParallelStreamProcessor&lt;String, Event&gt; p = ParallelStreamProcessor.createEosStreamProcessor(options);
+p.subscribe(List.of(&quot;customer-events&quot;));
+p.poll(ctx -&gt; handle(ctx.getSingleConsumerRecord()));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Producing with null or random keys, then expecting per-customer order.</li>
+  <li>Unkeyed thread pools inside the consumer.</li>
+  <li>Increasing partitions on a live keyed topic without a migration plan.</li>
+  <li>Ignoring a single hot customer that dominates one partition.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use the customer ID as the message key, so all of a customer's events hash to the same partition and are processed in order, while different customers are spread across many partitions and consumers in parallel. I size partitions for the throughput I need and keep the idempotent producer on so retries do not reorder. I watch per-partition lag for hot keys, and split huge tenants if strict ordering is only needed at a finer grain. To go beyond one thread per partition, the parallel consumer processes different keys concurrently while keeping per-key order.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What breaks ordering despite keys?</strong> Non-idempotent retries with many in-flight requests, async handlers, retry topics, repartitioning.</li>
+  <li><strong>Why max.in.flight 5 with idempotence?</strong> The broker tracks sequence numbers for up to five batches, preserving order.</li>
+  <li><strong>Global ordering?</strong> Only with one partition, which removes parallelism.</li>
+</ul>
+</article>
+</body>
+</html>

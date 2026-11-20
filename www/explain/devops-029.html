@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-029 · How do you secure a Kubernetes cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-029" data-topic="Kubernetes">
+<h1>How do you secure a Kubernetes cluster?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Secure a cluster in layers: <strong>RBAC least privilege</strong> with SSO, <strong>dedicated service accounts and workload identity</strong>, <strong>default-deny NetworkPolicies</strong>, <strong>Pod Security Standards (restricted)</strong> and hardened <strong>securityContext</strong>, <strong>admission control</strong> (Kyverno/Gatekeeper) with <strong>image scanning and signing</strong>, plus <strong>patching, private API endpoints, secret encryption, audit logs and runtime detection</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Identity and access.</strong> Humans authenticate through <strong>SSO/OIDC</strong> to the cloud or API server; no shared admin kubeconfigs. <strong>RBAC</strong> uses namespaced <strong>Roles and RoleBindings</strong> for teams, with ClusterRoles bound only where needed; avoid <code>cluster-admin</code>, wildcard verbs and access to <code>secrets</code>, <code>pods/exec</code> or <code>escalate</code>/<code>bind</code>. Each workload gets its <strong>own service account</strong>, with <code>automountServiceAccountToken: false</code> when it does not call the API. Cloud access uses <strong>workload identity</strong> (IRSA or EKS Pod Identity, Azure Workload Identity, GKE Workload Identity) rather than static keys.</p>
+<p><strong>Network.</strong> <strong>NetworkPolicies</strong> (enforced by the CNI) start with <strong>default-deny</strong> ingress, and ideally egress, per namespace, then allow only required flows, such as frontend to API and API to database. Block access to the cloud metadata endpoint from pods that do not need it. A service mesh can add mTLS and identity-based authorisation.</p>
+<p><strong>Workload hardening.</strong> <strong>Pod Security Admission</strong> at the <strong>restricted</strong> level enforces: run as non-root, no privileged containers, no host namespaces or hostPath, dropped capabilities, <code>allowPrivilegeEscalation: false</code>, a seccomp profile. Add a <strong>read-only root filesystem</strong> and resource limits.</p>
+<p><strong>Supply chain and admission.</strong> CI scans images (Trivy, Grype) and signs them (Sigstore cosign); <strong>Kyverno</strong> or <strong>OPA Gatekeeper</strong> admission policies block unsigned images, <code>latest</code> tags, untrusted registries and non-compliant manifests.</p>
+<p><strong>Platform.</strong> Keep Kubernetes and nodes <strong>patched</strong>; restrict the <strong>API endpoint</strong> (private or IP-allow-listed); enable <strong>encryption at rest for Secrets</strong> with KMS; turn on <strong>audit logging</strong>; run <strong>runtime detection</strong> such as <strong>Falco</strong> for suspicious behaviour (shells in containers, unexpected network connections). Benchmarks like CIS and tools like kube-bench check the baseline.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>SSO + RBAC for people; service accounts + workload identity for apps.</li>
+  <li>Namespaces per team with default-deny NetworkPolicies.</li>
+  <li>PSA <code>restricted</code> labels on namespaces.</li>
+  <li>Admission policies verify images and manifests.</li>
+  <li>Audit logs and Falco alerts feed the SIEM.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: shop }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Everyone using <code>cluster-admin</code>.</li>
+  <li>Static cloud keys in Secrets instead of workload identity.</li>
+  <li>NetworkPolicies defined but the CNI does not enforce them.</li>
+  <li>Default service account tokens mounted in every pod.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I layer it. RBAC with least privilege: namespaced roles, SSO for humans, no shared admin credentials. Each workload has its own service account, token automount off when not needed, and cloud access through workload identity like IRSA instead of static keys. Network policies default-deny and allow only required flows. Pod Security Standards at restricted enforce non-root, no privileged containers and dropped capabilities, plus a read-only root filesystem. Kyverno or Gatekeeper block non-compliant manifests and unsigned images, which are scanned in CI. And I keep the cluster patched, restrict the API endpoint, encrypt secrets, enable audit logs and run Falco.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you limit the blast radius of a compromised pod?</strong> Restricted pod security, minimal service account permissions, default-deny network policies and narrow workload identity.</li>
+  <li><strong>Why is <code>pods/exec</code> sensitive?</strong> It gives a shell into containers and their secrets.</li>
+  <li><strong>How do you verify image signatures?</strong> Admission policy checking cosign signatures against trusted keys or identities.</li>
+</ul>
+</article>
+</body>
+</html>

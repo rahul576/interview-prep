@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-024 · How do you back up and restore etcd, and what does a restore mean for the cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-024" data-topic="Kubernetes">
+<h1>How do you back up and restore etcd, and what does a restore mean for the cluster?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Back up etcd with <strong><code>etcdctl snapshot save</code></strong> (endpoints plus client <strong>cert, key and CA</strong>) on a schedule, store snapshots <strong>encrypted and off-cluster</strong>, and restore with <strong><code>etcdutl snapshot restore</code></strong> into a <strong>new data directory</strong> on every member; a restore sends the <strong>whole cluster back in time</strong>, so controllers reconcile and real-world resources may not match. Managed services back up etcd for you; use <strong>Velero/GitOps</strong> for workloads.</p>
+
+<h2>Detailed explanation</h2>
+<p>etcd contains every object, including all Secrets, so a snapshot is both your disaster recovery and a highly sensitive file.</p>
+<p><strong>Backup:</strong> on a self-managed cluster (kubeadm, bare metal), run <code>etcdctl snapshot save</code> against one healthy member using the client TLS certificate. Schedule it (hourly is common, more often for busy clusters) via a CronJob or systemd timer on control plane nodes, verify each snapshot (<code>etcdutl snapshot status</code>), encrypt it, and copy it to object storage in another account or region with retention.</p>
+<p><strong>Restore</strong> is disruptive and all-or-nothing:</p>
+<ol>
+  <li>Stop the API servers (move their static pod manifests) so nothing writes.</li>
+  <li>Stop etcd on all members.</li>
+  <li>On each member, run <code>etcdutl snapshot restore</code> (older docs use <code>etcdctl snapshot restore</code>) into a <strong>new data directory</strong>, with that member's <code>--name</code>, <code>--initial-cluster</code> and <code>--initial-advertise-peer-urls</code>, creating a fresh cluster identity.</li>
+  <li>Point etcd at the new directory, start the members, then the API servers, and restart kubelets and controllers if they misbehave.</li>
+</ol>
+<p><strong>What it means:</strong> the cluster state jumps back to the snapshot time. Objects created afterwards vanish, deleted ones reappear, and Deployments revert. The real world does not rewind: cloud load balancers and volumes created after the snapshot may be <strong>orphaned</strong>, and deleted ones get recreated by controllers.</p>
+<p>That is why, especially on <strong>managed Kubernetes</strong> (EKS, AKS, GKE back up etcd themselves and don't expose it), teams treat clusters as rebuildable: <strong>GitOps</strong> recreates manifests and <strong>Velero</strong> backs up namespaced objects and persistent volume data.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduled snapshot with TLS credentials.</li>
+  <li>Integrity check, encryption, off-cluster copy.</li>
+  <li>Disaster: stop API servers and etcd.</li>
+  <li>Restore snapshot into new data dirs on all members.</li>
+  <li>Start etcd, then API servers; check health and reconcile drift.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save /backup/etcd-$(date +%F-%H%M).db
+etcdutl snapshot status /backup/etcd-2026-11-21-0100.db -w table
+
+etcdutl snapshot restore /backup/etcd-2026-11-21-0100.db \
+  --data-dir /var/lib/etcd-restore --name cp-1 \
+  --initial-cluster cp-1=https://10.0.0.11:2380,cp-2=https://10.0.0.12:2380,cp-3=https://10.0.0.13:2380 \
+  --initial-advertise-peer-urls https://10.0.0.11:2380</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unencrypted snapshots in a shared bucket (they contain every Secret).</li>
+  <li>Restoring into the old data directory or only one member.</li>
+  <li>Never rehearsing a restore.</li>
+  <li>Relying on etcd snapshots for application data in volumes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On a self-managed cluster I take etcd snapshots with etcdctl snapshot save, using the client certificate, key and CA, on a schedule, verify them, encrypt them and copy them off the cluster, because they contain every secret. To restore, I stop the API servers, restore the snapshot into a new data directory on each member with the right cluster settings, and start etcd and then the API servers. The whole cluster goes back in time, so newer objects disappear and cloud resources may not match, and controllers reconcile. On managed services the provider handles etcd, and I use GitOps and Velero for workloads and volumes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is an etcd restore a last resort?</strong> It rewinds everything and creates drift; rebuilding from GitOps is more predictable.</li>
+  <li><strong>What does Velero back up?</strong> API objects via the API server and volume data via snapshots or file-level backup.</li>
+  <li><strong>How often to snapshot?</strong> Based on RPO; hourly is common, plus before upgrades.</li>
+</ul>
+</article>
+</body>
+</html>

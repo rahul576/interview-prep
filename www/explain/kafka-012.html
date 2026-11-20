@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-012 · When would you use Kafka Streams or Kafka Connect?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-012" data-topic="Kafka">
+<h1>When would you use Kafka Streams or Kafka Connect?</h1>
+<p class="ex-meta">Kafka · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Kafka Streams</strong> is a <strong>Java library embedded in your application</strong> for stateful stream processing (joins, windowed aggregations, local <strong>state stores</strong>), whereas <strong>Kafka Connect</strong> is a <strong>separate framework of source and sink connectors</strong> for moving data between Kafka and external systems without custom code.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Kafka Streams</strong> is not a cluster you deploy; it is a dependency in a normal service. You write a topology with the DSL (<code>KStream</code>, <code>KTable</code>, <code>GlobalKTable</code>) or the Processor API. It supports filters and maps, <strong>stream-table joins</strong> (enrich orders with customer data), <strong>windowed aggregations</strong> (tumbling, hopping, sliding, session windows) and <strong>stateful</strong> operations backed by local <strong>RocksDB state stores</strong>. Each store is replicated to a <strong>compacted changelog topic</strong>, so a failed instance's state can be rebuilt elsewhere; <strong>standby replicas</strong> keep warm copies to speed this up. Scaling means running more instances of the app; tasks map to input partitions. With <code>processing.guarantee=exactly_once_v2</code>, reads, state updates and writes are transactional.</p>
+<p><strong>Kafka Connect</strong> runs as its own worker cluster (or managed service) with a REST API. You configure connectors in JSON rather than writing code. <strong>Source connectors</strong> pull data into Kafka: <strong>Debezium</strong> for change data capture from PostgreSQL, MySQL, SQL Server or MongoDB, JDBC source, file or MQTT sources. <strong>Sink connectors</strong> push data out: Elasticsearch/OpenSearch, S3, JDBC databases, Snowflake, BigQuery. Connect handles offsets, scaling with tasks, retries, converters (Avro, JSON, Protobuf) and lightweight <strong>Single Message Transforms</strong>, plus error tolerance with dead letter queues.</p>
+<p>The rule of thumb: <strong>Connect moves data, Streams applies business logic</strong>. A common pipeline uses Debezium to capture database changes, a Streams app to enrich and aggregate them, and a sink connector to load results into Elasticsearch. For heavier, cross-language or SQL-based processing, <strong>Apache Flink</strong> is the main alternative.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Debezium source reads the database WAL into <code>db.orders</code>.</li>
+  <li>Streams app joins <code>db.orders</code> with a <code>customers</code> KTable.</li>
+  <li>It aggregates revenue per 5-minute window into a state store.</li>
+  <li>Results are written to <code>orders-enriched</code> and <code>revenue-5m</code>.</li>
+  <li>Elasticsearch sink connector indexes <code>orders-enriched</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">StreamsBuilder b = new StreamsBuilder();
+KTable&lt;String, Customer&gt; customers = b.table(&quot;customers&quot;);
+b.&lt;String, Order&gt;stream(&quot;db.orders&quot;)
+ .selectKey((k, o) -&gt; o.customerId())
+ .join(customers, (o, c) -&gt; new EnrichedOrder(o, c))
+ .to(&quot;orders-enriched&quot;);</code></pre>
+<pre><code class="language-json">{ &quot;name&quot;: &quot;es-sink&quot;, &quot;config&quot;: {
+  &quot;connector.class&quot;: &quot;io.confluent.connect.elasticsearch.ElasticsearchSinkConnector&quot;,
+  &quot;topics&quot;: &quot;orders-enriched&quot;, &quot;tasks.max&quot;: &quot;4&quot;,
+  &quot;errors.tolerance&quot;: &quot;all&quot;, &quot;errors.deadletterqueue.topic.name&quot;: &quot;es-dlq&quot; } }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Kafka Streams</th><th>Kafka Connect</th></tr></thead>
+<tbody>
+<tr><td>Form</td><td>Library in your app</td><td>Separate worker cluster</td></tr>
+<tr><td>Purpose</td><td>Processing logic</td><td>Integration</td></tr>
+<tr><td>Code</td><td>Java/Kotlin</td><td>Mostly configuration</td></tr>
+<tr><td>State</td><td>Local stores + changelogs</td><td>Offsets only</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing custom consumers to copy data into Elasticsearch instead of using a sink connector.</li>
+  <li>Putting complex business logic into Single Message Transforms.</li>
+  <li>Forgetting co-partitioning requirements for Streams joins.</li>
+  <li>Ignoring state restore time when scaling Streams apps.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kafka Streams is a Java library I embed in my own service to process streams: filtering, joining streams with tables, windowed aggregations, with local RocksDB state backed by compacted changelog topics and exactly-once support. It scales by running more instances. Kafka Connect is a separate framework for integration without code: source connectors like Debezium bring data in, sink connectors push it to Elasticsearch, S3 or databases. I use Connect for moving data and Streams for business logic.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Streams recover state?</strong> Restores the store from its changelog topic, faster with standby replicas.</li>
+  <li><strong>Streams vs Flink?</strong> Flink is a separate cluster with richer event-time and SQL features; Streams is simpler to embed.</li>
+  <li><strong>How do you scale Connect?</strong> Increase tasks.max and add workers in distributed mode.</li>
+</ul>
+</article>
+</body>
+</html>

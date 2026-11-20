@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-014 · What are ResourceQuota and LimitRange, and how do they work together?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-014" data-topic="Kubernetes">
+<h1>What are ResourceQuota and LimitRange, and how do they work together?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>ResourceQuota</strong> caps the <strong>total</strong> a namespace may consume (CPU and memory requests/limits, object counts, storage); a <strong>LimitRange</strong> sets <strong>per-container or per-pod defaults and min/max</strong>. They work together because once a quota covers CPU or memory, <strong>pods without those values are rejected</strong>, and LimitRange defaults fill them in.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a shared cluster, one team's runaway deployment or forgotten load test can claim every node. These two objects provide fairness at different levels.</p>
+<p><strong>ResourceQuota</strong> is an aggregate limit evaluated at admission time. It can cap:</p>
+<ul>
+  <li>compute: <code>requests.cpu</code>, <code>requests.memory</code>, <code>limits.cpu</code>, <code>limits.memory</code>, plus extended resources such as <code>requests.nvidia.com/gpu</code>;</li>
+  <li>object counts: <code>pods</code>, <code>services</code>, <code>services.loadbalancers</code>, <code>secrets</code>, <code>configmaps</code>, <code>persistentvolumeclaims</code>, or <code>count/deployments.apps</code>;</li>
+  <li>storage: <code>requests.storage</code> in total or per StorageClass (<code>gold.storageclass.storage.k8s.io/requests.storage</code>).</li>
+</ul>
+<p>Quotas can also be scoped, for example by PriorityClass or to BestEffort pods. <code>kubectl describe quota</code> shows used versus hard values.</p>
+<p><strong>LimitRange</strong> works at the level of individual containers, pods or PVCs in a namespace: <code>defaultRequest</code> and <code>default</code> (default limit) are injected into containers that don't specify them; <code>min</code> and <code>max</code> reject outliers; <code>maxLimitRequestRatio</code> stops tiny requests with huge limits.</p>
+<p>The interaction matters: when a quota includes <code>requests.cpu</code>, the API server <strong>must</strong> know every new pod's CPU request to account for it, so a pod without one is rejected with <code>forbidden: failed quota: must specify requests.cpu</code>. A LimitRange with defaults makes that seamless. Another subtlety: quota rejections hit the <strong>pod creation</strong> by the ReplicaSet controller, not your <code>kubectl apply</code> of the Deployment, so the Deployment is accepted but stays short of replicas, with the error visible only in ReplicaSet events.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform team creates namespace with ResourceQuota and LimitRange.</li>
+  <li>Developer applies a Deployment; it is accepted.</li>
+  <li>ReplicaSet creates pods; LimitRange admission fills defaults and checks min/max.</li>
+  <li>Quota admission adds the pod's requests to usage; rejects if over the hard limit.</li>
+  <li>Deleted pods release quota.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ResourceQuota
+metadata: { name: team-quota, namespace: search }
+spec:
+  hard:
+    requests.cpu: &quot;20&quot;
+    requests.memory: 64Gi
+    limits.memory: 96Gi
+    pods: &quot;100&quot;
+    services.loadbalancers: &quot;1&quot;
+---
+apiVersion: v1
+kind: LimitRange
+metadata: { name: defaults, namespace: search }
+spec:
+  limits:
+  - type: Container
+    defaultRequest: { cpu: 100m, memory: 128Mi }
+    default: { memory: 512Mi }
+    max: { cpu: &quot;4&quot;, memory: 8Gi }</code></pre>
+<pre><code class="language-bash">kubectl describe quota team-quota -n search
+kubectl describe rs -n search | grep -i &quot;exceeded quota&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding a compute quota without a LimitRange, breaking every deployment missing requests.</li>
+  <li>Looking for quota errors on the Deployment instead of the ReplicaSet events.</li>
+  <li>Defaults so high that the quota fills with few pods.</li>
+  <li>Quota on limits only, while scheduling uses requests.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A ResourceQuota caps the total a namespace can use: sums of CPU and memory requests and limits, object counts like pods or LoadBalancer Services, and storage per StorageClass. A LimitRange works per container: it injects default requests and limits and enforces min and max. They go together because once a quota covers CPU or memory, every pod must declare those values or it's rejected, and LimitRange defaults prevent that. In multi-tenant clusters that gives fairness and stops one team consuming every node.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Deployment stuck at 3 of 10 replicas with no pod errors?</strong> Check ReplicaSet events for quota rejections and <code>kubectl describe quota</code>.</li>
+  <li><strong>Does quota affect running pods?</strong> No, only new admissions; lowering it doesn't evict anything.</li>
+  <li><strong>Quota for GPUs?</strong> Use <code>requests.nvidia.com/gpu</code> in the hard list.</li>
+</ul>
+</article>
+</body>
+</html>

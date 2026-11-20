@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-032 · What do soft delete and purge protection mean for Azure Key Vault, and how do you rotate secrets and keys?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-032" data-topic="Azure">
+<h1>What do soft delete and purge protection mean for Azure Key Vault, and how do you rotate secrets and keys?</h1>
+<p class="ex-meta">Azure · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Soft delete</strong> (always on) keeps deleted vaults and objects <strong>recoverable for 7-90 days</strong>; <strong>purge protection</strong> stops <strong>anyone</strong> permanently purging them before that period ends; rotate with <strong>key rotation policies</strong>, <strong>certificate auto-renewal</strong> and <strong>Event Grid near-expiry events</strong> driving automation, while apps reference <strong>versionless secrets</strong> so they pick up new values.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Soft delete</strong> is mandatory on Key Vault. When a vault, key, secret or certificate is deleted, it moves to a deleted state for the configured retention (7 to 90 days, default 90) and can be <strong>recovered</strong> with its versions. The name stays reserved during that time, which surprises teams that delete and recreate a vault with the same name in IaC.</p>
+<p><strong>Purge protection</strong> is optional but <strong>cannot be disabled</strong> once enabled. Without it, someone with purge permission can permanently destroy deleted objects immediately. With it, nobody, including a Global Administrator or an attacker with stolen credentials, can purge before retention ends. It is <strong>required</strong> for <strong>customer-managed keys</strong> used by Storage, SQL TDE, Disk Encryption Sets and others, because losing the key makes the encrypted data unrecoverable.</p>
+<p><strong>Rotation:</strong></p>
+<ul>
+  <li><strong>Keys:</strong> a <strong>rotation policy</strong> (for example rotate 30 days before expiry, expire after one year) creates new key versions automatically; services using versionless key URIs adopt them.</li>
+  <li><strong>Certificates:</strong> issued by integrated CAs (DigiCert, GlobalSign) or self-signed can <strong>auto-renew</strong> at a set percentage of lifetime.</li>
+  <li><strong>Secrets:</strong> Key Vault cannot know how to change a database password, so it publishes <strong>SecretNearExpiry</strong> and <strong>SecretExpired</strong> events to <strong>Event Grid</strong>; a Function generates the new credential, updates the target system and writes a new secret version. A <strong>dual-credential</strong> pattern (two passwords or two storage keys, alternating) avoids downtime.</li>
+</ul>
+<p>Apps should reference the secret <strong>without a version</strong>: App Service <strong>Key Vault references</strong> refresh periodically, the AKS <strong>Secrets Store CSI driver</strong> supports rotation polling, and SDK clients can re-read on failure. Use the <strong>Azure RBAC permission model</strong> (not legacy access policies), <strong>private endpoints</strong> with public access disabled, and diagnostic logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create vault with RBAC model, purge protection and private endpoint.</li>
+  <li>Set expiry dates on secrets and rotation policies on keys.</li>
+  <li>Subscribe a Function to near-expiry events via Event Grid.</li>
+  <li>Function rotates the credential using the alternate-credential pattern.</li>
+  <li>Apps reference versionless secrets and refresh.</li>
+  <li>Alert on failed rotations and on purge attempts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az keyvault create -n kv-orders-prod -g rg-orders --enable-rbac-authorization true \
+  --enable-purge-protection true --retention-days 90 --public-network-access Disabled
+az keyvault key rotation-policy update --vault-name kv-orders-prod -n cmk-storage \
+  --value '{&quot;lifetimeActions&quot;:[{&quot;trigger&quot;:{&quot;timeBeforeExpiry&quot;:&quot;P30D&quot;},&quot;action&quot;:{&quot;type&quot;:&quot;Rotate&quot;}}],
+            &quot;attributes&quot;:{&quot;expiryTime&quot;:&quot;P1Y&quot;}}'
+# App Service setting: @Microsoft.KeyVault(SecretUri=https://kv-orders-prod.vault.azure.net/secrets/SqlPassword/)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pinning secret versions in app settings, so rotations are ignored.</li>
+  <li>Rotating a password in one step and breaking running apps.</li>
+  <li>Expecting to recreate a deleted vault name immediately.</li>
+  <li>Leaving vaults on access policies with broad &quot;get/list all&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Soft delete is always on: deleted vaults and objects stay recoverable for seven to ninety days. Purge protection makes sure nobody, not even an admin or an attacker, can permanently purge them before that, which is mandatory for customer-managed encryption keys. For rotation, keys use rotation policies, certificates auto-renew with integrated CAs, and for secrets, Event Grid near-expiry events trigger a Function that creates a new credential, updates the target and stores a new version. Apps reference secrets without a version, so they pick up the new value, and I use the RBAC model and private endpoints.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Rotate a DB password without downtime?</strong> Two credentials; update the inactive one, switch apps, then rotate the other.</li>
+  <li><strong>Can purge protection be turned off?</strong> No, once enabled it is permanent.</li>
+  <li><strong>Managed identity instead?</strong> Best of all: Entra auth to the database removes the password.</li>
+</ul>
+</article>
+</body>
+</html>

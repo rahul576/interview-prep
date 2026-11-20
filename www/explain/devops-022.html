@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-022 · What is the difference between liveness, readiness and startup probes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-022" data-topic="Kubernetes">
+<h1>What is the difference between liveness, readiness and startup probes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Liveness</strong> failure makes the kubelet <strong>restart the container</strong>; <strong>readiness</strong> failure <strong>removes the pod from Service endpoints</strong> without restarting; a <strong>startup probe</strong> holds off the other two until a slow app has started; probes can be <strong>HTTP, TCP, exec or gRPC</strong>, and <strong>liveness must not depend on external services</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Probes let Kubernetes distinguish between &quot;this process is broken and needs a restart&quot; and &quot;this process is fine but should not get traffic right now&quot;. Mixing them up causes outages.</p>
+<p><strong>Liveness probe.</strong> Answers <em>is the process healthy enough to keep running?</em> After <code>failureThreshold</code> consecutive failures the kubelet kills and restarts the container. Use it for unrecoverable states such as deadlocks or a wedged event loop. The check should be cheap and <strong>local</strong>: &quot;my process can respond&quot;.</p>
+<p><strong>Readiness probe.</strong> Answers <em>should this pod receive traffic now?</em> When it fails, the pod is marked not ready and removed from <strong>EndpointSlices</strong>, so Services and ingress stop routing to it; nothing is restarted. Readiness is used during startup and warm-up (loading caches), during temporary overload, and during shutdown. Readiness may consider critical dependencies carefully, though if every pod depends on the same database, all become unready together.</p>
+<p><strong>Startup probe.</strong> For slow starters such as large JVM apps or apps running migrations: while it has not yet succeeded, liveness and readiness are not run. Its budget (<code>failureThreshold × periodSeconds</code>) covers the worst-case start time, so liveness can stay aggressive afterwards without killing booting pods.</p>
+<p><strong>Mechanisms.</strong> <code>httpGet</code> (2xx/3xx is success), <code>tcpSocket</code>, <code>exec</code> (exit code 0) and <code>grpc</code> (the standard gRPC health protocol). Tune <code>initialDelaySeconds</code>, <code>periodSeconds</code>, <code>timeoutSeconds</code> and <code>failureThreshold</code>.</p>
+<p><strong>The classic failure.</strong> A liveness probe that checks the database: the database has a brief blip, every pod fails liveness, all restart at once, caches are cold and the restart storm becomes an outage.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Container starts; startup probe runs until success or its budget expires (then restart).</li>
+  <li>Readiness begins; on success the pod joins endpoints.</li>
+  <li>Liveness runs periodically; repeated failures restart the container.</li>
+  <li>Readiness failures remove the pod from endpoints until it recovers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">startupProbe:
+  httpGet: { path: /healthz, port: 8080 }
+  periodSeconds: 5
+  failureThreshold: 36        # up to 3 minutes to start
+livenessProbe:
+  httpGet: { path: /healthz, port: 8080 }   # process only, no dependencies
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  httpGet: { path: /ready, port: 8080 }     # warm-up done, not overloaded
+  periodSeconds: 5
+  failureThreshold: 2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking external dependencies in liveness, causing cascading restarts.</li>
+  <li>Same endpoint and thresholds for liveness and readiness.</li>
+  <li>Long <code>initialDelaySeconds</code> instead of a startup probe.</li>
+  <li>Timeouts too short for a loaded app, so healthy pods restart under load.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A liveness probe asks whether the container is alive; if it fails repeatedly, the kubelet restarts it, which recovers deadlocked apps. A readiness probe asks whether the pod should get traffic; if it fails, the pod is removed from the Service endpoints but not restarted, which is right for warm-up, overload or shutdown. A startup probe is for slow starters: it disables the other two until it succeeds, so a slow JVM isn't killed while booting. Probes can be HTTP, TCP, exec or gRPC. The big mistake is checking the database in liveness, because a blip then restarts every pod at once.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if readiness and liveness use the same endpoint?</strong> Under overload a pod that should just stop receiving traffic gets restarted, worsening the overload.</li>
+  <li><strong>Can readiness check dependencies?</strong> Carefully; a shared dependency failing makes every pod unready together.</li>
+  <li><strong>What happens if there's no readiness probe?</strong> The pod is considered ready as soon as its containers start.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-116 · What happens when etcd is overloaded or loses quorum, and how do you protect it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-116" data-topic="Kubernetes">
+<h1>What happens when etcd is overloaded or loses quorum, and how do you protect it?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>etcd</strong> holds all cluster state and uses <strong>Raft</strong>, so it needs a <strong>quorum</strong> (majority); when overloaded the API slows and times out, and when quorum is lost <strong>writes fail and the control plane stops</strong>, although <strong>running pods keep running</strong>. Protect it with <strong>odd member counts, fast disks, compaction and defragmentation, object limits and regular snapshots</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every Kubernetes object, from Deployments to Secrets to Leases, lives in etcd, and the API server is its only client. etcd replicates a log with Raft: a write is committed only when a <strong>majority</strong> of members have persisted it with <strong>fsync</strong>. That makes etcd very sensitive to <strong>disk latency</strong>; slow disks mean slow commits, missed heartbeats and leader elections.</p>
+<p><strong>Overload</strong> shows up as high API latency, <code>etcdserver: request timed out</code>, frequent leader changes and lagging controllers. Causes include slow or shared disks, huge object counts (Events, large Secrets), unpaginated LIST calls from bad controllers, and a database near its <strong>space quota</strong> (default 2 GB), after which a <strong>NOSPACE alarm</strong> blocks writes.</p>
+<p><strong>Losing quorum</strong> (two of three members down) means no leader. Nothing can be created, scheduled or updated. But the <strong>data plane keeps working</strong>: kubelets keep containers running and kube-proxy keeps its rules; nothing self-heals until quorum returns.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Run <strong>3 or 5 members</strong> across failure domains; 3 tolerates 1 failure, 5 tolerates 2.</li>
+  <li>Put etcd on dedicated, low-latency SSDs; watch <code>etcd_disk_wal_fsync_duration_seconds</code> (p99 under ~10 ms) and <code>etcd_disk_backend_commit_duration_seconds</code>.</li>
+  <li>Let the API server compact history and run <code>etcdctl defrag</code> member by member to reclaim space.</li>
+  <li>Limit object growth: short Event TTL, ResourceQuotas on object counts, paginated LISTs.</li>
+  <li>Take scheduled <code>etcdctl snapshot save</code> backups, encrypted and stored off-cluster, and test restores.</li>
+  <li>On managed services (EKS, AKS, GKE) the provider does most of this; you still watch API latency and object counts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ETCDCTL_API=3 etcdctl --endpoints=https://10.0.0.11:2379 \
+  --cacert=ca.crt --cert=etcd.crt --key=etcd.key \
+  endpoint status --write-out=table      # DB size, leader, raft term
+etcdctl alarm list                       # NOSPACE?
+etcdctl defrag --endpoints=https://10.0.0.11:2379</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Members</th><th>Quorum</th><th>Failures tolerated</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>1</td><td>0</td></tr>
+<tr><td>2</td><td>2</td><td>0</td></tr>
+<tr><td>3</td><td>2</td><td>1</td></tr>
+<tr><td>5</td><td>3</td><td>2</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running etcd on network disks shared with noisy workloads.</li>
+  <li>Even member counts, or spreading members across high-latency regions.</li>
+  <li>Defragmenting all members at once, which pauses them together.</li>
+  <li>Never testing that a snapshot can be restored.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;etcd stores all cluster state and needs a Raft majority to commit writes. If it's overloaded, usually from slow disks or too many objects, the API server becomes slow and starts timing out. If it loses quorum, writes fail completely, so nothing can be scheduled or changed, but existing pods keep running. I protect it with three or five members on fast SSDs, monitoring fsync latency and database size, compaction and rolling defrags, limits on object counts, and regular, tested snapshots. On managed Kubernetes most of that is the provider's job.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is two members worse than one?</strong> Quorum of two is two, so either failure stops the cluster: twice the failure probability with no extra tolerance.</li>
+  <li><strong>What does the NOSPACE alarm do?</strong> Blocks writes until you compact, defrag and disarm the alarm.</li>
+  <li><strong>Why not span etcd across regions?</strong> Every commit pays cross-region round trips, hurting the whole control plane.</li>
+</ul>
+</article>
+</body>
+</html>

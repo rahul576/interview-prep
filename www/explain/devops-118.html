@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-118 · How do PodDisruptionBudgets affect node maintenance and upgrades?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-118" data-topic="Kubernetes">
+<h1>How do PodDisruptionBudgets affect node maintenance and upgrades?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>PodDisruptionBudget (PDB)</strong> limits how many pods of an application may be taken down by <strong>voluntary disruptions</strong> at once, using <strong>minAvailable</strong> or <strong>maxUnavailable</strong>; <code>kubectl drain</code> and autoscalers use the <strong>Eviction API</strong>, which refuses evictions that would break the budget, so a <strong>misconfigured PDB can block upgrades</strong>, and PDBs do nothing for <strong>involuntary</strong> failures.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes separates <strong>voluntary disruptions</strong> (drains, autoscaler scale-down, manual evictions) from <strong>involuntary</strong> ones (hardware failure, kernel panic, node-pressure eviction). PDBs only govern the first kind.</p>
+<p>A PDB selects pods by label and states either <code>minAvailable</code> (at least N or N% must stay healthy) or <code>maxUnavailable</code> (at most N or N% may be down). When <code>kubectl drain</code> runs, it does not delete pods directly; it calls the <strong>Eviction API</strong> for each pod. The API server checks the PDB: if evicting the pod would drop healthy pods below the budget, it returns <strong>429 Too Many Requests</strong> and drain keeps retrying until the controller has brought up a replacement elsewhere. That is what makes rolling node upgrades safe: nodes go one at a time, and an application never loses more replicas than it can tolerate.</p>
+<p>The danger is a budget that can never be satisfied: <code>minAvailable</code> equal to the replica count, <code>maxUnavailable: 0</code>, or a single-replica Deployment with <code>minAvailable: 1</code>. Drains then hang forever, managed node upgrades time out or are forced, and autoscalers cannot remove nodes. Another trap is pods that are already unhealthy: by default they still count against the budget, which the <code>unhealthyPodEvictionPolicy: AlwaysAllow</code> setting addresses by letting broken pods be evicted.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform team starts a node pool upgrade; each node is cordoned.</li>
+  <li>Drain calls the Eviction API for every pod on the node.</li>
+  <li>API server compares current healthy pods with the PDB.</li>
+  <li>If allowed, the pod is evicted and the ReplicaSet creates a replacement on another node.</li>
+  <li>If not allowed, drain retries until replacements are Ready.</li>
+  <li>Node is empty and is replaced; the process moves to the next node.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: orders-pdb }
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels: { app: orders }</code></pre>
+<pre><code class="language-bash"># PDBs that currently allow zero disruptions will block the next drain
+kubectl get pdb -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,ALLOWED:.status.disruptionsAllowed | awk '$3==0'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>minAvailable: 100%</code> or <code>maxUnavailable: 0</code> on production apps.</li>
+  <li>A PDB on a single-replica workload, which can never be drained.</li>
+  <li>Selectors that match no pods or pods of several apps.</li>
+  <li>Believing a PDB protects against node crashes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A PDB limits voluntary disruptions for a set of pods with minAvailable or maxUnavailable. Drain and autoscalers use the Eviction API, which refuses an eviction that would violate the budget, so upgrades proceed only as fast as the application can tolerate. The flip side is that a PDB requiring all replicas, or one on a single-replica app, blocks drains forever and stalls upgrades. I usually set maxUnavailable to one or a percentage, run at least two replicas, and check for PDBs with zero allowed disruptions before every upgrade. PDBs don't help with node failures; for that you need replicas spread across nodes and zones.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find PDBs that will block the upgrade?</strong> List PDBs where <code>status.disruptionsAllowed</code> is 0, and check for single-replica targets.</li>
+  <li><strong>Does deleting a pod respect PDBs?</strong> No, <code>kubectl delete pod</code> bypasses the Eviction API.</li>
+  <li><strong>minAvailable or maxUnavailable?</strong> maxUnavailable scales naturally with HPA-driven replica counts.</li>
+</ul>
+</article>
+</body>
+</html>

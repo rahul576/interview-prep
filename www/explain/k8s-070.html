@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-070 · What is your disaster recovery strategy for Kubernetes clusters and the applications on them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-070" data-topic="Kubernetes">
+<h1>What is your disaster recovery strategy for Kubernetes clusters and the applications on them?</h1>
+<p class="ex-meta">Kubernetes · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Set <strong>RPO and RTO per application</strong>, <strong>rebuild clusters from IaC and GitOps</strong> rather than restoring them, back up <strong>stateful data separately</strong> with the best native tool (PITR, snapshots, cross-region copies), use <strong>Velero</strong> for anything not in Git, make <strong>secrets, DNS and certificates recoverable</strong>, and run <strong>timed restore drills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>DR starts with business requirements. <strong>RPO</strong> is how much data you may lose; <strong>RTO</strong> is how long you may be down. A stateless API might accept an RTO of an hour and no RPO concern, while a payments ledger needs RPO near zero. These numbers decide cost and design.</p>
+<p>The guiding principle is <strong>clusters are cattle</strong>. If the cluster itself is defined in <strong>Terraform/OpenTofu, Bicep or Crossplane</strong> and every workload in <strong>Git</strong> (Argo CD or Flux), recovery means creating a new cluster and pointing GitOps at it, which is reproducible and testable. Restoring <strong>etcd</strong> snapshots is mostly for self-managed control planes and brings back whatever state, good or bad, existed at backup time, including stale node objects.</p>
+<p><strong>Data</strong> needs its own protection. Use the strongest tool for each store: managed database backups with <strong>point-in-time recovery</strong> and cross-region replicas, native tools such as CloudNativePG's backups to object storage, <strong>CSI volume snapshots</strong> for other PVs, object storage replication for buckets. Copies must live in <strong>another region and ideally another account</strong>, protected against deletion (immutability or object lock) because ransomware and mistakes target backups too.</p>
+<p><strong>Velero</strong> backs up Kubernetes objects and volume data for anything not covered by Git: manually created resources, CRD instances created by operators, or legacy apps. <strong>Secrets</strong> should come from a replicated vault or cloud secret manager via External Secrets; cluster-only secrets are a classic DR gap. Also plan for <strong>DNS</strong>, <strong>TLS certificates</strong> and their issuers, container <strong>registries</strong> and <strong>identity</strong> (SSO, workload identity) in the recovery region.</p>
+<p><strong>Drills</strong> turn the plan into evidence: rebuild in another region on a schedule, time it against the RTO, and fix what breaks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify apps by RPO/RTO and dependencies.</li>
+  <li>Cluster from IaC; workloads from GitOps.</li>
+  <li>Data: PITR, snapshots, cross-region and cross-account copies.</li>
+  <li>Velero for objects and volumes outside Git.</li>
+  <li>Secrets in a replicated vault; DNS, certs and registry available in DR region.</li>
+  <li>Runbooks with order of recovery.</li>
+  <li>Regular timed restore drills with follow-up actions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">velero schedule create nightly --schedule &quot;0 1 * * *&quot; \
+  --include-namespaces payments,orders --snapshot-move-data --ttl 720h
+# DR drill: new cluster in secondary region
+terraform -chdir=infra/clusters/dr apply
+argocd cluster add dr-weu &amp;&amp; argocd app sync -l env=prod
+velero restore create --from-backup nightly-20261120010000 --include-namespaces payments</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Backups in the same account and region as production.</li>
+  <li>Never testing restores.</li>
+  <li>Secrets only in the cluster.</li>
+  <li>Ignoring dependencies such as DNS, identity and registries.</li>
+  <li>One RPO/RTO for everything.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start by agreeing RPO and RTO per application, because a stateless API and a payments database need different answers. Clusters are cattle: I rebuild the cluster from infrastructure as code and redeploy workloads from GitOps, which is cleaner than restoring etcd. Stateful data is backed up separately with the best tool for it: database PITR or replication, volume snapshots, copied cross-region and cross-account. Velero covers objects not in Git. Secrets live in a replicated vault, and DNS, certificates and identity must work in the DR region. Regular timed drills prove we meet the RTO.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What usually breaks in a DR drill?</strong> Forgotten secrets, hard-coded endpoints, DNS TTLs, missing quota or IAM in the DR region, and undocumented manual steps.</li>
+  <li><strong>When do you restore etcd?</strong> Self-managed clusters where state cannot be rebuilt from Git.</li>
+  <li><strong>How do you protect backups from ransomware?</strong> Separate account, immutable storage and limited delete permissions.</li>
+</ul>
+</article>
+</body>
+</html>

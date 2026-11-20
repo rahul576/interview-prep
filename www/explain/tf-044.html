@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-044 · A failed apply left a resource marked as tainted. What does that mean and what are your options?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-044" data-topic="Terraform">
+<h1>A failed apply left a resource marked as tainted. What does that mean and what are your options?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Tainted</strong> means a resource was created but a later step of its creation failed, so Terraform plans to <strong>replace</strong> it; <strong>inspect the real resource first</strong>, use <strong><code>terraform untaint</code></strong> if it is healthy, and use <strong><code>terraform apply -replace=ADDRESS</code></strong> when you deliberately want a rebuild.</p>
+
+<h2>Detailed explanation</h2>
+<p>When the create API call succeeds but something afterwards fails, such as a <strong>provisioner</strong>, a provider wait for &quot;ready&quot; status that times out, or a post-create configuration step, Terraform records the object in state but marks it <strong>tainted</strong>. It cannot be sure the object is correct, so the safe default on the next plan is <strong>replacement</strong>: destroy and create again, shown as <code>-/+</code> with &quot;is tainted, so must be replaced&quot;.</p>
+<p>That default is often right, but not always. Replacing a freshly created web server is harmless; replacing a database that took 40 minutes to provision, or one that already received data, is not. So before accepting the plan, <strong>check the real resource</strong>: portal or CLI status, logs, whether the provisioner or timeout was transient. If it is healthy, <code>terraform untaint &lt;address&gt;</code> removes the mark and Terraform keeps the object; the next plan should then show only remaining normal differences.</p>
+<p>Historically you could also run <code>terraform taint</code> to force replacement. That command is <strong>deprecated</strong> (since 0.15.2) because it changes state immediately, outside of a plan, so a teammate's apply could replace the resource without anyone reviewing it. The modern approach is <strong><code>terraform plan/apply -replace=address</code></strong>, which includes the replacement in a normal plan for review and does not modify state until apply. In HCP Terraform you can trigger the same through a run with replace addresses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create succeeds, a post-create step fails; Terraform saves the object as tainted.</li>
+  <li>Next plan proposes replacement of the tainted resource.</li>
+  <li>Inspect the real object and the original error.</li>
+  <li>Healthy: <code>terraform untaint ADDRESS</code>, then re-plan.</li>
+  <li>Broken: let Terraform replace it, or fix the cause first.</li>
+  <li>Future forced rebuilds: use <code>-replace</code> in the plan.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform plan
+#  azurerm_linux_virtual_machine.app is tainted, so must be replaced
+# -/+ resource &quot;azurerm_linux_virtual_machine&quot; &quot;app&quot; { ... }
+
+az vm get-instance-view -g rg-app -n vm-app-01 --query &quot;instanceView.statuses[].code&quot;
+
+# Healthy: keep it
+terraform untaint azurerm_linux_virtual_machine.app
+
+# Deliberate rebuild, reviewed in the plan
+terraform apply -replace=&quot;azurerm_linux_virtual_machine.app&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accepting replacement of a stateful resource without checking it.</li>
+  <li>Using <code>terraform taint</code> in shared environments instead of <code>-replace</code>.</li>
+  <li>Untainting a resource that is actually half-configured.</li>
+  <li>Not fixing the root cause, such as a too-short timeout or a fragile provisioner.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A resource is tainted when creation started but a later step failed, like a provisioner or a timeout, so Terraform isn't sure it's good and plans to replace it. Before accepting that, I check the real resource. If it's healthy and the failure was transient, I run terraform untaint so we don't rebuild something expensive like a database. If it's broken, I let Terraform replace it. And when I want to force a rebuild deliberately, I use apply with -replace, because unlike the deprecated taint command it shows the replacement in a reviewed plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is -replace safer than taint?</strong> It does not change state until a reviewed apply; taint changes state immediately for everyone.</li>
+  <li><strong>Can you replace a module instance?</strong> Yes, with the full address, such as <code>module.app.azurerm_linux_virtual_machine.this[0]</code>.</li>
+  <li><strong>How do you avoid taints from provisioners?</strong> Move configuration into images or cloud-init.</li>
+</ul>
+</article>
+</body>
+</html>

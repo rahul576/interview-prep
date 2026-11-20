@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-085 · How do you implement a blue-green deployment on Kubernetes without a service mesh?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-085" data-topic="Kubernetes">
+<h1>How do you implement a blue-green deployment on Kubernetes without a service mesh?</h1>
+<p class="ex-meta">Kubernetes · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run <strong>two Deployments</strong> (blue and green) distinguished by a <strong>version label</strong>, test green through a <strong>preview Service</strong>, then <strong>switch the production Service selector</strong> to green for a near-instant cutover; <strong>rollback is switching back</strong> while blue still runs. Costs are <strong>double capacity</strong> and <strong>backward-compatible database changes</strong>; <strong>Argo Rollouts</strong> automates it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Blue-green keeps the old and new versions fully running side by side, so the cutover is a routing change rather than a gradual replacement. Without a mesh, the routing switch is the <strong>Service selector</strong>: a Service with <code>selector: {app: shop, version: blue}</code> sends traffic to blue pods; patching it to <code>version: green</code> makes the EndpointSlice controller swap the endpoints within seconds.</p>
+<p>Before switching, green is deployed at full size and tested through a <strong>preview Service</strong> (and maybe a separate ingress host like <code>preview.shop.example.com</code>) with smoke tests, synthetic transactions or internal users. Because blue is untouched, <strong>rollback</strong> is the same patch in reverse and takes seconds. After a <strong>soak period</strong> with healthy metrics, blue is scaled down (or kept at zero replicas as the next deploy target).</p>
+<p><strong>Trade-offs</strong>: you need <strong>double capacity</strong> during the switch, which the cluster autoscaler can provide temporarily. Both versions must work with the <strong>same database schema</strong>, so migrations follow the <strong>expand and contract</strong> pattern: add new columns or tables first in a compatible way, switch code, remove old structures in a later release. Background workers and queue consumers in both colours may process the same messages, so they need care. Cutover is <strong>all-at-once</strong>, so it is less gradual than a canary.</p>
+<p><strong>Connections</strong>: changing the selector affects <strong>new connections</strong>. Existing keep-alive connections, gRPC streams or WebSockets may stay on blue pods until they close, which is another reason to keep blue running for a while and to use connection draining.</p>
+<p><strong>Argo Rollouts</strong> implements this as a <code>BlueGreen</code> strategy: it manages active and preview Services, can run <strong>AnalysisTemplates</strong> against Prometheus before promotion, supports auto-promotion and scales down the old version after a delay.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Blue Deployment serves; Service selects <code>version: blue</code>.</li>
+  <li>Deploy green Deployment with <code>version: green</code>.</li>
+  <li>Preview Service selects green; run tests.</li>
+  <li>Patch the production Service selector to green.</li>
+  <li>Monitor; rollback by patching back if needed.</li>
+  <li>Scale down blue after soak.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl apply -f shop-green-deployment.yaml          # labels: app=shop, version=green
+kubectl rollout status deploy/shop-green
+curl -fsS https://preview.shop.example.com/healthz &amp;&amp; ./smoke-tests.sh preview
+kubectl patch svc shop -p '{&quot;spec&quot;:{&quot;selector&quot;:{&quot;app&quot;:&quot;shop&quot;,&quot;version&quot;:&quot;green&quot;}}}'
+# rollback
+kubectl patch svc shop -p '{&quot;spec&quot;:{&quot;selector&quot;:{&quot;app&quot;:&quot;shop&quot;,&quot;version&quot;:&quot;blue&quot;}}}'</code></pre>
+<pre><code class="language-yaml"># Argo Rollouts equivalent
+strategy:
+  blueGreen:
+    activeService: shop
+    previewService: shop-preview
+    autoPromotionEnabled: false
+    scaleDownDelaySeconds: 600</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Incompatible schema migrations that break blue during rollback.</li>
+  <li>Scaling blue down immediately, removing the fast rollback.</li>
+  <li>Forgetting long-lived connections stay on blue.</li>
+  <li>Not testing green at production size.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I run two Deployments, blue with the current version and green with the new one, distinguished by a version label. The production Service selects blue. I deploy green alongside and test it through a preview Service. When it's good, I patch the production Service selector to green, which moves new traffic almost instantly, and rollback is just switching back while blue still runs. After a soak, blue scales down. The costs are double capacity during the switch and backward-compatible database changes using expand and contract. Argo Rollouts automates this with preview services and automated analysis.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Long-lived connections when you flip?</strong> They stay on blue until closed; keep blue up and drain or set max connection age.</li>
+  <li><strong>Blue-green vs canary?</strong> Blue-green switches all at once with instant rollback; canary shifts gradually and limits blast radius.</li>
+  <li><strong>What about queue consumers?</strong> Pause blue consumers at cutover or make processing idempotent.</li>
+</ul>
+</article>
+</body>
+</html>

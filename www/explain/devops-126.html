@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-126 · Design an observability stack for 40 microservices on Kubernetes.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-126" data-topic="Observability &amp; SRE">
+<h1>Design an observability stack for 40 microservices on Kubernetes.</h1>
+<p class="ex-meta">Observability &amp; SRE · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Build three correlated pipelines, <strong>metrics</strong> (Prometheus + Grafana), <strong>logs</strong> (Fluent Bit or Alloy to Loki/Elasticsearch) and <strong>traces</strong> (OpenTelemetry to Tempo/Jaeger), all linked by a <strong>trace id</strong>, with <strong>SLO-based alerting</strong>, and run the whole thing as a shared platform service.</p>
+
+<h2>Detailed explanation</h2>
+<p>With 40 microservices, nobody can debug by SSH-ing into pods or by reading one service's logs. The stack has to answer three questions quickly: <strong>is something wrong</strong> (metrics and alerts), <strong>where is it</strong> (traces) and <strong>why</strong> (logs). The goal is <strong>fast correlation during incidents</strong> at a sustainable cost.</p>
+<p><strong>Metrics:</strong> the <strong>kube-prometheus-stack</strong> Helm chart (Prometheus Operator, Alertmanager, node-exporter, kube-state-metrics, Grafana) or a managed service such as Amazon Managed Prometheus, Azure Monitor managed Prometheus or Grafana Cloud. Services expose RED metrics; for long retention and multi-cluster views add <strong>Thanos</strong> or <strong>Mimir</strong>. Watch <strong>cardinality</strong>: labels like user id explode storage.</p>
+<p><strong>Logs:</strong> applications write <strong>structured JSON</strong> to stdout with the trace id in every line. A <strong>DaemonSet</strong> agent (Fluent Bit, or Grafana <strong>Alloy</strong>, which replaces the deprecated Promtail) ships them to <strong>Loki</strong> (cheap, label-indexed) or <strong>Elasticsearch/OpenSearch</strong> when full-text search and analytics justify the cost.</p>
+<p><strong>Traces:</strong> <strong>OpenTelemetry</strong> SDKs or auto-instrumentation in each service, sending OTLP to an <strong>OpenTelemetry Collector</strong> (agent plus gateway), which samples (for example <strong>tail sampling</strong> to keep all errors and slow requests) and exports to <strong>Tempo</strong> or <strong>Jaeger</strong>. Grafana then links metric <strong>exemplars</strong> to traces and traces to logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform team installs the stack via GitOps (Argo CD or Flux) in every cluster.</li>
+  <li>Each service gets a standard library or auto-instrumentation: OTel tracing, Prometheus metrics, JSON logging with trace id.</li>
+  <li>ServiceMonitors/PodMonitors are created from the service template, so scraping is automatic.</li>
+  <li>Dashboards per service show golden signals; a fleet overview shows SLO status for all 40.</li>
+  <li>Alerts are <strong>multi-window burn-rate</strong> SLO alerts routed by Alertmanager to PagerDuty or Opsgenie, each with a runbook link.</li>
+  <li>Retention and sampling are tuned per signal to control cost.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># OpenTelemetry Collector gateway: keep errors and slow traces, sample the rest
+processors:
+  tail_sampling:
+    policies:
+      - name: errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: slow
+        type: latency
+        latency: { threshold_ms: 1000 }
+      - name: baseline
+        type: probabilistic
+        probabilistic: { sampling_percentage: 10 }
+exporters:
+  otlp/tempo:
+    endpoint: tempo-distributor.observability:4317</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unstructured logs without trace ids, so correlation is impossible.</li>
+  <li>High-cardinality labels (user id, full URL) in Prometheus.</li>
+  <li>Alerting on CPU and pod restarts instead of user-facing SLOs.</li>
+  <li>No retention or sampling plan, so cost explodes after six months.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd split it into metrics, logs and traces, all tied together by the trace id. Metrics come from kube-prometheus-stack or a managed Prometheus, with Thanos or Mimir if we need long retention, and Grafana dashboards showing golden signals per service. Logs are structured JSON shipped by a Fluent Bit or Alloy DaemonSet to Loki, or Elasticsearch if we really need full-text search. Traces use OpenTelemetry SDKs and a collector with tail sampling, exporting to Tempo. In Grafana you jump from a latency spike via an exemplar to the trace and then to the logs for that trace id. Alerts are SLO burn-rate alerts through Alertmanager to PagerDuty with runbooks, and a platform team owns the stack and bakes the instrumentation into service templates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you budget storage and retention?</strong> Short high-resolution retention (15 days) locally, downsampled long-term in object storage, logs 7-30 days by level, traces sampled.</li>
+  <li><strong>Managed or self-hosted?</strong> Managed if the team is small; self-hosted when scale makes managed pricing expensive and you have the skills.</li>
+  <li><strong>How do you stop cardinality explosions?</strong> Label allowlists, relabelling, per-tenant series limits and cardinality dashboards.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-014 · What is the difference between a private endpoint and a Private Link service?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-014" data-topic="Azure">
+<h1>What is the difference between a private endpoint and a Private Link service?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>private endpoint</strong> is the <strong>consumer side</strong>: a NIC with a private IP in your VNet that maps to one specific resource; a <strong>Private Link service</strong> is the <strong>provider side</strong>: your own service behind a <strong>Standard Load Balancer</strong>, published so consumers in other VNets or tenants can create private endpoints to it, with <strong>approval</strong>, and <strong>no peering or IP overlap concerns</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both are part of <strong>Azure Private Link</strong>. When you create a private endpoint for a storage account, Azure places a NIC in your subnet with an IP such as 10.1.2.5, and a <strong>private DNS zone</strong> (for example <code>privatelink.blob.core.windows.net</code>) makes the public name resolve to that IP. Traffic stays on the Microsoft backbone, and you can disable public network access on the resource. Importantly, the endpoint maps to <strong>one resource</strong>, not the whole service, which protects against data exfiltration to other storage accounts.</p>
+<p>A <strong>Private Link service</strong> lets you be the provider. You put your application behind a <strong>Standard internal Load Balancer</strong> and create a Private Link service on its frontend. Consumers anywhere, in other subscriptions or <strong>other Entra tenants</strong>, create a private endpoint pointing at your service's alias or resource ID. The provider sees a connection request and can <strong>approve or reject</strong> it, or auto-approve listed subscriptions. Traffic is <strong>NAT'd</strong> on the provider side into a NAT IP from your subnet, which is why <strong>overlapping address spaces don't matter</strong>: consumers only see their own private endpoint IP.</p>
+<p>Compared with <strong>VNet peering</strong>, Private Link exposes a <strong>single service</strong>, is unidirectional (only consumer to provider), and needs no routing coordination. SaaS vendors such as Snowflake or Databricks and internal platform teams use it to offer services to many networks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Provider: deploy the service behind a Standard internal Load Balancer.</li>
+  <li>Provider: create a Private Link service on that LB frontend, choose NAT IPs and visibility.</li>
+  <li>Consumer: create a private endpoint referencing the alias or resource ID.</li>
+  <li>Provider approves the pending connection.</li>
+  <li>Consumer creates DNS records pointing the service name to the endpoint IP.</li>
+  <li>Consumer traffic flows endpoint → backbone → NAT → load balancer → backend.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Provider side
+az network private-link-service create -g rg-platform -n pls-orders-api \
+  --vnet-name vnet-platform --subnet snet-pls \
+  --lb-name lb-orders-internal --lb-frontend-ip-configs fe-orders
+
+# Consumer side (another subscription or tenant)
+az network private-endpoint create -g rg-spoke-a -n pe-orders-api \
+  --vnet-name vnet-spoke-a --subnet snet-pe \
+  --private-connection-resource-id &lt;pls-resource-id&gt; \
+  --connection-name orders --manual-request true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting private DNS, so the name still resolves to the public IP.</li>
+  <li>Using a Basic Load Balancer (Private Link service needs Standard).</li>
+  <li>Thinking a private endpoint gives access to the whole PaaS service.</li>
+  <li>Not restricting visibility or auto-approval for a Private Link service.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A private endpoint is the consumer side: a private IP in my VNet that connects to one specific resource, like a single storage account or SQL server, with private DNS so the normal hostname resolves privately. A Private Link service is the provider side: I put my own service behind a Standard Load Balancer and publish it, and consumers in other VNets, subscriptions or tenants create private endpoints to it, which I approve. Because the provider NATs traffic, overlapping IP ranges don't matter, and only that one service is exposed, unlike peering.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you offer an API to 50 spokes with overlapping ranges?</strong> One Private Link service; each spoke creates its own private endpoint.</li>
+  <li><strong>How does the backend see the client IP?</strong> Through the TCP Proxy Protocol v2 option, which carries the source and link ID.</li>
+  <li><strong>Who manages DNS at scale?</strong> Central private DNS zones in the hub, often automated with Azure Policy.</li>
+</ul>
+</article>
+</body>
+</html>

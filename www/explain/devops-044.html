@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-044 · You are asked to build a shared Kubernetes platform for twenty product teams. How do you design multi-tenancy?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-044" data-topic="Platform Engineering">
+<h1>You are asked to build a shared Kubernetes platform for twenty product teams. How do you design multi-tenancy?</h1>
+<p class="ex-meta">Platform Engineering · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Choose the <strong>isolation model</strong> first (shared clusters versus cluster per tenant), then give each team <strong>namespaces</strong> with <strong>ResourceQuota/LimitRange</strong>, <strong>RBAC</strong>, <strong>default-deny NetworkPolicies</strong> and <strong>policy-engine guardrails</strong>, onboard them <strong>self-service via GitOps</strong>, and provide <strong>cost allocation and observability per tenant</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes was not built as a hard multi-tenant system: all tenants share the API server, the nodes and the kernel. For <strong>internal</strong> teams, <strong>soft multi-tenancy</strong> in shared clusters is usually enough and much cheaper to operate than 20+ clusters. <strong>Hard isolation</strong> (cluster per team, or virtual clusters with <strong>vCluster</strong>) is worth it for regulated workloads, very different requirements, or when a team needs cluster-admin. A common compromise is a <strong>few shared clusters split by environment</strong> (dev, staging, prod) and compliance level, plus dedicated clusters as an exception.</p>
+<p>Inside a shared cluster, the <strong>namespace</strong> is the tenancy unit, often one per team per environment or per service. Each gets:</p>
+<ul>
+  <li><strong>ResourceQuota</strong> (total CPU, memory, pods, load balancers) and <strong>LimitRange</strong> (default requests and limits) so one team cannot starve others.</li>
+  <li><strong>RBAC</strong>: team groups from the identity provider bound to an edit role in their namespaces only.</li>
+  <li><strong>NetworkPolicies</strong>: default deny, with explicit allows for ingress controller, monitoring and approved dependencies.</li>
+  <li><strong>Admission policies</strong> with <strong>Kyverno</strong> or <strong>OPA Gatekeeper</strong> (or built-in ValidatingAdmissionPolicy): Pod Security restricted, no privileged pods, approved registries, required labels such as <code>team</code> and <code>cost-center</code>.</li>
+</ul>
+<p>Optionally, <strong>node pools with taints</strong> separate noisy or special workloads, and tools like <strong>Capsule</strong> or Hierarchical Namespaces help group namespaces per tenant.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Team requests onboarding via a pull request to a tenants repo or a portal form.</li>
+  <li>GitOps (Argo CD or Flux) creates namespaces, quotas, RBAC, network policies and Argo CD project.</li>
+  <li>Policy engine enforces guardrails at admission.</li>
+  <li>Workloads carry team labels; OpenCost or Kubecost produces showback reports.</li>
+  <li>Dashboards and alerts are scoped per namespace; logs are labelled by tenant.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ResourceQuota
+metadata: { name: team-quota, namespace: payments-prod }
+spec:
+  hard:
+    requests.cpu: &quot;40&quot;
+    requests.memory: 80Gi
+    limits.memory: 120Gi
+    pods: &quot;200&quot;
+    services.loadbalancers: &quot;2&quot;
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: payments-prod }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Model</th><th>Isolation</th><th>Cost and ops</th><th>Good for</th></tr></thead>
+<tbody>
+<tr><td>Shared cluster, namespaces</td><td>Soft</td><td>Low</td><td>Most internal teams</td></tr>
+<tr><td>Virtual clusters (vCluster)</td><td>Medium</td><td>Medium</td><td>Teams needing CRDs or admin</td></tr>
+<tr><td>Cluster per tenant</td><td>Hard</td><td>High</td><td>Regulated or special workloads</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No quotas, so one runaway deployment consumes the cluster.</li>
+  <li>Network wide open between namespaces.</li>
+  <li>Manual onboarding through tickets.</li>
+  <li>Giving teams cluster-admin &quot;temporarily&quot;.</li>
+  <li>No labels, so costs cannot be allocated.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd first pick the isolation model. For twenty internal teams I'd use a few shared clusters split by environment and compliance needs, with dedicated or virtual clusters only as exceptions, because that's cheaper to run. Each team gets namespaces with ResourceQuotas and LimitRanges, RBAC from our identity provider limited to their namespaces, and default-deny network policies. Guardrails like no privileged pods, approved registries and required team labels are enforced by Kyverno or Gatekeeper. Onboarding is self-service through a GitOps repo or portal. Labels drive cost showback with OpenCost or Kubecost, and every tenant gets dashboards and alerts out of the box.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Team needs GPUs?</strong> A tainted GPU node pool with tolerations and quota for <code>nvidia.com/gpu</code>.</li>
+  <li><strong>Team needs a different Kubernetes version?</strong> Usually say no; if justified, a dedicated cluster with its own lifecycle.</li>
+  <li><strong>How do you handle CRDs that are cluster-scoped?</strong> Platform team owns CRDs; vCluster if teams need their own.</li>
+</ul>
+</article>
+</body>
+</html>

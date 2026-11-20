@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-043 · How do you manage variables and secrets in Azure Pipelines?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-043" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you manage variables and secrets in Azure Pipelines?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep plain config in <strong>YAML or variable templates</strong>, shared values in <strong>variable groups</strong> (protected resources), mark secrets as <strong>secret</strong> (masked, not given to <strong>fork PRs</strong>, <strong>mapped explicitly via <code>env</code></strong>), <strong>link variable groups to Key Vault</strong> or use the <strong>AzureKeyVault task</strong>, and ideally avoid secrets with <strong>workload identity federation</strong> and <strong>managed identities</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Levels of variables:</strong></p>
+<ul>
+  <li><strong>YAML variables</strong> and <strong>variable templates</strong> in Git: non-secret, versioned, reviewed values such as <code>buildConfiguration</code> or resource names.</li>
+  <li><strong>Pipeline variables</strong> set in the UI: useful for values that change per run or that users may override at queue time (mark &quot;settable at queue time&quot; carefully).</li>
+  <li><strong>Variable groups</strong> in the Library: shared across pipelines; they are <strong>protected resources</strong>, so you can control which pipelines use them and add <strong>approvals and checks</strong>.</li>
+</ul>
+<p><strong>Secret variables</strong> behave differently on purpose:</p>
+<ul>
+  <li>They are <strong>masked</strong> in logs (<code>***</code>).</li>
+  <li>They are <strong>not available to builds of pull requests from forks</strong> (unless explicitly allowed, which you shouldn't).</li>
+  <li>They are <strong>not mapped into environment variables automatically</strong>; a script must receive them via <code>env:</code> mapping. That makes the use explicit and avoids accidental exposure to every tool.</li>
+  <li>In YAML, they can't be defined inline; they come from the UI, variable groups or Key Vault.</li>
+</ul>
+<p><strong>Key Vault integration:</strong> link a variable group to an <strong>Azure Key Vault</strong>, selecting secrets; they are fetched at runtime using the service connection, so rotation happens in the vault, not in Azure DevOps. Alternatively the <strong>AzureKeyVault@2</strong> task pulls secrets on demand into a job.</p>
+<p><strong>Best option: no secrets.</strong> <strong>Service connections with workload identity federation (OIDC)</strong> let pipelines get Entra tokens without stored client secrets, and deployed apps use <strong>managed identities</strong>. Remaining secrets (third-party API keys) stay in Key Vault with least-privilege access for the pipeline identity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Non-secret config → YAML/variable templates.</li>
+  <li>Shared environment values → variable groups with pipeline permissions.</li>
+  <li>Secrets → Key Vault, linked variable group or AzureKeyVault task.</li>
+  <li>Scripts receive secrets via <code>env</code> mapping only.</li>
+  <li>Azure auth → workload identity federation service connection.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">variables:
+- template: vars/prod.yml           # non-secret values from Git
+- group: kv-orders-prod             # linked to Azure Key Vault
+steps:
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: sc-orders-prod-oidc     # workload identity federation
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: ./deploy.sh
+  env:
+    PAYMENT_API_KEY: $(PaymentApiKey)          # explicit secret mapping</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting secrets in YAML or variable templates in Git.</li>
+  <li>Making secret variables settable at queue time.</li>
+  <li>Giving every pipeline access to all variable groups.</li>
+  <li>Echoing secrets in scripts for debugging.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Non-secret values live in YAML or variable templates in Git, so they're versioned. Shared values go into variable groups, which are protected resources with permissions and checks. Secrets are marked secret: they're masked, not given to fork pull requests, and a script only gets them if I map them explicitly through env. Better, I link variable groups to Key Vault so secrets are rotated in the vault. Best of all, I avoid secrets: service connections use workload identity federation, and apps use managed identities.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can masking fail?</strong> Transformed values (base64, split, URL-encoded) aren't recognised.</li>
+  <li><strong>How does a script create a secret variable?</strong> <code>##vso[task.setvariable variable=x;issecret=true]value</code>.</li>
+  <li><strong>Key Vault-linked group permissions?</strong> The service connection needs Get/List or Key Vault Secrets User.</li>
+</ul>
+</article>
+</body>
+</html>

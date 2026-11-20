@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-050 · How do you design a Terraform pipeline in Azure DevOps or GitHub Actions with plan on pull request and approval before apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-050" data-topic="Terraform">
+<h1>How do you design a Terraform pipeline in Azure DevOps or GitHub Actions with plan on pull request and approval before apply?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On every <strong>PR</strong> run <strong>fmt, validate, lint, security scan and plan</strong> with a <strong>read-only OIDC identity</strong> and post the plan to the PR; after merge, <strong>re-plan, save the plan artifact, wait for environment approval</strong> and <strong>apply that exact plan</strong> with a <strong>separate privileged identity</strong>, with <strong>concurrency control per state</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The goal is that every infrastructure change is <strong>reviewed as code and as a plan</strong>, applied by automation, and promoted safely.</p>
+<p><strong>PR stage.</strong> The pipeline detects which stacks changed and runs <code>terraform fmt -check</code>, <code>validate</code>, <strong>tflint</strong>, a security scanner and <code>plan</code> for each affected environment. Authentication uses <strong>OIDC workload identity federation</strong> (GitHub OIDC to Azure or AWS, or Azure DevOps service connections with workload identity), so there are no stored secrets. The plan identity is <strong>read-only</strong> plus state read and lock access. The plan summary is posted as a <strong>PR comment</strong>, and policy checks (OPA/Conftest or Sentinel) can fail the check and block merge.</p>
+<p><strong>Apply stage.</strong> After merge to main, the pipeline plans again against the latest state, because other changes may have landed, and stores the binary plan as an artifact. A <strong>protected environment</strong> gates the next job: a GitHub environment with required reviewers or an Azure DevOps environment with approvals and checks. The apply job uses a <strong>separate identity with write rights</strong>, only available to that environment, and runs <code>terraform apply tfplan</code>. Applying a saved plan guarantees that what was approved is exactly what runs; if state changed meanwhile, Terraform rejects the stale plan.</p>
+<p><strong>Concurrency.</strong> Use a concurrency group per state in GitHub Actions or an exclusive lock check in Azure DevOps, so runs queue instead of racing on the state lock. Promote through environments in order: dev, test, then prod.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened: detect changed stacks; run checks and plan with read-only identity.</li>
+  <li>Post plan summary and policy results to the PR; reviewers approve code and plan.</li>
+  <li>Merge: plan again, save <code>tfplan</code> as an artifact.</li>
+  <li>Environment approval gate for each stage.</li>
+  <li>Apply the saved plan with the privileged identity.</li>
+  <li>Repeat for the next environment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">jobs:
+  apply-prod:
+    runs-on: ubuntu-latest
+    environment: production          # required reviewers
+    concurrency: tfstate-prod-network
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.APPLY_CLIENT_ID }}
+          tenant-id: ${{ vars.TENANT_ID }}
+          subscription-id: ${{ vars.SUBSCRIPTION_ID }}
+      - uses: actions/download-artifact@v4
+        with: { name: tfplan-prod }
+      - run: terraform init &amp;&amp; terraform apply tfplan</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One all-powerful identity for both plan and apply.</li>
+  <li>Applying a fresh plan nobody reviewed instead of the saved one.</li>
+  <li>No concurrency control, causing lock errors or racing applies.</li>
+  <li>Long-lived client secrets instead of OIDC.</li>
+  <li>Posting full plans with sensitive values into PR comments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On every pull request I run fmt, validate, tflint, a security scanner and plan for each affected environment, using a read-only identity via OIDC, and post the plan to the PR so reviewers see the real impact; policies can block the merge. After merge, the pipeline plans again, saves the plan as an artifact and waits on a protected environment approval. Apply uses that saved plan with a separate, more privileged identity. Concurrency is serialised per state, and environments are promoted dev, test, prod.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why apply-before-merge like Atlantis?</strong> Main then only contains code that applied successfully.</li>
+  <li><strong>What if the saved plan is stale?</strong> Terraform refuses it; re-plan and re-approve.</li>
+  <li><strong>How do you handle plan secrets?</strong> Mark values sensitive and post summaries, not raw output.</li>
+</ul>
+</article>
+</body>
+</html>

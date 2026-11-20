@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-014 · What does an LLM gateway do, and how does model routing work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-014" data-topic="LLMOps &amp; RAG">
+<h1>What does an LLM gateway do, and how does model routing work?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>LLM gateway</strong> exposes <strong>one consistent (often OpenAI-compatible) API</strong> in front of many providers and deployments, handling <strong>auth, per-team quotas and budgets, retries and fallbacks, logging and cost tracking, and guardrails</strong>, and <strong>routes</strong> each request to a model <strong>by task, complexity, cost or latency</strong>; examples are <strong>LiteLLM, Azure API Management, Kong, Portkey</strong> and cloud gateways.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without a gateway, each application embeds provider SDKs and keys, implements its own retries, and nobody can answer &quot;how much did team X spend last month?&quot;. A gateway centralises these cross-cutting concerns.</p>
+<p><strong>Access control.</strong> Apps authenticate with internal identities or virtual keys; real provider keys live only in the gateway's secret store. The gateway enforces <strong>rate limits in tokens per minute</strong>, <strong>quotas and budgets</strong> per team or app, and model allow-lists.</p>
+<p><strong>Reliability.</strong> It load-balances across deployments (several Azure OpenAI regions, Bedrock regions, self-hosted vLLM replicas), <strong>retries</strong> transient failures with backoff, and <strong>falls back</strong> on 429 or 5xx to another region, deployment or provider.</p>
+<p><strong>Observability and cost.</strong> It records model, tokens in and out, cached tokens, latency, errors and cost per request, tagged with team and feature, and exports traces (OpenTelemetry). Prompt and response logging is configurable per data classification.</p>
+<p><strong>Guardrails.</strong> PII redaction, prompt-injection and content filters, and response caching can run centrally.</p>
+<p><strong>Model routing</strong> chooses which model serves a request:</p>
+<ul>
+  <li><strong>Explicit</strong>: the app requests a logical alias like <code>fast-small</code> or <code>reasoning</code>, mapped centrally to concrete models so upgrades need no app change.</li>
+  <li><strong>Rule-based</strong>: by task type, tenant, data sensitivity (sensitive data to self-hosted only) or prompt length.</li>
+  <li><strong>Learned/complexity-based</strong>: a small classifier or heuristic estimates difficulty and sends easy queries to a cheap model and hard ones to a frontier model, sometimes with <strong>cascading</strong> (try cheap first, escalate if confidence or validation fails).</li>
+  <li><strong>Cost/latency policies</strong>: cheapest model meeting a latency target.</li>
+</ul>
+<p>Products: <strong>LiteLLM</strong> (open source proxy), <strong>Portkey</strong>, <strong>Kong AI Gateway</strong>, <strong>Azure API Management</strong> AI gateway policies, <strong>Envoy AI Gateway</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App calls <code>POST /v1/chat/completions</code> with a virtual key and model alias.</li>
+  <li>Gateway authenticates, checks quota and budget.</li>
+  <li>Router selects a concrete model and deployment.</li>
+  <li>Call is made with retries and fallbacks.</li>
+  <li>Usage, cost and latency are logged and attributed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># LiteLLM proxy config (simplified)
+model_list:
+  - model_name: chat-default
+    litellm_params: { model: azure/gpt-4o-eu, api_base: os.environ/AZ_EU_BASE, api_key: os.environ/AZ_EU_KEY }
+  - model_name: chat-default
+    litellm_params: { model: bedrock/anthropic.claude-sonnet, aws_region_name: eu-central-1 }
+  - model_name: fast-small
+    litellm_params: { model: openai/llama-8b, api_base: http://vllm.internal/v1 }
+router_settings: { routing_strategy: latency-based-routing, num_retries: 2 }
+litellm_settings: { fallbacks: [ { chat-default: [ fast-small ] } ] }</code></pre>
+<p>Model identifiers are illustrative; use the exact ones your providers expose.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Gateway as a single point of failure without redundancy.</li>
+  <li>Logging full prompts with sensitive data by default.</li>
+  <li>Falling back to a model with different behaviour without evaluating it.</li>
+  <li>Counting requests instead of tokens for limits.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An LLM gateway sits between apps and model providers and exposes one consistent API. Apps authenticate with internal keys, and the gateway enforces per-team token quotas, budgets and rate limits. It retries and falls back across regions or providers on 429s and 5xx, load-balances deployments, and centralises logging of usage, cost and latency, plus guardrails like PII redaction. Routing sends each request to a suitable model, by alias, task, data sensitivity or estimated complexity, so easy requests go to a cheap model and hard ones to a frontier model. LiteLLM, Portkey, Kong and Azure API Management are examples.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risks of auto-routing to cheaper models?</strong> Silent quality drops; need evals, monitoring and escalation.</li>
+  <li><strong>Where to cache responses?</strong> Gateway semantic or exact caches, carefully, for idempotent queries.</li>
+  <li><strong>Gateway latency overhead?</strong> A few milliseconds, negligible against generation time.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-052 · A pod has been stuck in Terminating for an hour. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-052" data-topic="Kubernetes">
+<h1>A pod has been stuck in Terminating for an hour. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A pod stuck <strong>Terminating</strong> is waiting on something: a <strong>finalizer</strong>, an <strong>unreachable node</strong> whose kubelet cannot confirm shutdown, a hanging <strong>volume unmount or detach</strong>, or a long <strong>grace period</strong> with a process ignoring SIGTERM; find which, and <strong>force delete only after understanding it</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Deleting a pod sets a <strong>deletionTimestamp</strong>; the object disappears only when the kubelet reports that containers stopped and all <strong>finalizers</strong> are removed. So &quot;Terminating for an hour&quot; means one of those steps is not completing.</p>
+<p><strong>Finalizers</strong> on pods are less common than on other objects, but some controllers add them (for example, custom protection or job tracking finalizers in older versions). If the controller that should remove the finalizer is broken or uninstalled, deletion waits forever. If the <strong>node is NotReady or gone</strong>, nobody can confirm the containers stopped, so the API server keeps the pod in Terminating until the node returns or the Node object is deleted.</p>
+<p>On a healthy node, check <strong>kubelet logs</strong>: unmounting a volume may hang (a dead NFS server, a stuck CSI driver, a busy device), and the kubelet will not finish termination until volumes are torn down. Occasionally the container runtime itself is hung. Finally, the application may ignore <strong>SIGTERM</strong> while <code>terminationGracePeriodSeconds</code> is set very high, so the kubelet patiently waits before sending SIGKILL.</p>
+<p><code>kubectl delete pod --grace-period=0 --force</code> removes the object from the API immediately, but it does <strong>not</strong> guarantee the containers stopped. For a StatefulSet pod on a partitioned node, that can mean two copies running at once.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get pod -o yaml</code>: deletionTimestamp, grace period, finalizers, node.</li>
+  <li>Check the node status; NotReady means the kubelet cannot report.</li>
+  <li>On a ready node, read kubelet logs for unmount/CSI errors and check <code>crictl ps</code>.</li>
+  <li>Check whether the app handles SIGTERM and what grace period is set.</li>
+  <li>Fix the controller, storage or node problem.</li>
+  <li>Force delete or remove a finalizer only when you know the consequence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get pod worker-5 -o jsonpath='{.metadata.deletionTimestamp} {.metadata.finalizers} {.spec.nodeName}{&quot;\n&quot;}'
+kubectl get node node-12
+journalctl -u kubelet | grep -i -E 'unmount|worker-5' | tail
+# finalizer from a removed controller:
+kubectl patch pod worker-5 --type=json -p='[{&quot;op&quot;:&quot;remove&quot;,&quot;path&quot;:&quot;/metadata/finalizers&quot;}]'
+# last resort:
+kubectl delete pod worker-5 --grace-period=0 --force</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Force deleting by reflex, leaving a process running on the node.</li>
+  <li>Removing finalizers without cleaning up what they protect.</li>
+  <li>Ignoring hung NFS mounts that will affect the next pod too.</li>
+  <li>Huge grace periods with apps that never exit cleanly.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with the pod YAML: deletion timestamp, grace period, finalizers and node. A finalizer whose controller is broken blocks deletion forever. If the node is NotReady, the kubelet can't confirm containers stopped, so the pod stays Terminating until the node returns or is removed. On a healthy node I check kubelet logs for a volume unmount or CSI detach that's hanging, and whether the app ignores SIGTERM with a long grace period. Only after I understand the cause do I force delete, because for stateful pods that can leave two copies running.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is force-deleting on a partitioned node risky?</strong> The containers may still run and write, while a replacement starts elsewhere.</li>
+  <li><strong>What does force delete actually do?</strong> Removes the API object without waiting for kubelet confirmation.</li>
+  <li><strong>How should apps handle SIGTERM?</strong> Stop accepting work, finish in-flight work, exit within the grace period.</li>
+</ul>
+</article>
+</body>
+</html>

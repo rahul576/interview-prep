@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-002 · A topic has 12 partitions and a consumer group has 15 consumers. What happens, and what does the partition count control?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-002" data-topic="Kafka">
+<h1>A topic has 12 partitions and a consumer group has 15 consumers. What happens, and what does the partition count control?</h1>
+<p class="ex-meta">Kafka · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>With 12 partitions and 15 consumers in one group, <strong>12 consumers each own one partition and 3 sit idle</strong>, because the <strong>partition is the unit of parallelism</strong> and the <strong>ordering boundary</strong> within a consumer group.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Kafka topic is split into <strong>partitions</strong>, each an ordered, append-only log. Inside a <strong>consumer group</strong>, the group coordinator assigns every partition to <strong>exactly one consumer</strong> at a time. A consumer may own several partitions, but a partition is never shared by two consumers of the same group, because that would break ordering and offset tracking. So the maximum useful parallelism of a group equals the partition count: the three extra consumers get no assignment. They are not useless, though: they act as <strong>hot standbys</strong> and take over partitions immediately during a rebalance if another consumer dies.</p>
+<p>The partition count also controls <strong>ordering</strong>. Kafka guarantees order only <strong>within a partition</strong>. Producers hash the <strong>message key</strong> (murmur2 by default) modulo the partition count, so all records with the same key land in the same partition and are consumed in order. If you later increase partitions from 12 to 24, the modulo changes, keys <strong>remap</strong> to different partitions, and old and new events for the same key can be processed out of order during the transition. That is why teams <strong>over-provision partitions</strong> at creation time, within reason, since each partition costs file handles, memory and recovery time.</p>
+<p>Finally, <strong>different consumer groups are independent</strong>: each keeps its own committed offsets in <code>__consumer_offsets</code>. One topic can feed a billing group and an analytics group at the same time, so Kafka behaves as a <strong>queue within a group</strong> and <strong>publish-subscribe across groups</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer computes <code>partition = hash(key) % 12</code> (or uses sticky partitioning for null keys).</li>
+  <li>Consumers join group <code>orders-svc</code>; the coordinator triggers a rebalance.</li>
+  <li>The assignor (for example cooperative sticky) maps 12 partitions to 12 consumers.</li>
+  <li>Three consumers receive an empty assignment and only heartbeat.</li>
+  <li>If a consumer leaves, a rebalance hands its partition to an idle member.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kafka-consumer-groups.sh --bootstrap-server broker:9092 \
+  --describe --group orders-svc
+# CONSUMER-ID shown for partitions 0..11; three members have no partitions
+kafka-topics.sh --bootstrap-server broker:9092 --describe --topic orders</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scaling consumer pods beyond the partition count and expecting more throughput.</li>
+  <li>Adding partitions to a keyed topic in production without planning for reordering.</li>
+  <li>Assuming Kafka offers global ordering across a topic.</li>
+  <li>Creating thousands of tiny partitions &quot;just in case&quot;, which slows failover.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Within one consumer group, each partition goes to exactly one consumer, so with 12 partitions and 15 consumers, 12 do the work and 3 are idle standbys. The partition count therefore caps parallelism, and it is also the ordering boundary, since Kafka only orders records within a partition and keys are hashed to partitions. Increasing partitions later remaps keys and can break per-key ordering, so I size partitions generously up front. Separate consumer groups each keep their own offsets, which is how one topic serves both queue-style and pub-sub consumers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What causes partition skew?</strong> Hot keys or poor key choice; detect it with per-partition lag and bytes-in metrics.</li>
+  <li><strong>Can one consumer read multiple partitions?</strong> Yes, a consumer can own many partitions; the reverse is not allowed within a group.</li>
+  <li><strong>How do you choose a partition count?</strong> Target throughput divided by per-partition throughput, plus headroom for future consumers.</li>
+</ul>
+</article>
+</body>
+</html>

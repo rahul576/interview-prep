@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-051 · A node running pod-0 of a PostgreSQL StatefulSet goes NotReady. Kubernetes does not start pod-0 elsewhere. Why, and what do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-051" data-topic="Kubernetes">
+<h1>A node running pod-0 of a PostgreSQL StatefulSet goes NotReady. Kubernetes does not start pod-0 elsewhere. Why, and what do you do?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>StatefulSet guarantees at most one pod per identity</strong>; when the node is unreachable, Kubernetes cannot know whether <strong>pod-0 is still running and writing</strong>, so it will not create a second one (avoiding <strong>split-brain</strong>) until you <strong>confirm the node is dead</strong> and <strong>force delete the pod</strong> or apply the <strong>out-of-service taint</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Deployment treats pods as interchangeable, so a replacement can start while the old one is still in doubt. A <strong>StatefulSet</strong> promises stable identity: <code>postgres-0</code> has a fixed name, DNS entry and PVC. The controller only creates a new <code>postgres-0</code> once the old pod object is fully deleted, and a pod on an unreachable node is only fully deleted when its kubelet confirms the containers stopped.</p>
+<p>When the node goes NotReady, the control plane sees silence. It cannot tell a powered-off node from a <strong>network partition</strong> where Postgres is still running and accepting writes. If it started <code>postgres-0</code> elsewhere and attached the same volume (or a different one), two primaries could diverge or corrupt data. So after the eviction timeout the pod is marked for deletion and shows <strong>Terminating</strong> or <strong>Unknown</strong>, and it stays there. A ReadWriteOnce volume also remains attached to the old node.</p>
+<p>A human or automation must <strong>fence</strong> the node: confirm in the cloud console or IPMI that it is powered off, or shut it down. Then either <strong>force delete</strong> the pod, or apply the taint <code>node.kubernetes.io/out-of-service=nodeshutdown:NoExecute</code> (non-graceful node shutdown, GA since 1.28). The taint makes Kubernetes force-delete pods on that node and <strong>force-detach volumes</strong>, so the StatefulSet can recreate pod-0 on a healthy node and reattach the PVC.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Node stops reporting; pod-0 becomes Terminating/Unknown after the toleration period.</li>
+  <li>StatefulSet controller waits; volume stays attached to the dead node.</li>
+  <li>Operator confirms the node is truly off (fencing).</li>
+  <li>Apply the out-of-service taint, or force delete the pod.</li>
+  <li>Volume detaches; pod-0 is recreated on another node with the same PVC.</li>
+  <li>Remove the taint once the node is recovered or deleted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get pod postgres-0 -o wide        # Terminating on node-7
+aws ec2 describe-instances --instance-ids i-0abc --query 'Reservations[].Instances[].State.Name'
+# &quot;stopped&quot; -&gt; safe to proceed
+kubectl taint nodes node-7 node.kubernetes.io/out-of-service=nodeshutdown:NoExecute
+kubectl get pod postgres-0 -w             # recreated on node-3</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Force deleting before confirming the node is off.</li>
+  <li>Assuming Kubernetes will &quot;just fail over&quot; a database like a Deployment.</li>
+  <li>Forgetting the volume is still attached, so the new pod hangs in ContainerCreating.</li>
+  <li>Leaving the out-of-service taint on after recovery.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A StatefulSet guarantees at most one pod per identity, so there must never be two pod-0s writing the same data. When the node goes NotReady, Kubernetes can't tell if it's dead or partitioned with Postgres still running. Starting another pod-0 could cause split-brain, so it waits with the pod stuck Terminating. I'd confirm the node is really down in the cloud console, then apply the out-of-service taint or force delete the pod, which lets the volume detach and pod-0 start elsewhere. For real HA I'd use a database operator with replicas rather than rely on one pod moving.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does CloudNativePG differ?</strong> It runs replicas and promotes a standby on primary failure, fencing the old primary, rather than moving one pod.</li>
+  <li><strong>Why not just use a Deployment?</strong> No stable identity or per-pod volumes, and two pods could share data.</li>
+  <li><strong>What is fencing?</strong> Guaranteeing the old instance cannot write, for example by powering it off.</li>
+</ul>
+</article>
+</body>
+</html>

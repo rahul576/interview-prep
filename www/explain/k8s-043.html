@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-043 · Pods fail with ImagePullBackOff only for images from your private registry. How do you troubleshoot and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-043" data-topic="Kubernetes">
+<h1>Pods fail with ImagePullBackOff only for images from your private registry. How do you troubleshoot and fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Read the exact pull error with <strong>kubectl describe pod</strong>, then check by category: <strong>unauthorized</strong> (missing or expired <strong>imagePullSecrets</strong>, wrong namespace, or node identity lacking registry permissions), <strong>not found</strong> (name, tag, architecture) or <strong>timeout</strong> (network, DNS, private endpoint).</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>ImagePullBackOff</strong> is a symptom: the kubelet tried to pull, failed (<code>ErrImagePull</code>) and is now backing off. The fact that only private-registry images fail narrows it to <strong>authentication</strong>, <strong>authorisation</strong> or <strong>network reachability</strong> of that registry. The pod events show the container runtime's message, which tells you which one.</p>
+<p>For <strong>401/403 unauthorized</strong>, the credentials used by the kubelet are wrong. Credentials come either from <strong>imagePullSecrets</strong> on the pod (or inherited from its <strong>ServiceAccount</strong>) or from the <strong>node's identity</strong> via a kubelet <strong>credential provider</strong>. Secrets are <strong>namespaced</strong>, so a secret created in <code>default</code> does not help a pod in <code>payments</code>. Tokens expire: an <strong>ECR</strong> authorisation token lasts 12 hours, so a static <code>docker-registry</code> secret created from it breaks the next day. On managed clusters the node identity normally pulls: EKS node roles need ECR read permissions, AKS needs the <strong>AcrPull</strong> role on the kubelet identity, GKE node service accounts need Artifact Registry reader.</p>
+<p>For <strong>not found / manifest unknown</strong>, check registry hostname, repository path, tag or digest, and whether the image has a manifest for the node's <strong>architecture</strong> (an amd64-only image on arm64 nodes). For <strong>i/o timeout or TLS errors</strong>, check egress firewall rules, NAT, proxy settings, private DNS zones for private endpoints, and certificate trust for self-hosted registries.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe pod</code> and read the Events message.</li>
+  <li>Unauthorized: check <code>imagePullSecrets</code> on pod and ServiceAccount, and that the secret exists in that namespace.</li>
+  <li>Decode the secret and verify registry host and credential validity.</li>
+  <li>Managed clusters: verify node role or managed identity permissions on the registry.</li>
+  <li>Not found: verify image reference and platform with <code>docker manifest inspect</code> or <code>crane</code>.</li>
+  <li>Timeout: on the node, test with <code>crictl pull</code> and <code>nslookup</code> to isolate network issues.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl -n payments describe pod api-7c9f | grep -A3 Failed
+#  Failed to pull image &quot;myacr.azurecr.io/api:1.8.2&quot;: 401 Unauthorized
+
+kubectl -n payments get sa default -o jsonpath='{.imagePullSecrets}'
+kubectl -n payments create secret docker-registry regcred \
+  --docker-server=registry.example.com --docker-username=ci-bot --docker-password=&quot;$TOKEN&quot;
+kubectl -n payments patch sa default -p '{&quot;imagePullSecrets&quot;:[{&quot;name&quot;:&quot;regcred&quot;}]}'
+
+# AKS: let the cluster's kubelet identity pull from ACR
+az aks update -n prod-aks -g rg-prod --attach-acr myacr</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating the pull secret in the wrong namespace.</li>
+  <li>Storing a 12-hour ECR token as a static secret.</li>
+  <li>Ignoring the actual error text and guessing.</li>
+  <li>Forgetting multi-arch images when adding arm64 nodes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I describe the pod, because the event tells me whether it's unauthorized, not found or a timeout. For unauthorized I check the imagePullSecrets on the pod or its service account, that the secret exists in the same namespace, and that the credential hasn't expired, which is common with ECR tokens. On managed clusters I check the node identity, such as AcrPull for AKS or ECR permissions on the node role. For not found I verify name, tag and architecture. For timeouts I test from the node with crictl pull and check DNS, firewall and private endpoints.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you survive a registry outage?</strong> Pull-through cache or mirror registry, <code>IfNotPresent</code> with immutable tags or digests, and pre-pulled critical images.</li>
+  <li><strong>ServiceAccount vs pod imagePullSecrets?</strong> ServiceAccount secrets are added automatically to every pod using it.</li>
+  <li><strong>What is a kubelet credential provider?</strong> A plugin that fetches short-lived registry credentials using the node's cloud identity.</li>
+</ul>
+</article>
+</body>
+</html>

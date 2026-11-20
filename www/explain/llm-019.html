@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-019 · How do temperature and other sampling settings affect LLM behaviour in production, and can outputs be made deterministic?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-019" data-topic="LLMOps &amp; RAG">
+<h1>How do temperature and other sampling settings affect LLM behaviour in production, and can outputs be made deterministic?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Temperature</strong> rescales the next-token distribution (low = focused, high = diverse), <strong>top_p/top_k</strong> limit candidate tokens; use <strong>low temperature for extraction, classification, code and tools</strong>, higher for creative work; even <strong>temperature 0 is not fully deterministic</strong> due to <strong>floating point, batching and provider updates</strong>, so design for variability.</p>
+
+<h2>Detailed explanation</h2>
+<p>At each step the model outputs <strong>logits</strong>, one score per vocabulary token, which softmax turns into probabilities. <strong>Temperature</strong> divides the logits before softmax: below 1 it sharpens the distribution so the top tokens dominate; above 1 it flattens it, giving lower-probability tokens more chance. Temperature 0 is treated as <strong>greedy decoding</strong> (always pick the top token).</p>
+<p><strong>top_p (nucleus sampling)</strong> keeps the smallest set of tokens whose cumulative probability reaches p, for example 0.9, and samples only among them; <strong>top_k</strong> keeps the k most likely tokens; <strong>min_p</strong> keeps tokens above a fraction of the top token's probability. Usually tune temperature or top_p, not both aggressively.</p>
+<p>Guidance: <strong>extraction, classification, SQL, code, tool calling, factual Q&amp;A</strong>: low temperature (0 to 0.3) for focus and repeatability. <strong>Brainstorming, marketing copy, varied responses</strong>: 0.7 to 1.0. Note that some <strong>reasoning models</strong> fix or restrict sampling parameters, and providers document recommended defaults per model, so check them.</p>
+<p><strong>Determinism.</strong> Even greedy decoding often gives different outputs across runs. Reasons: GPU floating-point arithmetic is <strong>not associative</strong>, and results depend on kernel choice and the order of reductions; <strong>batching</strong> with other users' requests changes matrix shapes and therefore kernels and numerics (batch-invariant kernels can fix this but are rarely default); mixture-of-experts routing may be affected by batch composition; and hosted providers <strong>update models, infrastructure or routing</strong> behind the same alias. Some APIs accept a <strong>seed</strong> for best-effort reproducibility, but it is not guaranteed. Pinning dated model versions helps.</p>
+<p>So production systems should <strong>design for variability</strong>: evaluate on multiple samples and report pass rates, validate outputs structurally, avoid parsing exact phrasing, cache answers where repeatability matters, and log prompts, parameters and model versions for debugging.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Model produces logits for all tokens.</li>
+  <li>Divide by temperature; apply softmax.</li>
+  <li>Filter with top_k / top_p / min_p.</li>
+  <li>Sample a token (or take argmax at temperature 0).</li>
+  <li>Append and repeat; stop at stop sequence or max tokens.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">extract = client.chat.completions.create(model=MODEL, temperature=0, seed=42,
+    messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Extract the order id from: {email}&quot;}])
+ideas = client.chat.completions.create(model=MODEL, temperature=0.9, top_p=0.95, n=3,
+    messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Suggest names for a new coffee brand&quot;}])</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming temperature 0 means identical output forever.</li>
+  <li>High temperature on tool-calling agents, causing erratic actions.</li>
+  <li>Tuning temperature to fix a prompt or retrieval problem.</li>
+  <li>Evaluating with a single sample per test case.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The model outputs a probability distribution for the next token. Temperature scales it: low values make the most likely tokens dominate, high values flatten it for more diverse but riskier output, and top_p or top_k restrict sampling to the likeliest candidates. I use low temperature for extraction, classification, code and tool use, higher for creative tasks. Even at zero, outputs are not fully deterministic because of floating-point non-associativity, batching with other requests and provider-side updates; seeds help but are best effort. So I design for variability: evaluate over multiple samples, validate outputs and pin model versions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Different answers at different times of day?</strong> Different batch composition and load-based routing change numerics; provider updates too.</li>
+  <li><strong>Temperature vs top_p?</strong> Temperature reshapes the distribution; top_p truncates its tail.</li>
+  <li><strong>How to get reproducible evals?</strong> Fixed versions, temperature 0, multiple runs and pass-rate thresholds.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-306 · How does Kubernetes support application scalability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-306" data-topic="Kubernetes">
+<h1>How does Kubernetes support application scalability?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Kubernetes scales apps by running more <strong>replicas behind a Service</strong>, automatically with the <strong>HorizontalPodAutoscaler</strong> (CPU, memory, custom metrics) or <strong>KEDA</strong> (event-driven, scale to zero), adjusts sizing with the <strong>VPA</strong>, and adds nodes with the <strong>Cluster Autoscaler or Karpenter</strong>; this only works for <strong>stateless apps with accurate requests and readiness probes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Horizontal scaling at the pod level.</strong> A Deployment declares <code>replicas</code>, and a <strong>Service</strong> load-balances across all ready pods, so capacity grows by adding pods. You can do it manually (<code>kubectl scale</code>, or changing replicas in Git with GitOps), but production systems use the <strong>HorizontalPodAutoscaler (HPA)</strong>. HPA <code>autoscaling/v2</code> reads metrics every 15 seconds or so and computes <code>desired = ceil(current * currentMetric / target)</code>. Metrics can be <strong>CPU or memory utilisation</strong> relative to requests (from metrics-server), <strong>custom metrics</strong> such as requests per second via Prometheus Adapter, or <strong>external metrics</strong> such as queue length. Behaviour policies control scale-up speed and scale-down stabilisation to avoid flapping.</p>
+<p><strong>Event-driven scaling.</strong> <strong>KEDA</strong> adds scalers for Kafka lag, RabbitMQ, SQS, Azure Service Bus, cron schedules and many more, drives an HPA under the hood, and can <strong>scale to zero</strong> when idle.</p>
+<p><strong>Vertical scaling.</strong> The <strong>Vertical Pod Autoscaler</strong> recommends or applies CPU and memory requests based on observed usage. Do not let VPA and HPA both act on the same CPU metric. Kubernetes 1.33+ also supports in-place pod resize, which reduces restarts for vertical changes.</p>
+<p><strong>Node scaling.</strong> When new pods are <strong>Pending</strong> because nodes are full, the <strong>Cluster Autoscaler</strong> grows node groups, and removes underused nodes. <strong>Karpenter</strong> (AWS, and Azure via node auto-provisioning) provisions right-sized nodes directly and consolidates them.</p>
+<p><strong>Preconditions.</strong> Apps must be <strong>stateless</strong> (sessions in Redis or tokens), start fast, expose <strong>readiness probes</strong> so traffic only reaches warm pods, handle SIGTERM gracefully, and have accurate <strong>resource requests</strong>, since both the HPA percentage and the scheduler depend on them. <strong>PodDisruptionBudgets</strong> keep availability during scale-down.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Load rises; metric exceeds HPA target.</li>
+  <li>HPA raises replica count on the Deployment.</li>
+  <li>New pods are scheduled; if no room, they stay Pending.</li>
+  <li>Cluster Autoscaler or Karpenter adds nodes; pods start.</li>
+  <li>Readiness passes; Service sends traffic; later, scale-down removes pods and nodes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: orders }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: orders }
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 300 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No resource requests, so CPU utilisation targets are meaningless.</li>
+  <li>Scaling stateful apps that keep sessions in memory.</li>
+  <li>Max replicas higher than the database connection pool can handle.</li>
+  <li>Scaling consumers beyond the number of Kafka partitions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Apps run as Deployments with several replicas behind a Service, so scaling out means adding pods. The HorizontalPodAutoscaler does it automatically on CPU, memory or custom metrics like requests per second, and KEDA scales on event sources like Kafka lag, even down to zero. The VPA tunes resource requests. When pods cannot fit, the Cluster Autoscaler or Karpenter adds nodes and removes idle ones. All of this assumes stateless apps, fast startup, readiness probes and accurate resource requests.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do requests matter?</strong> HPA utilisation is a percentage of requests, and the scheduler packs nodes by requests.</li>
+  <li><strong>HPA and VPA together?</strong> Not on the same CPU/memory metric; use VPA in recommendation mode or HPA on custom metrics.</li>
+  <li><strong>What limits scaling?</strong> Downstream databases, partitions, licences and node quotas.</li>
+</ul>
+</article>
+</body>
+</html>

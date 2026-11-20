@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-008 · Compare kube-proxy modes and eBPF-based alternatives for Service routing.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-008" data-topic="Kubernetes">
+<h1>Compare kube-proxy modes and eBPF-based alternatives for Service routing.</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>kube-proxy</strong> programmes each node so traffic to a Service <strong>ClusterIP</strong> reaches a backend pod: <strong>iptables</strong> mode (long-time default, linear rule chains), <strong>IPVS</strong> (kernel load balancer with hash tables), and the newer <strong>nftables</strong> mode (GA in 1.33); <strong>eBPF dataplanes</strong> like <strong>Cilium</strong> replace kube-proxy entirely for better scale and observability.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Service's ClusterIP is virtual: no interface owns it. kube-proxy watches Services and EndpointSlices and installs rules that translate (DNAT) the ClusterIP and port into a chosen pod IP.</p>
+<ul>
+  <li><strong>iptables mode</strong> writes a chain per Service and per endpoint, choosing a backend with random probability rules. It is simple and battle-tested, but packets of new connections walk chains sequentially and updates rewrite large rule sets. With tens of thousands of Services and endpoints, rule sync can take seconds to minutes and adds CPU.</li>
+  <li><strong>IPVS mode</strong> uses the kernel's IP Virtual Server with hash-table lookups and algorithms like round robin and least connections, scaling better for large clusters. It still relies on some iptables for helpers, and the Kubernetes project now steers new setups towards nftables rather than IPVS.</li>
+  <li><strong>nftables mode</strong> uses the modern netfilter API with maps and sets, giving faster lookups and incremental updates; it graduated to stable in 1.33 and is the intended long-term successor to iptables mode, although iptables remains the default for compatibility.</li>
+  <li><strong>eBPF dataplanes</strong> (Cilium, also Calico's eBPF mode) attach programs to sockets and network interfaces. With socket-level load balancing, a <code>connect()</code> to a ClusterIP is rewritten to a pod IP before any packet is built, avoiding per-packet NAT and conntrack. Cilium can run <strong>kube-proxy-free</strong>, handles NodePort and LoadBalancer services, and adds deep visibility through <strong>Hubble</strong> flow logs.</li>
+</ul>
+<p>The choice matters mainly at scale, with high connection churn, or when you need flow-level observability.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Service and EndpointSlice change in the API.</li>
+  <li>kube-proxy or the eBPF agent on each node receives the update.</li>
+  <li>It updates iptables chains, IPVS tables, nftables maps or eBPF maps.</li>
+  <li>A client connects to the ClusterIP.</li>
+  <li>The rule or program selects a backend and rewrites the destination.</li>
+  <li>Return traffic is reverse-translated (or never needed translation with socket LB).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># kube-proxy configuration
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: nftables</code></pre>
+<pre><code class="language-bash"># Cilium without kube-proxy
+helm install cilium cilium/cilium -n kube-system \
+  --set kubeProxyReplacement=true \
+  --set k8sServiceHost=10.0.0.10 --set k8sServicePort=6443
+cilium status | grep KubeProxyReplacement</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Mode</th><th>Lookup</th><th>Scale</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>iptables</td><td>Linear chains</td><td>Moderate</td><td>Default, most compatible</td></tr>
+<tr><td>IPVS</td><td>Hash tables</td><td>Good</td><td>Several algorithms</td></tr>
+<tr><td>nftables</td><td>Maps/sets</td><td>Good</td><td>Modern successor</td></tr>
+<tr><td>eBPF (Cilium)</td><td>eBPF maps</td><td>Very good</td><td>Replaces kube-proxy, observability</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Removing kube-proxy without fully enabling the replacement.</li>
+  <li>Not telling Cilium the API server address when kube-proxy is gone.</li>
+  <li>Assuming IPVS removes all iptables use.</li>
+  <li>Switching modes in place without cleaning old rules.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kube-proxy watches Services and EndpointSlices and programmes each node so ClusterIP traffic reaches a backend pod. iptables mode is the long-time default and simple, but it uses linear chains that get slow to update with thousands of services. IPVS uses kernel hash tables and scales better, and nftables, stable since 1.33, is the modern successor with faster incremental updates. eBPF dataplanes like Cilium replace kube-proxy completely, load balancing at the socket level before netfilter, with better performance and Hubble observability. It mostly matters at scale.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What breaks if you remove kube-proxy incorrectly?</strong> ClusterIP, NodePort and even API server access from pods stop working.</li>
+  <li><strong>Why might traffic not follow session affinity?</strong> Affinity is per client IP and node; NAT or many nodes change the picture.</li>
+  <li><strong>What is externalTrafficPolicy: Local?</strong> Keeps client source IP and avoids extra hops, routing only to local pods.</li>
+</ul>
+</article>
+</body>
+</html>

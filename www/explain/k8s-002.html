@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-002 · What is the difference between kubectl create, kubectl apply and server-side apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-002" data-topic="Kubernetes">
+<h1>What is the difference between kubectl create, kubectl apply and server-side apply?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>kubectl create</code></strong> is <strong>imperative</strong> and fails if the object exists; <strong><code>kubectl apply</code></strong> is <strong>declarative</strong>, doing a <strong>three-way merge</strong> using the <strong>last-applied annotation</strong>; <strong>server-side apply (SSA)</strong> moves merging into the API server and tracks <strong>field ownership</strong> in <code>managedFields</code>, reporting <strong>conflicts</strong> when managers disagree.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>kubectl create -f</code></strong> says &quot;make this object&quot;. If it already exists you get <code>AlreadyExists</code>. It is fine for one-off tasks, like generating a Secret or a Job, but not for repeatable pipelines.</p>
+<p><strong>Client-side <code>kubectl apply</code></strong> says &quot;make the object look like this&quot;. kubectl compares three versions: the <strong>live object</strong>, the <strong>new manifest</strong>, and the previous manifest stored in the <code>kubectl.kubernetes.io/last-applied-configuration</code> annotation. That three-way merge lets it remove fields you deleted from your file while keeping fields other actors set, such as <code>status</code> or a sidecar injected by a webhook. Its weaknesses are a large annotation, merge logic in the client, and no real notion of who owns what.</p>
+<p><strong>Server-side apply</strong> (<code>kubectl apply --server-side</code>, GA since 1.22) sends the desired fields to the API server, which merges them and records, per field, which <strong>field manager</strong> set it, in <code>metadata.managedFields</code>. If another manager already owns a field you try to change, the request fails with a <strong>conflict</strong> unless you use <code>--force-conflicts</code> to take ownership. This makes shared ownership safe and explicit: Helm or Argo CD owns most of a Deployment, the HPA owns <code>spec.replicas</code>, a mesh webhook owns injected fields. Controllers written with SSA can also apply partial objects, sending only the fields they care about. Argo CD and Flux support SSA, and it is the recommended approach for controllers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>create</code>: POST the object; error if it exists.</li>
+  <li>Client-side <code>apply</code>: GET live object, compute three-way patch, PATCH, update annotation.</li>
+  <li>SSA: PATCH with <code>application/apply-patch+yaml</code> and a field manager name.</li>
+  <li>API server merges and updates <code>managedFields</code>.</li>
+  <li>Conflicting ownership → 409 Conflict, unless forced.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl create deployment demo --image=nginx            # imperative
+kubectl apply -f deploy.yaml                            # client-side apply
+kubectl apply --server-side --field-manager=ci -f deploy.yaml
+kubectl get deploy orders --show-managed-fields -o yaml | grep -A3 manager:</code></pre>
+<pre><code class="language-yaml"># Let the HPA own replicas: simply omit spec.replicas from the applied manifest
+spec:
+  # replicas: 3   &lt;- removed
+  template: ...</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>create</code> in CI and getting failures on reruns.</li>
+  <li>Keeping <code>replicas</code> in manifests while an HPA scales the Deployment.</li>
+  <li>Using <code>--force-conflicts</code> by default, hiding real ownership fights.</li>
+  <li>Mixing <code>kubectl edit</code> with GitOps-managed objects.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kubectl create is imperative: it creates the object and fails if it exists. kubectl apply is declarative: kubectl does a three-way merge between the live object, the new manifest and the last-applied annotation, so removed fields get removed. Server-side apply moves that into the API server, which tracks which field manager owns each field in managedFields and raises a conflict when two managers try to own the same field. That's what lets a pipeline, Helm and an HPA share an object safely. For repeatable changes I use apply, preferably server-side, from CI or a GitOps tool.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does an HPA fight a pipeline with fixed replicas?</strong> Each apply resets replicas, then the HPA changes it back; remove <code>replicas</code> from the manifest.</li>
+  <li><strong>How do you migrate from client-side to server-side apply?</strong> kubectl handles the ownership transfer; apply with <code>--server-side</code> once.</li>
+  <li><strong>What is a field manager?</strong> The identity recorded for each owned field, for example <code>kubectl</code>, <code>helm</code> or a controller name.</li>
+</ul>
+</article>
+</body>
+</html>

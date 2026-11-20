@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-021 · How do you use module-level for_each to create the same set of infrastructure several times?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-021" data-topic="Terraform">
+<h1>How do you use module-level for_each to create the same set of infrastructure several times?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Since <strong>Terraform 0.13</strong>, a <strong>module block accepts <code>for_each</code></strong> (and <code>count</code>), so a <strong>map of settings</strong> creates one instance per key, addressed as <strong><code>module.app[&quot;eu&quot;]</code></strong>; the module must <strong>not configure providers itself</strong>, and very large maps <strong>increase the blast radius</strong> of one state.</p>
+
+<h2>Detailed explanation</h2>
+<p>Copy-pasting the same module block for every team, region or environment is error-prone: a fix applied to one copy is forgotten in another. <strong>Module-level <code>for_each</code></strong> expresses &quot;the same set of infrastructure, N times, with different settings&quot;.</p>
+<p>You pass a <strong>map</strong> (or set of strings). Inside the module block, <code>each.key</code> is the instance key and <code>each.value</code> holds its settings, which pairs well with an <code>object</code> type with <code>optional()</code> defaults. Each instance gets a <strong>stable address</strong> like <code>module.team[&quot;payments&quot;].aws_s3_bucket.this</code>. Because instances are keyed by name, adding a new team creates only that instance and removing a key destroys only that instance, unlike <code>count</code>, where removing an item in the middle shifts indexes and can replace others. Outputs of the instances are available as a map, for example <code>module.team[&quot;payments&quot;].bucket_arn</code> or <code>{ for k, m in module.team : k =&gt; m.bucket_arn }</code>.</p>
+<p>There are constraints. A module used with <code>for_each</code> or <code>count</code> <strong>must not contain provider configuration blocks</strong>; providers are passed from the root. And <strong>providers cannot be chosen dynamically per instance</strong>: the <code>providers</code> argument is static for all instances of one module block. So &quot;one instance per region&quot; still needs one aliased provider per region and typically one module block per region (or Stacks, which support provider <code>for_each</code>). Keys must be <strong>known at plan time</strong>, so they should come from configuration, not from computed values.</p>
+<p>Finally, putting many instances into one state means a single plan touches all of them: plan time grows, a mistake in shared code affects every instance at once, and locking blocks everyone. For large or independently owned sets, split by team or environment into separate states.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a map of instance settings in variables or locals.</li>
+  <li>Add <code>for_each = var.teams</code> to the module block.</li>
+  <li>Pass <code>each.key</code> and <code>each.value</code> attributes as inputs.</li>
+  <li>Terraform creates instances <code>module.x[&quot;key&quot;]</code>.</li>
+  <li>Reference outputs per key or with a for expression.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;teams&quot; {
+  type = map(object({
+    cpu_quota = string
+    budget    = number
+    admins    = list(string)
+  }))
+}
+
+module &quot;team&quot; {
+  source   = &quot;./modules/team-namespace&quot;
+  for_each = var.teams
+
+  name      = each.key
+  cpu_quota = each.value.cpu_quota
+  budget    = each.value.budget
+  admins    = each.value.admins
+}
+
+output &quot;namespaces&quot; {
+  value = { for k, m in module.team : k =&gt; m.namespace }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>count</code> with a list, then removing an item and shifting all indexes.</li>
+  <li>Provider blocks inside the module.</li>
+  <li>Trying <code>providers = { aws = each.value.provider }</code>; not allowed.</li>
+  <li>Keys derived from computed values.</li>
+  <li>Hundreds of instances in one state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since Terraform 0.13 a module block accepts for_each and count like resources. I pass a map where each key is an instance, say a team or a region, and the value holds its settings, and inside the module block I use each.key and each.value. Each instance gets an address like <code>module.team[&quot;payments&quot;]</code>, and adding or removing a key only affects that instance because keys are stable. The module must not contain its own provider configuration, and providers can't be selected dynamically per instance, so for many regions I still need one aliased provider and module block per region. Large sets in one state increase blast radius and plan time, so I split them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Same stack in five regions?</strong> Five aliased providers and five module blocks, separate states per region, or Stacks.</li>
+  <li><strong>How do you rename a key without recreating?</strong> A <code>moved</code> block from the old key to the new key.</li>
+  <li><strong>count or for_each on modules?</strong> for_each, except for simple on/off toggles with <code>count = var.enabled ? 1 : 0</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-001 · How do import blocks work in Terraform, and why are they better than the terraform import command?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-001" data-topic="Terraform">
+<h1>How do import blocks work in Terraform, and why are they better than the terraform import command?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>import block</strong> (Terraform 1.5+) declares in code <strong>which existing object</strong> (<code>id</code>) maps to <strong>which resource address</strong> (<code>to</code>), so importing becomes part of a <strong>reviewed plan and apply</strong>, with optional <strong>config generation</strong> and <strong>for_each</strong> support, unlike the CLI command that changes state immediately.</p>
+
+<h2>Detailed explanation</h2>
+<p>Most teams adopt Terraform with infrastructure that already exists: resources created by hand, by scripts or by another tool. To manage them, Terraform must record them in state under a resource address. The old way, <code>terraform import aws_s3_bucket.logs my-logs-bucket</code>, writes to state <strong>immediately</strong>, from whoever runs it, with <strong>no plan, no review and no record in Git</strong>. In a team with several environments that is error-prone: someone imports into the wrong workspace, or forgets the other environments.</p>
+<p>An <strong>import block</strong> turns this into normal, declarative configuration. You write <code>import { to = aws_s3_bucket.logs  id = &quot;my-logs-bucket&quot; }</code> next to the resource block. On <code>terraform plan</code>, Terraform reads the real object and shows &quot;will be imported&quot;, together with any differences between the real object and your configuration. The change is reviewed in a pull request and applied by the pipeline like any other.</p>
+<p>If you do not have configuration yet, <code>terraform plan -generate-config-out=generated.tf</code> writes a <strong>starting configuration</strong> from the real object's attributes. It is a draft: you clean it up, remove computed or default values, and replace hard-coded IDs with references. Since <strong>Terraform 1.7</strong>, import blocks support <strong>for_each</strong>, so you can import many similar objects from a map. The <code>id</code> can also be an expression, for example built from variables per environment, and newer versions let providers that support <strong>resource identity</strong> use an <code>identity</code> object instead of a string id.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find the provider's import ID format in the resource documentation.</li>
+  <li>Add an import block (and the resource block, or generate it).</li>
+  <li>Run <code>terraform plan</code>; check &quot;import&quot; and that no unintended update or replace appears.</li>
+  <li>Adjust configuration until the plan shows only the import.</li>
+  <li>Merge and apply through the pipeline in each environment.</li>
+  <li>Remove import blocks later as cleanup.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">locals {
+  buckets = { logs = &quot;acme-prod-logs&quot;, assets = &quot;acme-prod-assets&quot; }
+}
+
+import {
+  for_each = local.buckets
+  to       = aws_s3_bucket.this[each.key]
+  id       = each.value
+}
+
+resource &quot;aws_s3_bucket&quot; &quot;this&quot; {
+  for_each = local.buckets
+  bucket   = each.value
+}</code></pre>
+<pre><code class="language-bash">terraform plan -generate-config-out=generated.tf   # when no resource block exists yet</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing generated configuration without cleaning it up.</li>
+  <li>Applying when the plan shows an update or replacement along with the import.</li>
+  <li>Using the CLI import in one environment and forgetting the others.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since Terraform 1.5 I can declare an import block with <code>to</code>, the resource address, and <code>id</code>, the cloud identifier. The import then happens during plan and apply, so it's reviewed in a pull request, visible in the plan and run by the same pipeline as every other change. If I don't have configuration yet, <code>plan -generate-config-out</code> writes a starting point that I clean up. Since 1.7 import blocks support for_each, so I can import a whole map of resources at once. The old <code>terraform import</code> command changes state immediately from someone's laptop, with no review, which is risky in a team.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What do you check in generated configuration?</strong> Remove computed and default attributes, replace IDs with references, add variables and check no secrets are hard-coded.</li>
+  <li><strong>Can you import into a module?</strong> Yes, <code>to = module.network.aws_vpc.main</code>, but import blocks must be in the root module.</li>
+  <li><strong>How do you import at scale?</strong> <code>for_each</code> imports, or Terraform 1.14's <code>terraform query</code> to discover resources and generate config.</li>
+</ul>
+</article>
+</body>
+</html>

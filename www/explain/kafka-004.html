@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-004 · Consumers keep rebalancing and throughput collapses. How do you debug it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-004" data-topic="Kafka">
+<h1>Consumers keep rebalancing and throughput collapses. How do you debug it?</h1>
+<p class="ex-meta">Kafka · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Rebalance storms usually come from <strong>slow processing exceeding max.poll.interval.ms</strong>, not crashes; fix it by <strong>reducing max.poll.records or offloading work</strong>, tuning <strong>session timeouts</strong>, using <strong>static membership</strong> and the <strong>cooperative sticky assignor</strong> or the <strong>new KIP-848 consumer protocol</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A consumer has two liveness checks. A background thread sends <strong>heartbeats</strong>; if none arrives within <code>session.timeout.ms</code> (45 s by default in recent versions), the coordinator assumes the consumer died. Separately, the application must call <code>poll()</code> again within <strong>max.poll.interval.ms</strong> (default 5 minutes). If a batch of 500 records takes longer than that to process, the client proactively leaves the group even though heartbeats are fine. Its partitions are reassigned, it rejoins, triggers another rebalance, and the cycle repeats. With the classic <strong>eager</strong> protocol, every rebalance revokes all partitions from all members, so the whole group stops: throughput collapses.</p>
+<p>Debugging starts with evidence: consumer logs show messages such as &quot;consumer poll timeout has expired&quot; or &quot;member ... has left the group&quot;, and the coordinator logs record the reason for each rebalance. Correlate rebalance timestamps with deployments, GC pauses, autoscaler events and slow downstream calls.</p>
+<p>Fixes target the cause. Lower <code>max.poll.records</code> so each poll does less work, raise <code>max.poll.interval.ms</code> if processing is legitimately slow, or move heavy work to a worker pool while pausing partitions. For rolling restarts in Kubernetes, <strong>static membership</strong> (<code>group.instance.id</code>) lets a pod return with the same identity within the session timeout without any rebalance. The <strong>CooperativeStickyAssignor</strong> does incremental rebalances, moving only partitions that must move. Kafka 4.0 made the <strong>new consumer group protocol (KIP-848)</strong> generally available: the broker computes assignments and reconciles them incrementally, which removes the group-wide synchronisation barrier.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check logs and metrics for rebalance reasons and frequency.</li>
+  <li>Measure processing time per batch against max.poll.interval.ms.</li>
+  <li>Tune max.poll.records, timeouts, or offload work with pause/resume.</li>
+  <li>Add group.instance.id for stable pods.</li>
+  <li>Switch to cooperative sticky or <code>group.protocol=consumer</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties">max.poll.records=100
+max.poll.interval.ms=600000
+session.timeout.ms=45000
+group.instance.id=${POD_NAME}
+partition.assignment.strategy=org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+# Kafka 4.x clients and brokers:
+# group.protocol=consumer</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising session.timeout.ms when the real problem is poll interval.</li>
+  <li>Doing synchronous HTTP calls per record on the poll thread.</li>
+  <li>Autoscaling consumers on CPU, causing constant membership churn.</li>
+  <li>Using static membership with a very long session timeout, delaying real failure detection.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Most rebalance storms I have seen were caused by slow processing, not crashes. If the gap between poll calls exceeds max.poll.interval.ms, the consumer leaves the group even though heartbeats continue, and the eager protocol then stops everyone. I check the logs for the rebalance reason, measure batch processing time, then reduce max.poll.records or move slow work off the poll thread. For deployments I add static membership, use the cooperative sticky assignor, and on Kafka 4 I would consider the new broker-side consumer protocol from KIP-848.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you monitor rebalance frequency?</strong> Consumer metrics such as rebalance-rate-per-hour and join/sync time, plus alerts.</li>
+  <li><strong>Heartbeat vs poll interval?</strong> Heartbeat detects dead processes; poll interval detects stuck processing.</li>
+  <li><strong>Does static membership hide failures?</strong> Only up to session.timeout.ms, after which partitions move.</li>
+</ul>
+</article>
+</body>
+</html>

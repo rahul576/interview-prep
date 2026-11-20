@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-082 · A compromised container was detected in a production pod. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-082" data-topic="Kubernetes">
+<h1>A compromised container was detected in a production pod. What do you do?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Follow the incident process: <strong>contain without destroying evidence</strong> (deny-all NetworkPolicy, remove from Service, <strong>cordon the node</strong>), <strong>capture forensics</strong>, <strong>rotate every credential the pod could reach</strong>, find the <strong>entry point</strong> with runtime detection and audit logs, then <strong>rebuild from a clean, patched image</strong> and <strong>harden</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The instinct to delete the pod is wrong: it destroys the evidence you need to learn how the attacker got in and what they touched, and the controller simply recreates the same vulnerable pod. Involve the security team and incident commander early; legal or compliance may need to be informed if data could be exposed.</p>
+<p><strong>Containment</strong>: apply a NetworkPolicy selecting the pod (via a quarantine label) that denies all ingress and egress, so it can no longer exfiltrate or move laterally. Changing its labels so the Service and ReplicaSet no longer select it removes it from traffic and makes the controller start a replacement (ideally from a fixed image). <strong>Cordon</strong> the node so nothing new lands there, since a container escape may have compromised the node itself.</p>
+<p><strong>Evidence</strong>: <code>kubectl get pod -o yaml</code>, container logs, process list and open connections (<code>kubectl debug</code> with an ephemeral container or on the node with <code>crictl</code>), the container filesystem diff, a <strong>node disk snapshot</strong> and possibly memory capture, plus Kubernetes <strong>audit logs</strong>, cloud logs and runtime alerts. Record timestamps.</p>
+<p><strong>Assume breach of everything reachable</strong>: the pod's <strong>ServiceAccount token</strong>, its <strong>cloud workload identity</strong> permissions, mounted Secrets, environment variables, database credentials, API keys. Rotate them and review what they accessed in cloud and database audit logs.</p>
+<p><strong>Root cause</strong>: runtime detection (<strong>Falco</strong>, Tetragon, cloud threat detection such as GuardDuty or Defender for Containers) shows suspicious behaviour like a shell spawned in the container or unexpected outbound connections. Common entry points: a known vulnerable dependency, an exposed admin endpoint, leaked credentials, or a poisoned image.</p>
+<p><strong>Recovery and hardening</strong>: rebuild from a patched image, redeploy, drain and replace the node, then tighten securityContext, NetworkPolicies, RBAC and image policies, and hold a post-incident review.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare incident; involve security.</li>
+  <li>Quarantine label: deny-all NetworkPolicy, out of Service selection.</li>
+  <li>Cordon node; capture pod, node and log evidence.</li>
+  <li>Rotate credentials and review their use.</li>
+  <li>Identify entry point; patch and rebuild.</li>
+  <li>Replace node; delete pod after forensics.</li>
+  <li>Harden and run a post-incident review.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl -n shop label pod api-6c9f quarantine=true app- --overwrite   # leaves Service/ReplicaSet
+kubectl apply -f - &lt;&lt;'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: quarantine, namespace: shop }
+spec:
+  podSelector: { matchLabels: { quarantine: &quot;true&quot; } }
+  policyTypes: [Ingress, Egress]
+EOF
+kubectl cordon node-14
+kubectl -n shop logs api-6c9f --all-containers &gt; evidence/api-6c9f.log</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting the pod immediately.</li>
+  <li>Forgetting to rotate cloud identity and database credentials.</li>
+  <li>Restoring the same vulnerable image.</li>
+  <li>Leaving the node in service after a possible escape.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd follow the incident process and bring in security early. First contain without destroying evidence: a deny-all NetworkPolicy on the pod, relabel it out of its Service, and cordon the node, rather than deleting it. Then capture evidence: logs, processes, filesystem diff, a node disk snapshot and audit logs. I'd assume everything the pod could reach is exposed and rotate its service account token, cloud identity permissions, database passwords and mounted secrets. Falco alerts and audit logs help find the entry point, often a vulnerable image or exposed endpoint. Then rebuild from a patched image, replace the node, harden and write a post-incident review.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Controls that limit blast radius?</strong> Non-root, read-only filesystems, dropped capabilities, default-deny network policies, minimal RBAC, short-lived workload identity, signed images.</li>
+  <li><strong>Why cordon the node?</strong> A container escape may have compromised the node.</li>
+  <li><strong>Why keep the pod?</strong> Forensics need its state.</li>
+</ul>
+</article>
+</body>
+</html>

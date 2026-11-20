@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-025 · How do you scan Terraform code for security and compliance problems before it is applied?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-025" data-topic="Terraform">
+<h1>How do you scan Terraform code for security and compliance problems before it is applied?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run <strong>static scanners</strong> such as <strong>Checkov, Trivy (which absorbed tfsec) or KICS</strong> on HCL in <strong>pre-commit and CI</strong>, also <strong>scan the plan JSON</strong> for evaluated values, enforce <strong>organisation rules with policy as code</strong> (OPA/Conftest or Sentinel) as a gate before apply, and <strong>document every suppression</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Misconfiguration, not zero-day exploits, causes most cloud incidents: public buckets, SSH open to the internet, unencrypted databases, wildcard IAM policies, disabled logging. Infrastructure as code lets you catch these <strong>before they exist</strong>, which is far cheaper than finding them later with a cloud security posture tool.</p>
+<p><strong>Static scanners</strong> parse Terraform code and apply hundreds of built-in rules mapped to frameworks such as <strong>CIS Benchmarks</strong>, NIST or PCI DSS. <strong>Checkov</strong> (Prisma Cloud) is widely used and supports graph-based checks across resources. <strong>Trivy</strong> (Aqua) now includes the former <strong>tfsec</strong> engine, so one tool scans containers, IaC and dependencies. <strong>KICS</strong> (Checkmarx) is another option. They run in seconds and output SARIF for GitHub or GitLab security dashboards.</p>
+<p>Scanning HCL has a blind spot: values coming from <strong>variables, modules or expressions</strong> may not be resolvable statically. So for important checks I also scan the <strong>plan</strong>: <code>terraform show -json tfplan &gt; plan.json</code> contains fully evaluated values, and both Checkov and policy engines can evaluate it.</p>
+<p><strong>Organisation-specific rules</strong> (allowed regions, mandatory tags, approved instance sizes, no public IPs in production) are written as <strong>policy as code</strong>: <strong>OPA Rego</strong> with <strong>Conftest</strong>, or <strong>Sentinel</strong> / OPA in HCP Terraform policy sets, with advisory, soft-mandatory or hard-mandatory enforcement. Cloud-side guardrails (AWS SCPs, Azure Policy) remain the last line of defence for anything that bypasses Terraform.</p>
+<p>To keep developers engaged, scanners run in <strong>pre-commit hooks</strong> for fast feedback, a curated rule set avoids noise, and <strong>suppressions</strong> are inline comments with a <strong>reason and ticket</strong>, reviewed like code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer runs pre-commit: <code>terraform fmt</code>, TFLint, Checkov or Trivy.</li>
+  <li>PR pipeline runs the same scanners and uploads SARIF.</li>
+  <li>Pipeline creates the plan and exports JSON.</li>
+  <li>Conftest or Sentinel evaluates organisation policies on the plan.</li>
+  <li>High-severity failures block merge or apply; suppressions require review.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">checkov -d . --framework terraform --quiet --output sarif &gt; checkov.sarif
+trivy config --severity HIGH,CRITICAL .
+terraform plan -out=tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
+conftest test plan.json --policy policy/</code></pre>
+<pre><code class="language-rego">package main
+deny contains msg if {
+  r := input.resource_changes[_]
+  r.type == &quot;aws_s3_bucket&quot;
+  not r.change.after.tags.owner
+  msg := sprintf(&quot;%s must have an owner tag&quot;, [r.address])
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Enabling every rule and drowning developers in noise.</li>
+  <li>Only scanning HCL, missing values from variables and modules.</li>
+  <li>Suppressions without explanation.</li>
+  <li>Running scans only nightly instead of on every PR.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I run static scanners like Checkov, Trivy, which absorbed tfsec, or KICS on every pull request. They have hundreds of rules for things like public buckets, security groups open on SSH, missing encryption, disabled logging or overly broad IAM, mapped to frameworks like CIS. Because HCL scanning misses values computed from variables, I also scan the plan JSON from <code>terraform show -json</code>. Organisation-specific rules like allowed regions or mandatory tags go into policy as code with OPA Conftest or Sentinel as a gate before apply. Developers get the same checks in pre-commit hooks, and every suppression needs a documented reason.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keeping scanner noise low?</strong> Curated rule set, severity thresholds, baselines for legacy code and fast feedback in pre-commit.</li>
+  <li><strong>Static scan or plan scan?</strong> Both; static is fast, plan scanning sees real values.</li>
+  <li><strong>What if someone bypasses Terraform?</strong> Cloud-level guardrails such as SCPs and Azure Policy plus CSPM monitoring.</li>
+</ul>
+</article>
+</body>
+</html>

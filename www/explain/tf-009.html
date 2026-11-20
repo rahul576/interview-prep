@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-009 · When do you need depends_on in Terraform, and what are its drawbacks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-009" data-topic="Terraform">
+<h1>When do you need depends_on in Terraform, and what are its drawbacks?</h1>
+<p class="ex-meta">Terraform · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Terraform infers dependencies from <strong>references</strong>; <strong><code>depends_on</code></strong> is only for <strong>hidden dependencies</strong> not visible in arguments, and it should be used <strong>sparingly</strong> because it is <strong>coarse</strong>, and on <strong>modules and data sources</strong> it makes values <strong>unknown until apply</strong>, producing <strong>noisy, conservative plans</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform builds a <strong>dependency graph</strong> from expressions. If a subnet sets <code>vpc_id = aws_vpc.main.id</code>, the subnet depends on the VPC, so it is created after and destroyed before it. This <strong>implicit dependency</strong> covers the vast majority of cases and is precise: it links exactly the objects involved.</p>
+<p>Sometimes a real dependency exists but no attribute expresses it. The classic example is IAM: a Lambda function or ECS service references a role ARN, but its permissions come from a separate <code>aws_iam_role_policy_attachment</code>. Terraform may create the function before the policy is attached, and the first invocation or startup fails with access denied. Other examples are an application that needs a database firewall rule or private endpoint to exist, or a VM that must wait for a NAT gateway before its bootstrap script downloads packages. Here <code>depends_on = [aws_iam_role_policy_attachment.lambda_logs]</code> tells Terraform about the hidden ordering.</p>
+<p>The drawbacks are real. <code>depends_on</code> is <strong>coarse</strong>: on a <strong>module</strong>, every resource and data source in the module depends on everything in the list, which serialises work and can widen what gets replaced. On <strong>data sources</strong>, or data sources inside a module with <code>depends_on</code>, Terraform must <strong>defer reading until apply</strong> whenever the dependency has pending changes, so their results are &quot;known after apply&quot;. Anything derived from them becomes unknown too, which can show <strong>unnecessary updates or replacements</strong> and <strong>perpetual diffs</strong> in plans. It also hides intent: a future reader does not know why it is there.</p>
+<p>So prefer expressing the dependency through data: pass an attribute (for example output the policy attachment ID or a combined value) into the dependent resource or module. When <code>depends_on</code> is truly needed, put it on the narrowest resource and add a comment.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform parses references and builds the graph.</li>
+  <li><code>depends_on</code> adds explicit edges to the listed objects.</li>
+  <li>During plan, data sources with dependencies on pending changes are deferred to apply.</li>
+  <li>Apply follows the graph order, parallelising independent nodes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_iam_role_policy_attachment&quot; &quot;logs&quot; {
+  role       = aws_iam_role.lambda.name
+  policy_arn = &quot;arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole&quot;
+}
+
+resource &quot;aws_lambda_function&quot; &quot;api&quot; {
+  function_name = &quot;orders-api&quot;
+  role          = aws_iam_role.lambda.arn
+  handler       = &quot;app.handler&quot;
+  runtime       = &quot;python3.12&quot;
+  filename      = &quot;build/app.zip&quot;
+
+  # The role ARN is referenced, but the attached policy is not.
+  depends_on = [aws_iam_role_policy_attachment.logs]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding <code>depends_on</code> everywhere &quot;to be safe&quot;.</li>
+  <li>Putting <code>depends_on</code> on whole modules.</li>
+  <li>Using it on data sources and then wondering why plans always show changes.</li>
+  <li>No comment explaining the hidden dependency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform normally builds the dependency graph from references: if a subnet uses the VPC ID, it waits for the VPC. I only need <code>depends_on</code> for hidden dependencies that aren't visible in arguments, like a Lambda that references its role but needs the policy attachment to exist before it runs. The drawbacks are that it's coarse: on a module it makes everything inside depend on everything listed, and on data sources it delays reading them to apply time, so values become unknown and plans show unnecessary changes or replacements. So I use it sparingly, on the narrowest resource, prefer passing an attribute that expresses the dependency, and add a comment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might depends_on on a module cause perpetual diffs?</strong> Data sources inside are deferred to apply whenever dependencies change, making derived values unknown.</li>
+  <li><strong>Does depends_on affect destroy order?</strong> Yes, dependents are destroyed first.</li>
+  <li><strong>Alternative to depends_on for modules?</strong> Pass an output from the dependency as an input the module actually uses.</li>
+</ul>
+</article>
+</body>
+</html>

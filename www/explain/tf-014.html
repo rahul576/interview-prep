@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-014 · How does state locking work with the S3 and Azure Storage backends today?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-014" data-topic="Terraform">
+<h1>How does state locking work with the S3 and Azure Storage backends today?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>State <strong>locking</strong> makes sure only <strong>one run writes state at a time</strong>; the <strong>S3 backend</strong> now supports <strong>native locking with <code>use_lockfile = true</code></strong> (a <code>.tflock</code> object using S3 conditional writes) and <strong>DynamoDB locking is deprecated</strong>, while the <strong>azurerm backend</strong> locks via a <strong>blob lease</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>If two people or pipelines apply against the same state concurrently, both read version N, both make changes, and the second write overwrites the first. The state then misses real resources, and later plans try to recreate them. <strong>Locking</strong> prevents this: Terraform <strong>acquires a lock</strong> before operations that may write state (plan, apply, import, state commands), and releases it at the end. If another process holds it, the command fails or waits for <code>-lock-timeout</code>.</p>
+<p>For <strong>S3</strong>, Terraform historically used a separate <strong>DynamoDB table</strong> with a <code>LockID</code> key. Since S3 added <strong>conditional writes</strong>, Terraform 1.10 introduced <strong>native S3 locking</strong> with <code>use_lockfile = true</code>, generally available from 1.11: Terraform creates a <code>&lt;key&gt;.tflock</code> object next to the state only if it does not already exist, which gives atomic lock acquisition without another service. The <code>dynamodb_table</code> argument is <strong>deprecated</strong> and will be removed in a future version. Teams migrate by enabling <strong>both</strong> for a transition period, so old and new clients respect the lock, then removing DynamoDB.</p>
+<p>For <strong>Azure Storage</strong>, the <strong>azurerm backend</strong> acquires a <strong>lease</strong> on the state blob. The lease is exclusive, so a second run cannot take it. No extra resource is required, and a stuck lease can be broken from the portal or CLI.</p>
+<p>Regardless of backend, the store itself needs protection: <strong>versioning</strong> (S3 versioning, Azure blob versioning or soft delete) so older state versions can be recovered after corruption, <strong>encryption at rest</strong>, <strong>private access</strong>, <strong>least-privilege IAM/RBAC</strong>, and ideally a separate account or subscription, since state contains sensitive values.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>terraform plan</code> or <code>apply</code> starts.</li>
+  <li>Backend tries to acquire the lock (create <code>.tflock</code> object or take blob lease).</li>
+  <li>If it exists or is leased, the command fails or waits up to <code>-lock-timeout</code>.</li>
+  <li>Run reads, modifies and writes state.</li>
+  <li>Lock is released (object deleted, lease released).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  backend &quot;s3&quot; {
+    bucket       = &quot;acme-tfstate-prod&quot;
+    key          = &quot;network/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    encrypt      = true
+    use_lockfile = true
+    # dynamodb_table = &quot;tf-locks&quot;   # keep during migration, then remove
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No locking configured at all on S3.</li>
+  <li>Removing DynamoDB in one step while older pipelines still use it.</li>
+  <li>Bucket without versioning, so a corrupted state cannot be recovered.</li>
+  <li>Broad read access to the state bucket.</li>
+  <li>Disabling locking with <code>-lock=false</code> to &quot;get past&quot; an error.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Locking ensures only one run can write the state at a time; Terraform takes the lock before plan or apply and releases it afterwards. For S3, Terraform 1.10 introduced native locking with <code>use_lockfile = true</code>, which writes a <code>.tflock</code> object next to the state using S3 conditional writes, so DynamoDB is no longer needed, and DynamoDB locking is deprecated. During migration I enable both, then remove DynamoDB once every pipeline is on a new version. The azurerm backend locks by taking a lease on the state blob. In both cases I enable versioning, encryption and restricted access, because state contains sensitive data.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Migrating without a gap?</strong> Set both <code>use_lockfile</code> and <code>dynamodb_table</code>, upgrade all clients, then drop DynamoDB.</li>
+  <li><strong>What permissions does S3 locking need?</strong> Put and delete on the <code>.tflock</code> object in addition to state access.</li>
+  <li><strong>What is <code>-lock-timeout</code>?</strong> How long to retry acquiring the lock before failing.</li>
+</ul>
+</article>
+</body>
+</html>

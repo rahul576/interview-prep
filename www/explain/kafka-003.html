@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-003 · How do producer acks, replication factor and min.insync.replicas work together for durability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-003" data-topic="Kafka">
+<h1>How do producer acks, replication factor and min.insync.replicas work together for durability?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>acks</strong> decides when a write counts as successful, the <strong>replication factor</strong> decides how many copies exist, and <strong>min.insync.replicas</strong> decides how many of those copies must confirm an <code>acks=all</code> write; <strong>RF 3, min ISR 2, acks all</strong> is the standard durable setup.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every partition has one <strong>leader</strong> and some <strong>followers</strong>. Followers that are caught up with the leader form the <strong>in-sync replica set (ISR)</strong>; a follower that falls behind more than <code>replica.lag.time.max.ms</code> is removed from it.</p>
+<p>The producer's <strong>acks</strong> setting:</p>
+<ul>
+  <li><strong>acks=0</strong>: fire and forget; fastest, data can vanish silently.</li>
+  <li><strong>acks=1</strong>: the leader writes to its log and replies; if the leader dies before followers copy the record, it is lost.</li>
+  <li><strong>acks=all (-1)</strong>: the leader waits until <strong>all current ISR members</strong> have the record. Since Kafka 3.0 this is the default, together with idempotence.</li>
+</ul>
+<p>The trap with acks=all alone is that the ISR can shrink to just the leader, in which case &quot;all&quot; means one copy. <strong>min.insync.replicas</strong> closes that gap: if fewer than that number of replicas are in sync, the broker rejects acks=all writes with <code>NotEnoughReplicas</code>, so the producer gets an error instead of a false sense of durability. With <strong>RF 3 and min ISR 2</strong>, you can lose one broker and keep writing safely; lose two and writes stop while reads continue.</p>
+<p>The <strong>idempotent producer</strong> (<code>enable.idempotence=true</code>, default since 3.0) assigns a producer ID and per-partition sequence numbers so retried batches are not written twice. Also keep <code>unclean.leader.election.enable=false</code> so an out-of-sync replica cannot become leader and discard acknowledged data.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer sends a batch to the partition leader with acks=all.</li>
+  <li>Leader appends it; followers fetch and append.</li>
+  <li>Leader checks ISR size is at least min.insync.replicas.</li>
+  <li>When all ISR members have the batch, the high watermark advances and the producer is acknowledged.</li>
+  <li>On timeout the producer retries; sequence numbers prevent duplicates.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties"># topic
+replication.factor=3
+min.insync.replicas=2
+unclean.leader.election.enable=false
+# producer
+acks=all
+enable.idempotence=true
+delivery.timeout.ms=120000</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>acks</th><th>Waits for</th><th>Loss risk</th><th>Latency</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Nothing</td><td>High</td><td>Lowest</td></tr>
+<tr><td>1</td><td>Leader</td><td>Leader crash</td><td>Low</td></tr>
+<tr><td>all</td><td>ISR (&gt;= min ISR)</td><td>Very low</td><td>Higher</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting acks=all but leaving min.insync.replicas at 1.</li>
+  <li>Setting min.insync.replicas equal to RF, so any single broker outage stops writes.</li>
+  <li>Enabling unclean leader election on critical topics.</li>
+  <li>Treating idempotence as end-to-end exactly-once.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;acks controls when the producer considers a write done: zero means no wait, one means the leader has it, and all means every in-sync replica has it. The replication factor is how many copies exist, and min.insync.replicas is the floor for acks=all; if the ISR drops below it the producer gets an error rather than silently writing a single copy. I typically run replication factor three, min ISR two and acks all, which survives one broker failure, and keep the idempotent producer on so retries do not create duplicates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Two of three replicas down with min ISR 2?</strong> acks=all producers get NotEnoughReplicas errors; consumers can still read.</li>
+  <li><strong>Does acks=all mean all replicas?</strong> No, all in-sync replicas, which is why min ISR matters.</li>
+  <li><strong>What is the high watermark?</strong> The offset up to which data is replicated to the ISR and visible to consumers.</li>
+</ul>
+</article>
+</body>
+</html>

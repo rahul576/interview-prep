@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-024 · How do you authenticate Terraform in CI to AWS or Azure without static credentials?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-024" data-topic="Terraform">
+<h1>How do you authenticate Terraform in CI to AWS or Azure without static credentials?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>OIDC federation</strong>: the CI platform issues a <strong>signed token per job</strong>, AWS <strong>assumes an IAM role</strong> or Azure uses <strong>workload identity federation</strong>, giving <strong>short-lived credentials</strong>; restrict the <strong>trust policy to repo, branch or environment</strong>, use <strong>separate plan and apply roles</strong>, or HCP Terraform <strong>dynamic provider credentials</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Long-lived secrets in CI, such as AWS access keys or Azure service principal client secrets, are a top cause of cloud breaches: they leak through logs, forks, compromised runners or old variables, and they rarely get rotated. <strong>OpenID Connect (OIDC) federation</strong> removes them.</p>
+<p>GitHub Actions, GitLab CI, Azure DevOps, Bitbucket and others act as <strong>identity providers</strong>. For each job they mint a short-lived, signed <strong>JWT</strong> containing claims about the job: repository, branch or ref, environment, workflow, pipeline ID. On <strong>AWS</strong>, you register the CI issuer as an <strong>IAM OIDC identity provider</strong> and create a <strong>role</strong> whose trust policy allows <code>sts:AssumeRoleWithWebIdentity</code> when claims match. The job exchanges its token for temporary credentials valid for about an hour. On <strong>Azure</strong>, you add a <strong>federated identity credential</strong> to an app registration or <strong>user-assigned managed identity</strong> with the issuer and subject; the azurerm provider uses <code>use_oidc = true</code> (or <code>ARM_USE_OIDC</code>). On <strong>GCP</strong>, the equivalent is Workload Identity Federation.</p>
+<p>The security lives in the <strong>conditions</strong>. The <code>sub</code> claim should be narrow: <code>repo:acme/infra:environment:production</code> rather than <code>repo:acme/*</code>, and always check <code>aud</code>. Use <strong>separate roles</strong>: a <strong>read-only plan role</strong> that pull request jobs can assume (still careful, since PRs can run modified code), and a <strong>privileged apply role</strong> that only the protected <code>main</code> branch or a protected environment with required reviewers can assume. Scope permissions per account and environment.</p>
+<p><strong>HCP Terraform dynamic provider credentials</strong> do the same for workspaces: HCP Terraform is the OIDC issuer and tokens carry organisation, project, workspace and run phase claims, so plan and apply can map to different roles.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the OIDC trust (IAM OIDC provider or federated credential).</li>
+  <li>Create plan and apply roles with narrow trust conditions.</li>
+  <li>CI job requests an ID token (<code>id-token: write</code> in GitHub Actions).</li>
+  <li>Provider or action exchanges it for temporary cloud credentials.</li>
+  <li>Terraform runs; credentials expire automatically.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Effect&quot;: &quot;Allow&quot;,
+  &quot;Principal&quot;: { &quot;Federated&quot;: &quot;arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com&quot; },
+  &quot;Action&quot;: &quot;sts:AssumeRoleWithWebIdentity&quot;,
+  &quot;Condition&quot;: {
+    &quot;StringEquals&quot;: {
+      &quot;token.actions.githubusercontent.com:aud&quot;: &quot;sts.amazonaws.com&quot;,
+      &quot;token.actions.githubusercontent.com:sub&quot;: &quot;repo:acme/infra:environment:production&quot;
+    }
+  }
+}</code></pre>
+<pre><code class="language-yaml">permissions: { id-token: write, contents: read }
+steps:
+  - uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: arn:aws:iam::111122223333:role/tf-apply-prod
+      aws-region: eu-west-1</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Wildcard <code>sub</code> conditions allowing any repo or branch.</li>
+  <li>One admin role for both plan and apply.</li>
+  <li>Letting PRs from forks assume roles.</li>
+  <li>Keeping old static keys &quot;as backup&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Instead of storing access keys or a client secret in CI, I use OIDC federation. GitHub Actions, GitLab or Azure Pipelines issue a signed token per job; AWS trusts that issuer and lets the job assume a role, and Azure uses a federated credential on a managed identity or app registration. Credentials are short-lived, so nothing permanent can leak. The trust policy is narrow: only a specific repository and the main branch or a protected environment can assume the production role. I use a read-only role for plans on pull requests and a privileged apply role only after approval. HCP Terraform offers the same through dynamic provider credentials.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which claims in the AWS trust policy?</strong> <code>aud</code> = <code>sts.amazonaws.com</code> and a specific <code>sub</code> such as repo plus environment.</li>
+  <li><strong>Is a read-only plan role safe?</strong> Mostly, but it can read state and data, so limit scope and avoid forks.</li>
+  <li><strong>How long do credentials last?</strong> Typically one hour, configurable per role session.</li>
+</ul>
+</article>
+</body>
+</html>

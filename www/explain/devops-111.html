@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-111 · When do you use a StatefulSet, a DaemonSet, a Job or a CronJob?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-111" data-topic="Kubernetes">
+<h1>When do you use a StatefulSet, a DaemonSet, a Job or a CronJob?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>StatefulSet</strong> for stateful apps needing <strong>stable identity, ordered rollout and a persistent volume per pod</strong>; <strong>DaemonSet</strong> for <strong>one pod per (selected) node</strong> such as agents; <strong>Job</strong> for <strong>run-to-completion</strong> tasks with retries; <strong>CronJob</strong> to create Jobs <strong>on a schedule</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Deployment treats pods as interchangeable cattle. Other workloads need different guarantees, and Kubernetes has a controller for each.</p>
+<p><strong>StatefulSet.</strong> Pods get <strong>stable, ordinal names</strong> (<code>kafka-0</code>, <code>kafka-1</code>), stable DNS through a <strong>headless Service</strong> (<code>kafka-0.kafka.data.svc</code>), and <strong>their own PersistentVolumeClaim</strong> from <code>volumeClaimTemplates</code> that follows the pod when it is rescheduled. By default pods start and stop <strong>in order</strong> (<code>podManagementPolicy: OrderedReady</code>), and rolling updates proceed from the highest ordinal down, with <code>partition</code> allowing staged rollouts. Used for databases, Kafka, ZooKeeper, Elasticsearch and anything with replication roles. For production databases, an <strong>operator</strong> (CloudNativePG, Strimzi) usually manages the StatefulSet plus failover and backups.</p>
+<p><strong>DaemonSet.</strong> Ensures one pod on every node, or every node matching a <code>nodeSelector</code>/affinity, and automatically adds pods to new nodes. Used for log collectors (Fluent Bit), monitoring agents (node-exporter), CNI and CSI node plugins, security agents. They usually need tolerations to run on tainted nodes too.</p>
+<p><strong>Job.</strong> Runs pods until a number of <strong>successful completions</strong>, with <code>backoffLimit</code> for retries, <code>parallelism</code> for concurrent pods, <code>activeDeadlineSeconds</code> as a timeout and <code>ttlSecondsAfterFinished</code> for cleanup. Indexed Jobs give each pod a completion index for sharded work. Used for migrations, batch processing and one-off tasks.</p>
+<p><strong>CronJob.</strong> Creates Jobs on a cron <code>schedule</code>, with a <code>timeZone</code>, <code>concurrencyPolicy</code> (Allow, Forbid, Replace), <code>startingDeadlineSeconds</code> for missed runs and history limits. Used for backups, reports and cleanups. Jobs must be <strong>idempotent</strong>, because a run can occasionally happen twice or be skipped.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>StatefulSet creates <code>db-0</code>, waits for ready, then <code>db-1</code>, each with PVC <code>data-db-N</code>.</li>
+  <li>DaemonSet controller places one pod per eligible node, including new nodes.</li>
+  <li>Job controller creates pods until completions succeed or <code>backoffLimit</code> is hit.</li>
+  <li>CronJob controller creates a Job at each schedule time per its concurrency policy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: CronJob
+metadata: { name: nightly-backup }
+spec:
+  schedule: &quot;0 2 * * *&quot;
+  timeZone: &quot;Europe/London&quot;
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: ghcr.io/acme/pg-backup:2.3</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running a database as a Deployment with a shared volume.</li>
+  <li>Non-idempotent CronJobs with <code>concurrencyPolicy: Allow</code>.</li>
+  <li>DaemonSets without resource requests, starving nodes.</li>
+  <li>Jobs without TTL, leaving thousands of finished pods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A StatefulSet is for stateful apps like databases or Kafka: each pod gets a stable name and DNS entry, ordered startup and its own persistent volume claim that follows it. A DaemonSet runs one pod per node, or per selected node, for agents such as log collectors, monitoring exporters or CNI plugins, and adds pods to new nodes automatically. A Job runs pods to completion with retries, for things like a database migration. A CronJob creates Jobs on a schedule, like a nightly backup, with settings for concurrency, missed runs and history, and those jobs should be idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to a StatefulSet's volumes when you scale down?</strong> PVCs are kept by default so data survives scale-up again; <code>persistentVolumeClaimRetentionPolicy</code> can delete them.</li>
+  <li><strong>Why use an operator instead of a plain StatefulSet for databases?</strong> Failover, backups and upgrades need domain logic.</li>
+  <li><strong>Can a DaemonSet run on control-plane nodes?</strong> Yes, with tolerations for their taints.</li>
+</ul>
+</article>
+</body>
+</html>

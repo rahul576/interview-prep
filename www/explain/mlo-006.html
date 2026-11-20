@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-006 · What is the smallest set of things you must pin to make a training run reproducible?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-006" data-topic="MLOps">
+<h1>What is the smallest set of things you must pin to make a training run reproducible?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Pin the <strong>code commit</strong>, an <strong>immutable data snapshot</strong>, the <strong>feature transformation code and config</strong>, <strong>exact dependencies including CUDA and the framework</strong> (ideally an image digest), <strong>hyperparameters and seeds</strong>, and the <strong>hardware class</strong>; even then <strong>GPU nondeterminism</strong> means aiming for <strong>statistically equivalent</strong> results.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Code</strong>: the Git commit of the training code and of any <strong>feature pipeline</strong> code, with no uncommitted changes. A dirty working tree is a common reason runs cannot be reproduced.</p>
+<p><strong>Data</strong>: an <strong>immutable snapshot</strong>, not a live table that keeps changing. Use a Delta or Iceberg table version, a DVC hash, a dated Parquet export or a dataset version in your platform, and record the exact query, filters and date range. The <strong>train/validation/test split</strong> must be reproducible too: store the split or its seed and logic.</p>
+<p><strong>Features</strong>: the transformation code and configuration (window sizes, encodings, vocabularies, scaling parameters). Features are often computed by a separate pipeline, so pinning only the training script is not enough.</p>
+<p><strong>Environment</strong>: exact versions of Python packages (a lock file), the <strong>ML framework</strong> (PyTorch, TensorFlow, XGBoost), <strong>CUDA and cuDNN</strong> and drivers. The most reliable way is to run training in a <strong>container referenced by image digest</strong>, not a tag.</p>
+<p><strong>Configuration and randomness</strong>: hyperparameters and <strong>random seeds</strong> for every library (Python, NumPy, the framework, data loader workers).</p>
+<p><strong>Hardware</strong>: where numerics matter, the <strong>GPU type and count</strong>. Different GPUs, numbers of workers or batch partitioning change floating-point summation order.</p>
+<p>Even with all this, <strong>GPU training is often not bit-for-bit reproducible</strong>: some kernels use non-deterministic atomic operations, and distributed training adds ordering differences. Frameworks offer deterministic modes (in PyTorch, <code>torch.use_deterministic_algorithms(True)</code> plus cuDNN settings), but they can be <strong>slower</strong> and some operations are unsupported. The practical goal is <strong>statistically equivalent</strong> results within a tolerance, which suffices for debugging and most audits.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Commit all code; record the SHA.</li>
+  <li>Snapshot data and record its version and split.</li>
+  <li>Build a container image; record its digest.</li>
+  <li>Log hyperparameters and set seeds everywhere.</li>
+  <li>Record hardware type and count.</li>
+  <li>Re-run and compare metrics within tolerance.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import os, random, numpy as np, torch
+SEED = 42
+random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+os.environ[&quot;CUBLAS_WORKSPACE_CONFIG&quot;] = &quot;:4096:8&quot;
+torch.use_deterministic_algorithms(True)     # slower; only when needed
+torch.backends.cudnn.benchmark = False</code></pre>
+<pre><code class="language-yaml">run_manifest:
+  code_commit: 9f2c41e
+  data: s3://ml-data/churn/snapshot=2026-11-01 (delta version 412)
+  image: registry.example.com/train@sha256:5b1e...
+  params: { lr: 0.001, epochs: 30, batch: 256 }
+  seed: 42
+  hardware: 1x NVIDIA L4</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Training on a live table that changes underneath.</li>
+  <li>Pinning Python packages but not CUDA or drivers.</li>
+  <li>Using image tags like <code>latest</code> instead of digests.</li>
+  <li>Promising bit-for-bit reproducibility on GPUs without deterministic settings.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I pin the code commit of the training and feature code, an immutable data snapshot rather than a changing table, and the feature transformation code and configuration. Dependencies must be exact, including the framework, CUDA and cuDNN, ideally by using the same container image digest. Hyperparameters and random seeds are logged and fixed, and where numerics matter, the GPU type too. Even then, GPU training is often not bit-for-bit reproducible because of nondeterministic kernels and parallelism, and deterministic modes are slower, so in practice I aim for statistically equivalent results within tolerance.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is bit-for-bit reproducibility worth its cost?</strong> In regulated audits, debugging subtle regressions or research comparisons where tiny differences matter.</li>
+  <li><strong>How do you prove equivalence?</strong> Re-run several seeds and compare metric distributions within a tolerance.</li>
+  <li><strong>Why does batch size or worker count matter?</strong> It changes the order of floating-point operations and gradient updates.</li>
+</ul>
+</article>
+</body>
+</html>

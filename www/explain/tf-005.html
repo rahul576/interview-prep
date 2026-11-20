@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-005 · What are provider-defined functions in Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-005" data-topic="Terraform">
+<h1>What are provider-defined functions in Terraform?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Provider-defined functions</strong> (Terraform 1.8+) let providers ship their own functions, called as <strong><code>provider::&lt;name&gt;::&lt;function&gt;(...)</code></strong>, for things like <strong>parsing ARNs or Azure resource IDs</strong>, extending the language <strong>without changing Terraform core</strong> and <strong>versioned with the provider</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform's <strong>built-in functions</strong> (<code>lookup</code>, <code>cidrsubnet</code>, <code>jsonencode</code>, <code>regex</code> and so on) are general purpose and only change with Terraform releases. Real configurations often need <strong>domain-specific logic</strong>: extracting the account ID from an IAM role ARN, getting the resource group from an Azure resource ID, or normalising a value the same way the cloud API does. Before 1.8 people wrote fragile <code>regex</code> or <code>split</code> expressions that break when formats differ slightly, for example ARNs in China or GovCloud partitions, or nested Azure child resource IDs.</p>
+<p>With <strong>provider-defined functions</strong>, a provider implements functions in Go alongside its resources, and you call them with a namespaced syntax: <code>provider::aws::arn_parse(var.role_arn)</code> returns an object with partition, service, region, account ID and resource; <code>provider::azurerm::parse_resource_id(id)</code> returns subscription, resource group, provider namespace and name. Terraform itself ships a few through the built-in <code>terraform</code> provider, such as <code>provider::terraform::encode_tfvars</code>. Utility providers exist mostly to offer functions.</p>
+<p>Key properties: the provider must be declared in <strong><code>required_providers</code></strong> of the module that calls the function (the local name is used in the call); the function is <strong>versioned and pinned</strong> with the provider through version constraints and <code>.terraform.lock.hcl</code>, so behaviour is reproducible; and functions are <strong>pure</strong>: they compute locally during plan, without calling cloud APIs or needing credentials.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Add the provider to <code>required_providers</code> (version 1.8+ of Terraform required).</li>
+  <li>Check the provider documentation's &quot;Functions&quot; section.</li>
+  <li>Call <code>provider::&lt;local-name&gt;::&lt;function&gt;(args)</code> anywhere expressions are allowed.</li>
+  <li>Terraform starts the provider plugin and asks it to evaluate the function during plan.</li>
+  <li>The result is used like any other value.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_version = &quot;&gt;= 1.8&quot;
+  required_providers {
+    aws     = { source = &quot;hashicorp/aws&quot;, version = &quot;~&gt; 6.0&quot; }
+    azurerm = { source = &quot;hashicorp/azurerm&quot;, version = &quot;~&gt; 4.0&quot; }
+  }
+}
+
+locals {
+  role       = provider::aws::arn_parse(var.role_arn)
+  account_id = local.role.account_id
+
+  vnet = provider::azurerm::parse_resource_id(var.vnet_id)
+  rg   = local.vnet.resource_group_name
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling a function from a provider not declared in that module's <code>required_providers</code>.</li>
+  <li>Using a function name that exists only in a newer provider version than the one pinned.</li>
+  <li>Expecting functions to look up live data; they are pure.</li>
+  <li>Continuing to maintain complex regexes when a provider function exists.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Before Terraform 1.8 we only had built-in functions like lookup, cidrsubnet or jsonencode, so domain-specific logic ended up as fragile regexes. Provider-defined functions let providers ship their own functions, which I call as <code>provider::aws::arn_parse(var.role_arn)</code> or <code>provider::azurerm::parse_resource_id(id)</code>. Typical uses are parsing or building ARNs and Azure resource IDs, or encoding special formats. They extend the language without changing Terraform core, are versioned and locked with the provider, so behaviour is reproducible, and they're pure functions evaluated during plan without calling cloud APIs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is regex parsing fragile?</strong> Formats vary by partition, resource type and nesting; the provider knows the exact grammar.</li>
+  <li><strong>Can you write your own functions?</strong> Yes, by writing a provider with the plugin framework, not in HCL.</li>
+  <li><strong>Do functions work in modules?</strong> Yes, if the module declares the provider in <code>required_providers</code>.</li>
+</ul>
+</article>
+</body>
+</html>

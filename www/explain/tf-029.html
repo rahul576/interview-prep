@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-029 · A colleague ran terraform apply locally with a newer Terraform version, and now the pipeline fails reading the state. How do you fix it and prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-029" data-topic="Terraform">
+<h1>A colleague ran terraform apply locally with a newer Terraform version, and now the pipeline fails reading the state. How do you fix it and prevent it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>newer Terraform version may write state</strong> an older binary refuses to read; the usual fix is to <strong>upgrade the pipeline</strong> to the same or newer version (or <strong>restore the previous state version</strong> only if nothing else changed), and prevent it by <strong>pinning <code>required_version</code></strong>, using a <strong>version manager</strong>, and allowing <strong>only pipelines to apply</strong> to shared environments.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every state file records the <strong>Terraform version</strong> that last wrote it, along with provider schema versions for each resource. Terraform guarantees that newer versions can read older state, but <strong>not the other way round</strong>: an older binary may refuse a state written by a newer one, and providers may have upgraded a resource's schema version, which older providers cannot decode. The pipeline then fails during init or plan, even though nobody changed the code.</p>
+<p>The <strong>quickest and usually safest fix is to move forward</strong>: upgrade the pipeline's Terraform version (and providers if needed) to match or exceed the one that wrote the state, after reading the release notes and running a plan to confirm there are no unexpected changes. Going forward is safer than trying to go back.</p>
+<p>If upgrading is not acceptable, for example because the new version has a regression, you can <strong>restore the previous state version</strong> from backend versioning (S3 object versions, Azure blob versions). That is only safe if the local apply made <strong>no real changes</strong> or you can re-apply them, because the restored state would not know about resources created or modified in between, leading to duplicates or orphans.</p>
+<p>Prevention:</p>
+<ul>
+  <li><strong>Pin <code>required_version</code></strong> in configuration, e.g. <code>~&gt; 1.14.0</code>, so a mismatched binary refuses to run before touching state.</li>
+  <li>Use <strong>tfenv, mise or asdf</strong> with a <code>.terraform-version</code> / <code>.mise.toml</code> file in the repo, and the same version in CI images.</li>
+  <li>Commit <strong><code>.terraform.lock.hcl</code></strong> so provider versions match.</li>
+  <li>Remove <strong>local apply permissions</strong> for shared environments; humans plan locally with read-only roles, pipelines apply.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Local apply with a newer binary writes state with a newer version.</li>
+  <li>Pipeline with an older binary reads state and fails.</li>
+  <li>Decide: upgrade pipeline (preferred) or restore previous version.</li>
+  <li>Run a plan to verify no unexpected changes.</li>
+  <li>Add version pinning and permission changes to prevent recurrence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_version = &quot;~&gt; 1.14.0&quot;
+  required_providers {
+    azurerm = { source = &quot;hashicorp/azurerm&quot;, version = &quot;~&gt; 4.40&quot; }
+  }
+}</code></pre>
+<pre><code class="language-toml"># .mise.toml
+[tools]
+terraform = &quot;1.14.0&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Restoring an old state version after real changes were applied.</li>
+  <li><code>required_version = &quot;&gt;= 1.0&quot;</code>, which pins nothing.</li>
+  <li>Letting engineers apply to production from laptops.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform records the version that last wrote the state, and a newer version may write a format or provider schema an older binary refuses to read. The quickest fix is usually to upgrade the pipeline to the same or newer version after reading the release notes, because moving forward is safer than backwards. If that's not acceptable, I can restore the previous state version from backend versioning, but only if nothing changed in between. To prevent it, I pin <code>required_version</code> like <code>~&gt; 1.14.0</code> so mismatched binaries refuse to run, use tfenv or mise so everyone has the same version, commit the lock file, and remove local apply rights so only pipelines apply to shared environments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is restoring an old state dangerous?</strong> It forgets resources created or changed after it, causing duplicates or orphans.</li>
+  <li><strong>Does <code>required_version</code> protect state?</strong> Yes, Terraform checks it before reading or writing state.</li>
+  <li><strong>How do you roll out a Terraform upgrade?</strong> PR updates pin and CI image, plan dev first, then promote.</li>
+</ul>
+</article>
+</body>
+</html>

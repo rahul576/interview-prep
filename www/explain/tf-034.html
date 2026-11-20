@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-034 · Applies against Azure or AWS fail with throttling or rate-limit errors in a large configuration. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-034" data-topic="Terraform">
+<h1>Applies against Azure or AWS fail with throttling or rate-limit errors in a large configuration. What do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Large configurations exceed <strong>cloud API rate limits</strong> because of many parallel calls; short term, <strong>lower <code>-parallelism</code></strong> and tune <strong>provider retries/backoff</strong>; long term, <strong>split state</strong> to reduce refresh calls, avoid huge list data sources, and <strong>stagger pipelines and drift checks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every plan <strong>refreshes</strong> every resource in state, each needing one or more API reads, and data sources add more. A configuration with 1,500 resources may make several thousand API calls per plan. With the default <strong>10 parallel operations</strong>, multiplied by several pipelines running against the same account or subscription at the same time (scheduled drift checks often all start at 02:00), you can exceed rate limits. <strong>AWS</strong> throttles per API and account (for example EC2 <code>Describe*</code> calls or IAM), returning <code>ThrottlingException</code> or <code>RequestLimitExceeded</code>; <strong>Azure Resource Manager</strong> enforces read and write limits per subscription and principal, returning <strong>HTTP 429</strong> with <code>Retry-After</code>. Providers retry automatically, but under sustained throttling they eventually give up and the run fails, possibly mid-apply.</p>
+<p><strong>Short-term mitigations:</strong></p>
+<ul>
+  <li><strong>Lower <code>-parallelism</code></strong>, for example to 3-5, in the pipeline (<code>TF_CLI_ARGS_plan=&quot;-parallelism=4&quot;</code>). Runs get slower but steadier.</li>
+  <li><strong>Provider retry settings</strong>: the AWS provider supports <code>max_retries</code> and <code>retry_mode</code> (such as <code>adaptive</code>); AzureRM respects <code>Retry-After</code> and has built-in retries. More retries with backoff ride out short throttling bursts.</li>
+</ul>
+<p><strong>Long-term fixes</strong> reduce the number of calls:</p>
+<ul>
+  <li><strong>Split large states</strong> by layer, team or region, so each run refreshes only a few hundred resources. This also reduces blast radius and plan time.</li>
+  <li>Avoid <strong>data sources that enumerate huge collections</strong> (all subnets, all instances) on every plan; pass IDs as outputs or variables.</li>
+  <li>Use <strong><code>-refresh=false</code></strong> only in carefully controlled cases, such as a second plan immediately after a refresh, since it hides drift.</li>
+  <li><strong>Stagger schedules</strong> and use <strong>CI concurrency limits</strong> per account.</li>
+  <li>Ask for <strong>quota increases</strong> where the cloud allows it, and use separate accounts or subscriptions per environment to spread limits.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan triggers refresh calls for every resource, in parallel.</li>
+  <li>Cloud API returns throttling errors when limits are exceeded.</li>
+  <li>Provider retries with backoff; persistent throttling fails the run.</li>
+  <li>Lower parallelism and higher retries smooth the rate.</li>
+  <li>Smaller states and fewer data source calls reduce total calls.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">provider &quot;aws&quot; {
+  region      = &quot;eu-west-1&quot;
+  max_retries = 15
+  retry_mode  = &quot;adaptive&quot;
+}</code></pre>
+<pre><code class="language-yaml"># GitHub Actions: one Terraform run per account at a time, lower parallelism
+concurrency: { group: tf-prod-account, cancel-in-progress: false }
+env:
+  TF_CLI_ARGS_plan: &quot;-parallelism=4&quot;
+  TF_CLI_ARGS_apply: &quot;-parallelism=4&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Increasing parallelism to make slow plans faster.</li>
+  <li>Using <code>-refresh=false</code> permanently.</li>
+  <li>All drift-detection jobs scheduled at the same minute.</li>
+  <li>One giant state for an entire organisation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cloud APIs limit request rates per account or subscription, and a big configuration refreshing hundreds of resources with ten parallel operations, times several pipelines at once, hits those limits and gets 429 or throttling errors. Short term, I lower -parallelism to three to five and configure provider retries, like max_retries and adaptive retry mode in the AWS provider, so calls back off. Long term, I reduce the number of calls: split the large state so each run refreshes less, avoid data sources that list huge collections, and use -refresh=false only in controlled cases. I also stagger scheduled drift runs and limit concurrent pipelines per account.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is -refresh=false risky permanently?</strong> Plans are based on stale state, hiding drift and possibly making wrong changes.</li>
+  <li><strong>How do you find the noisiest calls?</strong> <code>TF_LOG=DEBUG</code> logs or CloudTrail/Activity Log by caller.</li>
+  <li><strong>Does splitting state have downsides?</strong> More cross-state references and orchestration, so split along clear boundaries.</li>
+</ul>
+</article>
+</body>
+</html>

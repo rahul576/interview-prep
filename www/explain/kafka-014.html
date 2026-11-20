@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-014 · How do you secure a Kafka cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-014" data-topic="Kafka">
+<h1>How do you secure a Kafka cluster?</h1>
+<p class="ex-meta">Kafka · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Secure Kafka with <strong>TLS encryption in transit</strong>, <strong>authentication via SASL (SCRAM, OAUTHBEARER) or mTLS</strong>, <strong>least-privilege ACLs</strong> per principal, <strong>private networking and quotas</strong>, plus <strong>audit logging and credential rotation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Out of the box, Kafka listeners are <strong>PLAINTEXT</strong>: anyone who can reach port 9092 can read and write every topic. Security is layered.</p>
+<p><strong>Encryption:</strong> configure <strong>SSL/TLS listeners</strong> for client-to-broker traffic and for <strong>inter-broker and controller</strong> traffic, using certificates from an internal CA. Encryption at rest is handled by disk or cloud volume encryption.</p>
+<p><strong>Authentication:</strong> <strong>SASL_SSL</strong> listeners with <strong>SCRAM-SHA-512</strong> (username and salted password stored in cluster metadata), <strong>OAUTHBEARER</strong> with tokens from an identity provider such as Keycloak, Okta or Entra ID, or <strong>Kerberos (GSSAPI)</strong> in enterprises. Alternatively <strong>mutual TLS</strong>, where the client certificate's distinguished name becomes the principal. Avoid SASL/PLAIN unless backed by an external callback and TLS.</p>
+<p><strong>Authorization:</strong> enable an authorizer (<code>StandardAuthorizer</code> in KRaft) with <code>allow.everyone.if.no.acl.found=false</code>. Grant each <strong>service principal</strong> only what it needs: <code>Write</code> and <code>Describe</code> on its output topics, <code>Read</code> on its input topics plus <code>Read</code> on its <strong>consumer group</strong>, <code>IdempotentWrite</code> or transactional ID permissions where needed. Prefixed ACLs (<code>orders.</code>) simplify team ownership.</p>
+<p><strong>Network and resilience:</strong> brokers live in private subnets, reachable through private endpoints or VPC peering, never on the public internet. <strong>Quotas</strong> (produce and fetch bytes per second, request rate) stop one client from starving others.</p>
+<p><strong>Operations:</strong> rotate SCRAM credentials and certificates automatically, keep secrets in a vault, enable authorizer audit logs, and manage ACLs as code (Terraform, Strimzi <code>KafkaUser</code>, Confluent RBAC). Managed services add integrations such as <strong>MSK IAM authentication</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client connects to a SASL_SSL listener over TLS.</li>
+  <li>Broker authenticates the client and derives a principal.</li>
+  <li>Each request is checked against ACLs for that principal.</li>
+  <li>Quotas throttle the principal if it exceeds limits.</li>
+  <li>Decisions are logged for audit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties">listeners=SASL_SSL://:9094,CONTROLLER://:9093
+sasl.enabled.mechanisms=SCRAM-SHA-512
+authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer
+allow.everyone.if.no.acl.found=false</code></pre>
+<pre><code class="language-bash">kafka-acls.sh --bootstrap-server b1:9094 --command-config admin.properties \
+  --add --allow-principal User:analytics-svc \
+  --operation Read --topic orders --group analytics-svc</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving a PLAINTEXT listener open &quot;for internal use&quot;.</li>
+  <li>One shared superuser credential for all services.</li>
+  <li>Forgetting consumer group ACLs, then granting wildcard access to fix errors.</li>
+  <li>Certificates that expire with no rotation alerting.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I encrypt everything in transit with TLS, including broker-to-broker traffic. Clients authenticate with SASL, either SCRAM or OAUTHBEARER against our identity provider, or with mutual TLS. Authorization uses ACLs with deny by default, so each service principal can only read or write its own topics and consumer groups. Brokers sit in private networks, quotas protect against noisy clients, credentials and certificates rotate automatically, and ACLs are managed as code and audited. On MSK I would use IAM authentication.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Give a new team read access to one topic?</strong> Create a principal, add Read on the topic and its group, via a reviewed ACL change.</li>
+  <li><strong>SCRAM vs mTLS?</strong> SCRAM is easier to rotate; mTLS avoids passwords but needs PKI.</li>
+  <li><strong>Encrypt data at rest?</strong> Volume encryption, or client-side encryption for sensitive fields.</li>
+</ul>
+</article>
+</body>
+</html>

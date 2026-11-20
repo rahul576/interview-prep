@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-033 · Creating an AKS cluster or RDS instance often fails in apply with a timeout, although it finishes later in the cloud. How do you handle it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-033" data-topic="Terraform">
+<h1>Creating an AKS cluster or RDS instance often fails in apply with a timeout, although it finishes later in the cloud. How do you handle it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Big resources can take <strong>longer than the provider's default timeout</strong>; Terraform errors while the cloud <strong>keeps creating</strong> the object, which then ends up <strong>tainted</strong> or <strong>missing from state</strong>; set a <strong><code>timeouts</code> block</strong>, recover by <strong>untainting or importing</strong>, and make the <strong>CI job timeout longer</strong> than Terraform's.</p>
+
+<h2>Detailed explanation</h2>
+<p>Providers wrap long-running cloud operations in <strong>polling loops with timeouts</strong>. AKS clusters, RDS instances, Application Gateways or VPN gateways can take 20 to 60 minutes or more. If the operation exceeds the provider's default timeout for that resource, Terraform stops waiting and reports an error, but the <strong>cloud API keeps working</strong> and the resource usually completes a few minutes later.</p>
+<p>What happens to state depends on the provider and the point of failure:</p>
+<ul>
+  <li>If the provider already received the object ID, it saves the resource in state but marks it <strong>tainted</strong>, because creation did not complete successfully. The next plan proposes to <strong>replace</strong> it, destroying a perfectly healthy cluster.</li>
+  <li>If the ID was not saved, the resource is <strong>absent from state</strong>. The next apply tries to create it again and fails with &quot;already exists&quot;.</li>
+</ul>
+<p><strong>Prevention:</strong> many resources support a <strong><code>timeouts</code> block</strong> with <code>create</code>, <code>update</code>, <code>delete</code> (and sometimes <code>read</code>) values, for example <code>create = &quot;90m&quot;</code>. Check the resource documentation for supported operations and defaults.</p>
+<p><strong>Recovery:</strong> wait until the cloud operation finishes and verify the resource is healthy in the console or CLI. If it is in state and tainted, run <strong><code>terraform untaint &lt;address&gt;</code></strong>. If it is missing, add an <strong>import block</strong> (or run <code>terraform import</code>) with its ID. Then run a plan; it should show no changes or only minor ones.</p>
+<p>Finally, the <strong>pipeline job timeout</strong> must be longer than the sum of Terraform timeouts. If CI kills Terraform mid-apply, the state may not be written, the lock stays behind, and resources are left in an unknown state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Provider starts a long operation and polls.</li>
+  <li>Poll exceeds timeout; Terraform reports an error.</li>
+  <li>Cloud finishes; Terraform state is tainted or missing.</li>
+  <li>Verify health, then untaint or import.</li>
+  <li>Set <code>timeouts</code> and adequate CI timeouts for future runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_kubernetes_cluster&quot; &quot;main&quot; {
+  name                = &quot;aks-prod-weu&quot;
+  location            = &quot;westeurope&quot;
+  resource_group_name = azurerm_resource_group.aks.name
+  dns_prefix          = &quot;aksprod&quot;
+  default_node_pool {
+    name       = &quot;system&quot;
+    vm_size    = &quot;Standard_D4s_v5&quot;
+    node_count = 3
+  }
+  identity { type = &quot;SystemAssigned&quot; }
+
+  timeouts {
+    create = &quot;90m&quot;
+    update = &quot;120m&quot;
+    delete = &quot;90m&quot;
+  }
+}</code></pre>
+<pre><code class="language-bash">terraform untaint azurerm_kubernetes_cluster.main
+# or, if missing from state, add an import block with the cluster's resource ID</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Approving a plan that replaces a healthy but tainted cluster.</li>
+  <li>Re-running apply immediately while the cloud is still creating the resource.</li>
+  <li>CI timeouts shorter than Terraform timeouts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Large resources like AKS clusters or RDS instances can take longer than the provider's default timeout, and when it expires Terraform reports an error although the cloud keeps creating the resource. Depending on the provider, the resource is saved as tainted, so the next apply wants to replace it, or isn't saved at all, so the next apply fails because it already exists. I set a timeouts block, for example <code>create = &quot;90m&quot;</code>. To recover I wait for the resource to finish, then untaint it if it's healthy, or import it into state, and re-run the plan. I also make sure the CI job timeout is longer than the Terraform timeouts so the pipeline doesn't kill Terraform midway.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of CI killing Terraform while it holds the lock?</strong> State not written, stale lock, and resources unknown to Terraform.</li>
+  <li><strong>What does taint mean?</strong> The object is marked for replacement on the next apply.</li>
+  <li><strong>Modern alternative to taint?</strong> <code>terraform apply -replace=&lt;address&gt;</code> for deliberate replacement.</li>
+</ul>
+</article>
+</body>
+</html>

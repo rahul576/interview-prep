@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-001 · How does LLM inference work, and why is the decode phase usually memory-bound?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-001" data-topic="LLMOps &amp; RAG">
+<h1>How does LLM inference work, and why is the decode phase usually memory-bound?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>LLM inference has a <strong>compute-bound prefill</strong> that processes the whole prompt in parallel and sets <strong>time to first token</strong>, followed by a <strong>memory-bound decode</strong> that generates <strong>one token per forward pass</strong>, each pass reading <strong>all weights and the KV cache</strong> from GPU memory.</p>
+
+<h2>Detailed explanation</h2>
+<p>Serving a request happens in two phases with very different hardware profiles.</p>
+<p><strong>Prefill.</strong> All prompt tokens are known, so the model processes them <strong>in parallel</strong> as large matrix-matrix multiplications. For each token and layer it computes attention <strong>keys and values</strong> and stores them in the <strong>KV cache</strong>. This keeps the GPU's tensor cores busy: prefill is <strong>compute-bound</strong>, and its duration (plus queueing) is the <strong>time to first token (TTFT)</strong>.</p>
+<p><strong>Decode.</strong> Output is <strong>autoregressive</strong>: token n+1 depends on token n, so the model runs one forward pass per new token. Each pass processes a single token per sequence, which is a matrix-vector multiplication. Yet it must still stream <strong>every weight</strong> (around 140 GB for a 70B model in BF16) plus that sequence's KV cache from HBM into the compute units. The <strong>arithmetic intensity</strong>, the FLOPs per byte loaded, is tiny, so the GPU waits on <strong>memory bandwidth</strong> rather than compute. A rough upper bound for a single stream is bandwidth divided by model size: an H100 with about 3.35 TB/s serving a 14 GB 7B model cannot exceed roughly 240 tokens per second for one sequence, whatever its TFLOPS.</p>
+<p>That is why a 500-token answer needs 500 sequential passes, and why serving one request at a time wastes most of the GPU. <strong>Batching</strong> fixes it: the weights are read once per step and reused for every sequence in the batch, turning matrix-vector into matrix-matrix work. Throughput rises almost linearly until compute or KV cache memory becomes the limit, which is why engines use <strong>continuous batching</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Tokenise the prompt.</li>
+  <li>Prefill: run all prompt tokens in parallel, fill the KV cache, emit the first token.</li>
+  <li>Decode step: feed the last token, attend to cached keys and values, sample the next token.</li>
+  <li>Append its keys and values to the cache.</li>
+  <li>Repeat until a stop token or max tokens; stream tokens as they are produced.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Model: 8B params, BF16 → ~16 GB weights; GPU bandwidth ~3.3 TB/s
+Single-stream decode ceiling ≈ 3300 / 16 ≈ 200 tokens/s (real: lower)
+Batch of 32: weights read once per step → ~32x tokens per step, close to the same step time
+Prompt 4,000 tokens → prefill ~ tens to hundreds of ms (compute-bound) → TTFT</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Prefill</th><th>Decode</th></tr></thead>
+<tbody>
+<tr><td>Work</td><td>All prompt tokens at once</td><td>One token per step</td></tr>
+<tr><td>Bottleneck</td><td>Compute (FLOPs)</td><td>Memory bandwidth</td></tr>
+<tr><td>Drives</td><td>Time to first token</td><td>Inter-token latency</td></tr>
+<tr><td>Helped by</td><td>Prefix caching, chunked prefill</td><td>Batching, quantisation, speculation</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming more TFLOPS always means faster generation.</li>
+  <li>Measuring only total latency and ignoring TTFT versus per-token speed.</li>
+  <li>Serving with batch size 1 and concluding GPUs are too expensive.</li>
+  <li>Forgetting that long prompts make TTFT grow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Inference has two phases. Prefill processes the whole prompt in parallel, computing keys and values for every token; it is compute-heavy, efficient on GPUs, and it determines time to first token. Then decode generates one token at a time, and each step needs a full forward pass that reads all the weights and the KV cache from GPU memory but does very little maths per byte. So decode is limited by memory bandwidth, not compute. That is why serving engines batch many requests together: one read of the weights then produces a token for every sequence in the batch.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does batching change cost per token?</strong> Weight reads are shared, so cost per token falls sharply until compute or memory limits.</li>
+  <li><strong>What is chunked prefill?</strong> Splitting long prefills into pieces interleaved with decode steps to avoid stalls.</li>
+  <li><strong>Why does quantisation speed up decode?</strong> Fewer bytes per weight means less memory traffic per step.</li>
+</ul>
+</article>
+</body>
+</html>

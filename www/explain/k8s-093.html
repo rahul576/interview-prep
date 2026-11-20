@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-093 · How does leader election work for controllers and applications running with multiple replicas on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-093" data-topic="Kubernetes">
+<h1>How does leader election work for controllers and applications running with multiple replicas on Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Replicas compete for a <strong>Lease</strong> object in <code>coordination.k8s.io</code>; the holder is the <strong>leader</strong> and keeps <strong>renewing</strong> it, others watch and <strong>take over when it expires</strong>, giving active-passive operation, with <strong>fencing or idempotency</strong> needed for the brief overlap a partition can cause.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many controllers must not run their reconcile loop twice at the same time: two schedulers would bind the same pod differently, and two operators might create duplicate cloud resources. Kubernetes solves this with <strong>leader election over Lease objects</strong>. The Lease records <code>holderIdentity</code>, <code>leaseDurationSeconds</code>, <code>acquireTime</code> and <code>renewTime</code>, and updates rely on the API server's <strong>optimistic concurrency</strong> (resourceVersion), so only one replica can win a given write.</p>
+<p>In client-go the common defaults are a <strong>lease duration of 15 seconds</strong>, a <strong>renew deadline of 10 seconds</strong> and a <strong>retry period of 2 seconds</strong>. The leader renews regularly; if it cannot renew before the deadline, it must stop doing leader work. Followers keep trying to acquire; once <code>renewTime + leaseDuration</code> has passed, one of them updates the Lease and becomes leader. kube-controller-manager, kube-scheduler and nearly every operator built with controller-runtime use this. Your own applications can use the same libraries or a sidecar.</p>
+<p>The caveat is that this is <strong>time-based, not a perfect lock</strong>. A leader stuck in a long GC pause or partitioned from the API server may keep acting for a moment after another replica has taken over. Side effects that must never happen twice need <strong>fencing tokens</strong> (for example, checking a lease generation on the target system) or <strong>idempotent operations</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each replica starts and tries to create or update the named Lease.</li>
+  <li>The successful writer becomes leader and starts its work loops.</li>
+  <li>The leader renews <code>renewTime</code> every few seconds.</li>
+  <li>Followers watch the Lease and retry periodically.</li>
+  <li>If renewals stop, the lease expires and a follower acquires it.</li>
+  <li>The old leader, on failing to renew, stops work or exits.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl -n kube-system get lease kube-scheduler -o yaml
+# spec:
+#   holderIdentity: master-2_8f3c...
+#   leaseDurationSeconds: 15
+#   renewTime: &quot;2026-11-21T09:14:03.120000Z&quot;</code></pre>
+<pre><code class="language-go">mgr, _ := ctrl.NewManager(cfg, ctrl.Options{
+    LeaderElection:   true,
+    LeaderElectionID: &quot;orders-operator.example.com&quot;,
+})</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming leader election is a strict mutex with zero overlap.</li>
+  <li>Running several replicas of a controller without enabling leader election.</li>
+  <li>Setting very short lease durations, causing flapping under API server latency.</li>
+  <li>Doing heavy work in a way that cannot stop quickly when leadership is lost.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kubernetes uses Lease objects in the coordination API. Each replica tries to acquire a named Lease; the winner records its identity and renews it every couple of seconds, with a lease duration of around fifteen seconds. The others watch, and if renewals stop because the leader crashed or lost connectivity, the lease expires and another replica takes over. The scheduler, controller manager and operators all work this way, active-passive, to avoid duplicate work. The caveat is that it is time-based, so during a partition or a long pause the old leader may briefly still act, so critical side effects need fencing tokens or idempotency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a leader-elected singleton still a scaling and availability concern?</strong> Only one replica does the work, so throughput is capped and failover leaves a gap of up to the lease duration.</li>
+  <li><strong>How do you scale beyond one leader?</strong> Shard work across leases or use partitioned consumers.</li>
+  <li><strong>What happens if the API server is down?</strong> The leader cannot renew and steps down; nothing new is reconciled until it returns.</li>
+</ul>
+</article>
+</body>
+</html>

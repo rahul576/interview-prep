@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-017 · How do you autoscale on custom or external metrics with the HPA, and how do you prevent flapping?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-017" data-topic="Kubernetes">
+<h1>How do you autoscale on custom or external metrics with the HPA, and how do you prevent flapping?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>autoscaling/v2 HPA</strong> scales on <strong>Resource</strong>, <strong>Pods</strong>, <strong>Object</strong> and <strong>External</strong> metrics; custom and external metrics come through an adapter such as <strong>Prometheus Adapter</strong> or <strong>KEDA</strong>. Scale on a <strong>business signal</strong> (RPS per pod, queue depth), and prevent flapping with the <strong>behavior</strong> field: <strong>stabilization windows</strong> and <strong>rate policies</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>CPU utilisation is a poor signal for many services: an IO-bound API can be overloaded with low CPU, and a queue consumer's backlog says far more than its CPU. The HPA's v2 API supports four metric types:</p>
+<ul>
+  <li><strong>Resource:</strong> CPU or memory per pod, as <code>Utilization</code> (percent of <strong>requests</strong>, so requests must be set) or <code>AverageValue</code>. <code>ContainerResource</code> targets one container, ignoring sidecars.</li>
+  <li><strong>Pods:</strong> a per-pod custom metric averaged across pods, such as <code>http_requests_per_second</code>.</li>
+  <li><strong>Object:</strong> a metric describing another object, such as requests on an Ingress.</li>
+  <li><strong>External:</strong> a metric from outside the cluster, such as SQS queue length or Kafka lag.</li>
+</ul>
+<p>The HPA reads Resource metrics from <strong>metrics-server</strong> (<code>metrics.k8s.io</code>) and custom/external metrics from APIs implemented by an <strong>adapter</strong>: <strong>Prometheus Adapter</strong> maps PromQL to <code>custom.metrics.k8s.io</code>, cloud adapters expose provider metrics, and <strong>KEDA</strong> serves <code>external.metrics.k8s.io</code> and manages HPAs itself. With several metrics, the HPA computes a desired replica count for each and uses the <strong>highest</strong>.</p>
+<p>The basic formula is <code>desired = ceil(current × currentValue / targetValue)</code>, within a 10% tolerance. Noisy metrics cause <strong>flapping</strong>: scaling up and down repeatedly, churning pods and caches. The <code>behavior</code> field controls this:</p>
+<ul>
+  <li><strong>stabilizationWindowSeconds:</strong> for scale-down (default 300 s), the HPA uses the highest recommendation in the window, so brief dips don't remove pods; scale-up defaults to 0 s.</li>
+  <li><strong>policies:</strong> limits like &quot;add at most 100% or 4 pods per 60 s&quot; and &quot;remove at most 10% per minute&quot;, with <code>selectPolicy</code> Max, Min or Disabled.</li>
+</ul>
+<p>Fast scale-up and slow scale-down is the usual shape.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Adapter exposes the metric through the metrics API.</li>
+  <li>HPA controller polls every 15 seconds by default.</li>
+  <li>Computes desired replicas per metric; takes the maximum.</li>
+  <li>Applies stabilisation and policies.</li>
+  <li>Updates the target's scale subresource; the Deployment adjusts pods.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+  - type: Pods
+    pods:
+      metric: { name: http_requests_per_second }
+      target: { type: AverageValue, averageValue: &quot;100&quot; }
+  behavior:
+    scaleUp:
+      policies: [ { type: Percent, value: 100, periodSeconds: 60 } ]
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [ { type: Percent, value: 10, periodSeconds: 60 } ]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Utilization targets with no CPU requests set (metric shows unknown).</li>
+  <li>Keeping <code>replicas</code> in the Deployment manifest so CI fights the HPA.</li>
+  <li>Scaling on a metric that doesn't fall when pods are added.</li>
+  <li>No scale-down stabilisation for spiky traffic.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The autoscaling/v2 HPA supports resource metrics like CPU, pods metrics averaged per pod, object metrics from another resource, and external metrics such as queue length. Custom and external metrics come through an adapter like Prometheus Adapter or KEDA. For IO-bound services I scale on requests per second per pod or queue depth rather than CPU. To prevent flapping I use the behavior field: a scale-down stabilisation window of a few minutes, policies capping how fast pods are added or removed, and faster scale-up than scale-down. Utilization targets need requests on every container.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does an HPA show unknown?</strong> Missing metrics-server or adapter, wrong metric name, no requests, or pods not ready yet.</li>
+  <li><strong>Multiple metrics?</strong> The HPA takes the highest desired replica count.</li>
+  <li><strong>Can the HPA scale to zero?</strong> Not by default; KEDA handles zero.</li>
+</ul>
+</article>
+</body>
+</html>

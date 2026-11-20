@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-057 · How do Terraform and Ansible work together?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-057" data-topic="Infrastructure as Code">
+<h1>How do Terraform and Ansible work together?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Terraform provisions and tracks infrastructure</strong>, <strong>Ansible configures what runs on it</strong>; connect them through <strong>dynamic inventory or Terraform outputs</strong> in separate pipeline stages, avoid <strong>provisioners</strong>, or bake images with <strong>Packer + Ansible</strong> for immutable infrastructure.</p>
+
+<h2>Detailed explanation</h2>
+<p>The tools have different models. <strong>Terraform</strong> is declarative with a <strong>state file</strong>: it knows which VPCs, instances, databases and DNS records it created, computes a plan of differences and handles dependencies and deletion. <strong>Ansible</strong> is procedural-but-idempotent and stateless: it connects to hosts and makes packages, files, users and services match the playbook, and it is also good at operational tasks such as rolling restarts. Using Terraform for software configuration or Ansible for cloud lifecycle works poorly; together they cover the stack.</p>
+<p>The clean integration is a <strong>pipeline with separate stages</strong>. Terraform applies first and tags resources (<code>role=web</code>, <code>env=prod</code>). Ansible then discovers hosts through a <strong>dynamic inventory plugin</strong> (<code>amazon.aws.aws_ec2</code>, <code>azure.azcollection.azure_rm</code>) that groups instances by those tags, or reads <code>terraform output -json</code>. Red Hat also publishes a <code>cloud.terraform</code> collection whose inventory plugin can read Terraform state. Each stage can be retried on its own, and failures are easy to understand.</p>
+<p><strong>Provisioners</strong> (<code>local-exec</code> calling <code>ansible-playbook</code>) seem convenient but are discouraged: Terraform cannot track what Ansible did, a failed playbook taints the resource so the next apply recreates the server, and re-running configuration requires hacks with triggers.</p>
+<p>For <strong>immutable infrastructure</strong> the split moves earlier: <strong>Packer runs Ansible</strong> to bake a golden image, Terraform deploys the image to an auto scaling group, and nobody configures running production servers. Ansible may still handle day-2 tasks that do not fit images.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform creates network, instances and load balancer, tagging each instance.</li>
+  <li>Pipeline stores Terraform outputs (for example bastion address, DB endpoint).</li>
+  <li>Ansible dynamic inventory groups hosts by tags.</li>
+  <li>Ansible playbook configures hosts, using outputs as variables.</li>
+  <li>Alternatively, Packer + Ansible bake the image and Terraform only rolls it out.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># inventory/aws_ec2.yml
+plugin: amazon.aws.aws_ec2
+regions: [eu-west-1]
+filters:
+  tag:env: prod
+keyed_groups:
+  - key: tags.role
+    prefix: role</code></pre>
+<pre><code class="language-bash">terraform apply -auto-approve tfplan
+terraform output -json &gt; tf_outputs.json
+ansible-playbook -i inventory/aws_ec2.yml site.yml -e @tf_outputs.json</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling Ansible from <code>local-exec</code> and losing control of retries and failures.</li>
+  <li>Hard-coding IP addresses from Terraform into a static inventory.</li>
+  <li>Letting both tools manage the same thing (for example security groups).</li>
+  <li>Configuring long-lived servers in place when images would avoid drift.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use each for what it's good at. Terraform provisions the infrastructure and keeps state: network, instances, databases, DNS. Ansible configures the servers and handles operational tasks. In the pipeline, Terraform runs first and tags instances; Ansible then finds them with a dynamic inventory plugin and can read Terraform outputs as variables. I avoid calling Ansible from Terraform provisioners because failures taint resources and re-runs are messy. Where possible I go immutable: Packer runs Ansible to bake images, and Terraform only rolls those images out.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are Terraform provisioners a last resort?</strong> Their effects are not in state, they are not idempotent, and failures taint resources.</li>
+  <li><strong>Where do secrets come from?</strong> A vault or cloud secrets manager, read by Ansible at runtime, not Terraform outputs in plain text.</li>
+  <li><strong>What about cloud-init?</strong> Good for minimal bootstrap, such as registering with a config system, not full configuration.</li>
+</ul>
+</article>
+</body>
+</html>

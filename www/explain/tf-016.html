@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-016 · When is terraform plan -target acceptable, and why is it dangerous as a habit?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-016" data-topic="Terraform">
+<h1>When is terraform plan -target acceptable, and why is it dangerous as a habit?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>-target</code> restricts plan or apply to <strong>specific addresses and their dependencies</strong>; it is acceptable for <strong>exceptional recovery</strong> or a <strong>chicken-and-egg</strong> situation, but as a habit it leaves the configuration <strong>partially applied</strong>, <strong>hides other changes and drift</strong>, and signals that the state should be <strong>split</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform is designed around one idea: <strong>the plan reconciles the entire configuration with reality</strong>. <code>-target=aws_instance.web</code> breaks that model on purpose. Terraform includes the target and everything it depends on, ignores the rest, and prints a warning that the result may be incomplete and that <code>-target</code> is not for routine use.</p>
+<p>There are legitimate cases. <strong>Recovery</strong> after a failed or interrupted apply, where you need to fix one resource before the rest can plan. <strong>Provider bugs</strong> where one resource must be replaced alone. <strong>Bootstrapping dependencies</strong>, the classic being creating a Kubernetes cluster first so a Kubernetes or Helm provider that needs the cluster endpoint can be configured in a second full apply. And occasionally an <strong>emergency fix</strong> during an incident, followed by a full plan.</p>
+<p>As a routine habit it is dangerous. The <strong>state no longer matches the code as a whole</strong>: some changes are applied, others are pending, and the next full plan contains surprises, possibly destructive ones, that nobody connects to the original change. It <strong>hides drift</strong> and other people's pending changes, because you never see the full plan. It breaks the guarantee that what is in Git is what is deployed, and makes reviews meaningless when the plan reviewers see differs from what someone applied. Dependent resources that should have updated (for example a security group referencing a changed CIDR) stay stale.</p>
+<p>If engineers regularly need <code>-target</code> because full plans are slow, risky or blocked by unrelated failures, the real problem is a <strong>state that is too large or coupled</strong>. Split it into smaller root modules by layer or ownership, with clear interfaces.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform builds the full graph.</li>
+  <li>It prunes to the targets and their dependencies (not dependents).</li>
+  <li>Only those nodes are planned and applied.</li>
+  <li>A warning reminds you the result is partial.</li>
+  <li>A follow-up full plan is needed to converge.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Acceptable: bootstrap cluster, then converge everything
+terraform apply -target=module.aks
+terraform apply            # full plan, reviewed, should now succeed
+
+# Detect in CI: fail jobs that pass -target for production
+if grep -q -- &quot;-target&quot; &lt;&lt;&lt; &quot;$TF_CLI_ARGS $TF_CLI_ARGS_plan $TF_CLI_ARGS_apply&quot;; then
+  echo &quot;-target is not allowed in production pipelines&quot;; exit 1
+fi</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>-target</code> to skip &quot;unrelated&quot; failing resources.</li>
+  <li>Not running a full plan afterwards.</li>
+  <li>Using it to apply only &quot;my part&quot; of a shared state.</li>
+  <li>Hiding it in wrapper scripts so reviewers never notice.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;-target restricts plan or apply to specific resources and what they depend on. It's acceptable in exceptional situations: recovering from a failed apply, working around a provider bug, or a chicken-and-egg problem like creating a cluster before configuring a provider that needs its endpoint, always followed by a full plan. As a habit it's dangerous: the configuration ends up partially applied, so state and code drift apart and the next full plan brings surprises, and it hides other pending changes and drift. Terraform itself warns it's not for routine use. If people need it regularly, the configuration is too big or coupled and should be split into smaller states.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you detect -target in production CI?</strong> Pipelines control the command line; reject extra args, and alert on applies not run by the pipeline identity.</li>
+  <li><strong>Does -target include dependents?</strong> No, only the targets and their dependencies.</li>
+  <li><strong>Better solution for providers needing cluster endpoints?</strong> Separate states or Stacks with deferred changes.</li>
+</ul>
+</article>
+</body>
+</html>

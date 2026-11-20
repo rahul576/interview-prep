@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-043 · You must bring 500 manually created cloud resources under Terraform management quickly. What is your approach?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-043" data-topic="Terraform">
+<h1>You must bring 500 manually created cloud resources under Terraform management quickly. What is your approach?</h1>
+<p class="ex-meta">Terraform · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Start with an <strong>inventory grouped by ownership and lifecycle</strong>, generate code with <strong><code>terraform query</code></strong>, <strong><code>-generate-config-out</code></strong> or tools like <strong>aztfexport</strong>, <strong>refactor</strong> the generated code into modules, and only apply when the <strong>plan shows imports and no changes</strong>, working in <strong>batches with separate states</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Writing 500 resource blocks and import commands by hand is slow and error-prone. Modern Terraform gives you two big helpers. <strong>Import blocks</strong> (Terraform 1.5+) combined with <code>terraform plan -generate-config-out=generated.tf</code> write HCL for resources you name by ID, and import blocks support <strong><code>for_each</code></strong> since 1.7. <strong>Terraform 1.14</strong> adds <strong>list resources</strong> in <code>.tfquery.hcl</code> files and the <strong><code>terraform query</code></strong> command, which asks the provider to discover existing resources by filters and can generate both configuration and import blocks, for providers that implement list resources. For Azure, <strong>aztfexport</strong> can export a resource group or a query result into code and state; similar community tools exist for other clouds.</p>
+<p>Inventory comes first because it decides the <strong>state boundaries</strong>. Group resources by owner, application, environment and lifecycle: networking separate from application resources, production separate from test. Each group becomes its own state and becomes a batch.</p>
+<p>Generated code is a starting point, not the result. It is verbose, hard-codes IDs and contains read-only or default-valued attributes. Refactor it: replace literal IDs with references, extract repeated patterns into modules and <code>for_each</code>, add variables and tags. The <strong>golden rule</strong> is that the plan must show <strong>only imports, with zero creates, updates or destroys</strong>. Any diff means the code does not yet describe reality and applying would change production.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Inventory via cloud resource graph or CLI exports; tag or group by owner and environment.</li>
+  <li>Pick a low-risk batch and a target state.</li>
+  <li>Generate import blocks and configuration (query, generate-config-out or aztfexport).</li>
+  <li>Refactor into modules, variables and references; remove read-only attributes.</li>
+  <li>Plan until it shows only imports; apply; confirm a clean follow-up plan.</li>
+  <li>Lock down manual changes for imported resources; move to the next batch.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># imports.tf - bulk import with for_each (Terraform 1.7+)
+locals {
+  storage_accounts = {
+    logs   = &quot;/subscriptions/.../resourceGroups/rg-shared/providers/Microsoft.Storage/storageAccounts/stlogsprod&quot;
+    backup = &quot;/subscriptions/.../resourceGroups/rg-shared/providers/Microsoft.Storage/storageAccounts/stbackupprod&quot;
+  }
+}
+
+import {
+  for_each = local.storage_accounts
+  to       = azurerm_storage_account.this[each.key]
+  id       = each.value
+}</code></pre>
+<pre><code class="language-bash">terraform plan -generate-config-out=generated.tf   # draft HCL for resources without code</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Importing everything into one giant state.</li>
+  <li>Applying generated code as-is, with hard-coded values and noise.</li>
+  <li>Accepting &quot;update in-place&quot; diffs during import.</li>
+  <li>Not freezing manual changes, so resources drift while you import.</li>
+  <li>Forgetting child resources like role assignments, diagnostic settings and DNS records.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I begin with an inventory and group resources by owner, application, environment and lifecycle, which defines future state boundaries. Then I use tooling instead of hand-writing: terraform query with list resources in 1.14, import blocks with for_each and generate-config-out, or aztfexport on Azure. Generated code is verbose, so I refactor it into modules, variables and references. The rule is that the plan must show only imports and no changes before I apply. I work in batches, low-risk first, each in its own state, and lock down manual changes once a batch is managed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you stop new unmanaged resources?</strong> Restrict portal write access, require pipelines, and add policies that deny untagged resources.</li>
+  <li><strong>Does generate-config-out work for every resource?</strong> It depends on provider support and often needs cleanup.</li>
+  <li><strong>How do you prove completeness?</strong> Compare inventory against state with a tag such as <code>managed-by=terraform</code>.</li>
+</ul>
+</article>
+</body>
+</html>

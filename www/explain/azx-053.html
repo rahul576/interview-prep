@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-053 · A production secret appeared in clear text in a pipeline log. What do you do and how do you prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-053" data-topic="Azure DevOps &amp; Pipelines">
+<h1>A production secret appeared in clear text in a pipeline log. What do you do and how do you prevent it?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Rotate the secret immediately</strong>, <strong>delete or restrict the logs</strong>, find <strong>why masking failed</strong> (transformed/encoded/partial value, unmarked source, <strong>system.debug</strong> or <strong>set -x</strong>), then prevent recurrence: <strong>never echo secrets</strong>, <strong>mark generated values as secret</strong>, and reduce secrets via <strong>workload identity federation and Key Vault</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Contain first.</strong> Once a secret has been in a log, assume it is <strong>compromised</strong>: anyone with read access to the pipeline, log exports or integrations may have it. <strong>Rotate</strong> it immediately (and the dependent configuration), then check usage logs of the target system (sign-ins, API access) for misuse since the run.</p>
+<p><strong>Limit exposure:</strong> delete the pipeline <strong>run</strong> (or retention lease) to remove its logs, check who had <strong>view</strong> permission on the pipeline, and whether logs were forwarded elsewhere (SIEM, chat notifications, artifacts).</p>
+<p><strong>Root cause.</strong> Azure Pipelines masking replaces the <strong>exact string</strong> of known secret variables. It fails when:</p>
+<ul>
+  <li>The value was <strong>transformed</strong>: base64 encoded, URL encoded, JSON-escaped, split across lines, or only part of it printed.</li>
+  <li>The value came from a source <strong>not marked as secret</strong>: a normal variable, a tool's output, a file printed with <code>cat</code>, an ARM deployment output, or a secret fetched by a script.</li>
+  <li><strong>Debug logging</strong> (<code>system.debug: true</code>) or <code>set -x</code> in bash / <code>Set-PSDebug -Trace</code> in PowerShell echoed commands with expanded values.</li>
+  <li>A tool printed its own config or verbose HTTP headers (<code>--debug</code>, <code>-v</code>).</li>
+</ul>
+<p><strong>Prevention:</strong></p>
+<ul>
+  <li>Never <code>echo</code> secrets; pass them via <code>env</code> mapping, not command-line arguments.</li>
+  <li>Any value a script generates or retrieves that is sensitive must be registered with <code>##vso[task.setvariable variable=x;issecret=true]</code> (or <code>##vso[task.setsecret]value</code>) so it's masked.</li>
+  <li>Avoid <code>set -x</code> and debug flags in steps handling secrets; restrict who can enable <code>system.debug</code>.</li>
+  <li>Mark deployment outputs as secure (<code>@secure()</code> in Bicep).</li>
+  <li>Prefer <strong>workload identity federation</strong> and <strong>managed identities</strong>, and <strong>Key Vault</strong> references, so pipelines handle fewer long-lived secrets. Secret scanning on logs can catch leaks early.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Rotate the credential; review its access logs.</li>
+  <li>Delete the run/logs; review who had access.</li>
+  <li>Reproduce how it leaked from the step output.</li>
+  <li>Fix the script/template; add masking for generated values.</li>
+  <li>Replace the secret with federation or managed identity where possible.</li>
+  <li>Write a short post-incident note and template guard.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Register a generated value as secret so later output is masked
+TOKEN=$(az account get-access-token --query accessToken -o tsv)
+echo &quot;##vso[task.setvariable variable=apiToken;issecret=true]$TOKEN&quot;
+# Bad: set -x; curl -H &quot;Authorization: Bearer $TOKEN&quot; ...
+# Bad: echo $SECRET | base64      (encoded value is not masked)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting the log but not rotating the secret.</li>
+  <li>Rotating without checking whether it was already used.</li>
+  <li>Blaming masking rather than fixing the script.</li>
+  <li>Leaving <code>system.debug</code> settable at queue time by anyone.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I treat the secret as compromised: rotate it immediately and check whether it was used. Then I delete the run's logs and check who could view them. Next I find how it bypassed masking: masking only hides the exact value, so a base64 or URL-encoded version, a partial print, a value from a source not marked secret, system.debug or set -x will leak it. To prevent it, scripts never echo secrets, any generated sensitive value is registered with issecret=true, debug tracing is avoided in those steps, and we move to workload identity federation and Key Vault so the pipeline handles fewer secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Register a generated value as secret?</strong> <code>##vso[task.setvariable ...;issecret=true]</code> or <code>##vso[task.setsecret]</code>.</li>
+  <li><strong>Why env mapping instead of arguments?</strong> Arguments can show in process lists and command echoes.</li>
+  <li><strong>Detect leaks automatically?</strong> Scan logs or use secret scanning and alerts on log exports.</li>
+</ul>
+</article>
+</body>
+</html>

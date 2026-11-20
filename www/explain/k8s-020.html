@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-020 · What is the difference between labels and annotations, and what are finalizers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-020" data-topic="Kubernetes">
+<h1>What is the difference between labels and annotations, and what are finalizers?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Labels</strong> are short key-value pairs that <strong>identify</strong> objects and are used by <strong>selectors</strong>; <strong>annotations</strong> hold <strong>non-identifying metadata</strong> for tools and can be large; <strong>finalizers</strong> are keys in <code>metadata.finalizers</code> that <strong>block deletion</strong> until a controller finishes <strong>cleanup</strong> and removes them, and stuck finalizers leave objects <strong>Terminating</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Labels</strong> (<code>app=orders</code>, <code>env=prod</code>, <code>team=payments</code>) are indexed and queryable. Everything that groups objects uses them: Service and Deployment selectors, NetworkPolicies, PDBs, topology spread, node selection, <code>kubectl get -l</code>, and cost reporting. Keys can have a prefix (<code>app.kubernetes.io/name</code>) and values are limited to 63 characters, so labels stay small and stable. The recommended <code>app.kubernetes.io/*</code> labels make tooling consistent.</p>
+<p><strong>Annotations</strong> are not used for selection. They carry information for humans and tools: <code>kubectl.kubernetes.io/last-applied-configuration</code>, Prometheus scrape hints, ingress or load balancer controller options, cert-manager issuers, <code>checksum/config</code> hashes to trigger rollouts, change ticket or owner contact. They can be much larger (total annotations up to 256 KB).</p>
+<p><strong>Finalizers</strong> implement safe, asynchronous deletion. When you delete an object that has finalizers, the API server does not remove it; it sets <code>deletionTimestamp</code>, and the object appears as Terminating. Controllers responsible for each finalizer see that timestamp, perform cleanup (delete the cloud load balancer behind a Service, release a PersistentVolume's disk, remove external DNS records, tidy a CRD's external resources), then remove their key. When the list is empty, the object is deleted. Built-in examples: <code>kubernetes.io/pvc-protection</code> prevents deleting a PVC in use, and namespace finalizers wait until all contents are gone.</p>
+<p>If the responsible controller is uninstalled or broken, the object stays Terminating forever. Removing the finalizer by hand works but <strong>skips cleanup</strong>, possibly leaking cloud resources, so first try to fix or reinstall the controller.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Controller adds its finalizer when it creates external resources.</li>
+  <li>User deletes the object; <code>deletionTimestamp</code> is set.</li>
+  <li>Controller cleans up the external resources.</li>
+  <li>Controller removes its finalizer.</li>
+  <li>API server deletes the object once no finalizers remain.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">metadata:
+  name: orders
+  labels:
+    app.kubernetes.io/name: orders
+    env: prod
+  annotations:
+    prometheus.io/scrape: &quot;true&quot;
+    owner: payments-team@example.com
+  finalizers:
+  - example.com/cleanup-dns</code></pre>
+<pre><code class="language-bash">kubectl get pods -l app.kubernetes.io/name=orders,env=prod
+kubectl get ns stuck-ns -o jsonpath='{.spec.finalizers} {.status.conditions}'
+# last resort, after confirming cleanup is not needed:
+kubectl patch mycrd foo --type merge -p '{&quot;metadata&quot;:{&quot;finalizers&quot;:null}}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting large or frequently changing data in labels.</li>
+  <li>Using annotations where a selector needs a label.</li>
+  <li>Force-removing finalizers without checking for leaked cloud resources.</li>
+  <li>Uninstalling an operator before deleting its custom resources.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Labels are small key-value pairs that identify objects, like app=orders or env=prod, and selectors in Services, Deployments, NetworkPolicies and kubectl -l use them. Annotations hold non-identifying metadata for tools, like last-applied config, scrape settings or controller options, and can be large. Finalizers block deletion: deleting the object only sets a deletion timestamp, the responsible controller cleans up, for example deleting a cloud load balancer, and then removes its finalizer so the object goes away. If that controller is gone, the object stays Terminating.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When may you remove a finalizer by hand?</strong> When the controller is gone and you've verified or done the cleanup yourself.</li>
+  <li><strong>Why is a namespace stuck Terminating?</strong> Remaining objects with finalizers or an unavailable aggregated API.</li>
+  <li><strong>Can selectors use annotations?</strong> No, only labels (and some field selectors).</li>
+</ul>
+</article>
+</body>
+</html>

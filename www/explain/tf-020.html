@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-020 · What happens internally when you run terraform plan?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-020" data-topic="Terraform">
+<h1>What happens internally when you run terraform plan?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>terraform plan</code> <strong>loads configuration, modules and providers</strong>, takes the <strong>state lock</strong>, <strong>refreshes</strong> resources from cloud APIs, <strong>builds and walks a dependency graph</strong> evaluating expressions and data sources, asks <strong>providers to plan each change</strong> (create, update, replace, destroy), running <strong>in parallel</strong> (default 10), and prints or saves the plan.</p>
+
+<h2>Detailed explanation</h2>
+<p>Understanding the internals explains slow plans, odd diffs and errors. Terraform is a <strong>graph engine</strong> plus <strong>provider plugins</strong> that talk to APIs over gRPC.</p>
+<p>First, <strong>loading</strong>: Terraform parses all <code>.tf</code> files in the root module and installed child modules (from <code>.terraform/modules</code>), checks <code>required_version</code>, and starts <strong>provider plugins</strong> at the versions recorded in <code>.terraform.lock.hcl</code>. It loads the <strong>state</strong> from the backend and acquires the <strong>lock</strong>.</p>
+<p>Then it builds the <strong>dependency graph</strong>: nodes are resources, data sources, variables, locals, outputs, modules and providers; edges come from references and <code>depends_on</code>. The graph is walked in dependency order. For each managed resource in state, Terraform calls the provider's <strong>ReadResource</strong> to <strong>refresh</strong> the current object from the API, which is how drift is detected. Data sources are read when their arguments are known; otherwise they are deferred to apply.</p>
+<p>For every resource, Terraform compares the <strong>desired configuration</strong> with the <strong>refreshed state</strong> and calls the provider's <strong>PlanResourceChange</strong>. The provider decides the action: no-op, <strong>create</strong>, <strong>update in place</strong>, or <strong>replace</strong> when an argument marked ForceNew changed (shown as &quot;forces replacement&quot;), and it fills in values that will only be <strong>known after apply</strong>. Resources in state but not in configuration are planned for <strong>destroy</strong>, unless a <code>removed</code> block says otherwise; <code>moved</code> and <code>import</code> blocks are applied to the plan as well. Checks and conditions are evaluated.</p>
+<p>The walk runs with up to <strong>10 concurrent operations</strong> by default, controlled by <strong><code>-parallelism</code></strong>. Finally Terraform renders the summary (&quot;Plan: 2 to add, 1 to change, 0 to destroy&quot;), optionally writes a plan file with <code>-out</code>, and releases the lock.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Parse configuration and modules; start provider plugins; load state; lock.</li>
+  <li>Build the dependency graph.</li>
+  <li>Refresh managed resources via provider read calls.</li>
+  <li>Evaluate expressions and read data sources in graph order.</li>
+  <li>Provider plans each resource change; compute replace and unknown values.</li>
+  <li>Output summary, optionally save plan; unlock.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform plan -out=tfplan -parallelism=10
+TF_LOG=DEBUG terraform plan 2&gt; plan-debug.log   # shows provider gRPC calls
+terraform graph -type=plan | dot -Tsvg &gt; graph.svg</code></pre>
+<pre><code class="language-text">  # azurerm_storage_account.logs must be replaced
+-/+ resource &quot;azurerm_storage_account&quot; &quot;logs&quot; {
+      ~ account_replication_type = &quot;LRS&quot; -&gt; &quot;ZRS&quot;
+      ~ name = &quot;acmelogs&quot; -&gt; &quot;acmelogs2&quot; # forces replacement</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking plan only reads files and does not call cloud APIs.</li>
+  <li>Ignoring &quot;forces replacement&quot; markers.</li>
+  <li>Raising parallelism without considering API rate limits.</li>
+  <li>Huge states where refresh dominates plan time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform first loads the configuration, modules and provider plugins and acquires the state lock. It then refreshes: for every resource in state it asks the provider to read the current object from the API, so drift is detected. Next it builds a dependency graph of resources, data sources, variables and outputs and walks it, evaluating expressions and reading data sources. For each resource it compares desired configuration with refreshed state and asks the provider to plan the change: create, update in place, replace or destroy, filling in values known after apply. The walk runs in parallel, ten by default via -parallelism. Finally it prints the summary and optionally saves the plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can refresh be slow and what can you do?</strong> Hundreds of API reads; split state, avoid huge data sources, use <code>-refresh=false</code> only carefully.</li>
+  <li><strong>What decides replace versus update?</strong> The provider schema: ForceNew arguments require replacement.</li>
+  <li><strong>Where do unknown values come from?</strong> Provider-computed attributes not available until the object exists.</li>
+</ul>
+</article>
+</body>
+</html>

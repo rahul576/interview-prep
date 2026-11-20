@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-062 · Users get 502 Bad Gateway from the ingress during every deployment. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-062" data-topic="Kubernetes">
+<h1>Users get 502 Bad Gateway from the ingress during every deployment. How do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>It is the <strong>termination race</strong>: the pod receives <strong>SIGTERM</strong> at the same time its endpoint is removed, but the ingress or load balancer <strong>learns of the change later</strong> and keeps sending requests; fix it with a <strong>preStop sleep</strong>, <strong>graceful SIGTERM handling</strong>, proper <strong>readiness probes</strong> and <strong>keep-alive timeouts</strong> where the app outlives the proxy.</p>
+
+<h2>Detailed explanation</h2>
+<p>When a pod is deleted, two things happen <strong>in parallel</strong>, not in sequence. The kubelet runs the preStop hook and then sends SIGTERM to the container. Meanwhile the EndpointSlice controller marks the endpoint as terminating, and every consumer (kube-proxy on each node, the ingress controller, a cloud load balancer's target group, a service mesh) must notice and update its routing. That propagation takes from hundreds of milliseconds to several seconds, longer for cloud load balancers. If the app exits immediately on SIGTERM, requests still being routed to it get connection refused, which the proxy reports as <strong>502</strong>.</p>
+<p>The fix is to keep serving until everyone has stopped sending. A <strong>preStop hook</strong> that sleeps 5-15 seconds delays SIGTERM, giving routing time to converge (since Kubernetes 1.30 there is a native <code>sleep</code> action, so no shell is needed in the image). Then the app should handle <strong>SIGTERM gracefully</strong>: stop accepting new connections, finish in-flight requests, close keep-alive connections, and exit. <code>terminationGracePeriodSeconds</code> must exceed the preStop sleep plus drain time. For cloud load balancers, configure <strong>deregistration delay</strong> or connection draining to match.</p>
+<p>On the <strong>new pod</strong> side, a correct <strong>readiness probe</strong> ensures traffic is sent only once the app can actually serve, not when the process just started. A third, separate cause is <strong>keep-alive mismatch</strong>: if the app's idle timeout is shorter than the proxy's, the app closes an idle connection just as the proxy reuses it, and that request fails with 502. The app's idle timeout should be longer than the proxy's.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod deletion starts preStop and endpoint removal together.</li>
+  <li>preStop sleep keeps the pod serving while proxies update.</li>
+  <li>SIGTERM arrives; the app stops accepting, drains and exits.</li>
+  <li>Grace period covers sleep plus drain, then SIGKILL if needed.</li>
+  <li>New pods only receive traffic after readiness passes.</li>
+  <li>Keep-alive timeouts: app idle timeout longer than proxy's.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+    - name: web
+      image: registry.example.com/web:5.1
+      lifecycle:
+        preStop:
+          sleep: { seconds: 10 }
+      readinessProbe:
+        httpGet: { path: /ready, port: 8080 }
+        periodSeconds: 5
+        failureThreshold: 2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on readiness failure during shutdown to remove the pod (endpoint removal already started).</li>
+  <li>Shell-based preStop sleep in distroless images with no shell.</li>
+  <li>Grace period shorter than preStop plus drain.</li>
+  <li>App idle timeout shorter than the ingress keep-alive.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;502s on every rollout are almost always the termination race. When an old pod is deleted, SIGTERM and endpoint removal happen at the same time, and the ingress controller or cloud load balancer only learns about it a bit later, so it keeps sending requests to a pod that already stopped. I add a preStop sleep of a few seconds, make the app handle SIGTERM by draining in-flight requests, and set the grace period long enough. New pods need a real readiness probe. I also check keep-alive timeouts, because if the app closes idle connections before the proxy does, the proxy reuses a dead connection and returns 502.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you verify the fix?</strong> Run a load test (k6, vegeta) during a rollout and assert zero 5xx.</li>
+  <li><strong>Why not just make readiness fail on SIGTERM?</strong> Endpoint removal is already in progress; the issue is propagation delay, not detection.</li>
+  <li><strong>Does a service mesh help?</strong> It can retry idempotent requests, but graceful shutdown is still needed.</li>
+</ul>
+</article>
+</body>
+</html>

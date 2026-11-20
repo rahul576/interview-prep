@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-061 · A Service returns connection refused and kubectl get endpoints shows no endpoints. What do you check?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-061" data-topic="Kubernetes">
+<h1>A Service returns connection refused and kubectl get endpoints shows no endpoints. What do you check?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>No endpoints</strong> means the Service selects <strong>no ready pods</strong>: check the <strong>selector against pod labels</strong>, <strong>readiness</strong>, and the <strong>namespace</strong>; if endpoints exist but connections still fail, check <strong>targetPort</strong> and that the app listens on <strong>0.0.0.0</strong>; <strong>port-forward to a pod</strong> separates app from wiring.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Service is a stable virtual IP plus a <strong>label selector</strong>. The EndpointSlice controller continuously lists pods that match the selector in the <strong>same namespace</strong> and are <strong>Ready</strong>, and publishes their IPs and ports. kube-proxy (or the eBPF dataplane) programs rules from those. With no ready endpoints there is nowhere to send traffic; depending on the dataplane the client sees connection refused or a timeout.</p>
+<p>The most common cause is a <strong>selector/label mismatch</strong>: a typo (<code>app: chekout</code>), a label changed in a new chart version, or the Service selecting on an extra label like <code>version: v2</code> that only some pods have. Remember the selector must match <strong>all</strong> its labels. Next is <strong>readiness</strong>: pods failing the readiness probe are listed as not ready and excluded, which is by design. Third, the pods are in <strong>another namespace</strong>; selectors never cross namespaces.</p>
+<p>If endpoints <strong>do</strong> exist but connections fail, the wiring is wrong further along: <code>targetPort</code> does not match the container's listening port (or a named port that does not exist), or the app listens on <strong>127.0.0.1</strong> so it accepts connections only from inside the pod. A NetworkPolicy blocking the client is another option, though that usually gives timeouts. <code>kubectl port-forward pod/...</code> goes straight to the pod, bypassing the Service, so if it works the app is fine and the Service is the problem.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get svc &lt;svc&gt; -o wide</code> to see the selector.</li>
+  <li><code>kubectl get pods -l &lt;selector&gt; --show-labels</code> in the same namespace.</li>
+  <li><code>kubectl get endpointslices -l kubernetes.io/service-name=&lt;svc&gt;</code> for ready status.</li>
+  <li>Describe non-ready pods to see probe failures.</li>
+  <li>Compare <code>targetPort</code> with the container port and bind address.</li>
+  <li>Test with port-forward and a curl from a debug pod.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl -n shop get svc checkout -o jsonpath='{.spec.selector}{&quot;\n&quot;}'
+#  {&quot;app&quot;:&quot;checkout&quot;,&quot;tier&quot;:&quot;backend&quot;}
+kubectl -n shop get pods -l app=checkout --show-labels
+#  checkout-7d..  app=checkout,tier=api      &lt;- tier mismatch
+kubectl -n shop get endpointslices -l kubernetes.io/service-name=checkout
+kubectl -n shop port-forward pod/checkout-7d9f 8080:8080 &amp;
+curl -s localhost:8080/healthz</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Editing labels on pods instead of the Deployment template.</li>
+  <li>Forgetting that unready pods are deliberately removed.</li>
+  <li>Using <code>port</code> where <code>targetPort</code> was meant.</li>
+  <li>Apps binding to localhost inside the container.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;No endpoints means the Service has no ready pods selected. First I compare the Service selector with the pod labels, because a typo or a label changed in a new release is the most common cause, and every selector label must match. Then readiness: pods failing their readiness probe are excluded. I confirm the pods are in the same namespace. If endpoints exist but connections still fail, I check that targetPort matches the port the app listens on and that it binds to 0.0.0.0. Port-forwarding directly to a pod tells me whether it's the app or the Service wiring.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Works from one namespace but not another?</strong> A NetworkPolicy, or the client uses the short name which resolves in its own namespace.</li>
+  <li><strong>Endpoints vs EndpointSlices?</strong> EndpointSlices are the scalable replacement; the old Endpoints API is deprecated.</li>
+  <li><strong>What is a headless Service?</strong> <code>clusterIP: None</code>; DNS returns pod IPs directly.</li>
+</ul>
+</article>
+</body>
+</html>

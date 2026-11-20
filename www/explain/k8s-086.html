@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-086 · What limits do you hit when a Kubernetes cluster grows very large, and how do you handle them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-086" data-topic="Kubernetes">
+<h1>What limits do you hit when a Kubernetes cluster grows very large, and how do you handle them?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Upstream tests about <strong>5,000 nodes, 150,000 pods and 110 pods per node</strong>, but you usually hit <strong>etcd size and object count</strong>, <strong>API server load from LIST/WATCH</strong>, <strong>IP and pods-per-node limits</strong>, kube-proxy and DNS scale first; tune those, and often prefer <strong>several smaller clusters managed as a fleet</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The official large-cluster guidance lists roughly <strong>5,000 nodes</strong>, <strong>150,000 total pods</strong>, <strong>300,000 total containers</strong> and <strong>110 pods per node</strong>; managed services publish their own limits. These are not hard walls but tested envelopes, and the practical limits arrive earlier depending on workload shape.</p>
+<p><strong>etcd</strong>: it holds every object. The default storage quota is 2 GB and the commonly recommended maximum is <strong>8 GB</strong>; beyond that, compaction, defragmentation, snapshots and leader elections get slow. Large ConfigMaps or Secrets, huge numbers of CRD instances (some operators create one object per tiny thing), and high event volume fill it. Write rate and disk latency matter as much as size.</p>
+<p><strong>API server</strong>: the biggest load comes from clients doing frequent <strong>full LIST calls</strong> instead of informers with watches, especially across all namespaces. Every node's kubelet and every DaemonSet pod watching resources multiplies load. <strong>API Priority and Fairness</strong> protects critical traffic, but fixing chatty clients is the real cure. Recent releases improved this with consistent reads from the watch cache and streaming lists.</p>
+<p><strong>Networking and nodes</strong>: pod IPs per subnet or node, kube-proxy iptables rule counts (with tens of thousands of Services, iptables updates become slow; <strong>nftables</strong> mode or eBPF dataplanes scale better), CoreDNS query load, and load balancer target limits. Scheduler throughput matters for very large batch bursts.</p>
+<p>Handling it: right-size the control plane (managed tiers), keep etcd healthy (defrag, fast disks, event TTL, lean objects, consider a separate etcd for events on self-managed clusters), fix chatty controllers, use APF, and choose a scalable dataplane. Often the better architectural answer is <strong>many smaller clusters</strong> (per region, environment or tenant group) managed as a <strong>fleet</strong> with GitOps and centralised policy and observability, which also limits <strong>blast radius</strong> and makes upgrades less risky.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Monitor etcd size, latency and object counts by resource.</li>
+  <li>Monitor API request rates by client and verb; find heavy LISTs.</li>
+  <li>Track IP usage, pods per node and Service counts.</li>
+  <li>Tune: event TTL, object sizes, informers, APF, dataplane mode.</li>
+  <li>Scale control plane tier or etcd hardware.</li>
+  <li>Split into multiple clusters when limits or blast radius demand it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># biggest object types in the API server's storage
+kubectl get --raw /metrics | grep apiserver_storage_objects | sort -k2 -n | tail
+# promql: who is doing LISTs
+# topk(10, sum by (resource, client) (rate(apiserver_request_total{verb=&quot;LIST&quot;}[5m])))
+etcdctl endpoint status --write-out=table</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating the documented limits as targets.</li>
+  <li>Operators that create millions of small CRs.</li>
+  <li>Cluster-wide LISTs from scripts on a schedule.</li>
+  <li>One giant cluster where every upgrade is high risk.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Upstream tests up to about 5,000 nodes, 150,000 pods and 110 pods per node, and managed services publish their own limits, but you usually hit other problems first. etcd has a recommended maximum around 8 GB, so many objects, large ConfigMaps, events and CRDs slow it down. The API server suffers from clients doing full LISTs instead of watches. Networking adds limits on IPs, kube-proxy rules and DNS. I tune event retention and object sizes, fix chatty clients, use API Priority and Fairness and size the control plane. Often the better answer is several smaller clusters managed as a fleet, which also limits blast radius.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Downsides of many small clusters?</strong> More control planes to upgrade and pay for, fleet tooling, cross-cluster networking and duplicated add-ons.</li>
+  <li><strong>Why is iptables mode a limit?</strong> Rule updates are linear and slow with many Services; nftables or eBPF scale better.</li>
+  <li><strong>How do you find chatty clients?</strong> API server metrics and audit logs grouped by user agent and verb.</li>
+</ul>
+</article>
+</body>
+</html>

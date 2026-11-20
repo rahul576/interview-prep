@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-007 · What are Terraform Stacks, and which problems are they meant to solve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-007" data-topic="Terraform">
+<h1>What are Terraform Stacks, and which problems are they meant to solve?</h1>
+<p class="ex-meta">Terraform · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Terraform Stacks</strong> are an <strong>HCP Terraform</strong> feature that declares <strong>components</strong> (module calls) once and <strong>deployments</strong> (environments, regions, accounts) separately, then <strong>orchestrates</strong> them in dependency order, including <strong>deferred changes</strong> for values unknown until another component is applied.</p>
+
+<h2>Detailed explanation</h2>
+<p>Real infrastructure is rarely one root module. A typical setup has layers (network, Kubernetes cluster, platform add-ons, applications) repeated across <strong>many deployments</strong>: dev, staging, prod-eu, prod-us, perhaps per customer or account. With plain Terraform, teams handle this with many workspaces wired by <strong>run triggers</strong>, remote state data sources, wrapper tools such as <strong>Terragrunt</strong>, or custom pipelines. All of these mean a lot of glue code and manual ordering.</p>
+<p>A <strong>Stack</strong> solves this natively. In <strong>component configuration</strong> files (<code>.tfcomponent.hcl</code>), you declare <code>component</code> blocks, each calling a module with inputs and providers, and you wire outputs of one component into inputs of another. In <strong>deployment configuration</strong> files (<code>.tfdeploy.hcl</code>), you declare <code>deployment</code> blocks, each with its own input values and identity tokens for <strong>OIDC-based credentials</strong>. HCP Terraform then plans and applies each deployment, ordering components by their dependencies.</p>
+<p>A notable capability is <strong>deferred changes</strong>. The classic problem is creating a Kubernetes cluster and deploying Helm charts into it in one go: the Kubernetes provider needs the cluster endpoint, which is unknown before the cluster exists. Stacks can plan what is known, apply the cluster, then plan and apply the deferred components in a follow-up step. <strong>Orchestration rules</strong> can auto-approve certain plans, and changes roll out across deployments in a controlled way.</p>
+<p>Stacks require HCP Terraform (and are coming to Terraform Enterprise); the CLI provides <code>terraform stacks</code> commands for validation. Terragrunt remains the main open-source alternative.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write modules as usual.</li>
+  <li>Declare components and their wiring in <code>.tfcomponent.hcl</code>.</li>
+  <li>Declare deployments with inputs and credentials in <code>.tfdeploy.hcl</code>.</li>
+  <li>Connect the repo to a Stack in HCP Terraform.</li>
+  <li>Each commit creates plans per deployment; components run in dependency order.</li>
+  <li>Deferred components are planned and applied once their inputs are known.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># components.tfcomponent.hcl
+component &quot;cluster&quot; {
+  source    = &quot;./modules/eks&quot;
+  inputs    = { region = var.region, name = var.name }
+  providers = { aws = provider.aws.this }
+}
+
+component &quot;apps&quot; {
+  source    = &quot;./modules/apps&quot;
+  inputs    = { cluster_endpoint = component.cluster.endpoint }
+  providers = { kubernetes = provider.kubernetes.this }
+}</code></pre>
+<pre><code class="language-hcl"># deployments.tfdeploy.hcl
+deployment &quot;prod_eu&quot; {
+  inputs = { region = &quot;eu-west-1&quot;, name = &quot;prod-eu&quot;, role_arn = var.prod_role }
+}
+deployment &quot;prod_us&quot; {
+  inputs = { region = &quot;us-east-1&quot;, name = &quot;prod-us&quot;, role_arn = var.prod_role }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Stacks</th><th>Terragrunt</th><th>Workspaces + run triggers</th></tr></thead>
+<tbody>
+<tr><td>Hosting</td><td>HCP Terraform</td><td>Any (open source)</td><td>HCP/TFE</td></tr>
+<tr><td>Dependency orchestration</td><td>Native, with deferral</td><td><code>dependency</code> blocks</td><td>Manual triggers</td></tr>
+<tr><td>Unknown values across layers</td><td>Deferred changes</td><td>Mock outputs, run-all</td><td>Separate runs</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating Stacks as a free open-source CLI feature.</li>
+  <li>Putting every environment into one giant component instead of layering.</li>
+  <li>Migrating everything at once instead of one system first.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Stacks are an HCP Terraform feature for infrastructure that's repeated across many environments, regions or accounts and split into layers. In component files I declare components, which are module calls like network, cluster and apps, and wire them together. In deployment files I declare deployments like dev, prod-eu and prod-us, each with its own inputs and OIDC credentials. HCP Terraform orchestrates components in dependency order and can defer changes whose values aren't known yet, which solves creating a cluster and deploying into it in one flow. Before Stacks, teams used Terragrunt, workspaces with run triggers or custom pipelines.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Stacks versus Terragrunt?</strong> Hosting and cost, vendor lock-in, maturity, team skills and need for deferred changes.</li>
+  <li><strong>What is a deferred change?</strong> A component planned later because an input or provider configuration is unknown until another component is applied.</li>
+  <li><strong>Do modules need changes for Stacks?</strong> Usually not; providers must be passed in, not configured inside modules.</li>
+</ul>
+</article>
+</body>
+</html>

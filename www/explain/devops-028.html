@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-028 · How do you achieve zero-downtime rolling updates in Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-028" data-topic="Kubernetes">
+<h1>How do you achieve zero-downtime rolling updates in Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Combine a <strong>RollingUpdate</strong> strategy with <strong><code>maxSurge</code> and <code>maxUnavailable: 0</code></strong>, <strong>readiness probes</strong> that gate traffic, <strong>graceful shutdown</strong> (handle <strong>SIGTERM</strong>, a short <strong>preStop</strong> delay, enough <strong><code>terminationGracePeriodSeconds</code></strong>), <strong>PodDisruptionBudgets</strong> for voluntary disruptions, and <strong>backward-compatible</strong> application and schema changes.</p>
+
+<h2>Detailed explanation</h2>
+<p>A rolling update replaces pods gradually, but &quot;gradually&quot; is not the same as &quot;without errors&quot;. Requests fail at two moments: when <strong>new pods receive traffic before they are ready</strong>, and when <strong>old pods are killed while still receiving or processing requests</strong>. Each needs its own fix.</p>
+<p><strong>Pace and capacity.</strong> <code>maxSurge</code> sets how many extra pods may exist above the desired count; <code>maxUnavailable</code> sets how many may be missing. With <code>maxUnavailable: 0</code> and <code>maxSurge: 25%</code> (or 1), capacity never drops: a new pod must become ready before an old one is removed. <code>minReadySeconds</code> adds a soak period before a pod counts as available.</p>
+<p><strong>Coming in.</strong> A <strong>readiness probe</strong> that reflects real readiness (warm caches, connections established) keeps new pods out of the Service endpoints until they can serve. Without it, a pod is &quot;ready&quot; as soon as the process starts.</p>
+<p><strong>Going out.</strong> On termination, two things happen <strong>in parallel</strong>: the pod is removed from EndpointSlices, and the kubelet sends <strong>SIGTERM</strong> to the container. Load balancers, ingress controllers and kube-proxy on every node take a moment to notice the endpoint removal, so for a few seconds new requests may still arrive. Hence:</p>
+<ul>
+  <li>A <strong><code>preStop</code> hook</strong> that sleeps 5-15 seconds before SIGTERM, giving the rest of the system time to stop routing.</li>
+  <li>The application <strong>handles SIGTERM</strong>: stop accepting new connections, finish in-flight requests, close connections, then exit.</li>
+  <li><strong><code>terminationGracePeriodSeconds</code></strong> (default 30) longer than preStop plus the longest request; after it, SIGKILL.</li>
+</ul>
+<p><strong>Other disruptions.</strong> <strong>PodDisruptionBudgets</strong> limit how many pods node drains, upgrades and autoscaler consolidation may evict at once.</p>
+<p><strong>Compatibility.</strong> During the rollout old and new versions serve simultaneously, so APIs, message formats and <strong>database schemas</strong> must work for both (expand-and-contract migrations).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>New ReplicaSet creates a surge pod.</li>
+  <li>It passes readiness and joins endpoints.</li>
+  <li>An old pod is selected; removed from endpoints and preStop starts.</li>
+  <li>After the sleep, SIGTERM; app drains and exits.</li>
+  <li>Repeat until all pods are new; PDB protects against concurrent drains.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  minReadySeconds: 10
+  template:
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: api
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 }   # or exec: [&quot;sleep&quot;,&quot;10&quot;] on older clusters
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: api }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app: api } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No readiness probe, so traffic hits starting pods.</li>
+  <li>Apps that exit immediately on SIGTERM, or a shell entrypoint that never forwards it.</li>
+  <li>Grace period shorter than preStop plus request time.</li>
+  <li>Breaking schema changes deployed together with the code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use the rolling update strategy with maxSurge and maxUnavailable set to zero so capacity never drops, and readiness probes so new pods only get traffic when they're actually ready. On the way out, the pod is removed from endpoints and gets SIGTERM at the same time, so I add a short preStop sleep to let load balancers catch up, the app drains in-flight requests on SIGTERM, and terminationGracePeriodSeconds is long enough. PodDisruptionBudgets protect against node drains. And changes must be backward compatible, including the database schema, because both versions run at once.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Roll back if readiness passes but error rates rise?</strong> <code>kubectl rollout undo</code>, or better, Argo Rollouts or Flagger canaries with metric analysis that abort automatically.</li>
+  <li><strong>Why does the shell entrypoint matter?</strong> <code>sh -c</code> as PID 1 may not forward SIGTERM; use exec form or a tini-style init.</li>
+  <li><strong>What does <code>minReadySeconds</code> add?</strong> A pod must stay ready that long before it counts as available.</li>
+</ul>
+</article>
+</body>
+</html>

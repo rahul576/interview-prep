@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-053 · How do you transform a list of objects into a map for for_each, and flatten nested structures?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-053" data-topic="Terraform">
+<h1>How do you transform a list of objects into a map for for_each, and flatten nested structures?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Convert a list of objects into a map with a <strong>for expression keyed by a unique, stable attribute</strong> (<code>{ for s in var.subnets : s.name =&gt; s }</code>), use <strong><code>flatten</code></strong> with nested for expressions for parent-child structures and a <strong>composite key</strong> like <code>&quot;vnet/subnet&quot;</code>, because <strong>stable keys</strong> prevent mass recreation.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>for_each</code> accepts only a <strong>map</strong> or a <strong>set of strings</strong>, and each key becomes part of the resource address, for example <code>azurerm_subnet.this[&quot;app&quot;]</code>. Keys must be <strong>known at plan time</strong>, so derive them from input values such as names, not from attributes of resources that do not exist yet.</p>
+<p>A list of objects is converted with a <strong>map-producing for expression</strong>. Using a meaningful attribute like <code>name</code> as the key is important: with <code>count</code>, instances are addressed by position, so removing the second item of a list shifts every later item and Terraform destroys and recreates them. With name keys, removing one item affects only that item.</p>
+<p>Nested structures are common: several VNets, each with several subnets. <code>for_each</code> cannot loop over two levels directly, so you first <strong>flatten</strong>: a nested for expression produces a list of lists of small objects, each carrying the parent and child values you need, and <code>flatten()</code> turns it into a single list. Then you convert that list into a map with a <strong>composite key</strong> such as <code>&quot;${vnet_key}/${subnet.name}&quot;</code>, which is unique across the whole structure and readable in plans. The resource then uses <code>each.value.vnet_name</code>, <code>each.value.cidr</code> and so on.</p>
+<p>If two objects produce the same key, Terraform fails with a duplicate key error, unless you use the grouping <code>...</code> syntax, which you usually do not want here. Test such transformations in <code>terraform console</code> first.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the input as a map or list of objects with unique names.</li>
+  <li>For one level, build <code>{ for x in list : x.name =&gt; x }</code>.</li>
+  <li>For nested levels, produce a list of child objects that include parent keys.</li>
+  <li>Apply <code>flatten()</code> to get one flat list.</li>
+  <li>Convert to a map with a composite key.</li>
+  <li>Use the map in <code>for_each</code> and reference <code>each.value</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;vnets&quot; {
+  type = map(object({
+    address_space = list(string)
+    subnets       = list(object({ name = string, cidr = string }))
+  }))
+}
+
+locals {
+  subnets = {
+    for s in flatten([
+      for vnet_key, vnet in var.vnets : [
+        for sn in vnet.subnets : {
+          key       = &quot;${vnet_key}/${sn.name}&quot;
+          vnet_name = vnet_key
+          name      = sn.name
+          cidr      = sn.cidr
+        }
+      ]
+    ]) : s.key =&gt; s
+  }
+}
+
+resource &quot;azurerm_subnet&quot; &quot;this&quot; {
+  for_each             = local.subnets
+  name                 = each.value.name
+  virtual_network_name = azurerm_virtual_network.this[each.value.vnet_name].name
+  resource_group_name  = azurerm_resource_group.net.name
+  address_prefixes     = [each.value.cidr]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using list indexes as keys, which recreates resources when the list changes.</li>
+  <li>Keys derived from values known only after apply.</li>
+  <li>Non-unique keys, such as subnet names repeated across VNets without the parent prefix.</li>
+  <li>Building unreadable one-liners instead of named locals.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;for_each needs a map or set of strings, so I turn a list of objects into a map with a for expression keyed by a unique, stable attribute like the name; keys must be known at plan time. For nested data, like VNets with subnets, I use nested for expressions with flatten to get a flat list of objects carrying both parent and child values, then convert it to a map with a composite key like vnet slash subnet. Stable name-based keys matter because adding or removing one item only touches that item instead of recreating everything after it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if two objects produce the same key?</strong> Terraform errors with a duplicate key; make the key composite.</li>
+  <li><strong>How do you debug it?</strong> Evaluate <code>local.subnets</code> in <code>terraform console</code>.</li>
+  <li><strong>Migrating from count to for_each?</strong> Use <code>moved</code> blocks from index to key addresses.</li>
+</ul>
+</article>
+</body>
+</html>

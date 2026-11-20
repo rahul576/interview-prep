@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-115 · A pod is in Pending, OOMKilled or ImagePullBackOff state. What does each mean and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-115" data-topic="Kubernetes">
+<h1>A pod is in Pending, OOMKilled or ImagePullBackOff state. What does each mean and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Pending</strong> means the pod <strong>cannot be scheduled</strong> (resources, selectors, taints, unbound PVC); <strong>ImagePullBackOff</strong> means the kubelet <strong>cannot pull the image</strong> (wrong name/tag or registry auth); <strong>OOMKilled</strong> (exit code <strong>137</strong>) means a container <strong>exceeded its memory limit</strong>. <code>kubectl describe pod</code> events tell you which cause applies.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pending:</strong> the pod exists but the scheduler found no suitable node. Events say things like <code>0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint</code>. Causes: requests larger than any node's free allocatable capacity (requests count, not real usage), a nodeSelector or affinity matching no node, taints without tolerations, topology spread rules, a ResourceQuota, or a PVC that cannot bind (no StorageClass, zone mismatch). Fix by right-sizing requests, letting the autoscaler add nodes, or correcting constraints.</p>
+<p><strong>ImagePullBackOff / ErrImagePull:</strong> the kubelet tried to pull and failed, then backs off exponentially. Events show the registry error: <code>not found</code> (typo, missing tag, wrong architecture), <code>unauthorized</code> (private registry without an <code>imagePullSecret</code>, or node IAM role lacking ECR/ACR pull rights), or rate limiting (Docker Hub anonymous limits). Fix the reference, add credentials, or mirror images to your own registry.</p>
+<p><strong>OOMKilled:</strong> the kernel's OOM killer terminated the container because it hit its <strong>memory limit</strong>; <code>lastState.terminated.reason: OOMKilled</code>, exit code 137 (128 + SIGKILL). Repeated kills lead to CrashLoopBackOff. Check real usage with <code>kubectl top</code> or Prometheus: a leak grows steadily, an undersized limit fails at peak. For JVMs, set heap relative to the container (<code>-XX:MaxRAMPercentage=75</code>) so heap plus metaspace, threads and buffers fit. Raise the limit only if the workload truly needs it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get pod</code> shows status.</li>
+  <li><code>kubectl describe pod</code> → read Events and <code>Last State</code>.</li>
+  <li>Pending → compare requests with node allocatable; check selectors, taints, PVCs.</li>
+  <li>ImagePullBackOff → verify image, tag, architecture and pull credentials.</li>
+  <li>OOMKilled → compare memory usage with limits; fix leak or tune limits.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pod orders-5f6c-xyz | sed -n '/Events/,$p'
+# Warning FailedScheduling  0/5 nodes are available: 5 Insufficient memory.
+kubectl get pod orders-5f6c-xyz -o jsonpath='{.status.containerStatuses[0].lastState.terminated}'
+# {&quot;exitCode&quot;:137,&quot;reason&quot;:&quot;OOMKilled&quot;,...}
+kubectl create secret docker-registry regcred --docker-server=registry.example.com \
+  --docker-username=ci --docker-password=&quot;$TOKEN&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Status</th><th>Who reports it</th><th>Typical fix</th></tr></thead>
+<tbody>
+<tr><td>Pending</td><td>Scheduler</td><td>Requests, nodes, constraints, PVC</td></tr>
+<tr><td>ImagePullBackOff</td><td>Kubelet</td><td>Image name/tag, pull secret, IAM</td></tr>
+<tr><td>OOMKilled</td><td>Kernel via kubelet</td><td>Memory limit, leak, heap size</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting huge requests &quot;to be safe&quot;, leaving pods Pending.</li>
+  <li>Using the <code>latest</code> tag and wondering which image is running.</li>
+  <li>Raising memory limits forever instead of finding the leak.</li>
+  <li>JVM heap equal to the container limit.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with kubectl describe pod and read the events. Pending means the scheduler can't place it: insufficient CPU or memory requests, a selector or affinity nothing matches, an untolerated taint or an unbound PVC, so I fix requests, add nodes or correct the constraints. ImagePullBackOff means the kubelet can't pull the image, typically a wrong name or tag, or missing registry credentials. OOMKilled, exit code 137, means the container exceeded its memory limit; I check real usage, look for leaks or JVM heap settings, and only then raise the limit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why size JVM heap relative to the limit?</strong> The limit covers heap plus non-heap memory; a heap equal to the limit guarantees OOM kills.</li>
+  <li><strong>What is CrashLoopBackOff?</strong> The container keeps exiting and the kubelet delays restarts exponentially.</li>
+  <li><strong>Can a pod be evicted instead of OOMKilled?</strong> Yes, node-pressure eviction when the node runs low.</li>
+</ul>
+</article>
+</body>
+</html>

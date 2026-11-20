@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-054 · A PersistentVolumeClaim stays Pending and the pod using it cannot start. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-054" data-topic="Kubernetes">
+<h1>A PersistentVolumeClaim stays Pending and the pod using it cannot start. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>kubectl describe pvc</strong> shows the provisioner events; common causes are a <strong>missing or wrong StorageClass</strong> (or no default), an <strong>unsupported access mode</strong>, <strong>WaitForFirstConsumer</strong> waiting for a pod that itself cannot be scheduled, <strong>zone mismatches</strong>, <strong>CSI driver errors</strong> and <strong>quota limits</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A PVC is <strong>Pending</strong> until it is bound to a PersistentVolume. With dynamic provisioning, the <strong>external provisioner</strong> sidecar of a <strong>CSI driver</strong> watches PVCs for its StorageClass, creates a disk in the cloud and a PV for it. If nothing happens, either no provisioner is responsible or it is failing.</p>
+<p><strong>StorageClass problems</strong>: <code>storageClassName</code> points to a class that does not exist, or the PVC omits the class and there is <strong>no default</strong> StorageClass, so nobody provisions. Access mode: asking for <strong>ReadWriteMany</strong> on a block disk driver (EBS, Azure Disk, Persistent Disk) cannot be satisfied; you need a file-based driver like EFS, Azure Files or Filestore. Driver health: if CSI controller pods crash or lack cloud permissions, provisioning fails; their logs say why.</p>
+<p><strong>WaitForFirstConsumer</strong> is a binding mode where provisioning is delayed until a pod using the claim is scheduled, so the disk is created in the right zone. Here Pending is <strong>normal</strong> until then, and the real problem is often that the pod is unschedulable for another reason.</p>
+<p><strong>Zones</strong>: block disks are zonal. A pre-existing PV or an <code>Immediate</code>-bound disk in zone A cannot attach to a pod that can only run in zone B. <strong>Capacity</strong>: cloud disk quotas, per-node attach limits, or for static provisioning a PV whose size, access mode, class or labels do not match the claim.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe pvc</code> and read events.</li>
+  <li>Check <code>kubectl get storageclass</code> for the name and a default.</li>
+  <li>Check access mode compatibility with the driver.</li>
+  <li>If WaitForFirstConsumer, describe the pod to see why it is not scheduled.</li>
+  <li>Check CSI controller logs and cloud permissions or quota.</li>
+  <li>For static PVs, compare size, class, access mode, selector and zone.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pvc data-postgres-0 | tail -5
+#  Normal  WaitForFirstConsumer  waiting for first consumer to be created before binding
+kubectl get storageclass
+kubectl describe pod postgres-0 | grep -A3 Events
+kubectl -n kube-system logs deploy/ebs-csi-controller -c csi-provisioner | tail</code></pre>
+<pre><code class="language-yaml">apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations: { storageclass.kubernetes.io/is-default-class: &quot;true&quot; }
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters: { type: gp3 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating WaitForFirstConsumer Pending as the bug.</li>
+  <li>Requesting ReadWriteMany from a block storage class.</li>
+  <li>Using <code>Immediate</code> binding in multi-zone clusters.</li>
+  <li>Not checking CSI driver IAM permissions after cluster changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I describe the PVC first, since the provisioner events usually say what's wrong. Common causes are a storage class name that doesn't exist or no default class, an access mode like ReadWriteMany the driver doesn't support, or failing CSI driver pods. If the class uses WaitForFirstConsumer, Pending is normal until a pod is scheduled, so the real issue is often that the pod can't be scheduled. Zone mismatches are frequent with zonal disks. Finally I check cloud quotas and, for static PVs, whether size, class and labels match.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does WaitForFirstConsumer help in multi-zone clusters?</strong> The disk is created in the zone where the pod is scheduled, avoiding mismatches.</li>
+  <li><strong>How do you resize a PVC?</strong> Increase the request if the class allows expansion.</li>
+  <li><strong>What is reclaimPolicy?</strong> Whether the disk is deleted or retained when the PVC is deleted.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-004 · What are ephemeral resources and write-only arguments in Terraform, and what problem do they solve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-004" data-topic="Terraform">
+<h1>What are ephemeral resources and write-only arguments in Terraform, and what problem do they solve?</h1>
+<p class="ex-meta">Terraform · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Ephemeral resources</strong> (Terraform 1.10+) produce values that exist <strong>only during a run</strong> and are <strong>never written to plan or state</strong>; <strong>write-only arguments</strong> (1.11+, usually named <code>*_wo</code>) are <strong>sent to the provider but not stored</strong>; together they keep <strong>secrets out of state</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform state is a JSON document that records every attribute of every managed object. Historically any secret Terraform touched ended up there in plain text: a <code>random_password</code> result, a database master password, a value read from Secrets Manager or Key Vault through a data source, a generated private key. The <code>sensitive</code> flag only hides values in CLI output. As a result, teams had to protect state like a secret store, and anyone with state read access effectively had production credentials.</p>
+<p><strong>Ephemeral resources</strong> are a new block type, <code>ephemeral &quot;type&quot; &quot;name&quot; {}</code>. Terraform opens them during a run, uses their values, and closes them; nothing is persisted. Examples include <code>ephemeral &quot;random_password&quot;</code>, <code>ephemeral &quot;aws_secretsmanager_secret_version&quot;</code>, <code>ephemeral &quot;azurerm_key_vault_secret&quot;</code> and Vault secrets. Their values can only be used in places that are also not persisted: provider configuration, other ephemeral contexts, <strong>ephemeral variables and outputs</strong> (<code>ephemeral = true</code>), and write-only arguments.</p>
+<p><strong>Write-only arguments</strong> are resource arguments that accept a value, pass it to the provider's API, and are always stored as null in state and plan. Providers add them for secret fields, such as <code>password_wo</code> on <code>aws_db_instance</code> or similar fields on other database and secret resources. Because Terraform never stores the value, it cannot detect a change by comparison, so these arguments come with a companion <strong>version argument</strong> (for example <code>password_wo_version</code>); incrementing it tells Terraform to send the new value.</p>
+<p>Both features depend on <strong>provider support</strong>, so check the provider documentation for which resources offer them.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>An ephemeral resource generates or fetches the secret at run time.</li>
+  <li>The value flows into a write-only argument on a managed resource.</li>
+  <li>The provider sends it to the cloud API.</li>
+  <li>Plan and state show the argument as null or hidden; nothing is persisted.</li>
+  <li>To rotate, change the secret source and bump the version argument.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">ephemeral &quot;random_password&quot; &quot;db&quot; {
+  length  = 32
+  special = true
+}
+
+resource &quot;aws_secretsmanager_secret_version&quot; &quot;db&quot; {
+  secret_id                = aws_secretsmanager_secret.db.id
+  secret_string_wo         = ephemeral.random_password.db.result
+  secret_string_wo_version = 1
+}
+
+resource &quot;aws_db_instance&quot; &quot;main&quot; {
+  identifier          = &quot;orders&quot;
+  engine              = &quot;postgres&quot;
+  instance_class      = &quot;db.t4g.medium&quot;
+  allocated_storage   = 50
+  username            = &quot;app_admin&quot;
+  password_wo         = ephemeral.random_password.db.result
+  password_wo_version = 1
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing <code>sensitive = true</code> keeps values out of state.</li>
+  <li>Using a normal data source to read secrets, which stores them in state.</li>
+  <li>Forgetting to bump the version argument, so a new password is never applied.</li>
+  <li>Assuming every provider resource already supports write-only arguments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Historically any secret Terraform handled, like a generated database password or a value read from a vault, was stored in plain text in plan files and state. Ephemeral resources, added in 1.10, exist only during a run: I can generate an ephemeral random password or read a secret from Secrets Manager or Key Vault, use it, and it's never persisted. Write-only arguments, added in 1.11, are arguments usually ending in <code>_wo</code>, like <code>password_wo</code> on a database, that are sent to the provider but not stored, with a version argument to trigger updates. Together I can create a database with a password that never lands in state, provided the provider supports it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you rotate a write-only password?</strong> Generate or store a new value and increment the <code>_wo_version</code> argument.</li>
+  <li><strong>Where can ephemeral values be used?</strong> Provider blocks, ephemeral variables/outputs, write-only arguments, other ephemeral resources.</li>
+  <li><strong>Does state still need protection?</strong> Yes, it still contains IDs, topology and other sensitive data.</li>
+</ul>
+</article>
+</body>
+</html>

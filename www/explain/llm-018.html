@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-018 · How do you get reliable structured output, such as JSON, from an LLM?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-018" data-topic="LLMOps &amp; RAG">
+<h1>How do you get reliable structured output, such as JSON, from an LLM?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>For reliable JSON, use <strong>structured output / strict JSON-schema modes</strong> that apply <strong>constrained decoding</strong>, or <strong>tool calling</strong> for typed arguments; define schemas with <strong>Pydantic</strong> (or similar), keep them <strong>simple</strong>, still <strong>validate and retry</strong>, and remember a schema guarantees <strong>format, not correctness</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Asking &quot;reply in JSON&quot; in the prompt works most of the time, which is not good enough when a parser in production fails on the 1-in-200 response with a trailing comment or missing brace.</p>
+<p><strong>Constrained decoding</strong> solves the format problem. You pass a <strong>JSON Schema</strong>; at each decoding step the engine computes which tokens can legally come next given the schema and <strong>masks</strong> all others, so the model cannot produce invalid JSON or missing required fields. Hosted APIs expose this as structured outputs or strict schema modes (OpenAI <code>response_format</code> with <code>json_schema</code> and <code>strict</code>, Gemini response schemas, and comparable features in other providers' APIs; check current docs for each). Self-hosted engines such as <strong>vLLM and SGLang</strong> implement it with grammar engines like <strong>XGrammar</strong>, <strong>Outlines</strong> or <strong>llguidance</strong>, supporting JSON Schema, regexes and context-free grammars.</p>
+<p><strong>Tool calling</strong> is a related route: you describe functions with parameter schemas, and the model returns a tool call with typed arguments, which many providers can also enforce strictly.</p>
+<p>In application code, define the schema as types, for example <strong>Pydantic</strong> models in Python or records with Jackson and JSON Schema generators in Java. Libraries like <strong>Instructor</strong> or Spring AI's output converters generate the schema and parse into objects. Still <strong>validate</strong>: when a provider lacks strict mode, or for semantic rules the schema cannot express, catch validation errors and <strong>retry with the error message</strong> in the prompt, with a retry limit.</p>
+<p>Design schemas for the model: few nesting levels, clear field <strong>descriptions</strong>, <strong>enums</strong> for categories, nullable fields for &quot;unknown&quot; instead of forcing invented values, and field order that lets reasoning come before the conclusion if needed. Format guarantees are not truth guarantees: a perfectly valid object can contain the wrong date or a hallucinated amount, so business validation, cross-checks and evaluation remain necessary.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a typed model and generate JSON Schema.</li>
+  <li>Send it as a strict response format or tool schema.</li>
+  <li>Engine masks invalid tokens during decoding.</li>
+  <li>Parse into typed objects; run business validation.</li>
+  <li>On failure, retry with error feedback or route to review.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from typing import Literal, Optional
+
+class Invoice(BaseModel):
+    vendor: str
+    total: float = Field(description=&quot;Grand total including tax&quot;)
+    currency: Literal[&quot;EUR&quot;, &quot;USD&quot;, &quot;INR&quot;, &quot;GBP&quot;]
+    due_date: Optional[str] = Field(None, description=&quot;ISO date or null if absent&quot;)
+
+resp = client.chat.completions.parse(            # OpenAI-style structured parse
+    model=MODEL, messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: invoice_text}],
+    response_format=Invoice)
+invoice = resp.choices[0].message.parsed
+assert invoice.total &gt;= 0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on prompt instructions alone for machine-read output.</li>
+  <li>Deeply nested, huge schemas that confuse the model.</li>
+  <li>Required fields with no &quot;unknown&quot; option, forcing hallucination.</li>
+  <li>Treating schema-valid output as correct output.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The most reliable approach is the structured output feature of modern APIs and engines: I pass a JSON schema and constrained decoding masks any token that would break it, so the result always parses. vLLM and SGLang do the same with grammar engines like XGrammar. Tool calling is another way to get typed arguments. In code I define the schema with Pydantic or similar, often via Instructor, and still validate, retrying with the error if a provider lacks strict mode. I keep schemas simple with descriptions and enums, because a schema guarantees format, not correctness, so business validation still matters.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can forcing JSON reduce quality?</strong> It constrains reasoning; let the model reason first in a field or separate step.</li>
+  <li><strong>Streaming structured output?</strong> Partial JSON parsing libraries emit fields as they complete.</li>
+  <li><strong>Grammar overhead?</strong> Small with modern engines, larger for complex grammars.</li>
+</ul>
+</article>
+</body>
+</html>

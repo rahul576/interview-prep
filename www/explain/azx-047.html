@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-047 · How do you share build outputs and packages in Azure DevOps: pipeline artifacts versus Azure Artifacts?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-047" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you share build outputs and packages in Azure DevOps: pipeline artifacts versus Azure Artifacts?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Pipeline artifacts</strong> carry <strong>build outputs</strong> between stages and pipelines (<strong>build once, deploy the same artifact everywhere</strong>); <strong>Azure Artifacts</strong> hosts <strong>package feeds</strong> (NuGet, npm, Maven/Gradle, Python, Cargo, universal) with <strong>upstream sources</strong> that cache public registries and <strong>views</strong> for promotion; <strong>container images go to ACR</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pipeline artifacts</strong> are files produced by a run: a zipped web app, compiled binaries, Helm charts, Bicep files, test reports. You publish them with <code>publish:</code> / <code>PublishPipelineArtifact@1</code> and download them in later stages with <code>download:</code> / <code>DownloadPipelineArtifact@2</code>, or from another pipeline declared as a resource. Deployment jobs download artifacts automatically. They are tied to the run and its retention. The key principle is <strong>build once, deploy many</strong>: the exact binary tested in staging is the one promoted to production, rather than rebuilding per environment, which could pull different dependencies. (Build artifacts via <code>PublishBuildArtifacts</code> are the older, slower mechanism.)</p>
+<p><strong>Azure Artifacts</strong> is a <strong>package management</strong> service for <strong>reusable libraries</strong> shared across teams and repos. <strong>Feeds</strong> (organisation- or project-scoped) host <strong>NuGet, npm, Maven, Gradle, Python (pip/twine), Cargo and Universal Packages</strong>. Pipelines authenticate with the build identity using <code>NuGetAuthenticate</code>, <code>npmAuthenticate</code> or <code>PipAuthenticate</code> tasks.</p>
+<p><strong>Upstream sources</strong> let one feed proxy public registries such as <strong>nuget.org, npmjs, Maven Central and PyPI</strong>. The first time a package is requested, it is <strong>saved</strong> into the feed, so builds keep working if the public registry is down or the package is unpublished, and you have one place to audit. Combined with internal packages, upstreams help against <strong>dependency confusion</strong>: once a package name exists internally in the feed, versions of that name from the upstream are blocked by default, so an attacker publishing a higher version of your internal package name on the public registry isn't pulled.</p>
+<p><strong>Views</strong> (<code>@local</code>, <code>@prerelease</code>, <code>@release</code>) let you <strong>promote</strong> a package after validation; consumers point at <code>@release</code> to get only approved versions. Retention policies clean up old versions.</p>
+<p><strong>Container images</strong> are not stored in Azure Artifacts; they go to <strong>Azure Container Registry</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build stage compiles and publishes a pipeline artifact.</li>
+  <li>Later stages download the same artifact and deploy.</li>
+  <li>Library pipelines pack and push packages to a feed.</li>
+  <li>Consumers restore through the feed, which proxies public upstreams.</li>
+  <li>Validated packages are promoted to the <code>@release</code> view.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- stage: Build
+  jobs:
+  - job: build
+    steps:
+    - task: NuGetAuthenticate@1
+    - script: dotnet publish src/Web -c Release -o $(Build.ArtifactStagingDirectory)/web
+    - publish: $(Build.ArtifactStagingDirectory)/web
+      artifact: web
+- stage: Prod
+  jobs:
+  - deployment: deploy
+    environment: shop-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: web</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Pipeline artifacts</th><th>Azure Artifacts</th></tr></thead>
+<tbody>
+<tr><td>Content</td><td>Outputs of one run</td><td>Versioned packages</td></tr>
+<tr><td>Consumers</td><td>Later stages/pipelines</td><td>Other projects and developers</td></tr>
+<tr><td>Lifetime</td><td>Run retention</td><td>Feed retention</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rebuilding for each environment.</li>
+  <li>Pushing Docker images to Azure Artifacts instead of ACR.</li>
+  <li>Builds pulling directly from public registries, bypassing the feed.</li>
+  <li>Promoting packages by republishing instead of views.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pipeline artifacts are the outputs of a run, published in the build stage and downloaded by later stages or pipelines, so we build once and deploy the same artifact everywhere. Azure Artifacts is package management: feeds host NuGet, npm, Maven, Python and universal packages for sharing libraries. Upstream sources proxy and cache public registries like npmjs and nuget.org, so we have one audited source that survives outages and helps against dependency confusion. Views like prerelease and release let us promote packages after validation. Container images go to Azure Container Registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Upstreams vs dependency confusion?</strong> Internal package names take precedence; public versions of the same name are blocked by default.</li>
+  <li><strong>Artifact retention?</strong> Follows run retention; retain runs that reached production.</li>
+  <li><strong>Universal Packages?</strong> Arbitrary files with versioning, like tools or datasets.</li>
+</ul>
+</article>
+</body>
+</html>

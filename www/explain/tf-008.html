@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-008 · How do optional object attributes with defaults improve module interfaces?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-008" data-topic="Terraform">
+<h1>How do optional object attributes with defaults improve module interfaces?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Declaring a variable as an <strong><code>object({...})</code></strong> with <strong><code>optional(type, default)</code></strong> attributes lets callers pass <strong>only what they need</strong>, fills in <strong>defaults inside the type</strong>, and gives <strong>type validation</strong> that catches typos, producing a <strong>cleaner module interface</strong> than many variables or <code>type = any</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Modules often need rich settings: a database with size, backups, retention and maintenance window; a map of node pools each with VM size, min and max count and labels. Before optional attributes became stable in <strong>Terraform 1.3</strong>, module authors had two poor choices. Either dozens of separate variables (<code>db_size</code>, <code>db_backup_enabled</code>, <code>db_retention_days</code>...), which cannot be grouped per item in a map, or <code>type = any</code> plus <code>lookup(var.settings, &quot;retention_days&quot;, 7)</code> calls everywhere, which accepts anything, including typos, without errors.</p>
+<p>With <strong>optional object attributes</strong>, the type itself documents the interface. <code>optional(bool, true)</code> means the attribute may be omitted, and if it is, Terraform inserts <code>true</code> <strong>before</strong> the module sees the value. Without a default, an omitted optional attribute becomes <code>null</code>. Defaults apply at every nesting level, including inside <code>map(object(...))</code> and <code>list(object(...))</code>, which is perfect for collections like node pools, subnets or per-environment settings where each item only overrides what differs.</p>
+<p>Because the type is declared, Terraform performs <strong>type conversion and validation at plan time</strong>: an unknown attribute such as <code>retension_days</code> is rejected with a clear error instead of being silently ignored, and a string where a number is expected fails early. Combined with <strong>validation blocks</strong>, you can add business rules such as &quot;retention must be between 1 and 35 days&quot;. Documentation generators like terraform-docs render the full structure, so consumers see the interface at a glance.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a variable with <code>type = object({...})</code> or <code>map(object({...}))</code>.</li>
+  <li>Wrap non-mandatory attributes in <code>optional(type, default)</code>.</li>
+  <li>Caller passes a partial object.</li>
+  <li>Terraform converts it to the full type, inserting defaults.</li>
+  <li>Validation blocks check business rules.</li>
+  <li>Module code uses attributes directly without <code>lookup</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;node_pools&quot; {
+  type = map(object({
+    vm_size   = string
+    min_count = optional(number, 1)
+    max_count = optional(number, 3)
+    labels    = optional(map(string), {})
+    spot      = optional(bool, false)
+  }))
+  validation {
+    condition     = alltrue([for p in var.node_pools : p.min_count &lt;= p.max_count])
+    error_message = &quot;min_count must not exceed max_count.&quot;
+  }
+}
+
+# Caller
+node_pools = {
+  system = { vm_size = &quot;Standard_D4s_v5&quot; }
+  batch  = { vm_size = &quot;Standard_D8s_v5&quot;, max_count = 10, spot = true }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>type = any</code> for structured settings.</li>
+  <li>Giving defaults outside the type with <code>merge</code>, duplicating logic.</li>
+  <li>Making huge single objects that are hard to read and document.</li>
+  <li>Forgetting that an optional attribute without a default is <code>null</code> in module code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I declare the variable as an object type and wrap optional attributes in <code>optional()</code>, where the second argument is the default, for example <code>backups = optional(bool, true)</code>. Terraform fills in the defaults when the caller leaves attributes out, so callers pass only what they want to change. It works nested too, so a map of node pools can have per-pool defaults. Because the type is declared, Terraform rejects unknown attribute names and wrong types at plan time, catching typos that <code>type = any</code> would silently accept. It replaces dozens of separate variables or lookup calls with a clean, documented interface, and I add validation blocks for business rules.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Downsides of very large object variables?</strong> Hard to read, long error messages, and every change touches one big interface; split by concern.</li>
+  <li><strong>What is the default for an optional attribute without a default?</strong> <code>null</code>.</li>
+  <li><strong>Since which version?</strong> Optional attributes with defaults are stable since Terraform 1.3.</li>
+</ul>
+</article>
+</body>
+</html>

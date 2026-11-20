@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-048 · Deployments to the whole cluster suddenly fail with errors calling an admission webhook. What happened and how do you prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-048" data-topic="Kubernetes">
+<h1>Deployments to the whole cluster suddenly fail with errors calling an admission webhook. What happened and how do you prevent it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The API server must call a <strong>validating or mutating admission webhook</strong> and the call fails; with <strong>failurePolicy: Fail</strong> every matching request is rejected, usually because the <strong>webhook backend is down</strong>, unreachable, or has an <strong>expired or mismatched TLS certificate</strong>; prevent it with <strong>HA, short timeouts, namespace exclusions and certificate automation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Admission webhooks are configured cluster-wide in <strong>ValidatingWebhookConfiguration</strong> and <strong>MutatingWebhookConfiguration</strong> objects. For every matching create or update, the API server makes an HTTPS call to the webhook's Service. If the call fails or times out, <code>failurePolicy</code> decides: <strong>Ignore</strong> admits the request, <strong>Fail</strong> rejects it. Policy engines (Kyverno, Gatekeeper), service meshes and cert-manager install such webhooks, often matching all pods in all namespaces, so a single broken webhook can block every deployment in the cluster.</p>
+<p>The error message names the webhook, which tells you where to look. Common causes: the webhook pods are crashing, were evicted or scaled to zero; the Service has no endpoints; a <strong>NetworkPolicy</strong> or firewall blocks the control plane from reaching the pods (common on managed clusters where the control plane is outside the node network and needs a specific port allowed); the serving certificate <strong>expired</strong> or the <code>caBundle</code> in the configuration no longer matches; or the webhook is so slow that <code>timeoutSeconds</code> is exceeded.</p>
+<p>A nasty variant is a <strong>deadlock</strong>: the webhook's own pods are covered by the webhook, so when they die, their replacements cannot be admitted because the webhook is down. That is why the webhook's namespace and <code>kube-system</code> should be excluded with a <code>namespaceSelector</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the error: it includes the webhook name and the failure (connection refused, x509, timeout).</li>
+  <li><code>kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations</code> to find it.</li>
+  <li>Check backend pods, Service endpoints, logs and network policies.</li>
+  <li>Check certificate expiry and the <code>caBundle</code>.</li>
+  <li>Short-term relief: temporarily set <code>failurePolicy: Ignore</code> or delete the configuration if non-critical.</li>
+  <li>Fix and restore; then harden.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: policy-webhook
+  annotations: { cert-manager.io/inject-ca-from: policy/policy-webhook-cert }
+webhooks:
+  - name: validate.policy.example.com
+    failurePolicy: Fail
+    timeoutSeconds: 5
+    sideEffects: None
+    admissionReviewVersions: [&quot;v1&quot;]
+    clientConfig:
+      service: { name: policy-webhook, namespace: policy, path: /validate }
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [&quot;kube-system&quot;, &quot;policy&quot;]
+    rules:
+      - { apiGroups: [&quot;apps&quot;], apiVersions: [&quot;v1&quot;], operations: [&quot;CREATE&quot;, &quot;UPDATE&quot;], resources: [&quot;deployments&quot;] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Webhook running as a single replica with no PDB.</li>
+  <li>Not excluding its own namespace, causing deadlock.</li>
+  <li>Default 10-second timeouts making every API write slow.</li>
+  <li>Manual certificates that silently expire.</li>
+  <li>No alerts on <code>apiserver_admission_webhook_rejection_count</code> or webhook latency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That error means the API server has to call a webhook before admitting objects, the call fails, and with failurePolicy Fail everything matching is rejected. I find the webhook from the error and the webhook configurations, then check its pods, Service endpoints and network policies between the control plane and pods, and its certificate, since an expired cert or stale CA bundle is common. For immediate relief I can set failurePolicy to Ignore temporarily if the policy isn't critical. To prevent it: multiple replicas with a PDB, short timeouts, a namespaceSelector excluding kube-system and the webhook's own namespace, cert-manager for certificates, and alerts on webhook errors and latency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can it deadlock?</strong> If the webhook covers its own namespace, its replacement pods cannot be admitted while it is down.</li>
+  <li><strong>When is Fail correct?</strong> For security-critical policy where admitting unchecked objects is worse than an outage.</li>
+  <li><strong>What are ValidatingAdmissionPolicies?</strong> In-process CEL rules (GA in 1.30) that avoid webhook network calls entirely.</li>
+</ul>
+</article>
+</body>
+</html>

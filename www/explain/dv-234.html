@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-234 · How does alerting work with Prometheus Alertmanager or similar tools?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-234" data-topic="Observability &amp; SRE">
+<h1>How does alerting work with Prometheus Alertmanager or similar tools?</h1>
+<p class="ex-meta">Observability &amp; SRE · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Prometheus</strong> evaluates <strong>alert rules</strong> (PromQL expression plus a <strong><code>for</code></strong> duration) and sends firing alerts to <strong>Alertmanager</strong>, which <strong>groups, deduplicates, routes</strong> them by labels to receivers like PagerDuty or Slack, and supports <strong>silences</strong> and <strong>inhibition</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Alerting is split into two components on purpose. <strong>Prometheus</strong> (or a compatible engine such as Thanos Ruler, Mimir or VictoriaMetrics vmalert) regularly evaluates <strong>alerting rules</strong>. Each rule is a PromQL expression; when it returns results, the alert becomes <strong>pending</strong>, and only if it stays true for the <strong><code>for</code></strong> duration does it become <strong>firing</strong>. That duration filters out short spikes. Rules carry <strong>labels</strong> (severity, team) and <strong>annotations</strong> (summary, description, runbook URL).</p>
+<p><strong>Alertmanager</strong> receives firing alerts from one or more Prometheus servers and decides what to do with them. <strong>Grouping</strong> combines related alerts, for example all alerts for one cluster and alertname, into a single notification. <strong>Deduplication</strong> ensures that two HA Prometheus replicas sending the same alert produce one page. The <strong>routing tree</strong> matches labels to <strong>receivers</strong>: <code>severity=page</code> to PagerDuty or Opsgenie, <code>severity=ticket</code> to a Jira integration, informational alerts to Slack, email or Microsoft Teams. Timings like <code>group_wait</code>, <code>group_interval</code> and <code>repeat_interval</code> control how quickly and how often notifications are sent.</p>
+<p><strong>Silences</strong> mute matching alerts for a time window, for planned maintenance. <strong>Inhibition rules</strong> suppress symptom alerts when a root-cause alert is firing, for example no per-service alerts when the whole cluster is unreachable. Similar concepts exist in Grafana Alerting, Datadog monitors and CloudWatch alarms. Whatever the tool, the rule is the same: <strong>page only for urgent, actionable issues, with a runbook</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Prometheus evaluates rules every evaluation interval (for example 30 s).</li>
+  <li>Expression true → pending → after <code>for</code> → firing, sent to Alertmanager.</li>
+  <li>Alertmanager deduplicates and groups by configured labels.</li>
+  <li>The routing tree picks a receiver; inhibition and silences are applied.</li>
+  <li>Notification is sent; resolved notifications follow when the condition clears.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># alertmanager.yml (excerpt)
+route:
+  group_by: [alertname, cluster, service]
+  group_wait: 30s
+  repeat_interval: 4h
+  receiver: slack-default
+  routes:
+    - matchers: [severity=&quot;page&quot;]
+      receiver: pagerduty-oncall
+inhibit_rules:
+  - source_matchers: [alertname=&quot;ClusterDown&quot;]
+    target_matchers: [severity=~&quot;page|ticket&quot;]
+    equal: [cluster]
+receivers:
+  - name: pagerduty-oncall
+    pagerduty_configs: [{ routing_key: &quot;&lt;secret&gt;&quot; }]
+  - name: slack-default
+    slack_configs: [{ channel: &quot;#alerts&quot;, api_url: &quot;&lt;secret&gt;&quot; }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No <code>for</code> duration, so every blip pages.</li>
+  <li>Running a single Alertmanager instead of a clustered HA pair.</li>
+  <li>No inhibition, so one outage sends hundreds of pages.</li>
+  <li>Silences created without expiry or a comment.</li>
+  <li>Never testing that the route actually reaches the on-call phone.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In Prometheus I write alert rules: a PromQL expression with a threshold and a for duration, like error rate above five percent for five minutes, so short blips don't page. Firing alerts go to Alertmanager, which deduplicates, groups related alerts and routes them by labels like team and severity: pages to PagerDuty or Opsgenie, low-priority ones to Slack or tickets. Silences mute alerts during planned maintenance and inhibition suppresses symptom alerts when a root cause like a cluster outage is already firing. Every page must be urgent, actionable and link to a runbook.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test an alert?</strong> Unit-test rules with <code>promtool test rules</code>, and send a synthetic alert with <code>amtool</code> to verify routing.</li>
+  <li><strong>What if Prometheus itself is down?</strong> A dead man's switch (&quot;Watchdog&quot;) alert that always fires; its absence pages via an external service.</li>
+  <li><strong>Where do alert rules live?</strong> In Git as PrometheusRule resources, reviewed and deployed with GitOps.</li>
+</ul>
+</article>
+</body>
+</html>

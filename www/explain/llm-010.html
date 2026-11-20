@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-010 · What is speculative decoding, and when does it help?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-010" data-topic="LLMOps &amp; RAG">
+<h1>What is speculative decoding, and when does it help?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Speculative decoding</strong> lets a <strong>cheap draft</strong> (small model, n-gram lookup, or <strong>Medusa/EAGLE heads</strong>) propose several tokens that the <strong>large model verifies in one forward pass</strong>; with <strong>rejection sampling</strong> the output distribution is <strong>identical to the large model's</strong>, giving <strong>2 to 3 times faster decode</strong> when acceptance is high, mostly at <strong>low batch sizes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Decode is memory-bound: each step loads all weights to produce one token per sequence, leaving compute idle. Verifying several tokens in a single pass costs almost the same as generating one, because the weights are loaded once and the extra tokens use spare compute, much like a small prefill. Speculative decoding exploits that.</p>
+<p>A <strong>draft</strong> proposes k tokens (for example 4). Options: a <strong>smaller model</strong> from the same family (Llama 1B drafting for Llama 70B, sharing the tokenizer); <strong>n-gram / prompt lookup</strong>, which copies continuations from the prompt and is great for summarisation, code edits and RAG where output repeats input; <strong>Medusa</strong> heads, extra prediction heads trained on the target; and <strong>EAGLE</strong> (EAGLE-2/3), lightweight draft heads that use the target's hidden states and achieve high acceptance rates.</p>
+<p>The <strong>target model</strong> runs one forward pass over the prompt plus the k drafted tokens, getting its own probabilities at every position. Tokens are accepted left to right: under greedy decoding, while they match the target's argmax; under sampling, via a <strong>rejection sampling</strong> rule that accepts token x with probability min(1, p_target/p_draft) and, on rejection, resamples from a corrected distribution. This is mathematically guaranteed to produce the <strong>same distribution</strong> as the target alone, so quality does not change.</p>
+<p>Speed-up depends on the <strong>acceptance rate</strong> and draft cost. Predictable text (code, JSON, extraction, templated replies) accepts many tokens; creative high-temperature text accepts fewer. Under <strong>heavy batching</strong>, the GPU is already compute-saturated, so verifying extra tokens is no longer free and gains shrink or vanish; the draft also consumes memory and compute. It is most valuable for <strong>latency-sensitive, low-to-moderate concurrency</strong> deployments.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Draft generates k candidate tokens cheaply.</li>
+  <li>Target scores prompt plus k candidates in one pass.</li>
+  <li>Accept tokens until the first rejection (rejection sampling).</li>
+  <li>Add the target's correction or bonus token.</li>
+  <li>Repeat; monitor acceptance rate and tune k.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve meta-llama/Llama-3.1-70B-Instruct --tensor-parallel-size 4 \
+  --speculative-config '{&quot;method&quot;:&quot;ngram&quot;,&quot;num_speculative_tokens&quot;:4,&quot;prompt_lookup_max&quot;:4}'
+# or a draft model / EAGLE head:
+#  --speculative-config '{&quot;model&quot;:&quot;&lt;eagle-or-draft-model&gt;&quot;,&quot;num_speculative_tokens&quot;:3}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing speculative decoding lowers quality; with correct verification it does not.</li>
+  <li>Using a draft with a different tokenizer.</li>
+  <li>Enabling it on a fully batched throughput deployment and seeing slowdowns.</li>
+  <li>Not monitoring acceptance rate.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Decode is slow because the big model makes one token per pass while mostly waiting on memory. Speculative decoding has a cheap draft, a small model, n-gram lookup or EAGLE-style heads, propose several tokens, and the big model verifies all of them in one forward pass, which costs about the same as one token. Tokens are accepted up to the first disagreement using rejection sampling, which keeps the output distribution exactly the same as the big model. When the draft is often right, you get two to three times faster decode, especially for code and structured output at low batch sizes. Under heavy batching the benefit shrinks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why less help when fully batched?</strong> Compute is already used; verification is no longer free.</li>
+  <li><strong>What decides speed-up?</strong> Acceptance rate, draft cost and number of speculative tokens.</li>
+  <li><strong>Best draft for RAG?</strong> Prompt lookup, since answers often copy from context.</li>
+</ul>
+</article>
+</body>
+</html>

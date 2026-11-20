@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-018 · How do you mark values sensitive in Terraform, and what does that protect and not protect?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-018" data-topic="Terraform">
+<h1>How do you mark values sensitive in Terraform, and what does that protect and not protect?</h1>
+<p class="ex-meta">Terraform · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Mark variables and outputs with <strong><code>sensitive = true</code></strong> (many provider attributes already are); Terraform <strong>redacts them in plan and CLI output</strong> and <strong>propagates sensitivity</strong> through expressions, but values are <strong>still stored in state and plan files</strong>, and <code>nonsensitive()</code> should only be used when a value is <strong>truly safe</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform output ends up in many places: CI logs, pull request comments, chat notifications. Without protection, a database password passed as a variable would be printed in the plan. <strong>Sensitive values</strong> prevent that.</p>
+<p>You can set <code>sensitive = true</code> on <strong>input variables</strong> and <strong>outputs</strong>, and providers mark schema attributes such as <code>password</code> or <code>private_key</code> as sensitive. In plans and apply output they appear as <code>(sensitive value)</code>. Sensitivity <strong>propagates</strong>: a local built with string interpolation from a sensitive variable is also sensitive, so <code>&quot;postgres://admin:${var.db_password}@host&quot;</code> is hidden too. If a root module output contains a sensitive value without being declared sensitive, Terraform raises an error, forcing you to be explicit. <code>terraform output name</code> hides it, while <code>terraform output -raw name</code> or <code>-json</code> show it, for scripts.</p>
+<p>What it <strong>does not protect</strong>: sensitive values are stored in <strong>plain text in state</strong> and in <strong>saved plan files</strong>. Anyone who can read the state bucket, run <code>terraform state pull</code> or <code>terraform console</code>, or download the plan artifact can see them. So state and plans still need <strong>encryption at rest, strict access control and versioning</strong>. To keep secrets out of state entirely, use <strong>ephemeral resources, ephemeral variables and write-only arguments</strong> (Terraform 1.10/1.11+), or let the application read secrets directly from a vault.</p>
+<p><strong><code>nonsensitive()</code></strong> removes the marking. Use it only when the derived value genuinely reveals nothing, such as a hash, a boolean &quot;is set&quot;, or a list length; otherwise you leak the secret into logs. There is also <code>sensitive()</code> to mark a value explicitly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A value is marked sensitive by variable, output or provider schema.</li>
+  <li>Expressions using it inherit the mark.</li>
+  <li>CLI rendering redacts marked values.</li>
+  <li>State and plan files store real values.</li>
+  <li><code>nonsensitive()</code> drops the mark deliberately.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;db_password&quot; {
+  type      = string
+  sensitive = true
+}
+
+locals {
+  conn = &quot;postgres://app:${var.db_password}@${aws_db_instance.main.address}/orders&quot;  # sensitive too
+}
+
+output &quot;connection_string&quot; {
+  value     = local.conn
+  sensitive = true
+}
+
+output &quot;password_is_set&quot; {
+  value = nonsensitive(length(var.db_password) &gt; 0)   # safe: reveals nothing
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing sensitive values are encrypted or excluded from state.</li>
+  <li>Using <code>nonsensitive()</code> just to silence an error.</li>
+  <li>Printing secrets with <code>terraform output -json</code> in CI logs.</li>
+  <li>Giving broad read access to state storage.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I mark variables and outputs with <code>sensitive = true</code>, and many provider attributes like passwords are sensitive by default. Terraform then shows <code>(sensitive value)</code> in plan and apply output, and sensitivity propagates through expressions, so anything derived from a secret is hidden too. That protects against secrets leaking into CI logs and PR comments. It doesn't encrypt anything: values are still in state and saved plans, so those need encryption and access control, or I avoid storing them using ephemeral resources and write-only arguments. I use <code>nonsensitive()</code> only for genuinely safe derived values like a hash or a length.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a sensitive value make for_each fail?</strong> Sensitive values cannot be used as instance keys, because keys are shown in addresses.</li>
+  <li><strong>Does <code>terraform output -json</code> show sensitive values?</strong> Yes, it prints them in plain text.</li>
+  <li><strong>How do you keep secrets out of state entirely?</strong> Ephemeral resources, write-only arguments or runtime secret retrieval.</li>
+</ul>
+</article>
+</body>
+</html>

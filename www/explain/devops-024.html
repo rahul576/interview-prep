@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-024 · Explain resource requests and limits in Kubernetes, and the pod QoS classes.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-024" data-topic="Kubernetes">
+<h1>Explain resource requests and limits in Kubernetes, and the pod QoS classes.</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Requests</strong> are what the scheduler <strong>reserves</strong> for a container; <strong>limits</strong> cap usage, with <strong>CPU throttled</strong> and <strong>memory over the limit OOMKilled</strong>; together they set the <strong>QoS class</strong>, <strong>Guaranteed, Burstable or BestEffort</strong>, which affects eviction order; <strong>right-size</strong> from real metrics and combine with autoscaling.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Requests.</strong> The scheduler places a pod only on a node whose <strong>allocatable</strong> capacity minus the sum of existing requests can fit the pod's requests. Requests are therefore about <strong>placement and guaranteed share</strong>, not actual usage. CPU requests also translate into CPU weight, so under contention a container gets CPU proportional to its request. The HPA's utilisation percentages are relative to requests, so wrong requests break autoscaling too.</p>
+<p><strong>Limits.</strong> CPU is <strong>compressible</strong>: above its limit, the kernel's CFS quota <strong>throttles</strong> the container, causing latency spikes even when the node has idle CPU. Memory is <strong>incompressible</strong>: above its limit, the kernel <strong>OOM-kills</strong> the container (exit code 137, reason OOMKilled).</p>
+<p><strong>QoS classes</strong> are derived automatically:</p>
+<ul>
+  <li><strong>Guaranteed</strong>: every container has CPU and memory requests equal to limits.</li>
+  <li><strong>Burstable</strong>: at least one container has a request or limit, but not Guaranteed.</li>
+  <li><strong>BestEffort</strong>: no requests or limits at all.</li>
+</ul>
+<p>When a node runs short of memory, the kubelet evicts pods whose usage exceeds their requests first, also considering priority; in practice BestEffort pods go first and Guaranteed pods last. QoS also sets the kernel OOM score.</p>
+<p><strong>Practical policy.</strong> Many teams set <strong>memory request = limit</strong> (predictable, no surprise OOMs from overcommit) and set CPU requests but <strong>no or generous CPU limits</strong> to avoid throttling, while LimitRanges and ResourceQuotas provide namespace defaults and caps. Right-size from metrics (p95 usage over weeks) using <strong>VPA in recommendation mode</strong> or tools like Goldilocks; recent Kubernetes versions also support resizing pod resources in place.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduler sums requests per node and picks one with room.</li>
+  <li>Kubelet configures cgroups: CPU weight from requests, CPU quota and memory limit from limits.</li>
+  <li>Over the CPU limit → throttled; over the memory limit → OOMKilled.</li>
+  <li>Node memory pressure → kubelet evicts pods, BestEffort first.</li>
+  <li>Metrics feed VPA recommendations and HPA scaling.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resources:
+  requests:
+    cpu: &quot;500m&quot;
+    memory: &quot;1Gi&quot;
+  limits:
+    memory: &quot;1Gi&quot;          # equal to request: no overcommit for memory
+    # no CPU limit: avoid throttling, rely on requests for fair share</code></pre>
+<pre><code class="language-bash">kubectl top pod -n shop --containers
+kubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No requests, so the scheduler overpacks nodes.</li>
+  <li>Tight CPU limits on latency-sensitive services.</li>
+  <li>Requests copied from limits far above real usage, wasting capacity.</li>
+  <li>JVM heap sized close to the memory limit.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Requests are what the container is guaranteed; the scheduler uses them to place pods, and the HPA calculates utilisation against them. Limits cap usage: over the CPU limit you're throttled, over the memory limit you're OOMKilled. The QoS class follows: Guaranteed when requests equal limits for all containers, Burstable when some are set, BestEffort when none; under memory pressure BestEffort pods are evicted first and Guaranteed last. I usually set memory request equal to limit and avoid tight CPU limits to prevent throttling, and I right-size from real usage with VPA recommendations, combined with the HPA.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a JVM get OOMKilled with a heap smaller than the limit?</strong> Off-heap memory: metaspace, thread stacks, direct buffers, code cache and GC overhead; size heap with <code>MaxRAMPercentage</code>.</li>
+  <li><strong>How do you spot CPU throttling?</strong> <code>container_cpu_cfs_throttled_periods_total</code> relative to total periods.</li>
+  <li><strong>What do LimitRanges do?</strong> Set default and maximum requests/limits per namespace.</li>
+</ul>
+</article>
+</body>
+</html>

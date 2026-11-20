@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-023 · What is terraform_data, and how does it replace null_resource?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-023" data-topic="Terraform">
+<h1>What is terraform_data, and how does it replace null_resource?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>terraform_data</code></strong> is a <strong>built-in resource</strong> (Terraform 1.4+) that replaces <strong><code>null_resource</code></strong> without needing the null provider; its <strong><code>input</code>/<code>output</code></strong> hold a value in the graph, <strong><code>triggers_replace</code></strong> forces replacement (re-running provisioners), and it works with <strong><code>replace_triggered_by</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>null_resource</code> from the <code>hashicorp/null</code> provider has long been used as a container for <strong>provisioners</strong> and as a way to trigger actions when something changes, via its <code>triggers</code> map. Its downsides: an extra provider to install and pin, and <code>triggers</code> only accepts a map of strings.</p>
+<p><strong><code>terraform_data</code></strong> is part of Terraform itself (the built-in <code>terraform.io/builtin/terraform</code> provider), so no provider download is required. It has two arguments. <strong><code>input</code></strong> accepts any value; Terraform stores it and exposes it as the <strong><code>output</code></strong> attribute, which changes in the same plan as the input. That is useful for keeping a plain value in the dependency graph, for example so that something can depend on it or be replaced when it changes. <strong><code>triggers_replace</code></strong> accepts any value; when it changes, the <code>terraform_data</code> resource is <strong>replaced</strong>.</p>
+<p>Replacement matters because <strong>creation-time provisioners</strong> run only when a resource is created. Attaching a <code>local-exec</code> provisioner to <code>terraform_data</code> with <code>triggers_replace = var.app_version</code> means the script, for example a database migration, cache warm-up or registration call, runs again whenever the version changes.</p>
+<p>The second pattern is <strong><code>lifecycle { replace_triggered_by = [...] }</code></strong>. This argument only accepts references to <strong>managed resources or their attributes</strong>, not variables or locals. To replace a resource when a plain value changes, put the value in <code>terraform_data.input</code> and reference <code>terraform_data.x</code> in <code>replace_triggered_by</code>. Moving from <code>null_resource</code> is straightforward, and Terraform 1.9+ supports <code>moved</code> from <code>null_resource</code> to <code>terraform_data</code>.</p>
+<p>Provisioners remain a <strong>last resort</strong>: they are not modelled in the plan, are hard to make idempotent and depend on the machine running Terraform.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define <code>terraform_data</code> with <code>input</code> and/or <code>triggers_replace</code>.</li>
+  <li>On first apply it is created; provisioners run.</li>
+  <li>If <code>triggers_replace</code> changes, it is replaced; provisioners run again.</li>
+  <li>If <code>input</code> changes, <code>output</code> updates in place.</li>
+  <li>Other resources can use <code>replace_triggered_by = [terraform_data.x]</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;terraform_data&quot; &quot;db_migration&quot; {
+  triggers_replace = var.app_version
+
+  provisioner &quot;local-exec&quot; {
+    command = &quot;./scripts/migrate.sh ${var.app_version}&quot;
+  }
+
+  depends_on = [aws_db_instance.main]
+}
+
+resource &quot;terraform_data&quot; &quot;ami_version&quot; {
+  input = var.ami_release
+}
+
+resource &quot;aws_instance&quot; &quot;worker&quot; {
+  ami           = data.aws_ami.worker.id
+  instance_type = &quot;t3.large&quot;
+  lifecycle {
+    replace_triggered_by = [terraform_data.ami_version]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping <code>null_resource</code> and the null provider in new code.</li>
+  <li>Expecting <code>input</code> changes to re-run provisioners; use <code>triggers_replace</code>.</li>
+  <li>Putting variables directly in <code>replace_triggered_by</code>.</li>
+  <li>Using provisioners for work that belongs in CI/CD or configuration management.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;terraform_data is a built-in resource added in Terraform 1.4 that does the job of null_resource without the separate null provider. Its input argument is stored and exposed as output, which is handy to hold a value in the dependency graph, and triggers_replace forces the resource to be replaced when its value changes. Replacing it re-runs attached provisioners, for example a local-exec that runs a migration when the version changes. It also pairs with lifecycle replace_triggered_by, so another resource can be replaced when a plain value changes, which resources can't reference directly. Provisioners are still a last resort, but terraform_data is the modern way to anchor them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are provisioners a last resort?</strong> Not shown in plans, not idempotent, depend on the runner, and failures taint resources.</li>
+  <li><strong>How do you migrate from null_resource?</strong> Replace it and use a <code>moved</code> block (1.9+), or accept one replacement.</li>
+  <li><strong>Alternative to local-exec migrations?</strong> Run migrations in the deployment pipeline or as a Kubernetes Job.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-162 · What are Linux namespaces and cgroups, and how do containers use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-162" data-topic="Linux">
+<h1>What are Linux namespaces and cgroups, and how do containers use them?</h1>
+<p class="ex-meta">Linux · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Namespaces</strong> isolate what a process can <strong>see</strong> (PIDs, network, mounts, hostname, IPC, users), <strong>cgroups</strong> limit and account what it can <strong>use</strong> (CPU, memory, I/O, PIDs), and a <strong>container is just a process with both applied</strong>, plus a root filesystem.</p>
+
+<h2>Detailed explanation</h2>
+<p>There is no &quot;container&quot; object in the Linux kernel. Runtimes such as runc (used by containerd and Docker) combine several kernel features to make an ordinary process look like a separate machine.</p>
+<p><strong>Namespaces</strong> give a process its own view of a resource. The <strong>pid</strong> namespace gives it its own process tree, so the app is PID 1. <strong>net</strong> gives it its own interfaces, IPs, routes and ports. <strong>mnt</strong> gives it its own mount table, so the image becomes its root filesystem. <strong>uts</strong> separates hostname, <strong>ipc</strong> separates shared memory and message queues, <strong>user</strong> maps container UIDs to different host UIDs (root inside, unprivileged outside), and <strong>cgroup</strong> and <strong>time</strong> namespaces exist too. In Kubernetes, containers in one pod share the net namespace, which is why they reach each other on localhost.</p>
+<p><strong>Control groups</strong> organise processes into a hierarchy and apply <strong>limits and accounting</strong>: CPU weight and quota, memory maximum, block I/O and the number of PIDs. <strong>cgroups v2</strong> uses a <strong>single unified hierarchy</strong> with consistent interfaces (<code>memory.max</code>, <code>cpu.max</code>) and is now the default on current distributions; recent Kubernetes versions treat v1 as deprecated.</p>
+<p>The effects show up in production. Exceeding <code>memory.max</code> triggers the <strong>OOM killer</strong> inside that cgroup, giving exit code 137 / OOMKilled. A <strong>CPU quota</strong> (<code>cpu.max</code>, from Kubernetes CPU limits) causes <strong>CFS throttling</strong> when the quota is used within a period, adding latency. Namespaces are isolation, not a strong security boundary, so seccomp, capabilities, AppArmor or SELinux, and user namespaces add defence.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The runtime creates new namespaces for the process.</li>
+  <li>It mounts the image layers as the root filesystem.</li>
+  <li>It creates a cgroup and writes limits (memory.max, cpu.max).</li>
+  <li>It starts the process inside the namespaces and cgroup.</li>
+  <li>The kernel enforces limits: OOM kill or throttling.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Inspect a running container's namespaces and cgroup from the host
+PID=$(docker inspect -f '{{.State.Pid}}' web)
+ls -l /proc/$PID/ns
+cat /proc/$PID/cgroup                     # 0::/system.slice/docker-&lt;id&gt;.scope
+CG=/sys/fs/cgroup$(cut -d: -f3 /proc/$PID/cgroup)
+cat $CG/memory.max $CG/cpu.max            # e.g. 536870912 and &quot;50000 100000&quot;
+cat $CG/cpu.stat | grep throttled
+sudo nsenter -t $PID -n ip addr           # run a host tool in its network namespace</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking containers are lightweight VMs with their own kernel.</li>
+  <li>Treating namespaces alone as a strong security boundary.</li>
+  <li>Confusing memory limits (OOM kill) with CPU limits (throttling).</li>
+  <li>Running privileged containers that disable most isolation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Namespaces isolate what a process can see: pid gives it its own process tree, net its own network stack, mnt its own filesystem view, plus uts for hostname, ipc, and user namespaces for UID mapping. cgroups limit and account the resources a group of processes can use, like CPU, memory, I/O and PIDs, and cgroups v2 with its unified hierarchy is now standard. A container is simply a process with its own namespaces and cgroup limits, plus an image as its root filesystem. Exceeding the memory limit triggers the OOM killer, and exceeding the CPU quota causes throttling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you see a container's cgroup limits from the host?</strong> Read /proc/&lt;pid&gt;/cgroup and the matching files under /sys/fs/cgroup, such as memory.max and cpu.max.</li>
+  <li><strong>What do containers in a pod share?</strong> The network and IPC namespaces, optionally the PID namespace.</li>
+  <li><strong>What does gVisor or Kata add?</strong> A stronger boundary with a user-space or VM kernel.</li>
+</ul>
+</article>
+</body>
+</html>

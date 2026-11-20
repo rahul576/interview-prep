@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-060 · Why are Terraform provisioners and null_resource considered a last resort?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-060" data-topic="Infrastructure as Code">
+<h1>Why are Terraform provisioners and null_resource considered a last resort?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Provisioners</strong> (<code>local-exec</code>, <code>remote-exec</code>) and <strong><code>null_resource</code>/<code>terraform_data</code></strong> run scripts Terraform cannot model: their effects are <strong>not in state</strong>, they are <strong>not idempotent</strong>, they don't re-run on drift and failures <strong>taint</strong> resources, so prefer <strong>cloud-init/user data, baked images, configuration management or a real provider</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform's value comes from its model: every resource has attributes in state, the provider knows how to read, create, update and delete it, and the plan shows exactly what will change. A provisioner is a hole in that model. Terraform knows only that a script ran once at creation (or destruction, with <code>when = destroy</code>); it does not know what the script changed.</p>
+<p>The consequences:</p>
+<ul>
+  <li><strong>No drift detection.</strong> If someone undoes what the script did, the plan shows nothing.</li>
+  <li><strong>No updates.</strong> Changing the script does not re-run it on existing resources.</li>
+  <li><strong>Not idempotent.</strong> Re-running may fail or duplicate work.</li>
+  <li><strong>Tainting.</strong> If a creation-time provisioner fails, the resource is marked <strong>tainted</strong> and the next apply destroys and recreates it, which for a database or a server with data is dangerous.</li>
+  <li><strong>Fragile connectivity.</strong> <code>remote-exec</code> needs SSH or WinRM from the runner to the instance, bastions, keys and open ports.</li>
+  <li><strong>Plan opacity.</strong> Reviewers cannot see the script's impact.</li>
+</ul>
+<p><strong><code>null_resource</code></strong> with <code>triggers</code> (and its built-in replacement <strong><code>terraform_data</code></strong> with <code>triggers_replace</code>, since Terraform 1.4) is commonly used to &quot;run this command when X changes&quot;. It has the same problems, plus hidden coupling between unrelated resources.</p>
+<p>Better options: <strong>user data / cloud-init</strong> for first-boot bootstrap, <strong>Packer images</strong> for software, <strong>Ansible</strong> or another configuration tool in a separate pipeline step, and a <strong>proper provider</strong> (there are providers for Kubernetes, Helm, databases, GitHub and most SaaS APIs). HashiCorp's own documentation calls provisioners a last resort.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform creates the resource through the provider.</li>
+  <li>Provisioner runs; Terraform records only success or failure.</li>
+  <li>On failure the resource is tainted (unless <code>on_failure = continue</code>).</li>
+  <li>Next apply replaces a tainted resource.</li>
+  <li>Later changes to the script are ignored unless a trigger forces replacement.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Avoid: configuration through remote-exec
+resource &quot;aws_instance&quot; &quot;web&quot; {
+  # ...
+  provisioner &quot;remote-exec&quot; {
+    inline = [&quot;sudo apt-get install -y nginx&quot;]
+  }
+}
+
+# Prefer: bootstrap with cloud-init, software from the image
+resource &quot;aws_instance&quot; &quot;web&quot; {
+  ami       = data.aws_ami.web_golden.id
+  user_data = file(&quot;${path.module}/cloud-init.yaml&quot;)
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Installing software with <code>remote-exec</code> on long-lived servers.</li>
+  <li>Using <code>null_resource</code> triggers as a general-purpose workflow engine.</li>
+  <li>Destroy-time provisioners that depend on resources already deleted.</li>
+  <li>Ignoring that a failed provisioner will recreate the resource next time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Provisioners run scripts that Terraform can't model. It doesn't know what they changed, so there's no drift detection, changing the script doesn't re-run it, they're rarely idempotent, remote-exec needs network access to the box, and if one fails the resource is tainted and gets recreated on the next apply. null_resource, now terraform_data, with triggers has the same issues. I use cloud-init or user data for bootstrap, baked images for software, Ansible as a separate pipeline step, or a real provider for the API. I'd only accept local-exec for small, idempotent glue where no provider exists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is a local-exec provisioner still acceptable?</strong> Small idempotent glue with no provider, such as a one-time notification or registering a resource with an internal tool.</li>
+  <li><strong>What replaced <code>null_resource</code>?</strong> The built-in <code>terraform_data</code> resource with <code>triggers_replace</code> and <code>input</code>/<code>output</code>.</li>
+  <li><strong>What does <code>on_failure = continue</code> do?</strong> Ignores the failure so the resource is not tainted, at the risk of an unconfigured resource.</li>
+</ul>
+</article>
+</body>
+</html>

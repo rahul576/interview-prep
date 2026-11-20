@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-041 · A replacement of a resource with create_before_destroy fails because the name already exists. Why, and how do you solve it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-041" data-topic="Terraform">
+<h1>A replacement of a resource with create_before_destroy fails because the name already exists. Why, and how do you solve it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With <strong><code>create_before_destroy</code></strong> the new object is created while the old one still exists, so <strong>unique cloud names collide</strong>; fix it with <strong><code>name_prefix</code></strong> or a <strong>random suffix</strong> tied to replacement triggers, or accept a scheduled <strong>destroy-then-create</strong> with downtime.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default Terraform replaces a resource by <strong>destroying first, then creating</strong>, which causes a gap. <code>lifecycle { create_before_destroy = true }</code> reverses the order to avoid downtime: create the replacement, repoint dependents, then delete the old one. That only works if two copies can exist at the same time. Many cloud resources require <strong>unique names</strong> in their scope: AWS launch templates, IAM roles, security groups in a VPC, target groups, ACM-linked listeners, Azure storage accounts (globally unique), Key Vaults and App Service plans. The second create fails with &quot;already exists&quot;.</p>
+<p>The standard fix is to make each generation's name unique. Several AWS resources support <strong><code>name_prefix</code></strong>, where the provider generates a unique suffix. Otherwise you add a <strong><code>random_id</code></strong> or <code>random_pet</code> with <strong><code>keepers</code></strong> set to the attributes that force replacement, so the suffix changes exactly when a new object is needed. When neither is possible, for example a storage account whose name is referenced by external systems, you accept <strong>destroy-then-create</strong> and schedule a maintenance window, or create a new resource side by side and migrate data deliberately.</p>
+<p>Also remember that <code>create_before_destroy</code> <strong>propagates through dependencies</strong>: if A has it and B depends on A, Terraform must also handle B in create-before-destroy order, because the old A cannot be destroyed before its dependents are moved. Terraform applies this implicitly, which can surprise you with replacements in an unexpected order or with name collisions on resources you did not mark.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A change forces replacement; Terraform plans <code>+/-</code> (create then destroy).</li>
+  <li>It calls create with the same name; the API rejects the duplicate.</li>
+  <li>Switch to <code>name_prefix</code> or a suffix from <code>random_id</code> with matching keepers.</li>
+  <li>Now the new object gets a new name, dependents are updated, the old object is deleted.</li>
+  <li>For resources that cannot rename, schedule a destroy-then-create.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;random_id&quot; &quot;sg&quot; {
+  byte_length = 3
+  keepers = {
+    vpc_id = var.vpc_id   # replacement trigger for the security group
+  }
+}
+
+resource &quot;aws_security_group&quot; &quot;web&quot; {
+  name   = &quot;web-${random_id.sg.hex}&quot;
+  vpc_id = var.vpc_id
+  lifecycle { create_before_destroy = true }
+}
+
+resource &quot;aws_launch_template&quot; &quot;web&quot; {
+  name_prefix   = &quot;web-&quot;
+  image_id      = var.ami_id
+  instance_type = &quot;t3.medium&quot;
+  lifecycle { create_before_destroy = true }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding <code>create_before_destroy</code> without checking whether names are unique.</li>
+  <li>Using <code>timestamp()</code> in names, which forces replacement on every plan.</li>
+  <li>Keepers that do not match the real replacement triggers, so the suffix never changes.</li>
+  <li>Forgetting quotas: two copies may exceed limits, such as public IPs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With create_before_destroy, Terraform creates the new object before deleting the old one, so for a moment both exist. Many cloud resources need unique names, so the create fails because the name is taken. I make names unique per generation: name_prefix where the provider supports it, or a random_id suffix with keepers tied to the attributes that force replacement. If the name can't change, I accept destroy-then-create in a maintenance window. I also remember that create_before_destroy propagates to dependent resources, which affects their ordering too.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which resources needed it for zero downtime?</strong> Launch templates with ASGs, TLS certificates on listeners, security groups attached to instances.</li>
+  <li><strong>Why not always use it?</strong> Name collisions, quotas and unusual replacement ordering.</li>
+  <li><strong>How do you see the order?</strong> The plan marks it <code>+/-</code> instead of <code>-/+</code>.</li>
+</ul>
+</article>
+</body>
+</html>

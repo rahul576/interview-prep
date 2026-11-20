@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-030 · How do Helm and GitOps tools like Argo CD fit together in your deployment workflow?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-030" data-topic="Kubernetes">
+<h1>How do Helm and GitOps tools like Argo CD fit together in your deployment workflow?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Helm</strong> packages manifests as <strong>charts</strong> (templates + values) for many environments; <strong>GitOps</strong> makes <strong>Git the source of truth</strong>, and <strong>Argo CD or Flux</strong> inside the cluster <strong>pull</strong> and <strong>render the chart</strong>, <strong>continuously reconciling</strong> and correcting drift, while <strong>CI only builds images and updates the version in Git</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Helm.</strong> A chart contains templated manifests plus a default <code>values.yaml</code>; per-environment values files (<code>values-prod.yaml</code>) change replicas, resources, hostnames and image tags. With the Helm CLI, each install is a <strong>release</strong> with revision history and <code>helm rollback</code>. Charts are versioned and published to a chart repository or an <strong>OCI registry</strong>.</p>
+<p><strong>GitOps.</strong> Desired state for every environment lives in Git: which chart version, which values, which image tag. Changes happen through <strong>pull requests</strong>, giving review and audit history. A controller in the cluster <strong>pulls</strong> from Git (no CI system holds cluster credentials), applies the desired state and keeps comparing; manual <code>kubectl edit</code> changes show as <strong>OutOfSync</strong> and are reverted if self-heal is enabled.</p>
+<p><strong>How they combine.</strong></p>
+<ul>
+  <li><strong>Argo CD</strong> renders the chart itself (equivalent to <code>helm template</code>) and applies the resulting manifests, so it does not create Helm releases; <strong>history and rollback</strong> are Argo CD sync history or, better, a <strong>git revert</strong>. Hooks are mapped to Argo CD sync phases.</li>
+  <li><strong>Flux</strong> uses its <strong>helm-controller</strong>, which performs real Helm installs and upgrades from <code>HelmRelease</code> objects, so Helm release history exists, with automatic remediation on failed upgrades.</li>
+</ul>
+<p><strong>Workflow.</strong> CI builds and tests the application, pushes an image (ideally an immutable tag or digest), then opens a PR or commits that bumps the tag in the environment's values file, or an image automation tool (Argo CD Image Updater, Flux image automation) does it. The controller syncs. Promotion from staging to production is another PR changing the production values to the same version. Tools such as Kargo can automate promotion pipelines.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer merges code; CI builds <code>api:1.8.3</code> and pushes it.</li>
+  <li>CI opens a PR updating <code>envs/staging/values.yaml</code> to <code>1.8.3</code>.</li>
+  <li>Merge → Argo CD detects the change, renders the chart, syncs staging.</li>
+  <li>After verification, a PR promotes <code>1.8.3</code> to <code>envs/prod</code>.</li>
+  <li>Rollback = revert the commit; Argo CD syncs back.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: api-prod, namespace: argocd }
+spec:
+  project: shop
+  source:
+    repoURL: https://github.com/acme/deploy.git
+    path: charts/api
+    targetRevision: main
+    helm:
+      valueFiles: [../../envs/prod/api-values.yaml]
+  destination: { server: https://kubernetes.default.svc, namespace: shop }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>CI running <code>helm upgrade</code> against production and a GitOps controller at the same time.</li>
+  <li>Mutable tags like <code>latest</code>, so Git does not describe what runs.</li>
+  <li>Expecting <code>helm list</code>/<code>helm rollback</code> to work for Argo CD-managed apps.</li>
+  <li>Secrets in plain values files.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Helm packages Kubernetes manifests as charts, templates plus values, so one chart serves many environments with different values files, and the Helm CLI tracks releases with rollback. GitOps adds the workflow: Git is the source of truth for each environment and changes go through pull requests. Argo CD or Flux in the cluster pulls the repo, renders the chart and continuously reconciles, correcting drift. Argo CD renders the templates itself, while Flux's helm-controller does real Helm releases. CI only builds images and bumps the tag in Git, so cluster credentials stay in the cluster, every change is audited and rollback is a git revert.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you promote staging to production?</strong> A PR that sets production values to the version proven in staging, possibly automated with Kargo or image updater.</li>
+  <li><strong>Where do secrets go?</strong> External Secrets Operator or Sealed Secrets, not values files.</li>
+  <li><strong>App-of-apps or ApplicationSets?</strong> ApplicationSets generate Applications per cluster or environment from one template.</li>
+</ul>
+</article>
+</body>
+</html>

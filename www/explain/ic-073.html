@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-073 · Design an immutable infrastructure pipeline using Packer, Terraform and auto scaling groups.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-073" data-topic="Infrastructure as Code">
+<h1>Design an immutable infrastructure pipeline using Packer, Terraform and auto scaling groups.</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>Packer</strong> bakes <strong>versioned, tested images</strong> (with Ansible), publishes them and records the <strong>latest approved version</strong>; <strong>Terraform</strong> puts that image into the <strong>launch template</strong>; an <strong>instance refresh</strong> replaces instances in batches with <strong>health checks and automatic rollback</strong>; rollback means pointing back to the <strong>previous image</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In an immutable model servers are never patched or reconfigured in place. Every change, from an OS patch to an application release, produces a <strong>new image</strong>, and instances are replaced. This removes configuration drift, makes every server identical and makes rollback a matter of using the previous image.</p>
+<p><strong>Build.</strong> A pipeline (scheduled weekly for patches, or triggered by a base image or application release) runs Packer. Packer launches a temporary instance from the latest approved base image (for example the newest Ubuntu or Amazon Linux AMI found with a filter), runs <strong>Ansible</strong> for hardening (CIS settings), agents and application dependencies, and then runs <strong>tests</strong> such as Goss or InSpec on the instance before creating the image. Images are tagged with version, git SHA and base image, and vulnerability-scanned.</p>
+<p><strong>Publish.</strong> The image is shared with or copied to target accounts and regions (encrypted with the right KMS keys), and the approved version is written to a registry: an <strong>SSM parameter</strong>, HCP Packer channel or similar. Dev gets new images first; promotion to prod updates the prod pointer.</p>
+<p><strong>Deploy.</strong> Terraform reads the pointer, updates the <strong>launch template</strong> <code>image_id</code>, and the auto scaling group starts an <strong>instance refresh</strong>: instances are replaced in batches while keeping a <strong>minimum healthy percentage</strong>, waiting for load balancer health checks and warm-up, with <strong>checkpoints</strong> and <strong>auto rollback</strong> if the refresh fails.</p>
+<p><strong>State</strong> must live outside instances: databases, S3, EFS, caches; logs shipped centrally; configuration and secrets fetched at boot.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Packer build → Ansible provisioning → Goss tests → image <code>web-2026.11.21-abc123</code>.</li>
+  <li>Image shared; SSM parameter <code>/images/web/dev</code> updated.</li>
+  <li>Terraform apply updates launch template; ASG instance refresh begins.</li>
+  <li>Batches replaced; health checks gate progress; failure rolls back.</li>
+  <li>Promotion copies the version to <code>/images/web/prod</code> and repeats.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;aws_ssm_parameter&quot; &quot;web_ami&quot; { name = &quot;/images/web/prod&quot; }
+
+resource &quot;aws_launch_template&quot; &quot;web&quot; {
+  image_id      = data.aws_ssm_parameter.web_ami.value
+  instance_type = &quot;m7g.large&quot;
+}
+
+resource &quot;aws_autoscaling_group&quot; &quot;web&quot; {
+  launch_template {
+    id      = aws_launch_template.web.id
+    version = aws_launch_template.web.latest_version
+  }
+  instance_refresh {
+    strategy = &quot;Rolling&quot;
+    preferences {
+      min_healthy_percentage = 90
+      instance_warmup        = 120
+      auto_rollback          = true
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Images without tests, so broken images reach production.</li>
+  <li><code>most_recent = true</code> in production, deploying unreviewed images.</li>
+  <li>State or logs left on instance disks.</li>
+  <li>Never cleaning up old images and snapshots (cost), or deleting the one you need for rollback.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A pipeline runs Packer, which starts from the latest approved base image, applies hardening and dependencies with Ansible, runs Goss or InSpec tests and produces a versioned image, which is shared to target accounts and recorded as the approved version in a parameter store. Terraform reads that parameter and updates the launch template, and an instance refresh replaces instances in batches with a minimum healthy percentage, health checks and automatic rollback. Servers are never patched in place, state lives in managed services, and rolling back means pointing the launch template at the previous image.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle state that lives on instances?</strong> Move it to managed data stores, shared file systems or object storage; ship logs.</li>
+  <li><strong>How fast can you ship an urgent patch?</strong> Trigger the build, skip the soak only with approval, refresh fleets in waves.</li>
+  <li><strong>Why not <code>most_recent</code> data sources?</strong> Deploys are no longer explicit or reviewable.</li>
+</ul>
+</article>
+</body>
+</html>

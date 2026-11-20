@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-019 · How do you use templatefile in Terraform, for example for cloud-init or configuration files?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-019" data-topic="Terraform">
+<h1>How do you use templatefile in Terraform, for example for cloud-init or configuration files?</h1>
+<p class="ex-meta">Terraform · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>templatefile(path, vars)</code> <strong>renders a template file</strong> with <code>${}</code> <strong>interpolation</strong> and <code>%{ for }</code> / <code>%{ if }</code> <strong>directives</strong>, commonly for <strong>cloud-init/user_data</strong> and configuration files, keeping large scripts out of HCL; remember that <strong>changed user_data can replace instances</strong> and that <strong>secrets do not belong in it</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Embedding a 60-line bootstrap script in a heredoc inside HCL is hard to read, impossible to lint and easy to break with escaping. <strong><code>templatefile</code></strong> reads an external file (conventionally <code>*.tftpl</code>) and renders it with a map of variables. Only the variables you pass are available, which makes templates explicit and testable.</p>
+<p>Inside the template, <code>${var_name}</code> interpolates a value, and <strong>template directives</strong> add logic: <code>%{ for s in servers ~}</code> ... <code>%{ endfor ~}</code> loops, <code>%{ if enable_agent }</code> ... <code>%{ endif }</code> conditionals, and the <code>~</code> strip markers remove surrounding whitespace and newlines. Literal <code>${</code> sequences, common in shell scripts, must be escaped as <code>$${</code>, and <code>%{</code> as <code>%%{</code>.</p>
+<p>The most common use is <strong><code>user_data</code> / <code>custom_data</code></strong> for virtual machines, launch templates and scale sets: a <strong>cloud-init</strong> YAML or shell script that installs packages and agents, writes configuration and receives values such as environment name, storage endpoint or cluster join address. Other uses: Nginx or application config files uploaded to object storage, Kubernetes manifests, IAM or bucket policies (though <code>jsonencode</code> is better for JSON).</p>
+<p>Two cautions. Many resources treat <code>user_data</code> as <strong>ForceNew</strong> or require a restart, so changing the template can <strong>replace instances</strong>; with launch templates it creates a new version used by the next rollout, which is usually what you want. And user data is visible to anyone who can describe the instance and is stored in state, so <strong>do not bake secrets</strong> into it; let the instance fetch them from a secret store using its identity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write the template file with placeholders and directives.</li>
+  <li>Call <code>templatefile(&quot;${path.module}/init.tftpl&quot;, {...})</code>.</li>
+  <li>Terraform renders the string during plan.</li>
+  <li>The rendered result is passed to an argument like <code>user_data</code>.</li>
+  <li>Changes to inputs or file content change the rendered value and the plan.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># cloud-init.tftpl
+#cloud-config
+write_files:
+  - path: /etc/app/config.env
+    content: |
+      ENVIRONMENT=${environment}
+      STORAGE_URL=${storage_url}
+runcmd:
+%{ for pkg in packages ~}
+  - apt-get install -y ${pkg}
+%{ endfor ~}
+  - systemctl enable --now app</code></pre>
+<pre><code class="language-hcl">resource &quot;aws_launch_template&quot; &quot;app&quot; {
+  name_prefix   = &quot;app-&quot;
+  image_id      = data.aws_ami.ubuntu.id
+  instance_type = &quot;t3.medium&quot;
+  user_data = base64encode(templatefile(&quot;${path.module}/cloud-init.tftpl&quot;, {
+    environment = var.environment
+    storage_url = aws_s3_bucket.assets.bucket_regional_domain_name
+    packages    = [&quot;nginx&quot;, &quot;jq&quot;]
+  }))
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting passwords or tokens in user data.</li>
+  <li>Forgetting to escape <code>${</code> in shell scripts.</li>
+  <li>Being surprised by instance replacement after a template edit.</li>
+  <li>Building JSON with templates and getting quoting wrong.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;<code>templatefile</code> reads a file and renders it with the variables I pass. Inside I interpolate with dollar-brace syntax and can use <code>%{ for }</code> loops and <code>%{ if }</code> conditionals, for example one line per backend server. The most common use is user_data, a cloud-init file or bootstrap script that installs agents and gets values like the environment name or storage endpoint, and also config files for storage or Kubernetes. It keeps big scripts out of HCL, so they're readable and can be linted separately. I remember that changing user_data often forces instance replacement, and I never bake secrets in; instances fetch them from a vault.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is <code>jsonencode</code> better than a JSON template?</strong> It produces valid, correctly escaped JSON from HCL values.</li>
+  <li><strong>What do <code>~</code> markers do?</strong> Strip whitespace and newlines around directives.</li>
+  <li><strong>How do you test templates?</strong> Render with <code>terraform console</code> or <code>terraform test</code> and lint the output.</li>
+</ul>
+</article>
+</body>
+</html>

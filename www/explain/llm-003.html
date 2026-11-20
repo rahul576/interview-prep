@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-003 · What is continuous batching, and why does it matter for LLM serving?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-003" data-topic="LLMOps &amp; RAG">
+<h1>What is continuous batching, and why does it matter for LLM serving?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Continuous batching</strong> (in-flight or <strong>iteration-level</strong> batching) reschedules the batch <strong>at every decode step</strong>, so finished sequences are immediately replaced by new ones; requests of different lengths no longer block each other, giving <strong>much higher GPU utilisation and throughput</strong> in engines like <strong>vLLM, TGI, TensorRT-LLM and SGLang</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Because decode is memory-bound, batching is essential: one read of the weights serves every sequence in the batch. The question is how to form batches when requests arrive at random times and produce very different output lengths.</p>
+<p><strong>Static batching</strong> (request-level) collects N requests, runs them together and returns when <strong>all</strong> are done. Problems: a 20-token answer waits for a 2,000-token answer in the same batch; slots of finished sequences sit <strong>idle</strong>, wasting compute; and new requests wait in a queue until the whole batch completes, so latency includes other people's long answers.</p>
+<p><strong>Continuous batching</strong>, introduced by the Orca paper and popularised by vLLM, makes scheduling decisions at <strong>every iteration</strong>. After each decode step, the scheduler removes sequences that hit a stop token or max length and admits waiting requests into the free capacity, constrained by available <strong>KV cache blocks</strong> and a token budget. A new request's <strong>prefill</strong> runs, then it joins the decode batch mid-flight. Modern engines use <strong>chunked prefill</strong> to mix prompt chunks and decode tokens in the same step, so a huge prompt does not freeze ongoing streams.</p>
+<p>The effect is that the GPU always works on as many sequences as memory allows, queueing delay drops, and throughput commonly improves <strong>several times</strong>. It is the main reason a dedicated serving engine beats a simple loop around <code>model.generate()</code>.</p>
+<p>It introduces new trade-offs. Larger batches make each decode step slightly slower, raising <strong>inter-token latency</strong> for everyone, and long prefills can still cause spikes. Engines expose knobs such as maximum number of sequences, maximum batched tokens and scheduling policies (priority, fairness) to balance throughput against latency SLOs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Requests enter a waiting queue.</li>
+  <li>Each step, the scheduler checks free KV blocks and token budget.</li>
+  <li>It admits new requests (prefill, possibly chunked) alongside running decodes.</li>
+  <li>One forward pass advances every running sequence by a token.</li>
+  <li>Finished sequences leave; their memory is freed for the next step.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve Qwen/Qwen2.5-7B-Instruct \
+  --max-num-seqs 256 \
+  --max-num-batched-tokens 8192 \
+  --enable-chunked-prefill
+# Metrics: vllm:num_requests_running, vllm:num_requests_waiting, vllm:gpu_cache_usage_perc</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Static batching</th><th>Continuous batching</th></tr></thead>
+<tbody>
+<tr><td>Scheduling</td><td>Per batch</td><td>Per decode step</td></tr>
+<tr><td>Short requests</td><td>Wait for longest</td><td>Leave immediately</td></tr>
+<tr><td>New requests</td><td>Wait for next batch</td><td>Join next step</td></tr>
+<tr><td>GPU utilisation</td><td>Low, idle slots</td><td>High</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Benchmarking with one request at a time and missing batching benefits.</li>
+  <li>Setting max sequences so high that inter-token latency breaks SLOs.</li>
+  <li>Confusing continuous batching with dynamic batching for classic ML models.</li>
+  <li>Ignoring that long prompts still affect others without chunked prefill.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With static batching, requests are grouped and run until every one finishes, so short answers wait for the longest, finished slots sit idle and new requests wait for the next batch. Continuous batching schedules at every decode step: when a sequence finishes, a waiting request takes its place after its prefill. Requests of very different lengths stop blocking each other, the GPU stays busy and throughput rises several times while queueing drops. vLLM, TGI, TensorRT-LLM and SGLang all do it, which is why I would never serve with a naive generate loop.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>New problems for latency-sensitive traffic?</strong> Bigger batches slow each step and prefills cause spikes; use priorities, chunked prefill or separate pools.</li>
+  <li><strong>What limits batch size?</strong> KV cache memory and max batched tokens.</li>
+  <li><strong>Is it the same as dynamic batching?</strong> No, dynamic batching groups whole requests; continuous works per token step.</li>
+</ul>
+</article>
+</body>
+</html>

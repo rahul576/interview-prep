@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-023 · What are static pods, and where are they used?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-023" data-topic="Kubernetes">
+<h1>What are static pods, and where are they used?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Static pods</strong> are run <strong>directly by the kubelet</strong> from manifest files in a node directory (usually <code>/etc/kubernetes/manifests</code>), not created through the API server or scheduler; the kubelet publishes read-only <strong>mirror pods</strong> so you can see them, and <strong>kubeadm</strong> uses them to run the <strong>control plane</strong> itself.</p>
+
+<h2>Detailed explanation</h2>
+<p>Normal pods follow API server → scheduler → kubelet. That creates a chicken-and-egg problem for the control plane: the API server, scheduler, controller manager and etcd must run before there is an API server to accept or schedule anything. Static pods solve it.</p>
+<p>The kubelet is configured with <code>staticPodPath</code> (in its config file). It watches that directory and, for each pod manifest, starts the pod through the container runtime, restarts it if it dies, and recreates it if the file changes. Static pods are bound to that node: no scheduling, no Deployments, no ReplicaSets.</p>
+<p>So that operators can see them, the kubelet creates a <strong>mirror pod</strong> in the API server, named <code>&lt;pod&gt;-&lt;nodename&gt;</code>, for example <code>kube-apiserver-cp-1</code> in <code>kube-system</code>. The mirror pod is just a reflection: deleting it with kubectl makes it reappear, and editing it has no effect. To change a static pod you <strong>edit the file on the node</strong>; the kubelet notices and restarts the pod with the new spec. To remove it, move the file out of the directory.</p>
+<p>Main use: <strong>kubeadm</strong> clusters run <code>kube-apiserver</code>, <code>kube-controller-manager</code>, <code>kube-scheduler</code> and (for stacked topology) <code>etcd</code> as static pods on each control plane node. Managed services such as EKS, AKS and GKE hide the control plane entirely, so you rarely see them there. Occasionally static pods are used for node-local agents that must start before the cluster is reachable, though DaemonSets are usually the better choice. Static pods cannot reference other API objects like ConfigMaps or ServiceAccounts in the normal way.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>kubelet starts with <code>staticPodPath: /etc/kubernetes/manifests</code>.</li>
+  <li>It reads each YAML file and starts the pod locally.</li>
+  <li>It creates a mirror pod in the API once the API server is reachable.</li>
+  <li>File changes → kubelet recreates the pod.</li>
+  <li>File removed → kubelet stops the pod and deletes the mirror.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ls /etc/kubernetes/manifests
+# etcd.yaml  kube-apiserver.yaml  kube-controller-manager.yaml  kube-scheduler.yaml
+sudo cp /etc/kubernetes/manifests/kube-apiserver.yaml /root/kube-apiserver.yaml.bak
+sudo vi /etc/kubernetes/manifests/kube-apiserver.yaml   # e.g. add --audit-log-path=...
+crictl ps | grep kube-apiserver                         # watch it restart
+kubectl get pod -n kube-system kube-apiserver-cp-1 -o jsonpath='{.metadata.ownerReferences[0].kind}'
+# Node</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trying to edit or delete a mirror pod with kubectl.</li>
+  <li>Leaving backup copies in the manifests directory, which the kubelet then runs too.</li>
+  <li>Editing all control plane nodes at once instead of one at a time.</li>
+  <li>A syntax error in the file with no backup, taking the API server down.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Static pods are managed directly by the kubelet from manifest files in a directory on the node, usually /etc/kubernetes/manifests, instead of being created through the API server and scheduled. The kubelet starts them, restarts them if they die, and creates a mirror pod so you can see them with kubectl, but editing or deleting the mirror does nothing; you edit the file. Their main use is bootstrapping the control plane in kubeadm: the API server, controller manager, scheduler and etcd run as static pods because they have to start before any API exists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you change an API server flag on kubeadm?</strong> Back up and edit the manifest on each control plane node, one at a time; persist it in the kubeadm ClusterConfiguration for upgrades.</li>
+  <li><strong>Why not DaemonSets for the control plane?</strong> DaemonSets need a working API server and controllers.</li>
+  <li><strong>How do you identify a static pod?</strong> Owner reference of kind Node and the <code>kubernetes.io/config.mirror</code> annotation.</li>
+</ul>
+</article>
+</body>
+</html>

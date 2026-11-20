@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-064 · How do you manage secrets in Ansible with an external vault?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-064" data-topic="Configuration Management">
+<h1>How do you manage secrets in Ansible with an external vault?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Keep secrets <strong>out of the repository</strong> and fetch them <strong>at runtime</strong> with <strong>lookup plugins</strong> for <strong>HashiCorp Vault</strong> (<code>community.hashi_vault</code>), <strong>AWS Secrets Manager</strong> or <strong>Azure Key Vault</strong>, authenticating with <strong>short-lived machine identity</strong>, and mark secret-handling tasks <strong><code>no_log: true</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Ansible Vault</strong> encrypts files in the repository with a shared password. It works, but the password must be distributed, rotation means re-encrypting and committing, anyone with the password can read all historical secrets in Git, and there is no audit of who read what. A central secrets manager fixes those problems: one place to rotate, fine-grained policies, and an audit log of every read.</p>
+<p><strong>Lookups at runtime.</strong> A <strong>lookup plugin</strong> runs on the control node when the variable is evaluated:</p>
+<ul>
+  <li><code>community.hashi_vault.vault_kv2_get</code> (or the <code>hashi_vault</code> lookup) for Vault KV, plus modules for dynamic database credentials.</li>
+  <li><code>amazon.aws.secretsmanager_secret</code> and <code>amazon.aws.ssm_parameter</code> for AWS.</li>
+  <li><code>azure.azcollection.azure_keyvault_secret</code> for Azure Key Vault.</li>
+</ul>
+<p><strong>Authentication without a shared secret.</strong> The control node or CI runner proves its identity: Vault <strong>AppRole</strong>, <strong>JWT/OIDC</strong> tokens issued by GitHub Actions or GitLab CI, Vault's AWS or Azure auth methods, or simply the runner's <strong>IAM role / managed identity</strong> for the cloud secret stores. Tokens are short-lived and policies grant only the paths that playbook needs. In AWX/AAP, <strong>credential plugins</strong> can resolve secrets from these stores and inject them into jobs.</p>
+<p><strong>Keeping secrets out of output.</strong> Lookups return plain values that Ansible happily prints in verbose mode, in <code>diff</code> output, in error messages and in AAP job logs. <strong><code>no_log: true</code></strong> on tasks that use them (and on <code>set_fact</code> or <code>register</code> holding them) prevents this. Use <strong><code>diff: false</code></strong> for templated files containing secrets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI job obtains an OIDC token and logs in to Vault with the JWT auth method.</li>
+  <li>Vault policy grants read on <code>kv/data/app/prod/*</code> only.</li>
+  <li>Playbook variables use lookups; values resolve when templates render.</li>
+  <li>Tasks templating secrets use <code>no_log</code> and <code>diff: false</code>.</li>
+  <li>Rotation happens in Vault; the next run picks up the new value.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">vars:
+  db_password: &gt;-
+    {{ lookup('community.hashi_vault.vault_kv2_get', 'app/prod/db',
+       engine_mount_point='kv', url='https://vault.example.com',
+       auth_method='jwt', role_id='ansible-prod', jwt=lookup('env', 'CI_JOB_JWT')).secret.password }}
+tasks:
+  - name: Render app config
+    ansible.builtin.template:
+      src: app.conf.j2
+      dest: /etc/app/app.conf
+      mode: &quot;0600&quot;
+    no_log: true
+    diff: false</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>no_log</code> on <code>register</code> or <code>set_fact</code>, leaking secrets on failure.</li>
+  <li>A long-lived Vault root or admin token stored in CI variables.</li>
+  <li>Broad policies that let every playbook read every secret.</li>
+  <li>Fetching a secret once per host in a loop, hammering the vault, instead of once per play.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Instead of encrypted files in Git, I fetch secrets at runtime with lookup plugins: community.hashi_vault for Vault, the amazon.aws lookups for Secrets Manager, or the Azure Key Vault lookup. The runner authenticates with machine identity, for example a JWT from the CI system or its IAM role, so there's no shared vault password, tokens are short-lived and policies are scoped per application and environment. Rotation is central and every read is audited. Any task that touches a secret gets no_log, and templates get diff false, so values never appear in logs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is no_log important even with an external vault?</strong> The vault protects storage; Ansible still prints resolved values in logs, diffs and errors.</li>
+  <li><strong>Is Ansible Vault still useful?</strong> For bootstrapping or small setups, ideally with its password itself coming from a secrets manager.</li>
+  <li><strong>How do dynamic secrets help?</strong> Vault issues per-run database credentials that expire automatically.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-076 · Should you set CPU limits on Kubernetes containers? Give the arguments on both sides.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-076" data-topic="Kubernetes">
+<h1>Should you set CPU limits on Kubernetes containers? Give the arguments on both sides.</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>CPU is compressible</strong>: <strong>requests</strong> already guarantee a proportional share via <strong>CFS weights</strong>, while <strong>limits</strong> add a hard <strong>CFS quota</strong> that <strong>throttles even when the node is idle</strong>; so many teams <strong>omit CPU limits for latency-sensitive services</strong>, but limits still make sense for <strong>predictability, runaway protection, Guaranteed QoS / exclusive cores and multi-tenant chargeback</strong>. <strong>Memory limits should always be set.</strong></p>
+
+<h2>Detailed explanation</h2>
+<p>When a node's CPU is contended, the kernel shares it in proportion to <strong>cpu weight</strong>, which the kubelet derives from <strong>requests</strong>. A container requesting 1 CPU on a busy node still gets roughly 1 CPU's worth; when the node is quiet it can use idle cycles. That is already fair and efficient.</p>
+<p>A <strong>limit</strong> converts to a CFS quota (<code>cpu.max</code>) per 100 ms period. Once the container uses its quota, it is stopped until the next period, even if every other core is idle. Multi-threaded apps and runtimes with GC threads burst and get <strong>throttled</strong>, which shows up as p99 latency spikes and slower start-up (JVM warm-up, for example). This is the main argument <strong>against</strong> CPU limits.</p>
+<p>Arguments <strong>for</strong> limits:</p>
+<ul>
+  <li><strong>Predictability</strong>: performance in production matches what was load-tested, instead of varying with how busy neighbours are.</li>
+  <li><strong>Runaway protection</strong>: a spinning process cannot consume all idle CPU, which matters when requests are inaccurate.</li>
+  <li><strong>Guaranteed QoS</strong>: requests equal to limits for CPU and memory; with the <strong>static CPU manager policy</strong> and integer CPUs, the pod gets <strong>exclusive cores</strong>, ideal for latency-critical or NUMA-sensitive work.</li>
+  <li><strong>Multi-tenancy and cost</strong>: in shared clusters or chargeback models, limits cap what a tenant can consume; some policies (LimitRanges, compliance) require them.</li>
+</ul>
+<p><strong>Memory is different</strong>: it is <strong>incompressible</strong>. A container cannot be &quot;slowed down&quot; when memory runs out; something gets OOM-killed or evicted. Memory limits (usually equal to or near the request) keep failures contained to the offending container.</p>
+<p>A balanced default: accurate CPU requests everywhere, no CPU limit (or a generous one, for example 2-4 times the request) for latency-sensitive services, Guaranteed pods with exclusive CPUs for the most critical workloads, memory limits always.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Kubelet maps requests to cgroup CPU weight.</li>
+  <li>Under contention, CPU is shared by weight.</li>
+  <li>A limit sets a quota per 100 ms period; exceeding it throttles.</li>
+  <li>Requests equal to limits gives Guaranteed QoS.</li>
+  <li>Static CPU manager pins integer-CPU Guaranteed pods to exclusive cores.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># latency-sensitive API: no CPU limit, memory limit set
+resources:
+  requests: { cpu: 500m, memory: 512Mi }
+  limits:   { memory: 512Mi }
+---
+# critical, pinned workload: Guaranteed with integer CPUs
+resources:
+  requests: { cpu: &quot;2&quot;, memory: 4Gi }
+  limits:   { cpu: &quot;2&quot;, memory: 4Gi }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Blanket policies forcing CPU limit equal to a small request.</li>
+  <li>Removing limits while requests are guesses.</li>
+  <li>Treating memory like CPU and leaving it unlimited.</li>
+  <li>Deciding without throttling metrics.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CPU is compressible, so requests already guarantee each container a proportional share through CFS weights when the node is busy. A CPU limit adds a hard quota, so the container is throttled even when the node is idle, which often hurts tail latency. That's why I usually set accurate requests and leave CPU limits off for latency-sensitive services. On the other side, limits give predictable performance, protect against runaway processes, are needed for Guaranteed QoS and exclusive cores with the static CPU manager, and may be required for multi-tenant chargeback. Memory is incompressible, so memory limits are always set.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you decide for one service?</strong> Compare throttled-period ratio and p99 latency with and without the limit under load tests.</li>
+  <li><strong>What QoS class without CPU limits?</strong> Burstable.</li>
+  <li><strong>Does removing limits hurt neighbours?</strong> Not if their requests are accurate, since weights protect them.</li>
+</ul>
+</article>
+</body>
+</html>

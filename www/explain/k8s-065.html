@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-065 · Someone accidentally deleted a production namespace. How do you recover, and how do you prevent it from happening again?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-065" data-topic="Kubernetes">
+<h1>Someone accidentally deleted a production namespace. How do you recover, and how do you prevent it from happening again?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Contain and communicate, then <strong>recreate objects from GitOps or a Velero backup</strong>, recover <strong>persistent data</strong> depending on <strong>reclaimPolicy and snapshots</strong>, restore <strong>secrets and external resources</strong>, use <strong>audit logs</strong> to learn what happened, and prevent repeats with <strong>least-privilege RBAC</strong>, an <strong>admission policy</strong> blocking deletion of protected namespaces and <strong>restore drills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Deleting a namespace deletes everything in it: Deployments, Services, ConfigMaps, Secrets, PVCs and, through cascading deletion, their pods. Whether the <strong>data</strong> survives depends on the PersistentVolumes: dynamically provisioned volumes default to <strong>reclaimPolicy: Delete</strong>, so the cloud disks are deleted too, while <strong>Retain</strong> leaves them as <code>Released</code> PVs that can be rebound.</p>
+<p>Recovery order matters. First declare an incident, freeze further changes and tell stakeholders. Then restore <strong>configuration</strong>: with <strong>GitOps</strong> (Argo CD, Flux) the namespace and its objects are recreated by a sync within minutes, which is one of the biggest benefits of GitOps. Without it, restore from a <strong>Velero</strong> backup, which stores object manifests and optionally volume snapshots. Then restore <strong>data</strong>: rebind retained PVs to new PVCs (clear the PV's <code>claimRef</code>), restore from <strong>volume snapshots</strong>, or restore databases from their own backups with point-in-time recovery. Secrets that only existed in the cluster are a common gap; if they came from Vault or a cloud secret manager via External Secrets, they are recreated automatically. External resources created by controllers, such as load balancers, DNS records and certificates, are reprovisioned but may get new addresses.</p>
+<p>Afterwards, <strong>audit logs</strong> show which identity issued the delete and from where, which leads to a blameless review: why was this possible? Prevention: humans get read-only access to production with just-in-time elevation; a <strong>Kyverno or ValidatingAdmissionPolicy</strong> rule blocks <code>DELETE</code> on namespaces labelled <code>protected=true</code> except from a break-glass group; critical storage classes use <strong>Retain</strong>; backups are tested in regular <strong>restore drills</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare the incident and stop further changes.</li>
+  <li>Recreate objects: GitOps sync or <code>velero restore</code>.</li>
+  <li>Recover data: retained PVs, snapshots or database backups.</li>
+  <li>Restore secrets, certificates and external dependencies.</li>
+  <li>Verify the application end to end.</li>
+  <li>Audit log review, then prevention controls and drills.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">velero restore create --from-backup daily-20261120 --include-namespaces payments
+kubectl get pv | grep Released          # retained disks
+kubectl patch pv pvc-8a1f --type=json -p='[{&quot;op&quot;:&quot;remove&quot;,&quot;path&quot;:&quot;/spec/claimRef&quot;}]'</code></pre>
+<pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: protect-namespaces }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [&quot;&quot;], apiVersions: [&quot;v1&quot;], operations: [&quot;DELETE&quot;], resources: [&quot;namespaces&quot;] }
+  validations:
+    - expression: &quot;!(has(oldObject.metadata.labels) &amp;&amp; oldObject.metadata.labels['protected'] == 'true')&quot;
+      message: &quot;Protected namespace; use the break-glass process.&quot;</code></pre>
+<p>(A ValidatingAdmissionPolicyBinding activates the policy.)</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming PV data survives with the default Delete policy.</li>
+  <li>Backups never restored in practice.</li>
+  <li>Secrets only in the cluster, not in a vault.</li>
+  <li>Blaming a person instead of fixing the access model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I declare an incident and freeze changes. Objects come back from the source of truth: with GitOps, Argo CD recreates the namespace in minutes; otherwise I restore from Velero. Data is the hard part: with reclaimPolicy Retain the disks still exist and I rebind them; with Delete I need snapshots or database backups. Secrets not in a vault and external resources like DNS must be restored too. Then audit logs show who did it and how. Prevention is least-privilege RBAC, an admission policy blocking deletion of protected namespaces, Retain on critical storage, and regular restore drills.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test Velero backups?</strong> Scheduled restores into a scratch cluster with automated checks on data and app health.</li>
+  <li><strong>Why can't you just undo?</strong> Kubernetes has no recycle bin; deleted objects are gone from etcd.</li>
+  <li><strong>Can RBAC deny deletes?</strong> RBAC only grants, so remove the delete verb; admission policies add explicit denial.</li>
+</ul>
+</article>
+</body>
+</html>

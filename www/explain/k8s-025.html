@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-025 · You need to upgrade a production cluster two minor versions. How do you plan and run it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-025" data-topic="Kubernetes">
+<h1>You need to upgrade a production cluster two minor versions. How do you plan and run it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Upgrade <strong>one minor version at a time</strong> (1.33 → 1.34 → 1.35), <strong>control plane first, then nodes</strong>, respecting <strong>version skew</strong> rules; beforehand, check <strong>removed APIs</strong> (pluto, kubent, <code>apiserver_requested_deprecated_apis</code>), <strong>add-on compatibility</strong> (CNI, CoreDNS, ingress/gateway, operators), rehearse in <strong>staging</strong>, and roll nodes with <strong>surge or blue-green pools</strong> that respect <strong>PDBs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes does not support skipping minor versions on the control plane, because storage migrations and API changes are designed for adjacent versions. A two-version jump is therefore two full upgrade cycles, each with its own checks.</p>
+<p><strong>Preparation</strong> is most of the work:</p>
+<ul>
+  <li><strong>Release notes and deprecation guide</strong> for both target versions: removed APIs, changed defaults, feature gates graduating or being removed.</li>
+  <li><strong>Removed API usage:</strong> scan Git manifests and Helm charts with <strong>pluto</strong> or <strong>kubent</strong>, and check live calls with the API server metric <code>apiserver_requested_deprecated_apis</code> and audit logs, which also catch operators and scripts.</li>
+  <li><strong>Add-ons:</strong> each has a supported Kubernetes range: CNI, CoreDNS, CSI drivers, gateway controllers, cert-manager, mesh, Karpenter or Cluster Autoscaler, and every operator.</li>
+  <li><strong>Version skew policy:</strong> API servers in an HA control plane may differ by at most one minor version; kubelets must not be newer than the API server and may be up to three minors older; kubectl within one minor.</li>
+  <li><strong>Rehearsal</strong> in a staging cluster with the same add-ons and representative workloads, plus a backup (etcd snapshot or managed equivalent, Velero).</li>
+</ul>
+<p><strong>Execution</strong> per hop: upgrade the control plane (managed: one click or Terraform change; kubeadm: <code>kubeadm upgrade apply</code> on the first node, then others), then add-ons as required, then node pools. For nodes, either <strong>surge upgrades</strong> (add new-version nodes, drain old ones) or a <strong>blue-green node pool</strong>: create a new pool, cordon the old one, drain gradually, watch error rates and latency. <strong>PDBs</strong> limit disruption, so check beforehand that none allows zero disruptions.</p>
+<p><strong>Rollback:</strong> control plane downgrades are generally not supported, so the safety net is preparation, staging and the ability to keep old node pools until validation passes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Inventory: versions, add-ons, deprecated API usage.</li>
+  <li>Fix manifests and charts; upgrade incompatible add-ons.</li>
+  <li>Rehearse both hops in staging.</li>
+  <li>Back up; upgrade control plane to N+1.</li>
+  <li>Upgrade add-ons, then node pools with PDB-aware draining.</li>
+  <li>Validate; repeat for N+2.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">pluto detect-helm -o wide --target-versions k8s=v1.35.0
+pluto detect-files -d ./manifests --target-versions k8s=v1.35.0
+kubectl get --raw /metrics | grep apiserver_requested_deprecated_apis
+kubectl get pdb -A -o json | jq -r '.items[] | select(.status.disruptionsAllowed==0) | .metadata.namespace+&quot;/&quot;+.metadata.name'
+# kubeadm control plane
+kubeadm upgrade plan
+kubeadm upgrade apply v1.34.2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trying to jump two minors at once.</li>
+  <li>Upgrading the cluster before the autoscaler, CNI or operators support it.</li>
+  <li>Fixing live objects but not the Helm charts and Git sources.</li>
+  <li>Blocking PDBs discovered halfway through the node rollout.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kubernetes upgrades go one minor version at a time, so 1.33 to 1.35 is two full upgrades: control plane first, then add-ons, then nodes, within the skew policy where kubelets are never newer than the API server. Beforehand I read the release notes, find removed APIs with pluto or kubent and the deprecated-APIs metric, and check every add-on's compatibility: CNI, CoreDNS, gateway controllers, cert-manager, autoscaler and operators. I rehearse in staging, take a backup, then roll nodes with surge or a blue-green pool, respecting PDBs and watching error rates. Control plane rollback isn't really possible, so validation happens before production.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Helm release fails after upgrade due to a removed API?</strong> Use the <code>helm mapkubeapis</code> plugin to rewrite the stored release, then fix the chart.</li>
+  <li><strong>Blue-green node pool vs in-place?</strong> Blue-green allows instant fallback to the old pool while it exists.</li>
+  <li><strong>How long between hops?</strong> Long enough to validate, usually days, not minutes.</li>
+</ul>
+</article>
+</body>
+</html>

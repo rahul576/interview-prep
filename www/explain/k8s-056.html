@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-056 · A latency-sensitive service shows high p99 latency even though average CPU usage is low. What could be wrong?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-056" data-topic="Kubernetes">
+<h1>A latency-sensitive service shows high p99 latency even though average CPU usage is low. What could be wrong?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The classic cause is <strong>CPU throttling</strong>: <strong>CPU limits</strong> are enforced by the <strong>CFS quota</strong> per <strong>100 ms period</strong>, so a multi-threaded burst uses the quota early and the container is <strong>paused until the next period</strong>, adding tens of milliseconds to some requests while <strong>average usage looks low</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A CPU <strong>limit</strong> of 1 core becomes a CFS quota of 100 ms of CPU time per 100 ms period (cgroup <code>cpu.max</code>). Average usage is calculated over seconds or minutes, but enforcement happens every 100 ms. A service with 8 busy threads can consume 100 ms of CPU in about 12.5 ms of wall time, after which <strong>all</strong> its threads are stopped for the remaining 87.5 ms. A request that arrived in that window waits, so p99 explodes while the dashboard shows 30 percent average CPU.</p>
+<p>The evidence is in cAdvisor metrics: <code>container_cpu_cfs_throttled_periods_total</code> divided by <code>container_cpu_cfs_periods_total</code>. If a large share (say over 10-20 percent) of periods are throttled for a latency-sensitive service, the limit is the problem. The fix is to <strong>raise or remove the CPU limit while keeping an accurate CPU request</strong>. Requests drive scheduling and, through CPU weights, fair sharing under contention, so removing the limit still protects neighbours. Some teams keep limits but set them well above requests; the static CPU manager policy with Guaranteed pods gives exclusive cores for the most sensitive workloads.</p>
+<p>Other causes of high p99 with low average CPU: <strong>garbage collection pauses</strong>, runtimes that size thread pools from the <strong>node's</strong> CPU count instead of the container limit (old JVMs, Go before container-aware GOMAXPROCS), <strong>noisy neighbours</strong> sharing disk or memory bandwidth, <strong>conntrack or connection pool exhaustion</strong>, and DNS timeouts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compare p99 latency with throttling ratio over the same window.</li>
+  <li>Check thread counts and runtime CPU detection.</li>
+  <li>If throttled, raise or remove the CPU limit, keep the request realistic.</li>
+  <li>Re-measure p99 and throttling.</li>
+  <li>Rule out GC pauses (GC logs), node contention and connection limits.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql">sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=&quot;checkout&quot;, container=&quot;api&quot;}[5m]))
+/
+sum by (pod) (rate(container_cpu_cfs_periods_total{namespace=&quot;checkout&quot;, container=&quot;api&quot;}[5m]))</code></pre>
+<pre><code class="language-yaml">resources:
+  requests: { cpu: &quot;1&quot;, memory: 1Gi }
+  limits: { memory: 1Gi }      # no CPU limit; request still guarantees share</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Judging CPU health by averages only.</li>
+  <li>Setting CPU limit equal to a low request for every service by policy.</li>
+  <li>Ignoring that runtimes see the node's CPU count.</li>
+  <li>Removing limits without accurate requests, causing contention.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My first suspect is CPU throttling. A CPU limit is enforced as a CFS quota per 100 millisecond period. A multi-threaded service can burn its whole quota in the first few milliseconds of a burst and is then paused until the next period, so some requests wait tens of milliseconds while average CPU looks low. I check the ratio of throttled periods to total periods, and if it's high I raise or remove the CPU limit while keeping an accurate request, which still guarantees fair sharing. I'd also rule out GC pauses, thread pools sized to the node CPU count, noisy neighbours and connection exhaustion.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Arguments for and against CPU limits?</strong> For: predictability, multi-tenant fairness, cost caps. Against: throttling latency and wasted idle CPU; requests already give fair share.</li>
+  <li><strong>Does memory work the same way?</strong> No; exceeding a memory limit gets the container OOMKilled, not throttled.</li>
+  <li><strong>What does a Guaranteed pod give you?</strong> Highest QoS and, with the static CPU manager, exclusive cores.</li>
+</ul>
+</article>
+</body>
+</html>

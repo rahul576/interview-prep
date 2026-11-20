@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-070 · You must change a production database setting that Terraform says forces replacement. How do you handle it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-070" data-topic="Infrastructure as Code">
+<h1>You must change a production database setting that Terraform says forces replacement. How do you handle it?</h1>
+<p class="ex-meta">Infrastructure as Code · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Never apply a plan that replaces a production database: find <strong>why the attribute is immutable</strong>, keep <strong><code>prevent_destroy</code> and deletion protection</strong> on, and either make the change <strong>in place</strong> through another path and align the code, or run a <strong>planned migration</strong> (snapshot/restore or replication, cut-over in a window), with <strong>verified backups</strong> first.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>-/+ ... # forces replacement</code> in a plan means the provider cannot update that attribute through the cloud API, so Terraform will destroy the old resource and create a new one. For a database it means <strong>downtime and data loss</strong>, because the new instance starts empty unless restored from a snapshot.</p>
+<p><strong>Understand the cause.</strong> Typical immutable settings on AWS RDS are <code>storage_encrypted</code>/<code>kms_key_id</code>, the <code>identifier</code>, the availability zone of a single-AZ instance, and some engine changes. Sometimes the replacement is accidental: a module refactor without <code>moved</code> blocks, a changed <code>count</code> index, or a provider upgrade that changed defaults. Those are fixed in code, not by migrating.</p>
+<p><strong>Guards.</strong> <code>lifecycle { prevent_destroy = true }</code> makes Terraform refuse any plan that would destroy the resource, and the cloud's <strong>deletion protection</strong> makes the API refuse as well. Note that <code>prevent_destroy</code> lives in the resource block, so it gives no protection if someone deletes the block entirely.</p>
+<p><strong>Options.</strong></p>
+<ol>
+  <li><strong>Another attribute or API path.</strong> Many settings (instance class, storage size, parameter group, Multi-AZ) are in-place modifications, sometimes with <code>apply_immediately = false</code> to wait for the maintenance window.</li>
+  <li><strong>Migration.</strong> Create a new database alongside: restore from a snapshot (for example copying the snapshot with encryption enabled), or use replication or AWS DMS for minimal downtime. Freeze writes, take a final sync, switch the application's endpoint, verify, then retire the old one.</li>
+  <li><strong>Terraform alignment.</strong> Import the new database or point the resource at it, use <code>removed</code> with <code>destroy = false</code> for the old one, and finish with a clean plan.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the plan and identify the attribute marked &quot;forces replacement&quot;.</li>
+  <li>Check for accidental causes (addresses, provider defaults).</li>
+  <li>Verify a recent snapshot restores successfully.</li>
+  <li>Choose in-place path or migration; agree a window and rollback plan.</li>
+  <li>Execute the migration; update Terraform to manage the new database.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_db_instance&quot; &quot;orders&quot; {
+  identifier          = &quot;orders-prod&quot;
+  storage_encrypted   = true
+  deletion_protection = true
+  apply_immediately   = false
+  lifecycle {
+    prevent_destroy = true
+  }
+}</code></pre>
+<pre><code class="language-bash">aws rds create-db-snapshot --db-instance-identifier orders-prod --db-snapshot-identifier orders-pre-enc
+aws rds copy-db-snapshot --source-db-snapshot-identifier orders-pre-enc \
+  --target-db-snapshot-identifier orders-enc --kms-key-id alias/rds-prod</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Approving a plan without reading the replace markers.</li>
+  <li>Removing <code>prevent_destroy</code> &quot;just for this apply&quot;.</li>
+  <li>Migrating without testing the restore and the application cut-over.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I find out why. Some attributes, like encryption, the identifier or certain engine changes, can't be changed in place, so the provider would destroy and recreate the database, which means data loss. I check it's not accidental, like a refactor without moved blocks. prevent_destroy and deletion protection should already make the apply fail, which is the point. Then either the change can be made in place another way and I align the code, or I plan a migration: create the new database from a snapshot or with replication, cut over in a maintenance window, and update Terraform to manage the new one. Backups are verified before anything.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you enable encryption on an unencrypted RDS instance?</strong> Snapshot, copy the snapshot with a KMS key, restore, cut over; DMS for minimal downtime.</li>
+  <li><strong>Does <code>prevent_destroy</code> stop a removed resource block?</strong> No; the protection disappears with the block, so cloud deletion protection matters.</li>
+  <li><strong>Why <code>apply_immediately = false</code>?</strong> It defers disruptive modifications to the maintenance window.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-116 · How do you package and configure applications for different environments in Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-116" data-topic="Kubernetes">
+<h1>How do you package and configure applications for different environments in Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Build <strong>one immutable image</strong> and promote it through every environment; put everything that differs into <strong>configuration</strong> (ConfigMaps, Secrets synced from a vault, env vars or files), generate per-environment manifests with <strong>Kustomize overlays or Helm values files</strong>, and deploy from <strong>Git via GitOps</strong> with reviews.</p>
+
+<h2>Detailed explanation</h2>
+<p>If each environment gets its own build, production runs something that was never tested. The rule from the twelve-factor app applies: the <strong>same artefact</strong>, identified by tag and ideally digest, moves from dev to staging to prod; only configuration changes.</p>
+<p>Configuration has layers:</p>
+<ul>
+  <li><strong>ConfigMaps</strong> for non-secret settings (feature flags, URLs, log levels), mounted as files or injected as env vars.</li>
+  <li><strong>Secrets</strong> for credentials, ideally not written by hand but synced from Vault, AWS Secrets Manager or Azure Key Vault by the <strong>External Secrets Operator</strong> or mounted by the Secrets Store CSI driver.</li>
+  <li><strong>Manifest differences</strong> such as replica counts, resource requests, HPA limits, ingress hostnames, node selectors.</li>
+</ul>
+<p>To avoid copying YAML, use <strong>Kustomize</strong> (a base plus small overlays that patch differences, built into kubectl) or <strong>Helm</strong> (templated charts plus <code>values-staging.yaml</code>, <code>values-prod.yaml</code>). Kustomize suits in-house apps; Helm suits distributable packages and complex logic. Both can be combined: Argo CD renders a Helm chart and applies Kustomize patches.</p>
+<p>Everything lives in <strong>Git</strong>. Changing production means a pull request on the prod overlay, reviewed and merged, then <strong>Argo CD</strong> or <strong>Flux</strong> syncs it. Image promotion is a commit changing the tag in the next environment, so every environment is versioned and reproducible.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI builds and scans the image once, pushes <code>orders:1.8.2</code> (plus digest).</li>
+  <li>CI updates the dev overlay with the new tag; Argo CD deploys it.</li>
+  <li>Tests pass → PR promotes the same tag to staging, then prod.</li>
+  <li>Each overlay supplies its ConfigMap values, replicas and hosts.</li>
+  <li>Secrets come from the vault via External Secrets, never from Git in plain text.</li>
+  <li>Rollback = revert the commit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># overlays/prod/kustomization.yaml
+resources: [../../base]
+namespace: orders-prod
+images:
+- { name: orders, newName: registry.example.com/orders, newTag: &quot;1.8.2&quot; }
+replicas:
+- { name: orders, count: 6 }
+configMapGenerator:
+- name: orders-config
+  behavior: merge
+  literals: [LOG_LEVEL=info, PAYMENTS_URL=https://payments.prod.internal]
+patches:
+- path: resources-prod.yaml</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rebuilding images per environment or baking config into the image.</li>
+  <li>Plain Secrets committed to Git.</li>
+  <li>Huge copy-pasted manifests per environment that drift.</li>
+  <li>Using <code>latest</code> instead of immutable tags or digests.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I build the image once and promote exactly that image through every environment, so what we tested is what runs. Everything that differs is configuration: ConfigMaps for settings and Secrets synced from a vault with External Secrets, injected as env vars or files. To avoid duplicated YAML I use Kustomize with a base and per-environment overlays, or Helm with a values file per environment, for replicas, resources, ingress hosts and feature flags. All of it is in Git, changed through pull requests and deployed by Argo CD or Flux, so promotion and rollback are just commits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do pods pick up a changed ConfigMap?</strong> Env vars need a restart; use a config hash annotation or Kustomize's hashed generator names to trigger a rollout.</li>
+  <li><strong>Helm or Kustomize?</strong> Kustomize for small differences; Helm for packaging and third-party software.</li>
+  <li><strong>How do you promote between environments?</strong> A commit or automated PR changing the image tag in the next overlay.</li>
+</ul>
+</article>
+</body>
+</html>

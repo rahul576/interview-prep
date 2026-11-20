@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-059 · Pods are Pending but the cluster autoscaler does not add nodes. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-059" data-topic="Kubernetes">
+<h1>Pods are Pending but the cluster autoscaler does not add nodes. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Read the <strong>pod events</strong> and the autoscaler's <strong>logs or cluster-autoscaler-status ConfigMap</strong>; typical reasons are <strong>requests larger than any node type</strong>, node groups at <strong>max size</strong> or hitting <strong>cloud quota/capacity</strong>, <strong>selectors, taints or affinity</strong> that no node group matches, and <strong>zonal volumes</strong> in a zone the group cannot launch in.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>cluster autoscaler</strong> does not look at CPU usage. It reacts to <strong>unschedulable pods</strong>: for each node group it simulates &quot;if I added a node from this group's template, would the pending pod fit?&quot; If no group passes the simulation, it does nothing and logs why (for example <code>pod didn't trigger scale-up: 3 max node group size reached</code> or <code>didn't match node selector</code>). So the job is to find which constraint fails the simulation.</p>
+<p><strong>Too big</strong>: a pod requests 64 GiB while the largest instance in any group has 32 GiB, or requests slightly more than a node's <strong>allocatable</strong> (capacity minus system and kubelet reservations and DaemonSet overhead). <strong>Limits on the group</strong>: max size reached, cloud <strong>vCPU quota</strong>, or the provider has no capacity for that instance type in that zone; check the autoscaler events and the cloud activity log. <strong>Constraints no template satisfies</strong>: nodeSelector or affinity on a label the group does not carry, a GPU request on a non-GPU group, missing tolerations for tainted groups, topology spread that requires a zone where no group exists. <strong>Volumes</strong>: a pod bound to an existing zonal PV in zone C can only run in zone C; a node group spanning zones A and B, or an autoscaler unaware of the zone balance, cannot help.</p>
+<p>With <strong>Karpenter</strong>, there are no node groups: it reads pod requirements and picks instance types from NodePool constraints. Check the NodePool <strong>requirements</strong>, <strong>limits</strong>, the EC2NodeClass and Karpenter's events and logs for messages such as incompatible requirements.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe pod</code>: FailedScheduling message.</li>
+  <li>Read <code>kubectl -n kube-system get cm cluster-autoscaler-status -o yaml</code> and autoscaler logs.</li>
+  <li>Compare pod requests with node allocatable of each group.</li>
+  <li>Check group max sizes, cloud quotas and capacity errors.</li>
+  <li>Match selectors, affinity, tolerations and zones with group templates.</li>
+  <li>Fix the node group, NodePool or pod spec; confirm scale-up.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pod ml-batch-4 | grep -A2 FailedScheduling
+#  0/12 nodes are available: 12 Insufficient nvidia.com/gpu.
+kubectl -n kube-system logs deploy/cluster-autoscaler | grep ml-batch-4
+#  pod didn't trigger scale-up: 2 node(s) didn't match Pod's node affinity/selector, 1 max node group size reached
+kubectl get nodepools -o yaml | grep -A10 requirements   # Karpenter</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting the autoscaler to react to high CPU rather than Pending pods.</li>
+  <li>Forgetting DaemonSet overhead when sizing requests.</li>
+  <li>Scale-from-zero groups whose templates lack the labels or taints the pod needs.</li>
+  <li>Ignoring cloud quota errors in the provider console.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The pod events show why the scheduler couldn't place it, and the autoscaler logs or its status ConfigMap say why it chose not to scale, like no node group fitting. The common reasons: the pod requests more than any node type's allocatable; the node group is at max size or the cloud account hit a quota or capacity limit; a nodeSelector, affinity, GPU request or toleration matches no group template; or it needs a zonal volume in a zone where the group can't launch. I fix the group or the pod spec, and with Karpenter I check NodePool requirements, limits and events.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Karpenter pick instances?</strong> It filters instance types by pod and NodePool requirements, then picks the cheapest that fits the batch of pending pods (with spot price and capacity considered).</li>
+  <li><strong>What is allocatable?</strong> Node capacity minus kube and system reservations and eviction thresholds.</li>
+  <li><strong>Why balance zones?</strong> Zonal volumes and spread constraints need capacity in specific zones.</li>
+</ul>
+</article>
+</body>
+</html>

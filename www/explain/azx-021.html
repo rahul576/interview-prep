@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-021 · What is the difference between system-assigned and user-assigned managed identities, and when do you use each?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-021" data-topic="Azure">
+<h1>What is the difference between system-assigned and user-assigned managed identities, and when do you use each?</h1>
+<p class="ex-meta">Azure · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>system-assigned</strong> managed identity is created and deleted <strong>with one resource</strong>; a <strong>user-assigned</strong> identity is a <strong>standalone resource</strong> you can <strong>pre-create, grant roles to, and attach to many resources</strong>, which also makes it the usual choice for <strong>workload identity federation</strong> (AKS, GitHub Actions); either way grant <strong>least privilege</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Managed identities are Entra ID service principals whose credentials Azure manages and rotates, so code obtains tokens from the local identity endpoint (via <code>DefaultAzureCredential</code> or <code>ManagedIdentityCredential</code>) without any secret.</p>
+<p><strong>System-assigned:</strong> enabled on a VM, App Service, Function App and so on. Its lifecycle is tied to that resource: deleting the resource deletes the identity, leaving its role assignments orphaned until cleaned up. It is ideal for a single resource with its own permissions, and cleanup is automatic.</p>
+<p><strong>User-assigned:</strong> an <code>Microsoft.ManagedIdentity/userAssignedIdentities</code> resource. It is useful when:</p>
+<ul>
+  <li><strong>Several resources need identical access</strong>, such as VM scale set instances or multiple function apps processing the same queue.</li>
+  <li>You want to <strong>create the identity and its role assignments before</strong> the compute resource exists, avoiding RBAC <strong>propagation delays</strong> that cause first-start failures in deployments.</li>
+  <li>The identity must <strong>survive resource recreation</strong> (blue-green redeploys, immutable infrastructure), keeping access to Key Vault or SQL.</li>
+  <li>You need <strong>federated identity credentials</strong>: <strong>AKS workload identity</strong> maps a Kubernetes service account to a user-assigned identity, and <strong>GitHub Actions or Azure DevOps</strong> use OIDC federation, avoiding stored secrets. (App registrations can also hold federated credentials.)</li>
+</ul>
+<p>Microsoft's guidance now favours user-assigned identities for most production scenarios because of these lifecycle and pre-provisioning benefits, but you must avoid sharing one identity across <strong>unrelated</strong> apps, which turns it into an over-privileged blast radius.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the identity (system: toggle on resource; user: separate resource).</li>
+  <li>Assign RBAC roles at the narrowest scope (a vault, a container).</li>
+  <li>Attach a user-assigned identity to one or more resources.</li>
+  <li>Code requests a token for a resource audience; Azure returns it.</li>
+  <li>With federation, an external OIDC token is exchanged for an Entra token.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az identity create -g rg-orders -n id-orders-api
+az role assignment create --assignee &lt;principalId&gt; \
+  --role &quot;Key Vault Secrets User&quot; --scope &lt;vault-id&gt;
+az webapp identity assign -g rg-orders -n app-orders --identities &lt;identity-id&gt;
+# Code: new SecretClient(uri, new DefaultAzureCredential(
+#   new DefaultAzureCredentialOptions { ManagedIdentityClientId = &quot;&lt;client-id&gt;&quot; }));</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>System-assigned</th><th>User-assigned</th></tr></thead>
+<tbody>
+<tr><td>Lifecycle</td><td>Tied to resource</td><td>Independent</td></tr>
+<tr><td>Sharing</td><td>One resource</td><td>Many resources</td></tr>
+<tr><td>Pre-create roles</td><td>No</td><td>Yes</td></tr>
+<tr><td>Federation (AKS, GitHub)</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One user-assigned identity for many unrelated apps.</li>
+  <li>Granting Contributor at subscription scope &quot;to make it work&quot;.</li>
+  <li>Not specifying the client ID when a resource has several identities.</li>
+  <li>Forgetting role propagation delay with system-assigned identities in pipelines.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A system-assigned identity lives and dies with one resource, which is simple and cleans up automatically. A user-assigned identity is its own resource, so I can create it and its role assignments before deploying, share it across scale set instances or a set of function apps doing the same job, and keep it when resources are recreated. It's also what I use for AKS workload identity and GitHub Actions OIDC federation. In both cases I grant least-privilege roles at the narrowest scope, and I never share one identity across unrelated workloads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of sharing one identity?</strong> Compromise of any app exposes all permissions; auditing is harder.</li>
+  <li><strong>Can a resource have multiple identities?</strong> Yes, one system plus several user-assigned.</li>
+  <li><strong>How does DefaultAzureCredential pick?</strong> It tries credentials in order; specify client ID for user-assigned.</li>
+</ul>
+</article>
+</body>
+</html>

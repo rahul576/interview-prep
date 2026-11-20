@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-066 · One team's batch job makes other services on the same nodes slow. How do you handle noisy neighbours in Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-066" data-topic="Kubernetes">
+<h1>One team's batch job makes other services on the same nodes slow. How do you handle noisy neighbours in Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Confirm the contention with node metrics, then make <strong>requests reflect real usage</strong>, <strong>isolate batch on its own tainted node pool</strong>, give batch a <strong>lower PriorityClass</strong>, cap teams with <strong>ResourceQuotas</strong>, and remember that <strong>disk IO, network and memory bandwidth are not isolated</strong> by requests and limits.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes isolation is mainly about <strong>CPU and memory</strong> via cgroups, and scheduling is based on <strong>requests</strong>. If a batch job requests 0.5 CPU but uses 6, the scheduler places it next to latency-sensitive services as if it were small. Without CPU limits it will use all idle CPU, which is fine until the service needs it: CPU shares (weights from requests) protect the service proportionally, but only if its own requests are realistic. Memory overuse is worse: the node comes under pressure and the kubelet may evict pods.</p>
+<p>The first step is <strong>data</strong>: node CPU saturation, run queue, memory pressure (PSI metrics), disk IO wait and network throughput while the batch runs, plus the service's latency. Then fix the declarations: realistic <strong>requests</strong> and appropriate <strong>limits</strong> for the batch pods, so the scheduler sees them as large.</p>
+<p>The cleaner solution is <strong>isolation</strong>: a dedicated node pool for batch with a taint such as <code>workload=batch:NoSchedule</code>, batch pods carrying the toleration and a node affinity, so batch and services never share a node. A <strong>PriorityClass</strong> with lower priority for batch lets the scheduler preempt batch pods when services need room. <strong>ResourceQuotas</strong> and <strong>LimitRanges</strong> per namespace stop one team from consuming the whole cluster and enforce default requests.</p>
+<p>Shared resources still leak: <strong>disk IO</strong> on the node's disk, <strong>network bandwidth</strong>, <strong>memory bandwidth and CPU caches</strong>, and the kernel's conntrack table. IO-heavy jobs (ETL, compaction) genuinely need separate nodes or volumes with their own IOPS.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Correlate service latency with node resource metrics during batch runs.</li>
+  <li>Compare batch requests with actual usage; fix them.</li>
+  <li>Create a tainted batch node pool; add tolerations and affinity to batch jobs.</li>
+  <li>Assign a low PriorityClass to batch.</li>
+  <li>Apply ResourceQuotas and LimitRanges per team namespace.</li>
+  <li>Move IO-heavy work to separate nodes or storage.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: batch-low }
+value: 1000
+preemptionPolicy: Never
+description: &quot;Batch jobs; may be preempted by services&quot;
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: nightly-etl, namespace: data }
+spec:
+  template:
+    spec:
+      priorityClassName: batch-low
+      tolerations: [{ key: workload, value: batch, effect: NoSchedule }]
+      nodeSelector: { pool: batch }
+      containers:
+        - name: etl
+          image: registry.example.com/etl:7
+          resources:
+            requests: { cpu: &quot;4&quot;, memory: 8Gi }
+            limits: { memory: 8Gi }
+      restartPolicy: OnFailure</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tiny requests on heavy batch pods.</li>
+  <li>Taints without node affinity (pods may still land elsewhere).</li>
+  <li>Expecting CPU limits to isolate disk IO.</li>
+  <li>Arguing with the other team without data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd confirm the contention with node metrics during the batch run: CPU saturation, memory pressure, disk IO and network. If batch pods have low requests but use much more, the scheduler packs them next to services, so I'd set realistic requests and limits. The cleaner fix is isolation: a tainted node pool just for batch, a lower PriorityClass so batch can be preempted, and ResourceQuotas per team. I'd also point out that Kubernetes doesn't isolate disk IO, network or memory bandwidth, so IO-heavy jobs really need their own nodes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to show impact with data?</strong> Overlay service p99 latency with batch job schedule and node IO wait on one dashboard.</li>
+  <li><strong>Why <code>preemptionPolicy: Never</code>?</strong> Batch waits for room rather than evicting others, while still being preemptible.</li>
+  <li><strong>What are PSI metrics?</strong> Pressure stall information showing time tasks wait on CPU, memory or IO.</li>
+</ul>
+</article>
+</body>
+</html>

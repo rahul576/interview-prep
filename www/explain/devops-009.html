@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-009 · What is the difference between kill and kill -9? What is a zombie process?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-009" data-topic="Linux">
+<h1>What is the difference between kill and kill -9? What is a zombie process?</h1>
+<p class="ex-meta">Linux · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><code>kill</code> sends <strong>SIGTERM</strong>, a catchable request to shut down <strong>gracefully</strong>; <code>kill -9</code> sends <strong>SIGKILL</strong>, which <strong>cannot be caught</strong>, so there is no cleanup. A <strong>zombie</strong> is a child that has exited but has <strong>not been reaped</strong> by its parent.</p>
+
+<h2>Detailed explanation</h2>
+<p>Signals are how the kernel and other processes notify a process. <strong>SIGTERM (15)</strong>, the default for <code>kill</code>, says &quot;please terminate&quot;. A well-written program catches it, stops accepting work, finishes in-flight requests, flushes buffers, closes files and connections, and exits. <strong>SIGKILL (9)</strong> is handled by the kernel itself: the process is stopped immediately and cannot catch, block or ignore it. Nothing is flushed, temporary files and locks are left behind, and writes may be incomplete, so it is a <strong>last resort</strong> after SIGTERM has failed. <strong>SIGINT</strong> (Ctrl+C) and <strong>SIGHUP</strong> (often &quot;reload config&quot;) are other common ones.</p>
+<p>A <strong>zombie process</strong> (state <code>Z</code>, shown as <code>&lt;defunct&gt;</code>) has finished running, but its parent has not yet called <strong>wait()</strong> to read its exit status, so a small entry stays in the process table. It uses no CPU or memory, and you <strong>cannot kill it</strong>, because it is already dead. The fix is the <strong>parent</strong>: make it reap its children, or kill the parent so the zombie is adopted by PID 1 (init or systemd), which reaps it. Many zombies indicate a buggy parent and can eventually exhaust PIDs.</p>
+<p><strong>systemd</strong> handles this for services: <code>systemctl stop</code> sends SIGTERM, waits <code>TimeoutStopSec</code> (90 seconds by default), then sends SIGKILL.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kill PID</code> sends SIGTERM; the process runs its handler and exits.</li>
+  <li>If it does not exit in time, <code>kill -9 PID</code> sends SIGKILL.</li>
+  <li>When a process exits, it becomes a zombie until the parent calls wait().</li>
+  <li>If the parent dies first, PID 1 adopts and reaps the child.</li>
+  <li>systemd automates SIGTERM, timeout, then SIGKILL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kill 4321                  # SIGTERM
+sleep 10; kill -0 4321 &amp;&amp; kill -9 4321   # still alive? force it
+ps -eo pid,ppid,stat,cmd | awk '$3 ~ /Z/'   # list zombies and parents
+kill -TERM &lt;parent-pid&gt;    # fix the parent, not the zombie
+systemctl stop myapp       # SIGTERM, then SIGKILL after TimeoutStopSec</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>kill -9</code> first and causing data corruption.</li>
+  <li>Trying to kill zombies instead of fixing the parent.</li>
+  <li>Applications that ignore SIGTERM, making every stop take the full timeout.</li>
+  <li>Confusing zombies with orphans (orphans are alive and adopted by PID 1).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kill sends SIGTERM by default, which asks the process to stop; it can catch it, finish requests, flush data and exit cleanly. kill -9 sends SIGKILL, which cannot be caught or ignored, so the kernel stops it immediately with no cleanup, and that risks corrupted files, so it is a last resort. A zombie is a child that has exited but whose parent has not called wait to collect its status, so it stays in the process table in state Z. It uses no resources and killing it does nothing; you fix or kill the parent so init reaps it. systemd sends SIGTERM and then SIGKILL after a timeout.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does PID 1 in a container need to handle signals properly?</strong> PID 1 ignores signals without handlers and must reap zombies, so use exec-form entrypoints or an init like tini.</li>
+  <li><strong>What is kill -0?</strong> It checks whether a process exists without sending a signal.</li>
+  <li><strong>What does SIGHUP usually do?</strong> Reloads configuration in many daemons.</li>
+</ul>
+</article>
+</body>
+</html>

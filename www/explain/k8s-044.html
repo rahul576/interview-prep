@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-044 · How do you ensure only trusted, signed images run in your clusters?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-044" data-topic="Kubernetes">
+<h1>How do you ensure only trusted, signed images run in your clusters?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Sign images in CI</strong> (cosign keyless via Sigstore, or Notation), attach <strong>SBOM and provenance attestations</strong>, and enforce them with an <strong>admission policy</strong> (Kyverno, Sigstore policy-controller, Gatekeeper with Ratify) that verifies signer identity, allows only approved registries and requires <strong>digests</strong> rather than mutable tags.</p>
+
+<h2>Detailed explanation</h2>
+<p>A trusted image pipeline answers: who built this image, from which source, and was it changed since? <strong>Signing</strong> binds an image <strong>digest</strong> to an identity. With <strong>cosign keyless</strong> signing, the CI job gets an OIDC token (for example from GitHub Actions), <strong>Fulcio</strong> issues a short-lived certificate for that workflow identity, the signature is stored in the registry next to the image and recorded in the <strong>Rekor transparency log</strong>. There is no long-lived private key to leak, and verifiers check &quot;signed by workflow X in repo Y&quot;. <strong>Notation</strong> (Notary Project) is the alternative common with Azure and enterprise PKI.</p>
+<p>CI also attaches <strong>attestations</strong>: an <strong>SBOM</strong> (SPDX or CycloneDX) and <strong>SLSA provenance</strong> describing the build. Signing happens after build, tests and vulnerability scanning, so a signature means the image passed the pipeline.</p>
+<p>Enforcement happens at <strong>admission</strong>. A policy engine intercepts pod creation, resolves the image to its digest, verifies the signature against the expected issuer and subject, optionally verifies attestations (for example, provenance from your builder, no critical CVEs at scan time), and rejects images from unapproved registries. Referencing by <strong>digest</strong> matters because a tag can be moved to a different image after verification. Policies roll out in <strong>audit</strong> mode first, then enforce, with a documented <strong>break-glass</strong> exception.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI builds, tests and scans the image, then pushes it and records the digest.</li>
+  <li><code>cosign sign</code> keylessly with the CI OIDC identity; signature logged in Rekor.</li>
+  <li><code>cosign attest</code> SBOM and provenance.</li>
+  <li>Deployment manifests reference <code>image@sha256:...</code>.</li>
+  <li>Admission policy verifies signature, identity and attestations; restricts registries.</li>
+  <li>Start in audit, monitor violations, then enforce.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">cosign sign --yes registry.example.com/shop/api@sha256:3f1c...
+cosign attest --yes --type spdxjson --predicate sbom.spdx.json registry.example.com/shop/api@sha256:3f1c...</code></pre>
+<pre><code class="language-yaml">apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata: { name: verify-signed-images }
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 15
+  rules:
+    - name: cosign-keyless
+      match: { any: [{ resources: { kinds: [Pod] } }] }
+      verifyImages:
+        - imageReferences: [&quot;registry.example.com/*&quot;]
+          mutateDigest: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    subject: &quot;https://github.com/example/shop/.github/workflows/release.yml@refs/heads/main&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Verifying &quot;any valid signature&quot; instead of a specific identity.</li>
+  <li>Signing tags rather than digests.</li>
+  <li>Enforcing immediately and blocking system images.</li>
+  <li>Treating a signature as proof the image has no vulnerabilities.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I sign every image in CI after it's built and scanned, using cosign keyless signing so the signature is tied to the pipeline's OIDC identity and logged in Rekor, with no long-lived keys. CI also attaches an SBOM and SLSA provenance. In the cluster, Kyverno or the Sigstore policy-controller verifies the signature and expected signer identity at admission and rejects unapproved registries. Manifests use digests, so what we verified is exactly what runs. I roll policies out in audit mode first and keep a break-glass process.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does a signature prove?</strong> Who signed which digest; not that the code is secure or bug-free.</li>
+  <li><strong>Why digests?</strong> Tags are mutable; a digest is content-addressed.</li>
+  <li><strong>How do you handle third-party images?</strong> Mirror into your registry, scan and re-sign, or verify the vendor's signatures.</li>
+</ul>
+</article>
+</body>
+</html>

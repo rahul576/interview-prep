@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-058 · Pipeline jobs wait a long time in the queue before an agent picks them up. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-058" data-topic="Azure DevOps &amp; Pipelines">
+<h1>Pipeline jobs wait a long time in the queue before an agent picks them up. How do you investigate?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Check <strong>pool capacity</strong> and <strong>parallel job limits</strong>, <strong>agent state</strong> (offline/busy) and <strong>demands vs capabilities</strong>, <strong>autoscaling settings</strong> (max agents, scale speed, <strong>standby agents</strong>) for VMSS or Managed DevOps Pools, <strong>stuck long-running jobs</strong>, and whether it is really <strong>queueing</strong> or an <strong>exclusive lock / approval</strong> wait.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Parallel jobs:</strong> an organisation can only run as many concurrent jobs as it has <strong>parallel jobs</strong>: separately for <strong>Microsoft-hosted</strong> and <strong>self-hosted</strong> agents. If 10 jobs are running and you have 10 parallel jobs, the 11th waits regardless of idle agents. <strong>Organization settings → Parallel jobs</strong> shows usage and the queue.</p>
+<p><strong>Agent availability:</strong> in the pool, check how many agents are <strong>online, offline, or busy</strong>. Offline agents may have crashed, lost network, or been deprovisioned. A job's <strong>demands</strong> (for example <code>Agent.OS -equals Linux</code>, <code>docker</code>, a specific tool) must match agent <strong>capabilities</strong>; if only two agents have Docker, Docker jobs queue behind each other even when other agents are idle.</p>
+<p><strong>Autoscaling:</strong> for <strong>VMSS agents</strong>, check max agent count, the number of standby agents and the time to provision a VM (image size, extension install). For <strong>Managed DevOps Pools</strong>, check <strong>maximum agents</strong>, <strong>standby agent schedules</strong> (none overnight means the first morning jobs wait for cold starts) and subnet IP capacity for VNet-injected pools. Quota limits for the VM family can also block scale-out.</p>
+<p><strong>Stuck jobs:</strong> hung test runs, waiting prompts or deadlocks can hold agents for hours. Set <strong>job <code>timeoutInMinutes</code></strong> and <code>cancelTimeoutInMinutes</code>, and find long-running jobs in the pool's job list.</p>
+<p><strong>Not really queueing:</strong> a stage waiting for an <strong>environment check</strong> shows as waiting: <strong>exclusive lock</strong> (another run is deploying), <strong>pending approval</strong>, <strong>business hours</strong> check, or Azure Monitor gate. The run's view shows &quot;Waiting for checks&quot;, not &quot;Waiting for an agent&quot;.</p>
+<p><strong>Data:</strong> pool <strong>analytics</strong> (queue time, concurrency) and the run timeline tell you which cause applies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open the waiting run: agent wait or check wait?</li>
+  <li>Check parallel job usage at org level.</li>
+  <li>Check pool agents: online/busy/offline, capabilities.</li>
+  <li>Check scaling settings, standby, quota, subnet IPs.</li>
+  <li>Find long-running jobs; add timeouts.</li>
+  <li>Adjust capacity, demands or schedules; monitor queue time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">jobs:
+- job: test
+  timeoutInMinutes: 30          # prevent hung jobs from holding agents
+  pool:
+    name: mdp-linux
+    demands: [ docker ]</code></pre>
+<pre><code class="language-bash">az pipelines pool list -o table
+az pipelines agent list --pool-id 12 --include-capabilities -o table \
+  --query &quot;[].{name:name,status:status,enabled:enabled}&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding agents without buying parallel jobs.</li>
+  <li>Overly specific demands that match one agent.</li>
+  <li>No standby agents during peak morning hours.</li>
+  <li>Default 60-minute (or unlimited on self-hosted) job timeouts for hung tests.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I check the pool: how many agents are online, busy or offline, and whether we've hit our parallel job limit, because Microsoft-hosted and self-hosted parallelism are both capped by licensing. Then demands: if the job needs a capability few agents have, it waits for those. For scale set agents or Managed DevOps Pools I check the max agent count, scale-up speed and standby agents, since cold starts add minutes. Hung jobs without timeouts can hold agents for hours. And sometimes it's not queueing at all but an exclusive lock or pending approval. Pool analytics and the run timeline tell me which.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How many parallel jobs to buy?</strong> Look at peak concurrent demand and queue time in analytics; target acceptable p90 wait.</li>
+  <li><strong>Standby cost vs speed?</strong> Schedule standby for working hours only.</li>
+  <li><strong>Why do VNet-injected pools stall?</strong> Subnet IP exhaustion or VM quota.</li>
+</ul>
+</article>
+</body>
+</html>
