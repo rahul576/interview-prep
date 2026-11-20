@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-069 · Is exactly-once message delivery possible, and how do real systems achieve exactly-once processing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-069" data-topic="Distributed Systems">
+<h1>Is exactly-once message delivery possible, and how do real systems achieve exactly-once processing?</h1>
+<p class="ex-meta">Distributed Systems · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Exactly-once <strong>delivery</strong> is impossible over unreliable networks; systems achieve exactly-once <strong>effect</strong> with <strong>at-least-once delivery + deduplication/idempotent consumers</strong>, Kafka's <strong>idempotent producers and transactions</strong>, and <strong>atomic commits of results with offsets</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Two Generals problem in practice: a sender gets no ack. Was the message lost, or was the ack lost? It must choose: resend (risk duplicate → at-least-once) or not (risk loss → at-most-once). No protocol avoids both on its own.</p>
+<p>So &quot;exactly-once&quot; in products really means: the <strong>observable effect</strong> of processing happens once.</p>
+<p>Techniques:</p>
+<ul>
+  <li><strong>Idempotent processing:</strong> upserts keyed by event ID, <code>INSERT … ON CONFLICT DO NOTHING</code>, setting state rather than incrementing.</li>
+  <li><strong>Deduplication store:</strong> remember processed message IDs (with TTL) in the same DB transaction as the effect (<strong>inbox pattern</strong>).</li>
+  <li><strong>Kafka idempotent producer:</strong> broker deduplicates producer retries using producer ID + sequence numbers.</li>
+  <li><strong>Kafka transactions:</strong> consume → produce output + commit consumer offsets atomically; downstream consumers with <code>read_committed</code> see only committed results.</li>
+  <li><strong>External sinks:</strong> store output and source offsets in one DB transaction, or use two-phase-commit sinks (Flink).</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Consumer reads message (id=m17).</li>
+  <li><code>BEGIN; INSERT INTO processed(id) VALUES ('m17')</code> (unique) → if conflict, skip.</li>
+  <li>Apply effect; <code>COMMIT</code>.</li>
+  <li>Commit offset (if crash before this, redelivery is deduplicated in step 2).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">props.put(&quot;enable.idempotence&quot;, &quot;true&quot;);
+props.put(&quot;transactional.id&quot;, &quot;payments-processor-1&quot;);
+producer.initTransactions();
+producer.beginTransaction();
+producer.send(outputRecord);
+producer.sendOffsetsToTransaction(offsets, consumer.groupMetadata());
+producer.commitTransaction();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing a broker setting alone gives end-to-end exactly-once with external side effects.</li>
+  <li>Dedup store in a different transaction from the effect.</li>
+  <li>Side effects like emails that can't be deduplicated by the receiver.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Exactly-once delivery isn't achievable over a network, so I design for at-least-once delivery and make processing idempotent. Consumers record processed message IDs in the same transaction as their effect, or use naturally idempotent writes. Within Kafka, idempotent producers plus transactions make read-process-write exactly-once, and for external databases I commit results and offsets together.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Exactly-once email sending?</strong> Record &quot;sent&quot; with message ID before/after via provider idempotency key; accept rare duplicates or use provider dedup.</li>
+  <li><strong>At-most-once use cases?</strong> Metrics where loss is acceptable but duplicates aren't.</li>
+  <li><strong>What's the inbox pattern?</strong> Consumer-side dedup table in the same transaction.</li>
+</ul>
+</article>
+</body>
+</html>

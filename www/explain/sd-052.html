@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-052 · A popular cache key expires and thousands of requests hit the database at once. How do you prevent this cache stampede?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-052" data-topic="Scalability &amp; Reliability">
+<h1>A popular cache key expires and thousands of requests hit the database at once. How do you prevent this cache stampede?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>cache stampede</strong> (thundering herd) happens when a hot key expires and many requests rebuild it at once; prevent it with <strong>request coalescing/locks</strong>, <strong>stale-while-revalidate</strong>, <strong>probabilistic early refresh</strong>, <strong>TTL jitter</strong> and <strong>pre-warming</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Suppose the home page data takes 300 ms to compute and gets 5,000 requests/s. When it expires, in those 300 ms about 1,500 requests miss and all hit the database with the same expensive query. The database slows, more requests pile up, and an outage follows.</p>
+<p>Remedies:</p>
+<ul>
+  <li><strong>Single flight / coalescing:</strong> only one request per key recomputes; others wait for its result (in-process) or briefly serve stale data. Across instances, use a short Redis lock (<code>SET lock:key NX PX 5000</code>).</li>
+  <li><strong>Stale-while-revalidate:</strong> store a soft expiry and a hard expiry. After soft expiry, serve the old value and trigger one background refresh.</li>
+  <li><strong>Probabilistic early expiration (XFetch):</strong> each request recomputes early with a probability that increases near expiry, spreading refreshes.</li>
+  <li><strong>Jitter:</strong> randomise TTLs so keys written together don't expire together.</li>
+  <li><strong>Pre-warm / scheduled refresh</strong> for known hot keys.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read key → value + soft_expiry.</li>
+  <li>If fresh → return.</li>
+  <li>If stale but present → return stale; try <code>SET lock NX</code>; winner refreshes asynchronously.</li>
+  <li>If absent → winner rebuilds; others wait briefly then retry or return a fallback.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">val, soft_exp = cache.get_with_meta(key)
+if val and time.time() &lt; soft_exp:
+    return val
+if redis.set(f&quot;lock:{key}&quot;, 1, nx=True, px=5000):
+    refresh_async(key)            # recompute, set new value + soft_exp
+if val:
+    return val                    # serve stale while refreshing
+return wait_for_value(key, timeout=0.5) or fallback()</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Identical TTLs for keys loaded at startup.</li>
+  <li>Locks without expiry (a crashed refresher blocks forever).</li>
+  <li>Making every waiter hit the DB after the lock holder fails.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That's a cache stampede. I'd make sure only one request rebuilds the key, using request coalescing in-process and a short distributed lock across instances, while everyone else keeps getting the stale value: stale-while-revalidate. I'd add jitter to TTLs, and for known hot keys refresh them proactively before they expire, so they never actually go missing under load.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detect hot keys?</strong> Redis <code>--hotkeys</code>, client-side sampling, per-key metrics.</li>
+  <li><strong>What if the DB is down?</strong> Serve stale longer; circuit breaker.</li>
+  <li><strong>CDN equivalent?</strong> <code>stale-while-revalidate</code> and request collapsing at the edge.</li>
+</ul>
+</article>
+</body>
+</html>

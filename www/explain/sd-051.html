@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-051 · Which caching strategy would you use for a product catalogue versus a user’s shopping cart, and why?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-051" data-topic="Scalability &amp; Reliability">
+<h1>Which caching strategy would you use for a product catalogue versus a user’s shopping cart, and why?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Pick the caching strategy by <strong>read/write ratio and staleness tolerance</strong>: the product catalogue suits <strong>cache-aside with TTL plus a CDN</strong>; the shopping cart suits <strong>Redis as the durable primary store</strong> (or <strong>write-through</strong>), with <strong>prices re-validated at checkout</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The main strategies:</p>
+<ul>
+  <li><strong>Cache-aside (lazy loading):</strong> app reads cache; on miss, reads DB and fills cache. Writes go to DB and delete the key. Simple, resilient (cache down = slower, not broken), but the first read after a change is a miss.</li>
+  <li><strong>Read-through:</strong> the cache library loads from the DB itself; same idea, cleaner code.</li>
+  <li><strong>Write-through:</strong> writes go to cache and DB synchronously; reads are always warm, writes are slower.</li>
+  <li><strong>Write-back (write-behind):</strong> write to cache, flush to DB later; fastest writes, risk of losing data if the cache dies.</li>
+</ul>
+<p><strong>Catalogue:</strong> millions of reads, few updates, a few minutes of staleness is fine (except price/stock at checkout). Cache-aside with TTL + invalidation on product update events, plus CDN for pages and images.</p>
+<p><strong>Cart:</strong> per-user, written frequently, must not lose items, read mostly by its owner. Many shops keep active carts in <strong>Redis with AOF persistence and replicas</strong> as the system of record, and persist to the DB at checkout or on a schedule. Alternatively write-through to the DB. Write-back is risky unless the cache is durable.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>GET /product/42</code> → Redis → miss → DB → <code>SET product:42 … EX 600</code>.</li>
+  <li>Product updated → event → <code>DEL product:42</code> (+ CDN purge).</li>
+  <li><code>POST /cart/items</code> → Redis hash <code>cart:{user}</code> (persisted) → TTL 30 days.</li>
+  <li>Checkout → read cart → fetch live prices/stock from source → order.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def get_product(pid):
+    data = redis.get(f&quot;product:{pid}&quot;)
+    if data: return json.loads(data)
+    p = db.fetch_product(pid)
+    redis.set(f&quot;product:{pid}&quot;, json.dumps(p), ex=600 + random.randint(0, 60))
+    return p</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>Read speed</th><th>Write speed</th><th>Data loss risk</th></tr></thead>
+<tbody>
+<tr><td>Cache-aside</td><td>Fast after warm-up</td><td>Normal</td><td>None</td></tr>
+<tr><td>Write-through</td><td>Always warm</td><td>Slower</td><td>None</td></tr>
+<tr><td>Write-back</td><td>Fast</td><td>Fastest</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Caching prices and charging the cached price.</li>
+  <li>Write-back with a non-persistent cache.</li>
+  <li>No TTL jitter (mass expiry).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For the catalogue I'd use cache-aside with a TTL and event-driven invalidation, plus a CDN, since it's read-heavy and tolerates slight staleness. The cart is per-user and write-heavy, so I'd store it in Redis with persistence and replication as its primary store, or write-through to the database. At checkout, price and stock are always re-read from the source of truth.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why delete instead of update on write?</strong> Avoids races writing stale values.</li>
+  <li><strong>Guest carts?</strong> Key by anonymous session ID, merge on login.</li>
+  <li><strong>Read-through vs cache-aside?</strong> Same pattern; who owns the loading code.</li>
+</ul>
+</article>
+</body>
+</html>

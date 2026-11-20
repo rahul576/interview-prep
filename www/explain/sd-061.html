@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-061 · How do you implement a distributed lock safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-061" data-topic="Distributed Systems">
+<h1>How do you implement a distributed lock safely?</h1>
+<p class="ex-meta">Distributed Systems · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A safe distributed lock needs <strong>expiry</strong>, <strong>owner tokens</strong>, and, for correctness, <strong>fencing tokens</strong> checked by the protected resource; Redis <code>SET NX PX</code> suits <strong>efficiency</strong> locks, <strong>etcd/ZooKeeper</strong> suit <strong>correctness</strong> locks, and often <strong>conditional writes</strong> remove the need for locks entirely.</p>
+
+<h2>Detailed explanation</h2>
+<p>Two kinds of locks:</p>
+<ul>
+  <li><strong>Efficiency locks:</strong> prevent duplicate work (two workers generating the same report). If the lock occasionally fails, you waste some CPU. Redis is fine.</li>
+  <li><strong>Correctness locks:</strong> two holders would corrupt data (double charge, overwrite). Here you need stronger guarantees.</li>
+</ul>
+<p>Why expiry? A holder may crash; without a TTL the lock is held forever. But expiry creates the core problem: a holder can <strong>pause</strong> (GC, VM migration, network delay) longer than the TTL. The lock expires, someone else acquires it, then the first holder wakes up and writes, believing it still owns the lock.</p>
+<p><strong>Fencing tokens</strong> solve this: the lock service returns a monotonically increasing number with each grant; the storage layer accepts writes only with a token ≥ the highest it has seen. etcd revisions and ZooKeeper zxids provide such numbers; plain Redis doesn't, which is the core of the Redlock debate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Acquire: <code>SET lock:job42 &lt;uuid&gt; NX PX 30000</code> (or etcd lease + key).</li>
+  <li>Do work; extend the TTL if needed (watchdog).</li>
+  <li>Write to resource with fencing token; resource checks it.</li>
+  <li>Release only if value == my uuid (Lua script).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-lua">-- safe release
+if redis.call(&quot;GET&quot;, KEYS[1]) == ARGV[1] then
+  return redis.call(&quot;DEL&quot;, KEYS[1])
+else return 0 end</code></pre>
+<pre><code class="language-sql">-- lock-free alternative: conditional write
+UPDATE jobs SET owner='w7', version=version+1 WHERE id=42 AND version=5;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>DEL</code> without checking ownership (releasing someone else's lock).</li>
+  <li>No TTL, or TTL shorter than the work.</li>
+  <li>Assuming Redis locks are safe for correctness under pauses.</li>
+  <li>Locks where a unique constraint or compare-and-set would do.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I ask whether I need a lock at all: idempotency, unique constraints or compare-and-set often solve it. For efficiency locks I use Redis SET NX with a TTL and a random owner value, releasing only my own lock. For correctness, I use etcd or ZooKeeper and pass a fencing token to the protected resource, which rejects writes from stale holders, because any lock with expiry can be outlived by a paused process.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is Redlock controversial?</strong> It relies on timing assumptions and lacks fencing tokens.</li>
+  <li><strong>Lock renewal?</strong> Watchdog threads extending TTL (Redisson).</li>
+  <li><strong>Database advisory locks?</strong> <code>pg_advisory_lock</code> for single-DB coordination.</li>
+</ul>
+</article>
+</body>
+</html>

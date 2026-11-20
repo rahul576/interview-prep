@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-053 · How do you keep a cache consistent with the database when data changes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-053" data-topic="Scalability &amp; Reliability">
+<h1>How do you keep a cache consistent with the database when data changes?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep cache and DB consistent by <strong>writing the DB then deleting the cache key</strong>, guarding against races with <strong>delayed double delete, versions or leases</strong>, using <strong>CDC-driven invalidation</strong> for reliability, <strong>TTLs as a safety net</strong>, and <strong>bypassing the cache</strong> for critical reads.</p>
+
+<h2>Detailed explanation</h2>
+<p>Perfect consistency between two systems without a shared transaction is impossible; the goal is <strong>bounded staleness</strong>.</p>
+<p>Why delete rather than update? Two writers updating cache values can apply them in the wrong order, leaving an old value indefinitely. Deleting means the next read loads the current DB value.</p>
+<p>The classic race with delete: Reader R misses, reads old value V1 from DB… Writer W updates DB to V2 and deletes the key… R then writes V1 into the cache. Now stale until TTL. Mitigations:</p>
+<ul>
+  <li><strong>Delayed double delete:</strong> delete again ~1 s after the write.</li>
+  <li><strong>Versioned values:</strong> store a version; only set if newer (Lua compare-and-set).</li>
+  <li><strong>Leases</strong> (Facebook's Memcache paper): a miss returns a lease token; only the token holder can fill, and a delete invalidates outstanding leases.</li>
+</ul>
+<p><strong>CDC-driven invalidation:</strong> a consumer reads the DB change log (Debezium) and deletes affected keys. It catches every committed change, even if the app crashed after writing the DB.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write: <code>UPDATE db</code> → commit → <code>DEL cache:key</code> (and/or CDC consumer deletes).</li>
+  <li>Read: cache-aside with TTL (e.g. 5–15 min) as the upper bound on staleness.</li>
+  <li>Critical reads (balance, stock at checkout): go to the DB.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Debezium (orders table) → Kafka → invalidator → DEL order:{id}, DEL customer:{cid}:orders</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Updating the cache before committing the DB transaction.</li>
+  <li>No TTL at all.</li>
+  <li>Invalidating only one of several cached representations of the same data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I write the database first, then delete the cache entry, so the next read loads fresh data. Because there's still a race where a slow reader re-populates an old value, I'd add a delayed second delete or versioned writes, and ideally drive invalidation from CDC so every committed change triggers it. TTLs bound how long anything stale can live, and for critical reads like balances I skip the cache.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Write-through instead?</strong> Still racy across writers; deletion is simpler.</li>
+  <li><strong>Multiple cached views of one entity?</strong> Track dependencies or use tag-based invalidation.</li>
+  <li><strong>Multi-region caches?</strong> Invalidate via replicated events in each region.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-077 · Design a platform that serves a large language model to thousands of concurrent users with low latency.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-077" data-topic="AI &amp; ML System Design">
+<h1>Design a platform that serves a large language model to thousands of concurrent users with low latency.</h1>
+<p class="ex-meta">AI &amp; ML System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>LLM serving at scale uses <strong>GPU inference servers (vLLM, TensorRT-LLM)</strong> with <strong>continuous batching</strong>, careful <strong>KV-cache management (PagedAttention, prefix caching)</strong>, <strong>token streaming</strong>, a gateway with <strong>token-based quotas</strong>, <strong>autoscaling on queue depth/tokens</strong>, and cost levers like <strong>quantisation, speculative decoding and model routing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Generating text is <strong>memory-bandwidth bound</strong>: each new token requires reading the model weights. Processing one request at a time leaves the GPU mostly idle, so <strong>batching</strong> many sequences together multiplies throughput. <strong>Continuous (in-flight) batching</strong> adds new requests and removes finished ones at each decoding step rather than waiting for a full batch, which is the main reason vLLM-style servers deliver several times higher throughput.</p>
+<p>The <strong>KV cache</strong> stores attention keys/values for every token of every active sequence; it limits how many concurrent requests fit in GPU memory. <strong>PagedAttention</strong> allocates it in pages (like virtual memory) to avoid fragmentation; <strong>prefix caching</strong> reuses the KV cache for shared system prompts.</p>
+<p>Latency metrics: <strong>time to first token (TTFT)</strong> (prefill cost, grows with prompt length) and <strong>inter-token latency / tokens per second</strong>. Users perceive streaming as fast, so stream tokens via SSE.</p>
+<p>Scaling: large models need tensor parallelism across GPUs on one node; replicas behind a router that's <strong>load-aware</strong> (queue length, KV utilisation). GPU nodes and model loading take minutes, so keep warm capacity and autoscale on <strong>queue depth or tokens/s</strong>, not CPU.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gateway: auth, per-tenant token quotas, routing by model.</li>
+  <li>Router: pick least-loaded replica (or one with matching prefix cache).</li>
+  <li>Inference server: prefill → decode loop with continuous batching → stream tokens.</li>
+  <li>Metrics: TTFT, tokens/s, queue time, GPU utilisation, KV-cache usage.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --tensor-parallel-size 1 --max-num-seqs 256 \
+  --enable-prefix-caching --gpu-memory-utilization 0.90</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Autoscaling on CPU.</li>
+  <li>Static batching with fixed batch sizes.</li>
+  <li>Ignoring prompt length (long prompts dominate TTFT and memory).</li>
+  <li>No per-tenant limits, so one batch job starves interactive users.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd run models on GPU nodes with an inference server like vLLM, using continuous batching and paged KV-cache management to maximise utilisation, with prefix caching for shared system prompts. Responses stream over SSE, so time to first token is the key latency metric. A gateway enforces token quotas and routes to the least-loaded replica; autoscaling uses queue depth or tokens per second with warm spare capacity. For cost, quantisation, speculative decoding and routing simple requests to smaller models.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Dashboard metrics?</strong> TTFT p50/p95, tokens/s, queue time, GPU and KV utilisation, error rate, cost per 1k tokens.</li>
+  <li><strong>Separate interactive vs batch?</strong> Priority queues or separate pools.</li>
+  <li><strong>Prefill/decode disaggregation?</strong> Run prefill and decode on different GPU pools for efficiency.</li>
+</ul>
+</article>
+</body>
+</html>

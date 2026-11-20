@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-059 · How does leader election work in a distributed system, and what can go wrong?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-059" data-topic="Distributed Systems">
+<h1>How does leader election work in a distributed system, and what can go wrong?</h1>
+<p class="ex-meta">Distributed Systems · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Leader election picks one coordinator using a <strong>consensus system (ZooKeeper, etcd, Raft)</strong> with <strong>leases and heartbeats</strong> and a <strong>quorum</strong>; the main danger is <strong>split brain</strong>, prevented with <strong>fencing tokens</strong> that let resources reject stale leaders.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many tasks need exactly one actor: a scheduler firing jobs, a partition owner, the primary database. Rolling your own election with timestamps or &quot;whoever writes first&quot; fails under network partitions and pauses.</p>
+<p>Consensus systems provide linearizable primitives: an <strong>ephemeral node</strong> in ZooKeeper or a <strong>lease</strong> in etcd, owned by a session kept alive by heartbeats. If the leader stops heartbeating, the lease expires and another candidate acquires it. Because the consensus cluster requires a <strong>majority</strong>, a node on the minority side of a partition can't become leader.</p>
+<p><strong>Split brain:</strong> the old leader may not <em>know</em> it lost leadership, for example after a 30 s GC pause, and may still act. <strong>Fencing tokens</strong> fix this: each leadership term gets a monotonically increasing number (etcd revision, ZooKeeper zxid); every write to shared resources includes it, and the resource rejects tokens lower than the highest seen.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Candidates try to create/acquire the lease key.</li>
+  <li>Winner becomes leader; gets term/token.</li>
+  <li>Leader renews the lease periodically (e.g. TTL 15 s, renew every 5 s).</li>
+  <li>Followers watch the key; on deletion/expiry, contend again.</li>
+  <li>Leader includes the token in all side-effecting operations.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-go">// etcd concurrency package
+s, _ := concurrency.NewSession(cli, concurrency.WithTTL(15))
+e := concurrency.NewElection(s, &quot;/scheduler/leader&quot;)
+e.Campaign(ctx, hostname)        // blocks until elected
+// leadership revision usable as fencing token: e.Rev()</code></pre>
+<p>In Kubernetes, the <code>coordination.k8s.io/Lease</code> API offers the same for pods.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming the leader always knows it's the leader.</li>
+  <li>Lease TTLs shorter than realistic GC/network pauses.</li>
+  <li>Using an even-sized consensus cluster.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use an existing consensus system like etcd, ZooKeeper or Kubernetes Leases rather than build it. A node acquires a lease and renews it with heartbeats; if it disappears, the lease expires and another takes over. Quorum prevents a minority partition from electing a leader. Because an old leader can still be alive after a pause, every write carries a fencing token from the leadership term, and resources reject older tokens.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Kubernetes pods?</strong> client-go leaderelection with a Lease object.</li>
+  <li><strong>Why odd cluster sizes?</strong> Majority tolerance: 3 tolerates 1, 5 tolerates 2.</li>
+  <li><strong>What if etcd is down?</strong> No new leaders; current one should step down when it can't renew.</li>
+</ul>
+</article>
+</body>
+</html>
