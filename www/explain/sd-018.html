@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-018 · A query on a 500 million row orders table takes 40 seconds. How would you investigate and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-018" data-topic="Data &amp; Storage Design">
+<h1>A query on a 500 million row orders table takes 40 seconds. How would you investigate and fix it?</h1>
+<p class="ex-meta">Data &amp; Storage Design · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Start with <strong>EXPLAIN ANALYZE</strong> to see why the query is slow (usually a full scan or bad plan), then fix it with the <strong>right index</strong> (composite column order, covering), query rewrites, fresh statistics and, at this size, <strong>partitioning and archiving</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A 40-second query on 500M rows almost always reads far more rows than it returns. The execution plan tells you where time goes: sequential scans, nested loops over millions of rows, huge sorts spilling to disk.</p>
+<p><strong>B-tree indexes</strong> keep keys sorted, so equality and range lookups touch a few pages instead of the whole table. For composite indexes, <strong>column order matters</strong> (leftmost prefix rule): an index on <code>(customer_id, created_at)</code> serves <code>WHERE customer_id = ? AND created_at &gt; ?</code> but not <code>WHERE created_at &gt; ?</code> alone. A <strong>covering index</strong> (<code>INCLUDE</code> columns) lets the database answer from the index alone.</p>
+<p>Indexes can be ignored when you wrap the column in a function (<code>WHERE date(created_at) = …</code>), compare mismatched types, use leading wildcards (<code>LIKE '%abc'</code>), or when statistics are stale.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Capture the exact query and parameters (slow query log, pg_stat_statements).</li>
+  <li><code>EXPLAIN (ANALYZE, BUFFERS)</code> and read: scan types, row estimates vs actual, sort/hash spills.</li>
+  <li>Add or fix an index matching filter + sort columns; create it <strong>concurrently</strong> on a live table.</li>
+  <li>Rewrite the query (avoid functions on columns, select only needed columns, keyset pagination instead of OFFSET).</li>
+  <li><code>ANALYZE</code> to refresh statistics.</li>
+  <li>Long term: partition by date and archive old rows.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">EXPLAIN ANALYZE SELECT id, total FROM orders
+WHERE customer_id = 42 AND created_at &gt;= now() - interval '90 days'
+ORDER BY created_at DESC LIMIT 50;
+-- Seq Scan on orders (rows=500M) ... 40s
+CREATE INDEX CONCURRENTLY idx_orders_cust_created
+  ON orders (customer_id, created_at DESC) INCLUDE (total);
+-- Index Only Scan ... 3 ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding an index for every column (each slows every write).</li>
+  <li>Wrong column order in a composite index.</li>
+  <li>Creating an index without <code>CONCURRENTLY</code> and locking writes for minutes.</li>
+  <li>Using <code>OFFSET 100000</code> pagination on huge tables.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd reproduce the query and run EXPLAIN ANALYZE. Most likely it's scanning the whole table. I'd add a composite index on the filter and sort columns, here customer and created date, maybe covering the selected columns, and build it concurrently. I'd also check for functions on indexed columns and stale statistics. For a 500-million-row table I'd partition by month and archive old data so it stays fast.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might the DB ignore an index?</strong> Low selectivity, functions on columns, type mismatch, stale stats.</li>
+  <li><strong>Keyset vs OFFSET pagination?</strong> Keyset uses <code>WHERE created_at &lt; last_seen</code>, constant cost.</li>
+  <li><strong>Cost of indexes?</strong> Slower writes, more storage and memory.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,5 +1,15 @@
 # InterviewPro — V1.10
 
+## What's new in V1.19 – instant, offline "Read in detail"
+
+- "Read in detail" opens instantly and works offline. It no longer waits for an AI engine.
+- Each question's detailed answer is its own HTML file: `www/explain/<question-id>.html`. Open any file in a browser to review it, and edit it in any editor. Keep the `<article data-id>` and the `<h2>` section names.
+- After editing or adding files, run `node scripts/build-explain.mjs` to validate them and refresh `www/explain/index.json`.
+- `scripts/md-to-explain.mjs` turns Markdown drafts (`@@ <id>` blocks) into these HTML files.
+- Questions without a written answer yet show a summary built from the model answer.
+- "✨ Ask AI" is still available on request, and its answer is saved on the device.
+- Answers are written in batches, starting with System Design.
+
 ## What's new in V1.18 – System Design role
 
 - **New role: System Design**, beside Java Backend and DevOps, with four positions from a new-grad system design round up to Principal Engineer / Solutions Architect.

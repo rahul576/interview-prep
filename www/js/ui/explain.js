@@ -1,7 +1,7 @@
 // "Read in detail" (V1.10): a rich overlay explaining one question in depth, like a good chat answer.
-// With an AI engine connected it writes a full explanation (sections, examples, code, pitfalls,
-// follow-ups) and caches it on this device. Without AI it shows a structured version of the
-// question's model answer, key points, follow-up and related questions.
+// V1.19: explanations are pre-written and shipped with the app (www/explain/*.json), so they open
+// instantly and work offline. Questions without one show a structured version of the model answer.
+// An AI engine is only used when the user asks for it ("Ask AI"), and its answer is cached on this device.
 
 const CACHE_KEY = 'interviewpro.explain.v1';
 const CACHE_MAX = 300;
@@ -18,6 +18,46 @@ function cachePut(id, md, provider) {
     for (const k of keys.slice(CACHE_MAX)) delete c[k];
     localStorage.setItem(CACHE_KEY, JSON.stringify(c));
   } catch { /* storage full: just don't cache */ }
+}
+
+// Pre-written explanations: one standalone HTML file per question (explain/<id>.html), listed in
+// explain/index.json. The app shows the file's <article>, minus its own title.
+const EXPLAIN_BASE = new URL('../../explain/', import.meta.url);
+let indexPromise = null;
+function loadIndex() {
+  if (!indexPromise) {
+    indexPromise = fetch(new URL('index.json', EXPLAIN_BASE)).then(r => (r.ok ? r.json() : null))
+      .then(ix => (ix && Array.isArray(ix.ids) ? new Set(ix.ids) : null)).catch(() => null)
+      .then(ids => { if (!ids) indexPromise = null; return ids; });
+  }
+  return indexPromise;
+}
+/** Returns the explanation body HTML for a question (from its own HTML file), or null. Never throws. */
+export async function staticExplanation(id) {
+  const ids = await loadIndex();
+  if (!ids || !ids.has(id)) return null;
+  try {
+    const r = await fetch(new URL(`${encodeURIComponent(id)}.html`, EXPLAIN_BASE));
+    if (!r.ok) return null;
+    return articleBody(await r.text());
+  } catch { return null; }
+}
+/** Extracts and cleans the <article> of an explanation file for display inside the app. */
+export function articleBody(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const art = doc.querySelector('article');
+  if (!art) return null;
+  art.querySelectorAll('script, style, link, iframe, object, embed, h1, .ex-meta').forEach(n => n.remove());
+  art.querySelectorAll('*').forEach(n => { for (const a of [...n.attributes]) if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name); });
+  art.querySelectorAll('h2').forEach(h => { const h3 = doc.createElement('h3'); h3.innerHTML = h.innerHTML; h.replaceWith(h3); });
+  art.querySelectorAll('table').forEach(t => { if (!t.parentElement.classList.contains('ex-table')) { const w = doc.createElement('div'); w.className = 'ex-table'; t.replaceWith(w); w.appendChild(t); } });
+  art.querySelectorAll('pre').forEach(pre => {
+    const lang = ((pre.querySelector('code')?.className || '').match(/language-([\w+-]+)/) || [])[1] || 'code';
+    const box = doc.createElement('div'); box.className = 'ex-code';
+    box.innerHTML = `<div class="ex-code-h"><span>${esc(lang)}</span><button type="button" class="ex-copy">Copy</button></div>`;
+    pre.replaceWith(box); box.appendChild(pre);
+  });
+  return art.innerHTML.trim();
 }
 
 /** Small, safe Markdown renderer: headings, lists, bold/italic, inline code, code blocks, tables, quotes. */
@@ -120,7 +160,8 @@ export async function openExplain(q, { ai, bank = [], roleLabel = 'technical', d
         <h2 id="exTitle">${esc(q.q)}</h2>
         <div class="ex-actions">
           <button type="button" class="btn btn-sm" id="exListen">▶ Listen</button>
-          <button type="button" class="btn btn-sm" id="exRegen" hidden>↻ Regenerate</button>
+          <button type="button" class="btn btn-sm" id="exBuiltIn" hidden>📘 Built-in</button>
+          <button type="button" class="btn btn-sm" id="exRegen" hidden>✨ Ask AI</button>
           <button type="button" class="ex-close" id="exClose" aria-label="Close">✕</button>
         </div>
       </header>
@@ -139,9 +180,9 @@ export async function openExplain(q, { ai, bank = [], roleLabel = 'technical', d
   ov.querySelector('#exClose').focus();
 
   let currentMd = '';
-  const show = (md, note) => {
+  const show = (md, note, html = null) => {
     currentMd = md;
-    body.innerHTML = `<article class="ex-md">${renderMarkdown(md)}</article>`;
+    body.innerHTML = `<article class="ex-md">${html ?? renderMarkdown(md)}</article>`;
     // colour each section by its heading
     body.querySelectorAll('h3').forEach((h) => {
       const t = h.textContent.toLowerCase();
@@ -156,25 +197,43 @@ export async function openExplain(q, { ai, bank = [], roleLabel = 'technical', d
   };
 
   const related = bank.filter(r => r.id !== q.id && r.topic === q.topic && r.ideal).slice(0, 3);
-  const generate = async (force = false) => {
+  const aiBtn = ov.querySelector('#exRegen'), builtInBtn = ov.querySelector('#exBuiltIn');
+  const aiReady = () => !!(ai && ai.active);
+  let builtIn = null;
+  const showBuiltIn = () => {
+    builtInBtn.hidden = true;
+    aiBtn.hidden = !aiReady(); aiBtn.textContent = '✨ Ask AI';
+    if (builtIn) show('', 'Detailed explanation · built into InterviewPro, works offline.', builtIn);
+    else show(offlineMarkdown(q, related), aiReady() ? 'Summary from the model answer. Tap “Ask AI” for a longer AI-written explanation.' : 'Summary from the model answer · works offline.');
+  };
+  // Instant: pre-written explanation (or the built-in summary). Never waits on an AI engine.
+  const showDefault = async () => {
+    builtIn = await staticExplanation(q.id);
+    if (!ov.isConnected) return;
+    showBuiltIn();
+  };
+  // Only on request: AI explanation, cached on this device.
+  const askAi = async (force = false) => {
     const cached = !force && cacheGet(q.id);
-    if (cached) { show(cached.md, `Detailed explanation written by AI (${cached.provider}). Saved on this device.`); ov.querySelector('#exRegen').hidden = false; return; }
-    if (!ai || !ai.active) {
-      show(offlineMarkdown(q, related), 'Connect an AI engine (Setup → AI interviewer) for a full explanation with examples, code and common mistakes.');
-      return;
-    }
-    body.innerHTML = `<div class="ex-loading"><div class="ex-skel"></div><div class="ex-skel w80"></div><div class="ex-skel w60"></div><p class="muted">Writing a detailed explanation…</p></div>`;
+    builtInBtn.hidden = false;
+    if (cached) { show(cached.md, `Written by AI (${cached.provider}) · saved on this device.`); aiBtn.textContent = '↻ Regenerate'; return; }
+    if (!aiReady()) return;
+    aiBtn.disabled = true;
+    body.innerHTML = `<div class="ex-loading"><div class="ex-skel"></div><div class="ex-skel w80"></div><div class="ex-skel w60"></div><p class="muted">Asking the AI for a detailed explanation…</p></div>`;
     const text = await ai.complete({ system: 'You are an expert software engineering interview coach. Answer in clean Markdown.', messages: [{ role: 'user', content: aiPrompt(q, roleLabel) }], maxTokens: 2000, timeoutMs: ai.provider === 'chrome' ? 90000 : 60000 });
+    aiBtn.disabled = false;
     if (!ov.isConnected) return;
     if (text && text.length > 200) {
       cachePut(q.id, text, ai.provider);
-      show(text, 'Detailed explanation written by AI. Saved on this device.');
-      ov.querySelector('#exRegen').hidden = false;
+      show(text, 'Written by AI · saved on this device.');
+      aiBtn.textContent = '↻ Regenerate';
     } else {
-      show(offlineMarkdown(q, related), `The AI explanation could not be generated${ai.lastError ? ` (${ai.lastError})` : ''}, so the built-in answer is shown.`);
+      showBuiltIn();
+      foot.textContent = `The AI explanation could not be generated${ai.lastError ? ` (${ai.lastError})` : ''}, so the built-in one is shown.`;
     }
   };
-  ov.querySelector('#exRegen').addEventListener('click', () => generate(true));
+  aiBtn.addEventListener('click', () => askAi(aiBtn.textContent.includes('Regenerate')));
+  builtInBtn.addEventListener('click', showBuiltIn);
   ov.querySelector('#exListen').addEventListener('click', async (e) => {
     if (!speech) return;
     const b = e.currentTarget;
@@ -184,6 +243,6 @@ export async function openExplain(q, { ai, bank = [], roleLabel = 'technical', d
     await speech.speak(plain, { gender: 'female' });
     speaking = false; if (b.isConnected) b.textContent = '▶ Listen';
   });
-  await generate();
+  await showDefault();
   return { close, markdown: () => currentMd };
 }

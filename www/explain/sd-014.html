@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-014 · How do you design for idempotency in distributed systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-014" data-topic="SD Fundamentals">
+<h1>How do you design for idempotency in distributed systems?</h1>
+<p class="ex-meta">SD Fundamentals · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Because <strong>retries are unavoidable</strong>, design operations so repeating them has <strong>the same effect as doing them once</strong>, using <strong>idempotency keys</strong>, naturally idempotent operations, <strong>consumer deduplication</strong> and <strong>unique constraints</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A client sends &quot;charge ₹500&quot; and the connection times out. Did the charge happen? The client can't know, so it retries. Without idempotency, the customer may be charged twice. The same happens with message brokers: most deliver <strong>at least once</strong>, so consumers will see duplicates.</p>
+<p>Some operations are naturally idempotent: <code>PUT /users/42 {full state}</code>, <code>DELETE /items/7</code>, <code>SET balance_reserved = true</code>. Others, like &quot;create order&quot; or &quot;add ₹500&quot;, are not and need an <strong>idempotency key</strong>: a unique ID the client generates per logical operation and sends with every retry.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client generates <code>Idempotency-Key: 7f3c…</code> (UUID) per operation and reuses it on retries.</li>
+  <li>Server, in one transaction: insert the key (unique), perform the operation, store the response with the key.</li>
+  <li>If the key already exists: return the stored response (or 409 if still in progress).</li>
+  <li>Expire keys after a window (e.g. 24 hours to a few days).</li>
+  <li>Consumers store processed message IDs (or use upserts) to skip duplicates.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE idempotency_keys (
+  key TEXT PRIMARY KEY, request_hash TEXT, response JSONB, created_at TIMESTAMPTZ
+);
+-- in the same transaction as creating the payment:
+INSERT INTO idempotency_keys(key, request_hash) VALUES ($1, $2);  -- fails on duplicate</code></pre>
+<p>Also check that a reused key comes with the <strong>same request body</strong> (store a hash), otherwise reject.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing the key <em>after</em> the operation in a separate transaction (crash in between = duplicate).</li>
+  <li>Server-generated keys (the client must own them, or retries create new keys).</li>
+  <li>Retrying non-idempotent operations automatically in HTTP clients or gateways.</li>
+  <li>Not deduplicating in message consumers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Retries are guaranteed in distributed systems, so every write API must be safe to repeat. For naturally idempotent operations like PUT that's free. For creates and payments, the client sends an idempotency key; the server stores it with the result in the same transaction and returns the stored result on a retry, like Stripe does. Consumers deduplicate by message ID, and a unique constraint on the business key is the final safety net.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How long do you keep keys?</strong> Longer than the maximum retry window; often 24 hours to 7 days.</li>
+  <li><strong>What if two retries arrive concurrently?</strong> The unique insert lets one win; the other waits or gets 409.</li>
+  <li><strong>Is POST ever idempotent?</strong> Not by default; with an idempotency key it can be.</li>
+</ul>
+</article>
+</body>
+</html>

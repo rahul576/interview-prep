@@ -1,6 +1,6 @@
 // Offline cache for the web/PWA build. Bump VERSION when assets change.
 const CDN_CACHE = 'interviewpro-cdn-v1';
-const VERSION = 'interviewpro-v1.18.1';
+const VERSION = 'interviewpro-v1.19.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/data/meta.js', './js/data/kp.js', './js/data/questions.js',
@@ -11,8 +11,19 @@ const ASSETS = [
   './js/ui/avatar.js', './js/ui/explain.js', './js/services/speech.js', './js/services/media.js', './js/services/ai.js', './js/services/natural-voice.js', './js/services/recordings.js', './img/interviewers/vikram.jpg', './img/interviewers/ananya.jpg', './img/interviewers/ananya-avatar.jpg', './img/interviewers/vikram-avatar.jpg', './img/interviewers/daniel-avatar.jpg', './img/interviewers/priya-avatar.jpg', './img/interviewers/minjun-avatar.jpg', './img/interviewers/sarah-avatar.jpg', './img/interviewers/daniel.jpg', './img/interviewers/priya.jpg', './img/interviewers/minjun.jpg', './img/interviewers/sarah.jpg', './js/services/store.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
+// Pre-written "Read in detail" answers (V1.19): one HTML file per question, listed in explain/index.json.
+// Cached in small batches so one missing file never breaks installation.
+const precacheExplain = (c) => fetch('./explain/index.json', { cache: 'no-cache' })
+  .then(r => (r.ok ? r.json() : null))
+  .then(async (ix) => {
+    if (!ix || !Array.isArray(ix.ids)) return;
+    await c.put('./explain/index.json', new Response(JSON.stringify(ix), { headers: { 'Content-Type': 'application/json' } }));
+    const urls = ix.ids.map(id => `./explain/${encodeURIComponent(id)}.html`);
+    for (let i = 0; i < urls.length; i += 50) await Promise.all(urls.slice(i, i + 50).map(u => c.add(u).catch(() => {})));
+  })
+  .catch(() => { /* answers are still cached on first use */ });
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS).then(() => precacheExplain(c))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   // Only remove our own old app caches. Never touch the natural-voice model cache ("transformers-cache")

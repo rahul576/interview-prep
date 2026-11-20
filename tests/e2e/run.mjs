@@ -597,8 +597,12 @@ try {
     await page.waitForTimeout(150);
   }
   await page.waitForFunction(() => /AI summary: honest about gaps/.test(document.querySelector('#aiFeedback')?.textContent || ''), null, { timeout: 15000 });
-  // detailed answer popup written by AI: sections, code block, table; cached for next time
+  // detailed answer popup: opens instantly with the built-in answer (no AI call); AI only when asked; cached for next time
+  const before = prompts.length;
   await page.click('[data-explain] >> nth=0');
+  await page.waitForSelector('.ex-overlay .ex-md h3');
+  assert.equal(prompts.length, before, 'opening Read in detail does not call the AI');
+  await page.click('#exRegen');
   await page.waitForFunction(() => /AI deep dive line/.test(document.querySelector('.ex-body')?.textContent || ''), null, { timeout: 15000 });
   assert.ok(await page.$('.ex-code pre code'), 'code block rendered');
   assert.ok(await page.$('.ex-table table'), 'table rendered');
@@ -608,8 +612,10 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await page.$('.ex-overlay'), null, 'Escape closes');
   await page.click('[data-explain] >> nth=0');
+  await page.waitForSelector('.ex-overlay .ex-md h3');
+  await page.click('#exRegen');
   await page.waitForFunction(() => /AI deep dive line/.test(document.querySelector('.ex-body')?.textContent || ''));
-  assert.equal(prompts.length, calls, 'second open is served from the device cache');
+  assert.equal(prompts.length, calls, 'second AI view is served from the device cache');
   await page.click('#exClose');
   await page.screenshot({ path: new URL('ai-report.png', OUT).pathname });
 

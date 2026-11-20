@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-017 · How does database replication work, and what are the trade-offs of each approach?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-017" data-topic="Data &amp; Storage Design">
+<h1>How does database replication work, and what are the trade-offs of each approach?</h1>
+<p class="ex-meta">Data &amp; Storage Design · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Replication copies data to multiple nodes: <strong>leader-follower</strong> (simple, read scaling), <strong>multi-leader</strong> (multi-region writes, conflicts) or <strong>leaderless</strong> (quorums). The key trade-off is <strong>synchronous vs asynchronous</strong>: durability versus latency.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Leader-follower:</strong> the leader takes all writes and streams its log (WAL/binlog) to followers. Followers serve reads and can be promoted. With <strong>asynchronous</strong> replication, writes are fast but followers lag, so replica reads can be <strong>stale</strong>, and a failover can lose the last few writes. <strong>Synchronous</strong> (or semi-sync, one follower confirms) prevents loss but adds latency and can block if the follower is slow.</p>
+<p><strong>Multi-leader:</strong> each region has a leader; writes are local and fast, but two regions can update the same row concurrently, so you need <strong>conflict resolution</strong> (last-writer-wins, merge functions, CRDTs).</p>
+<p><strong>Leaderless (Dynamo-style):</strong> client writes to W of N replicas and reads from R; with R + W &gt; N, reads overlap the latest write. Repair happens via read repair and anti-entropy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Leader appends change to its log.</li>
+  <li>Followers pull/receive and apply it.</li>
+  <li>Sync mode: commit waits for follower ack; async: commit returns immediately.</li>
+  <li>Failure detection triggers promotion of the most up-to-date follower.</li>
+  <li>Clients/proxies are redirected to the new leader.</li>
+</ol>
+
+<h2>Example</h2>
+<p>PostgreSQL in the cloud: primary in zone A, a <strong>synchronous</strong> standby in zone B (no data loss on zone failure), plus two <strong>asynchronous</strong> read replicas for reporting. After a user updates their profile, their reads go to the primary for a few seconds to guarantee read-your-writes.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Mode</th><th>Write latency</th><th>Data loss on failover</th><th>Stale reads</th></tr></thead>
+<tbody>
+<tr><td>Async</td><td>Low</td><td>Possible</td><td>Yes</td></tr>
+<tr><td>Sync</td><td>Higher</td><td>None</td><td>Fewer</td></tr>
+<tr><td>Leaderless quorum</td><td>Tunable</td><td>Tunable</td><td>Tunable</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading from async replicas for data the user just wrote.</li>
+  <li>Assuming failover is instant and lossless with async replication.</li>
+  <li>Multi-leader without a conflict strategy.</li>
+  <li>Split brain: two leaders after a partition (needs fencing/quorum).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use leader-follower: one synchronous standby in another zone so committed data survives a zone loss, plus async replicas for read scaling. Because async replicas lag, users get read-your-writes by reading from the primary right after their own writes. Multi-region writes would need multi-leader or a leaderless store, which brings conflict resolution I'd only accept where the data tolerates it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you detect replication lag?</strong> Monitor replica LSN/seconds-behind; route away from lagging replicas.</li>
+  <li><strong>What is split brain?</strong> Two nodes accepting writes as leader; prevented with quorum and fencing.</li>
+  <li><strong>What's semi-synchronous?</strong> Wait for at least one follower ack, not all.</li>
+</ul>
+</article>
+</body>
+</html>
