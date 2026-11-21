@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-069 · Containers have intermittent DNS failures or very slow name resolution. What could be wrong?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-069" data-topic="Docker">
+<h1>Containers have intermittent DNS failures or very slow name resolution. What could be wrong?</h1>
+<p class="ex-meta">Docker · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Container DNS goes through Docker's <strong>embedded DNS at 127.0.0.11</strong> (on user-defined networks), which forwards to upstreams taken from the <strong>host's resolv.conf</strong>; failures usually come from an <strong>unreachable or slow upstream</strong> (often a host-local resolver like systemd-resolved), <strong>ndots/search-domain amplification</strong>, <strong>musl (Alpine) resolver quirks</strong>, <strong>conntrack races</strong> or <strong>MTU problems</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>On the default bridge network a container gets a copy of the host's <code>/etc/resolv.conf</code>. On <strong>user-defined networks</strong> it gets <code>nameserver 127.0.0.11</code>, Docker's embedded resolver, which answers container and service names and forwards everything else to the host's configured upstreams. If the host points at a <strong>loopback resolver</strong> such as systemd-resolved (<code>127.0.0.53</code>), that address is meaningless inside the container's network namespace. Docker then uses the real upstreams or falls back to public resolvers like 8.8.8.8, which a corporate firewall may block, giving intermittent or total failures.</p>
+<p><strong>Slowness</strong> often comes from the resolver searching domain suffixes. With a long <code>search</code> list and a high <code>ndots</code> (Kubernetes uses 5), one lookup of <code>api.example.com</code> may first try several suffixed names, each timing out or returning NXDOMAIN before the real query. <strong>Alpine's musl libc</strong> behaves differently from glibc: it sends queries to all nameservers in parallel, handles search domains and TCP fallback differently, which exposes misconfigurations that Debian images hide.</p>
+<p>At the network level, the parallel A and AAAA queries from the same socket can hit a <strong>conntrack race</strong> in the Linux kernel that drops one packet, causing 5-second timeouts. On VPNs or overlay networks a wrong <strong>MTU</strong> can drop large DNS responses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce inside the container: <code>dig</code>, <code>nslookup</code> or <code>getent hosts</code> with timing.</li>
+  <li>Compare with the same query on the host and against a specific server (<code>dig @10.0.0.2</code>).</li>
+  <li>Check <code>/etc/resolv.conf</code> in the container: nameserver, search list, options.</li>
+  <li>Check the host's upstream DNS health and firewall rules.</li>
+  <li>Fix: set explicit DNS servers, trim search domains, lower ndots, use fully qualified names (trailing dot) or a node-local DNS cache.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run --rm --network appnet nicolaka/netshoot sh -c \
+  'cat /etc/resolv.conf; time dig +search api.example.com; dig @10.0.0.2 api.example.com'</code></pre>
+<pre><code class="language-json">{ &quot;dns&quot;: [&quot;10.0.0.2&quot;, &quot;10.0.0.3&quot;], &quot;dns-search&quot;: [&quot;corp.example.com&quot;] }</code></pre>
+<p>Placed in <code>/etc/docker/daemon.json</code>, this pins reachable corporate resolvers for all containers.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing DNS only from the host and assuming containers behave the same.</li>
+  <li>Blaming the app when the real issue is 5-second timeouts from dropped UDP packets.</li>
+  <li>Adding many search domains, multiplying lookups per name.</li>
+  <li>Ignoring MTU on VPN or overlay networks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I check how the container resolves: on user-defined networks it uses Docker's embedded DNS at 127.0.0.11, which forwards to the host's upstream servers. A common trap is the host using systemd-resolved at 127.0.0.53, which containers can't reach, so Docker falls back to public DNS that the corporate network blocks. I test with <code>dig</code> inside the container and on the host, compare timings and look at resolv.conf. Other causes are slow upstreams, long search lists with high ndots, Alpine's musl resolver, conntrack races causing five-second timeouts and MTU issues on VPNs. The fix is usually explicit <code>dns</code> servers in daemon.json, fewer search domains, or a local DNS cache.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does Alpine behave differently?</strong> musl queries nameservers in parallel and handles search domains and TCP fallback differently from glibc.</li>
+  <li><strong>What causes exact 5-second delays?</strong> A dropped query (often a conntrack race) followed by the resolver's 5-second retry timeout.</li>
+  <li><strong>How do Kubernetes clusters mitigate this?</strong> NodeLocal DNSCache, lower ndots in <code>dnsConfig</code>, and fully qualified names.</li>
+</ul>
+</article>
+</body>
+</html>

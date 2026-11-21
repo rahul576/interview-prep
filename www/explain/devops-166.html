@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-166 · How do you structure Ansible for many environments and keep it safe?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-166" data-topic="Configuration Management">
+<h1>How do you structure Ansible for many environments and keep it safe?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use a <strong>separate inventory per environment</strong> with <strong><code>group_vars</code>/<code>host_vars</code></strong>, put logic in <strong>roles</strong> and shared <strong>versioned collections</strong>, encrypt secrets with <strong>Ansible Vault</strong> (or look them up from HashiCorp Vault), always run <strong><code>--check --diff</code></strong> before production, roll out in <strong><code>serial</code> batches</strong> with failure thresholds, and test roles with <strong>Molecule</strong> and <strong>ansible-lint</strong> in CI.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Layout:</strong> the same playbooks run everywhere; only data differs. Keep <code>inventories/dev</code>, <code>inventories/staging</code> and <code>inventories/prod</code>, each with its own <code>hosts.yml</code> (or a <strong>dynamic inventory</strong> plugin filtered by tags such as <code>env=prod</code>) plus <code>group_vars</code> and <code>host_vars</code>. Roles hold tasks, templates and <strong>defaults</strong> that environments override. Shared roles live in <strong>collections</strong> with version pins in <code>requirements.yml</code>, so updating a role is a reviewed change.</p>
+<p><strong>Secrets:</strong> encrypt sensitive vars with <strong>Ansible Vault</strong> (<code>ansible-vault encrypt_string</code>), using a <strong>different vault ID/password per environment</strong>, so dev users can't decrypt prod. Even better, fetch at runtime from <strong>HashiCorp Vault</strong> or a cloud secret manager via lookup plugins, and use <code>no_log: true</code> on tasks handling secrets.</p>
+<p><strong>Safety for production:</strong></p>
+<ul>
+  <li><strong>Dry runs:</strong> <code>--check --diff</code> shows exactly which files and packages would change.</li>
+  <li><strong>Rolling updates:</strong> <code>serial: &quot;20%&quot;</code> and <code>max_fail_percentage</code> stop the play before every host is broken; combine with taking hosts out of the load balancer in <code>pre_tasks</code> and back in <code>post_tasks</code>.</li>
+  <li><strong>Limit scope:</strong> <code>--limit</code> and tags for targeted runs.</li>
+  <li><strong>Guardrails</strong> against running on prod by accident: separate credentials and SSH keys for prod, a confirmation assertion, or only allowing prod runs from CI or <strong>AWX/Ansible Automation Platform</strong> with RBAC and audit logs.</li>
+</ul>
+<p><strong>Quality:</strong> <strong>ansible-lint</strong> catches bad practices (raw shell, missing names, deprecated syntax). <strong>Molecule</strong> spins up containers or VMs, applies the role, checks <strong>idempotence</strong> (a second run must report no changes) and runs verification tests.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer changes a role or vars in a PR.</li>
+  <li>CI runs ansible-lint and Molecule (converge, idempotence, verify).</li>
+  <li>Merge → run against dev, then staging.</li>
+  <li>Prod run from CI/AWX: <code>--check --diff</code> reviewed, then real run with <code>serial</code>.</li>
+  <li>Logs and recap stored for audit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">inventories/
+  prod/hosts.yml
+  prod/group_vars/web.yml
+  prod/group_vars/vault.yml      # encrypted
+roles/nginx/  roles/app/
+site.yml</code></pre>
+<pre><code class="language-yaml">- hosts: web
+  serial: &quot;20%&quot;
+  max_fail_percentage: 10
+  pre_tasks:
+    - name: Refuse prod runs outside CI
+      ansible.builtin.assert:
+        that: lookup('env', 'CI') == 'true' or env != 'prod'
+  roles: [ nginx, app ]</code></pre>
+<pre><code class="language-bash">ansible-playbook -i inventories/prod site.yml --vault-id prod@prompt --check --diff</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One inventory with all environments mixed together.</li>
+  <li>The same Vault password for every environment.</li>
+  <li>Running against all hosts at once with no <code>serial</code>.</li>
+  <li>Roles that are never tested for idempotence.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I keep a separate inventory per environment, with variables in group_vars and host_vars, so the same playbooks run everywhere with different values. Logic lives in roles, and shared roles come from versioned collections. Secrets are encrypted with Ansible Vault, using different vault IDs per environment, or pulled from HashiCorp Vault at runtime. Before production I run with check mode and diff, then roll out in serial batches with a max failure percentage, so a bad change stops after a few hosts. Production runs only happen from CI or AWX with separate credentials, and roles are tested with Molecule, including an idempotence check, and ansible-lint in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid accidentally running against production?</strong> Separate inventories and credentials, runs only via CI/AWX, and assertion guards.</li>
+  <li><strong>Does check mode always work?</strong> Not for every task; commands and dependent tasks may be skipped or misleading, so modules need check-mode support.</li>
+  <li><strong>What is AWX?</strong> The open-source upstream of Ansible Automation Platform, adding a UI, RBAC, scheduling and audit.</li>
+</ul>
+</article>
+</body>
+</html>

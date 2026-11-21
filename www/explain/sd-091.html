@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-091 · Your application must comply with GDPR and keep EU customer data in the EU. How does this change your design?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-091" data-topic="Architecture Trade-offs">
+<h1>Your application must comply with GDPR and keep EU customer data in the EU. How does this change your design?</h1>
+<p class="ex-meta">Architecture Trade-offs · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>GDPR data residency means <strong>EU personal data is stored and processed in EU regions</strong>: partition users by <strong>home region</strong>, route requests there, keep <strong>every copy</strong> (logs, backups, analytics, vendors) in-region or anonymised, and build <strong>erasure, minimisation and audit</strong> into the design.</p>
+
+<h2>Detailed explanation</h2>
+<p>GDPR itself does not strictly forbid transfers outside the EU (it allows them under adequacy decisions or <strong>Standard Contractual Clauses</strong>), but many customers and contracts require <strong>data residency</strong>, and keeping data in the EU is the simplest way to stay compliant. The design consequence is a <strong>regional cell architecture</strong>: each user or tenant gets a <strong>home region</strong> at sign-up, and their personal data lives only in that region's stack.</p>
+<p>A thin <strong>global layer</strong> holds only non-personal data: routing tables keyed by pseudonymous IDs, product catalogue, feature flags. A global router (DNS, edge or API gateway) looks up the home region and forwards the request. Cross-region features, such as a global admin dashboard, work on aggregated or pseudonymised data.</p>
+<p>The hard part is <strong>leaks through secondary copies</strong>. Personal data turns up in application logs, distributed traces, error trackers, CDN caches, search indexes, data warehouses, backups and third-party SaaS. Each must be either region-pinned or fed <strong>anonymised/pseudonymised</strong> data, and every <strong>sub-processor</strong> must be checked for where it processes data.</p>
+<p>GDPR also brings duties that are architectural: the <strong>right to erasure</strong> and <strong>access</strong> across every store, <strong>data minimisation</strong>, <strong>purpose limitation</strong> and consent records, <strong>encryption</strong> with region-specific keys, least-privilege access and <strong>audit logs</strong> to support 72-hour breach notification.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>At sign-up, record the user's home region (country, contract) in a global directory keyed by an opaque ID.</li>
+  <li>The edge router resolves the home region and sends requests to that regional stack (app, DB, cache, queues, search).</li>
+  <li>Logs, traces and analytics pipelines run per region; anything sent globally is scrubbed of personal fields.</li>
+  <li>Backups and DR replicas stay inside EU regions (e.g. Frankfurt to Ireland, not to the US).</li>
+  <li>A <strong>data map</strong> lists every store with personal data; an erasure workflow fans out deletes to all of them, and <strong>crypto-shredding</strong> (deleting the per-user key) covers backups.</li>
+  <li>Access is audited, region-scoped and just-in-time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Region routing config (global, no personal data)
+regions:
+  eu: { api: api.eu.example.com, kms_key: arn:aws:kms:eu-central-1:...:key/eu-pii }
+  us: { api: api.us.example.com, kms_key: arn:aws:kms:us-east-1:...:key/us-pii }
+user_directory:          # opaque id -&gt; home region
+  u_8f3a91: eu
+logging:
+  eu: { sink: loki-eu, redact: [email, phone, name, ip] }
+backups:
+  eu: { primary: eu-central-1, replica: eu-west-1 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pinning the database but shipping raw logs or traces to a US-hosted observability tool.</li>
+  <li>Forgetting backups, search indexes and data-warehouse copies when implementing erasure.</li>
+  <li>Using a single global KMS key or admin role that can read every region.</li>
+  <li>Treating pseudonymised data as anonymous (it is still personal data under GDPR).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd give every customer a home region and run a regional stack holding their personal data, with a thin global routing layer that only knows an opaque ID and the region. Then I'd hunt down secondary copies: logs, traces, backups, analytics and vendors either stay in the EU or receive scrubbed data. I'd keep a data map so erasure requests reach every store, using crypto-shredding for backups, and add region-specific encryption keys, least-privilege access with audit logs, and data minimisation so we collect less in the first place.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a support engineer in India debug an EU issue?</strong> Through an in-region tool with masked data, just-in-time approved access, and full audit, or escalate to EU staff.</li>
+  <li><strong>What about users who travel or move?</strong> Route by home region, not current location; support an explicit region migration.</li>
+  <li><strong>How do you handle erasure in immutable backups?</strong> Per-user encryption keys deleted on request (crypto-shredding), plus backup expiry.</li>
+</ul>
+</article>
+</body>
+</html>

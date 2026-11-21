@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-214 · What is an AWS load balancer and an Auto Scaling group?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-214" data-topic="Cloud (AWS)">
+<h1>What is an AWS load balancer and an Auto Scaling group?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Elastic Load Balancing</strong> spreads traffic across healthy targets: the <strong>ALB</strong> works at <strong>layer 7</strong> (HTTP routing, TLS), the <strong>NLB</strong> at <strong>layer 4</strong> (TCP/UDP, static IPs, extreme throughput); an <strong>Auto Scaling group</strong> keeps a <strong>desired number of instances</strong> from a <strong>launch template</strong> across AZs, replaces unhealthy ones and scales with policies like <strong>target tracking</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>Application Load Balancer</strong> understands HTTP and HTTPS. It terminates TLS (certificates from ACM), routes by <strong>host, path, header or query</strong> (for example <code>/api/*</code> to one target group, <code>admin.example.com</code> to another), supports WebSockets, HTTP/2 and gRPC, and integrates with WAF and Cognito/OIDC authentication. A <strong>Network Load Balancer</strong> forwards TCP, UDP and TLS at layer 4 with very low latency, millions of requests per second, <strong>static or Elastic IPs per AZ</strong> and source IP preservation, which suits non-HTTP protocols or clients that need fixed IPs. (A Gateway Load Balancer exists for inline security appliances.)</p>
+<p>Load balancers forward to <strong>target groups</strong>: EC2 instances, IPs (containers) or Lambda functions. Each target group has a <strong>health check</strong> (for example <code>GET /health</code> expecting 200); only healthy targets receive traffic, and <strong>deregistration delay</strong> lets in-flight requests finish during scale-in or deployments.</p>
+<p>An <strong>Auto Scaling group (ASG)</strong> uses a <strong>launch template</strong> (AMI, instance type, security groups, IAM profile, user data) and keeps <strong>desired capacity</strong> between min and max, spread across the AZs of its subnets. If an instance fails EC2 or ELB health checks, the ASG terminates and replaces it. <strong>Scaling policies</strong> adjust desired capacity: <strong>target tracking</strong> (&quot;keep average CPU at 60%&quot; or &quot;1,000 requests per target&quot;) is the simplest and most common; <strong>step scaling</strong>, <strong>scheduled</strong> and <strong>predictive scaling</strong> cover other needs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client → DNS name of the ALB → listener on 443.</li>
+  <li>Listener rules pick a target group.</li>
+  <li>ALB sends requests to healthy targets in any AZ.</li>
+  <li>CloudWatch metric crosses the target → ASG changes desired capacity.</li>
+  <li>New instances launch from the template, pass health checks after the grace period and join the target group.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_autoscaling_group&quot; &quot;web&quot; {
+  min_size                  = 2
+  max_size                  = 12
+  vpc_zone_identifier       = var.private_subnet_ids
+  target_group_arns         = [aws_lb_target_group.web.arn]
+  health_check_type         = &quot;ELB&quot;
+  health_check_grace_period = 120
+  launch_template {
+    id      = aws_launch_template.web.id
+    version = &quot;$Latest&quot;
+  }
+}
+
+resource &quot;aws_autoscaling_policy&quot; &quot;cpu60&quot; {
+  name                   = &quot;cpu-60&quot;
+  autoscaling_group_name = aws_autoscaling_group.web.name
+  policy_type            = &quot;TargetTrackingScaling&quot;
+  target_tracking_configuration {
+    predefined_metric_specification { predefined_metric_type = &quot;ASGAverageCPUUtilization&quot; }
+    target_value = 60
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A health check grace period shorter than application start-up, causing a replacement loop.</li>
+  <li>Health checks that call the database, so a DB blip marks every instance unhealthy.</li>
+  <li>Min size of 1 or subnets in only one AZ.</li>
+  <li>Using an NLB when you need path-based routing, or an ALB when clients need static IPs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Elastic Load Balancing spreads traffic over healthy targets. The ALB is layer 7: it terminates TLS and routes by host or path, which is ideal for web apps and microservices. The NLB is layer 4 for TCP and UDP, with very high throughput and static IPs. Both send traffic to target groups and only to targets passing health checks. An Auto Scaling group keeps a desired number of instances from a launch template, spread across AZs, replaces unhealthy ones and scales with policies, usually target tracking on CPU or requests per target. I set health check grace periods to match startup time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are instances replaced right after launch?</strong> Health checks fail before the app is ready; fix grace period, health path or startup.</li>
+  <li><strong>What is connection draining?</strong> Deregistration delay so in-flight requests finish.</li>
+  <li><strong>Scale on CPU or requests?</strong> Requests per target or latency often reflect user load better for web tiers.</li>
+</ul>
+</article>
+</body>
+</html>

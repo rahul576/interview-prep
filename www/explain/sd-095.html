@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-095 · Design an IoT platform that ingests telemetry from 10 million devices.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-095" data-topic="Classic Design Problems">
+<h1>Design an IoT platform that ingests telemetry from 10 million devices.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>An IoT platform for 10 million devices uses <strong>MQTT</strong> to a <strong>scalable broker or managed IoT hub</strong>, <strong>X.509 device identity</strong>, a <strong>stream</strong> (Kafka) for buffering and fan-out, <strong>time-series plus cold storage</strong>, <strong>device shadows/twins</strong> for state and commands, and handles <strong>intermittent connectivity and OTA updates</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start with numbers: 10 million devices sending one message per minute is roughly <strong>167,000 messages per second</strong>, plus 10 million <strong>long-lived connections</strong>. That shapes everything: brokers must hold millions of TCP/TLS connections, and ingestion must absorb bursts (for example, all devices reconnecting after a power cut).</p>
+<p><strong>MQTT</strong> is the standard device protocol: lightweight, publish/subscribe over persistent TCP, with QoS levels (0 at-most-once, 1 at-least-once) and retained messages. Brokers like <strong>EMQX</strong> or <strong>HiveMQ</strong> cluster horizontally, or you use <strong>AWS IoT Core</strong> or <strong>Azure IoT Hub</strong> to avoid running them.</p>
+<p><strong>Security</strong> is per device: unique <strong>X.509 certificates</strong> provisioned at manufacturing (or via a provisioning service), <strong>mutual TLS</strong>, and topic-level policies so a device can only publish to <code>devices/{its-id}/...</code>. Compromised devices are revoked individually.</p>
+<p>The broker forwards into a <strong>stream</strong> (Kafka, Kinesis, Event Hubs) that decouples ingestion from consumers: rules and alerting, stream aggregation (Flink), and storage. Hot data goes to a <strong>time-series database</strong> (TimescaleDB, InfluxDB, ClickHouse) for dashboards; raw data lands in <strong>object storage / a lakehouse</strong> for analytics and ML.</p>
+<p><strong>Device shadows</strong> (AWS) or <strong>device twins</strong> (Azure) store reported and desired state, so apps can set &quot;desired: firmware 2.3&quot; even while the device is offline; the device syncs on reconnect.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Device boots, connects with mTLS to the nearest regional broker.</li>
+  <li>Publishes telemetry with a device timestamp at QoS 1.</li>
+  <li>Broker rule forwards messages to Kafka, partitioned by device ID.</li>
+  <li>Stream processors compute aggregates and alerts; sinks write to time-series and lake storage.</li>
+  <li>Commands and config go through the shadow; the device receives the delta.</li>
+  <li>When offline, devices buffer readings locally and upload with original timestamps.</li>
+  <li>OTA updates roll out in stages (1%, 10%, 100%) with health checks and rollback.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">// Topic: devices/thermo-00981/telemetry  (QoS 1)
+{&quot;ts&quot;: &quot;2026-11-21T08:00:00Z&quot;, &quot;temp_c&quot;: 21.4, &quot;humidity&quot;: 48, &quot;fw&quot;: &quot;2.2.1&quot;}
+
+// Shadow document
+{&quot;state&quot;: {
+   &quot;desired&quot;:  {&quot;fw&quot;: &quot;2.3.0&quot;, &quot;report_interval_s&quot;: 60},
+   &quot;reported&quot;: {&quot;fw&quot;: &quot;2.2.1&quot;, &quot;report_interval_s&quot;: 60}},
+ &quot;version&quot;: 418}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sharing one credential across a device fleet.</li>
+  <li>Writing directly from the broker into a database with no buffer.</li>
+  <li>Ignoring reconnection storms; devices need jittered backoff.</li>
+  <li>Trusting server arrival time instead of device timestamps for late data.</li>
+  <li>Pushing firmware to all devices at once without rollback.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ten million devices at one message a minute is about 170,000 messages per second over long-lived connections. Devices use MQTT with mutual TLS and per-device certificates to a clustered broker or AWS IoT Core. The broker feeds Kafka, which buffers and fans out to alerting, stream aggregation and storage: a time-series database for recent data and a data lake for history. Device shadows hold desired and reported state so commands work offline. Devices buffer locally, reconnect with jittered backoff, and firmware rolls out in stages with automatic rollback.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you roll out firmware safely?</strong> Signed images, A/B partitions, staged cohorts, health metrics gating each stage.</li>
+  <li><strong>How do you handle a reconnect storm?</strong> Jittered exponential backoff on devices, broker connection rate limits, autoscaling.</li>
+  <li><strong>MQTT QoS 2?</strong> Exactly-once handshake; costly, rarely needed if consumers are idempotent.</li>
+</ul>
+</article>
+</body>
+</html>

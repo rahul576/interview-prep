@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-096 · Design product search for an e-commerce site with filters, facets and ranking.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-096" data-topic="Classic Design Problems">
+<h1>Design product search for an e-commerce site with filters, facets and ranking.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>E-commerce search uses a dedicated <strong>search index</strong> (Elasticsearch/OpenSearch) fed by a <strong>CDC/event indexing pipeline</strong>, with <strong>text analysis</strong> (stemming, synonyms, typo tolerance), <strong>aggregations for facets</strong>, <strong>ranking that blends relevance and business signals</strong>, and <strong>replicas and caching</strong> for scale.</p>
+
+<h2>Detailed explanation</h2>
+<p>The catalogue database is optimised for transactions, not for &quot;red running shoes under 2000 with 4+ stars&quot;. A <strong>search engine</strong> with an <strong>inverted index</strong> handles full-text matching, filtering and aggregations in milliseconds.</p>
+<p><strong>Indexing pipeline:</strong> catalogue, price and stock changes flow via <strong>CDC</strong> (Debezium) or domain events into an indexer that builds a denormalised product document. Full reindexes build a new index and switch an <strong>alias</strong> atomically, giving zero-downtime schema changes.</p>
+<p><strong>Text analysis</strong> makes matching forgiving: tokenising, lowercasing, <strong>stemming</strong> (&quot;running&quot; to &quot;run&quot;), <strong>synonyms</strong> (&quot;sofa&quot; = &quot;couch&quot;), <strong>fuzzy matching</strong> for typos, and language-specific analysers. Brand and category fields are stored as <strong>keyword</strong> types for exact filtering.</p>
+<p><strong>Facets</strong> (brand counts, price buckets, sizes) come from <strong>aggregations</strong> on keyword or numeric fields. Filters go in the <code>filter</code> clause, which does not affect scoring and is cached.</p>
+<p><strong>Ranking</strong> starts with <strong>BM25</strong> text relevance plus field boosts (title over description), then blends business signals: popularity, conversion rate, stock, margin, recency. Mature teams use <strong>learning-to-rank</strong> models trained on clicks and purchases, and <strong>hybrid search</strong> combining keyword and <strong>vector (semantic)</strong> retrieval. <strong>Query understanding</strong> extracts category, colour and price from the text.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Catalogue change -&gt; CDC event -&gt; indexer enriches with price, stock, ratings -&gt; upsert document.</li>
+  <li>User query -&gt; query understanding (spell-correct, detect &quot;shoes&quot;, &quot;red&quot;, &quot;&lt;2000&quot;).</li>
+  <li>Search: bool query with text <code>must</code>, structured <code>filter</code>s, aggregations for facets.</li>
+  <li>Rerank top results with business signals or an LTR model.</li>
+  <li>Return results plus facet counts; log impressions, clicks and purchases.</li>
+  <li>Analytics on zero-result and low-CTR queries improve synonyms and ranking.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">POST /products/_search
+{
+  &quot;query&quot;: { &quot;function_score&quot;: {
+    &quot;query&quot;: { &quot;bool&quot;: {
+      &quot;must&quot;:   { &quot;multi_match&quot;: { &quot;query&quot;: &quot;running shoes&quot;, &quot;fields&quot;: [&quot;title^3&quot;, &quot;brand^2&quot;, &quot;description&quot;], &quot;fuzziness&quot;: &quot;AUTO&quot; } },
+      &quot;filter&quot;: [ { &quot;term&quot;: { &quot;color&quot;: &quot;red&quot; } }, { &quot;range&quot;: { &quot;price&quot;: { &quot;lte&quot;: 2000 } } }, { &quot;term&quot;: { &quot;in_stock&quot;: true } } ] } },
+    &quot;field_value_factor&quot;: { &quot;field&quot;: &quot;popularity&quot;, &quot;modifier&quot;: &quot;log1p&quot; } } },
+  &quot;aggs&quot;: {
+    &quot;brands&quot;: { &quot;terms&quot;: { &quot;field&quot;: &quot;brand&quot; } },
+    &quot;price&quot;:  { &quot;range&quot;: { &quot;field&quot;: &quot;price&quot;, &quot;ranges&quot;: [ {&quot;to&quot;: 1000}, {&quot;from&quot;: 1000, &quot;to&quot;: 2000}, {&quot;from&quot;: 2000} ] } } }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Querying the relational database with <code>LIKE '%term%'</code>.</li>
+  <li>Putting filters in scoring queries, losing caching and distorting relevance.</li>
+  <li>Reindexing in place instead of building a new index behind an alias.</li>
+  <li>Ranking purely by text relevance and ignoring stock and conversion.</li>
+  <li>Not measuring search quality at all.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use OpenSearch or Elasticsearch as a separate search index, fed by CDC from the catalogue so price and stock stay fresh, with full rebuilds swapped in through an alias. Analysers handle stemming, synonyms and typos. Facets come from aggregations on keyword fields, and filters use non-scoring cached clauses. Ranking blends BM25 relevance with popularity, conversion and stock, and later a learning-to-rank or hybrid vector model trained on click data. I'd scale with replicas, cache popular queries, and track zero-result queries to improve synonyms.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you measure a ranking change?</strong> A/B test on conversion and revenue per search, offline with NDCG on judged queries.</li>
+  <li><strong>How fresh must stock be?</strong> Near real-time via CDC; re-check at add-to-cart.</li>
+  <li><strong>Keyword vs vector search?</strong> Hybrid: keyword for precision on SKUs and brands, vectors for intent.</li>
+</ul>
+</article>
+</body>
+</html>

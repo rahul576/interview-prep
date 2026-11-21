@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-063 · How do seccomp, AppArmor and Linux capabilities harden containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-063" data-topic="Docker">
+<h1>How do seccomp, AppArmor and Linux capabilities harden containers?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>Capabilities</strong> split root's powers, so run with <strong><code>--cap-drop ALL</code></strong> and add back only what is needed; <strong>seccomp</strong> filters <strong>system calls</strong>; <strong>AppArmor/SELinux</strong> add <strong>mandatory access control</strong>; <strong><code>no-new-privileges</code></strong> blocks setuid escalation; and <strong><code>--privileged</code></strong> disables nearly all of it.</p>
+
+<h2>Detailed explanation</h2>
+<p>These mechanisms apply <strong>least privilege</strong> at different levels, and together they make an exploited process much less useful to an attacker.</p>
+<p><strong>Linux capabilities</strong> break the all-powerful root into about 40 units such as <code>NET_BIND_SERVICE</code> (bind ports below 1024), <code>CHOWN</code>, <code>NET_ADMIN</code> (configure networking), <code>SYS_PTRACE</code> and the very broad <code>SYS_ADMIN</code>. Docker already starts containers with a reduced default set, but it still includes items most apps never need, like <code>CHOWN</code>, <code>SETUID</code>, <code>NET_RAW</code> and <code>MKNOD</code>. A hardened container uses <strong><code>--cap-drop ALL</code></strong> and adds back specific capabilities with <code>--cap-add</code>, often none at all for a non-root web service.</p>
+<p><strong>seccomp</strong> (secure computing mode) attaches a <strong>BPF filter</strong> to the process that allows or denies individual <strong>system calls</strong>. Docker's <strong>default profile</strong> blocks several dozen dangerous or rarely needed calls such as <code>kexec_load</code>, <code>open_by_handle_at</code>, <code>init_module</code> and unprivileged <code>mount</code>, which has neutralised many kernel exploits. Stricter <strong>custom profiles</strong> can allow only the syscalls an application uses. Kubernetes applies the runtime default only when you set <code>seccompProfile: RuntimeDefault</code>.</p>
+<p><strong>AppArmor</strong> (path-based, Ubuntu/Debian) and <strong>SELinux</strong> (label-based, RHEL/Fedora) are <strong>Linux Security Modules</strong> providing <strong>mandatory access control</strong>: even root inside the container cannot access files, mounts or devices outside its policy. Docker applies <code>docker-default</code> AppArmor or <code>container_t</code> SELinux labels automatically.</p>
+<p><strong><code>--security-opt no-new-privileges</code></strong> prevents processes from gaining privileges through <strong>setuid/setgid binaries</strong> or file capabilities. Combine with a <strong>non-root user</strong> and a <strong>read-only root filesystem</strong>. <strong><code>--privileged</code></strong> grants all capabilities, disables seccomp and LSM confinement and exposes all host devices; it should never be used for normal applications.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The runtime computes the capability set and drops the rest.</li>
+  <li>It loads the seccomp BPF filter before exec.</li>
+  <li>It applies the AppArmor profile or SELinux label.</li>
+  <li>It sets <code>no_new_privs</code> on the process.</li>
+  <li>Kernel checks every privileged operation against these layers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name web \
+  --user 10001 --read-only --tmpfs /tmp \
+  --cap-drop ALL --cap-add NET_BIND_SERVICE \
+  --security-opt no-new-privileges \
+  --security-opt seccomp=/etc/docker/seccomp/web.json \
+  registry.local/web:1.4</code></pre>
+<pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [&quot;ALL&quot;] }
+  seccompProfile: { type: RuntimeDefault }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>--privileged</code> to fix a permission error.</li>
+  <li>Adding <code>SYS_ADMIN</code> because one feature needs a mount.</li>
+  <li>Disabling seccomp (<code>seccomp=unconfined</code>) instead of extending the profile.</li>
+  <li>Assuming Kubernetes applies seccomp by default in every cluster.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Capabilities split root's powers into pieces like NET_BIND_SERVICE or SYS_ADMIN; I run with --cap-drop ALL and add back only what's needed. seccomp filters which system calls the process may make; Docker's default profile blocks dozens of dangerous calls and custom profiles can be stricter. AppArmor or SELinux add mandatory access control, confining files and resources even for root. no-new-privileges stops escalation through setuid binaries. Combined with a non-root user and read-only filesystem this is solid hardening, and --privileged turns almost all of it off, so it's never for normal apps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find needed capabilities?</strong> Start with none, test, and read denials in audit logs or use tracing tools.</li>
+  <li><strong>How do you build a custom seccomp profile?</strong> Record syscalls with tools like <code>strace</code> or the Security Profiles Operator.</li>
+  <li><strong>What does RuntimeDefault mean?</strong> The container runtime's default seccomp profile.</li>
+</ul>
+</article>
+</body>
+</html>

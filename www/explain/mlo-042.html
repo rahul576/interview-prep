@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-042 · How does KServe autoscaling work, and what are the trade-offs of scaling to zero?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-042" data-topic="MLOps">
+<h1>How does KServe autoscaling work, and what are the trade-offs of scaling to zero?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In <strong>serverless mode</strong>, KServe uses <strong>Knative</strong> to autoscale on <strong>concurrency or requests per second</strong> and can <strong>scale to zero</strong>, saving money (especially on GPUs) at the cost of <strong>cold starts</strong> (scheduling, image pull, model load); <strong>raw deployment mode</strong> uses <strong>HPA or KEDA</strong>; keep <strong>minReplicas above zero</strong> for latency-sensitive models.</p>
+
+<h2>Detailed explanation</h2>
+<p>CPU utilisation is a poor scaling signal for inference: a GPU model can be saturated with low CPU, and request queues are what users feel. In <strong>serverless mode</strong>, KServe deploys the predictor as a <strong>Knative Service</strong>. Knative's autoscaler (KPA) watches <strong>in-flight requests per pod</strong> (concurrency) or RPS and adds replicas when the target is exceeded. Requests queue briefly in the activator or queue-proxy while new pods start.</p>
+<p><strong>Scale to zero</strong>: after a period with no traffic, Knative removes all pods; the <strong>activator</strong> holds the first new request and triggers scale-up. For dozens of rarely used models, especially on <strong>GPUs</strong>, this saves a lot of money.</p>
+<p>The trade-off is the <strong>cold start</strong>: a pod must be scheduled—maybe a new GPU node must be provisioned by the cluster autoscaler or Karpenter, taking minutes—the image pulled (often gigabytes), the model downloaded from storage and loaded into memory or GPU, and the runtime warmed up. Small CPU models may start in seconds; large models can take minutes, so the first users wait or time out.</p>
+<p><strong>Raw deployment mode</strong> (now the default in recent KServe releases for many setups) uses ordinary Deployments with <strong>HPA</strong>, or <strong>KEDA</strong> for custom metrics like queue depth or Prometheus request rates. It is simpler, avoids Knative and suits steady traffic, but scale to zero needs KEDA.</p>
+<p>Mitigations for cold starts: <strong>minReplicas ≥ 1</strong> for user-facing models, <strong>model caching</strong> on nodes (local PVs or KServe's model cache), smaller images, pre-pulled images, warm GPU node pools and scale-down delays.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose serverless or raw deployment mode per model.</li>
+  <li>Set scaling metric and target (for example concurrency 4 per pod).</li>
+  <li>Set minReplicas and maxReplicas; scale-down delay.</li>
+  <li>For scale to zero, measure and accept cold-start time.</li>
+  <li>Reduce cold start with caches, slimmer images and warm nodes.</li>
+  <li>Monitor queueing, cold-start counts and cost.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: doc-classifier
+  annotations:
+    serving.kserve.io/deploymentMode: Serverless
+    autoscaling.knative.dev/scale-down-delay: &quot;10m&quot;
+spec:
+  predictor:
+    minReplicas: 0          # internal, low-traffic model
+    maxReplicas: 4
+    scaleMetric: concurrency
+    scaleTarget: 4
+    model:
+      modelFormat: {name: huggingface}
+      storageUri: s3://models/doc-classifier/v3
+      resources: {limits: {nvidia.com/gpu: 1}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scale to zero on a user-facing, latency-critical model.</li>
+  <li>Scaling GPU inference on CPU utilisation.</li>
+  <li>Ignoring node provisioning time in cold-start estimates.</li>
+  <li>Client timeouts shorter than the cold start.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In serverless mode KServe runs on Knative, which autoscales on concurrent requests or RPS per replica, which matches inference load far better than CPU. It can scale to zero for idle models, saving a lot, especially on GPUs. The cost is cold starts: scheduling, maybe a new GPU node, pulling a large image and loading the model, which can take minutes. Raw deployment mode uses HPA or KEDA and is simpler for steady traffic. I keep minReplicas above zero for latency-sensitive models and use scale to zero for internal or rarely used ones.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does model caching on nodes help?</strong> It skips downloading weights, often the largest part of cold start.</li>
+  <li><strong>What target concurrency would you set?</strong> From load tests: the concurrency where latency stays within SLO.</li>
+  <li><strong>KEDA vs HPA?</strong> KEDA scales on external metrics like queue depth and supports scale to zero.</li>
+</ul>
+</article>
+</body>
+</html>

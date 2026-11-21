@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-032 · What CronJob settings matter in production, and what can go wrong with schedules?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-032" data-topic="Kubernetes">
+<h1>What CronJob settings matter in production, and what can go wrong with schedules?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In production, set <strong>concurrencyPolicy</strong> (Allow, <strong>Forbid</strong>, Replace), <strong>startingDeadlineSeconds</strong> for missed runs, an explicit <strong>timeZone</strong>, and <strong>history limits</strong>; remember that a CronJob may run a schedule <strong>twice or not at all</strong>, so jobs must be <strong>idempotent</strong> and <strong>monitored</strong> for missed or failed runs.</p>
+
+<h2>Detailed explanation</h2>
+<p>A CronJob creates a Job for each schedule tick in standard cron syntax. The defaults are permissive, and most production incidents come from not choosing settings deliberately.</p>
+<p><strong>concurrencyPolicy</strong> decides what happens if the previous Job is still running when the next tick arrives:</p>
+<ul>
+  <li><code>Allow</code> (default): both run, which can overload databases or corrupt shared output.</li>
+  <li><code>Forbid</code>: skip the new run; right for jobs that must never overlap, such as a nightly billing export or a backup.</li>
+  <li><code>Replace</code>: kill the running Job and start the new one; right when only the latest result matters.</li>
+</ul>
+<p><strong>startingDeadlineSeconds</strong>: how late a Job may start after its scheduled time (controller down, API unavailable, Forbid skipping). If the deadline passes, that run is counted as missed. Without it, the controller counts all missed schedules since the last run; if more than <strong>100</strong> are missed, it stops creating Jobs for that CronJob and logs an error. Setting a deadline (for example 300 s) bounds that window and avoids the surprise after long outages.</p>
+<p><strong>timeZone</strong> (for example <code>Europe/London</code>, <code>Asia/Kolkata</code>) interprets the schedule in a named zone rather than the controller manager's zone, which is usually UTC; DST transitions can make a run happen twice or be skipped, so avoid scheduling critical jobs in the DST-ambiguous hour.</p>
+<p><strong>successfulJobsHistoryLimit</strong> (default 3) and <strong>failedJobsHistoryLimit</strong> (default 1) keep recent Jobs for debugging; combine with Job-level <code>ttlSecondsAfterFinished</code> sensibly. The <code>suspend</code> field pauses a CronJob during maintenance. All Job reliability settings (backoffLimit, activeDeadlineSeconds, podFailurePolicy) belong in <code>jobTemplate</code>.</p>
+<p>The documentation is explicit that CronJob scheduling is approximate: a Job may occasionally be created <strong>twice</strong> or <strong>not at all</strong> for a tick. Make jobs idempotent (unique run keys, upserts, locks) and alert on outcomes, not on hopes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Controller checks schedules regularly.</li>
+  <li>At a tick, checks concurrencyPolicy against active Jobs.</li>
+  <li>Creates a Job from <code>jobTemplate</code> if within startingDeadlineSeconds.</li>
+  <li>Job runs pods with its own retry and deadline settings.</li>
+  <li>Old Jobs pruned per history limits.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: CronJob
+metadata: { name: billing-export }
+spec:
+  schedule: &quot;15 2 * * *&quot;
+  timeZone: &quot;Europe/London&quot;
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: export
+            image: registry.example.com/billing-export:2.4</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default <code>Allow</code> on jobs that must not overlap.</li>
+  <li>No startingDeadlineSeconds, then a CronJob silently stops after an outage.</li>
+  <li>Assuming the schedule uses local time.</li>
+  <li>No alert when a critical job didn't run.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;concurrencyPolicy decides what happens when the previous run is still going: Allow runs both, Forbid skips the new one and Replace kills the old one; for a nightly billing export I use Forbid. startingDeadlineSeconds sets how late a missed run may start; without it, more than 100 missed schedules makes the controller stop scheduling, which surprises people after outages. The timeZone field pins the schedule to a named zone. History limits keep a few Jobs for debugging. The docs say a CronJob may occasionally create two Jobs or none, so jobs are idempotent and I alert on missed or failed runs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you monitor a critical CronJob ran?</strong> Alert on <code>kube_cronjob_status_last_successful_time</code> age via kube-state-metrics, or a dead man's switch heartbeat.</li>
+  <li><strong>How do you trigger a run manually?</strong> <code>kubectl create job --from=cronjob/billing-export manual-1</code>.</li>
+  <li><strong>How do you pause it?</strong> Set <code>spec.suspend: true</code>.</li>
+</ul>
+</article>
+</body>
+</html>

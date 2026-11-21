@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-005 · How do you secure access to an Azure Storage account?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-005" data-topic="Azure">
+<h1>How do you secure access to an Azure Storage account?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Prefer <strong>Entra ID with data-plane RBAC</strong> and <strong>managed identities</strong>, <strong>disable shared key authorisation</strong>, use <strong>user delegation SAS</strong> for temporary access, lock the network with <strong>private endpoints and no public access</strong>, and enable <strong>encryption, soft delete, versioning and logging</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Storage accounts support several authorisation methods, and the <strong>account key</strong> is the most dangerous: it grants full control over all data, it does not identify who used it, and rotating it breaks every client using it. Security best practice is therefore <strong>identity-based access</strong>.</p>
+<p><strong>Entra ID and RBAC:</strong> applications use <strong>managed identities</strong> and people use their Entra accounts, with <strong>data-plane roles</strong> such as <em>Storage Blob Data Reader</em>, <em>Storage Blob Data Contributor</em> or <em>Storage Queue Data Message Processor</em>, scoped to the account or, better, a single container. Note that control-plane roles like Contributor do not by themselves grant data access with Entra auth.</p>
+<p><strong>Disable shared key:</strong> setting <code>allowSharedKeyAccess</code> to false blocks account-key and account-SAS requests. Before doing so, find remaining key users, for example in <strong>resource logs</strong> (<code>StorageBlobLogs</code> shows the <code>AuthenticationType</code>) or the <strong>Transactions metric split by authentication type</strong>.</p>
+<p><strong>SAS tokens:</strong> when an external client needs temporary access, use a <strong>user delegation SAS</strong>, signed with Entra credentials, scoped to a container or blob, with minimal permissions, HTTPS only and a short expiry (maximum seven days). Stored access policies allow revocation for service SAS.</p>
+<p><strong>Network:</strong> add <strong>private endpoints</strong> and set <strong>public network access to Disabled</strong>, or restrict to selected VNets and IPs, allowing trusted Azure services where needed. Disable <strong>anonymous blob access</strong> and require <strong>TLS 1.2</strong> or higher.</p>
+<p><strong>Data protection:</strong> encryption at rest is always on with Microsoft-managed keys; use <strong>customer-managed keys</strong> in Key Vault for compliance. Enable <strong>soft delete</strong> for blobs and containers, <strong>versioning</strong>, <strong>point-in-time restore</strong>, and <strong>immutability policies</strong> for regulated or ransomware-resilient data. Send <strong>diagnostic logs</strong> to Log Analytics and enable <strong>Defender for Storage</strong> for malware scanning and threat detection.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assign managed identities and data-plane roles at container scope.</li>
+  <li>Identify and migrate clients still using keys or account SAS.</li>
+  <li>Disable shared key authorisation and anonymous access.</li>
+  <li>Add private endpoints; disable public network access.</li>
+  <li>Enable soft delete, versioning, logging and Defender.</li>
+  <li>Enforce all of this through Azure Policy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az role assignment create --assignee &lt;app-identity-id&gt; \
+  --role &quot;Storage Blob Data Contributor&quot; \
+  --scope /subscriptions/&lt;sub&gt;/resourceGroups/rg-docs/providers/Microsoft.Storage/storageAccounts/stdocs/blobServices/default/containers/invoices
+az storage account update -n stdocs -g rg-docs \
+  --allow-shared-key-access false --allow-blob-public-access false \
+  --public-network-access Disabled --min-tls-version TLS1_2
+az storage blob generate-sas --account-name stdocs -c invoices -n inv-981.pdf \
+  --permissions r --expiry 2026-11-22T12:00Z --auth-mode login --as-user --https-only</code></pre>
+<pre><code class="language-kusto">StorageBlobLogs
+| where TimeGenerated &gt; ago(7d) and AuthenticationType in (&quot;AccountKey&quot;, &quot;SAS&quot;)
+| summarize count() by CallerIpAddress, UserAgentHeader, AuthenticationType</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Account keys in application configuration.</li>
+  <li>Long-lived account SAS tokens shared by email.</li>
+  <li>Contributor role assumed to grant data access.</li>
+  <li>Private endpoint added but public access left enabled.</li>
+  <li>Disabling shared key without checking dependencies (some tools still need it).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I prefer identity-based access: applications use managed identities and people use Entra ID, with data-plane roles like Storage Blob Data Reader or Contributor scoped to the container. Account keys give full control and are hard to rotate, so I disable shared key authorisation once nothing depends on it, after checking the resource logs for key usage. For temporary client access I use a short-lived user delegation SAS signed with Entra credentials. On the network side I use private endpoints and disable public network access, and block anonymous access. Data is encrypted at rest, optionally with customer-managed keys, and I enable soft delete, versioning, logging and Defender for Storage, all enforced with Azure Policy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you find which applications still use account keys?</strong> Query <code>StorageBlobLogs</code> for AuthenticationType AccountKey or split the Transactions metric by authentication.</li>
+  <li><strong>What if a SAS token leaks?</strong> Revoke via stored access policy, rotate keys for key-signed SAS, or revoke user delegation keys.</li>
+  <li><strong>When use customer-managed keys?</strong> For compliance requirements needing key control and revocation.</li>
+</ul>
+</article>
+</body>
+</html>

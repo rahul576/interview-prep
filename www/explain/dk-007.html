@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-007 · What is the difference between docker stop and docker kill?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-007" data-topic="Docker">
+<h1>What is the difference between docker stop and docker kill?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>docker stop</code></strong> shuts down <strong>gracefully</strong>: it sends <strong>SIGTERM</strong> (or the image's <code>STOPSIGNAL</code>), waits a <strong>grace period (10 s by default, <code>-t</code> to change)</strong>, then sends <strong>SIGKILL</strong>; <strong><code>docker kill</code></strong> sends <strong>SIGKILL immediately</strong> (or any signal chosen with <code>--signal</code>).</p>
+
+<h2>Detailed explanation</h2>
+<p>A clean shutdown matters: a web server should stop accepting new connections, finish in-flight requests, a worker should finish or requeue its current job, and a database should flush to disk. <strong>SIGTERM</strong> is the polite request that lets the application do that; <strong>SIGKILL</strong> cannot be caught or ignored, so the process dies instantly with no cleanup.</p>
+<p><strong><code>docker stop name</code></strong> sends SIGTERM (or whatever <code>STOPSIGNAL</code> the Dockerfile defines, e.g. <code>SIGQUIT</code> for nginx's graceful shutdown) to the <strong>main process</strong>. It then waits up to the timeout: <strong>10 seconds by default</strong>, configurable per command with <code>-t 30</code> or per container with <code>--stop-timeout</code>. If the process is still alive, Docker sends SIGKILL. The container ends in the exited state with exit code 0 or 143 (128 + 15) if the app exited on SIGTERM, or <strong>137</strong> (128 + 9) if it had to be killed.</p>
+<p><strong><code>docker kill name</code></strong> sends <strong>SIGKILL</strong> by default, immediately. With <code>--signal</code> you can send others: <code>docker kill --signal=SIGHUP web</code> asks many daemons (nginx, HAProxy) to <strong>reload configuration</strong> without stopping, and <code>SIGUSR1</code> may trigger log reopen or diagnostics depending on the app.</p>
+<p>The common real-world problem: <strong>PID 1 ignores SIGTERM</strong>. Causes include shell-form <code>CMD</code>/<code>ENTRYPOINT</code> (sh is PID 1 and does not forward signals), entrypoint scripts without <code>exec</code>, or apps that do not install a handler (PID 1 gets no default signal behaviour from the kernel). Symptom: every <code>docker stop</code> takes <strong>exactly the timeout</strong> and ends with exit code 137. Fix with exec form, <code>exec &quot;$@&quot;</code>, <code>--init</code> (tini), and a SIGTERM handler. Kubernetes behaves the same way with <code>terminationGracePeriodSeconds</code> (30 s default).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>docker stop</code> → STOPSIGNAL (default SIGTERM) to PID 1.</li>
+  <li>App drains and exits → container exited.</li>
+  <li>Timeout reached → SIGKILL → exit code 137.</li>
+  <li><code>docker kill</code> → chosen signal immediately (default SIGKILL).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker stop -t 30 api            # allow 30 s for graceful shutdown
+docker kill api                  # immediate SIGKILL
+docker kill --signal=SIGHUP proxy  # reload config, keep running
+docker inspect -f '{{.State.ExitCode}}' api</code></pre>
+<pre><code class="language-javascript">// Node.js: handle SIGTERM for graceful shutdown
+process.on('SIGTERM', () =&gt; {
+  server.close(() =&gt; process.exit(0));   // stop accepting, finish in-flight requests
+  setTimeout(() =&gt; process.exit(1), 25000).unref();
+});</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>docker kill</code> habitually and corrupting data or dropping requests.</li>
+  <li>Shell-form commands so SIGTERM never reaches the app.</li>
+  <li>Grace periods shorter than the app's real drain time.</li>
+  <li>Assuming SIGHUP stops a container; for many apps it means reload.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;docker stop asks for a graceful shutdown: it sends SIGTERM to the main process, waits a grace period, 10 seconds by default and configurable with -t, and only then sends SIGKILL. That gives the app time to finish requests, close connections and flush data. docker kill sends SIGKILL immediately, so there's no cleanup, though with --signal I can send something else, like SIGHUP to reload config. I normally use stop and make sure the app actually handles SIGTERM; if every stop takes exactly 10 seconds and exits with 137, PID 1 is ignoring the signal, usually due to shell-form commands.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does stop take exactly 10 seconds?</strong> SIGTERM is ignored, so Docker waits for the timeout and SIGKILLs.</li>
+  <li><strong>What do exit codes 137 and 143 mean?</strong> Killed by SIGKILL (137) vs terminated by SIGTERM (143).</li>
+  <li><strong>What is STOPSIGNAL?</strong> A Dockerfile instruction that changes the signal <code>docker stop</code> sends.</li>
+</ul>
+</article>
+</body>
+</html>

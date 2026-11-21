@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-039 · What is Terragrunt, and what problems does it solve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-039" data-topic="Infrastructure as Code">
+<h1>What is Terragrunt, and what problems does it solve?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Terragrunt</strong> is a <strong>thin wrapper</strong> around Terraform and OpenTofu that keeps <strong>backend, provider and module configuration DRY</strong> across many environments, models <strong>dependencies between stacks</strong>, and runs <strong>many stacks in order</strong>, at the cost of <strong>another tool</strong> to learn.</p>
+
+<h2>Detailed explanation</h2>
+<p>With plain Terraform, a typical estate has directories like <code>prod/eu-west-1/network</code>, <code>prod/eu-west-1/app</code>, <code>dev/...</code>, each containing nearly identical <strong>backend blocks</strong>, <strong>provider blocks</strong> and a module call. Backend blocks cannot use variables, so every directory hard-codes its bucket and key, and copy-paste errors such as two stacks sharing a state key are easy to make.</p>
+<p>Terragrunt addresses this with HCL files of its own:</p>
+<ul>
+  <li>A <strong>root configuration</strong> (in current versions conventionally <code>root.hcl</code>; older setups used a root <code>terragrunt.hcl</code>) defines <code>remote_state</code> once, with the state key derived from the folder path via <code>path_relative_to_include()</code>, and <code>generate</code> blocks that write <code>backend.tf</code> and <code>provider.tf</code> into each stack.</li>
+  <li>Each <strong>leaf</strong> <code>terragrunt.hcl</code> <code>include</code>s the root, sets <code>terraform { source = &quot;git::...//modules/app?ref=v1.4.0&quot; }</code> and passes <code>inputs</code>. Environment folders therefore contain only what differs: module version and inputs.</li>
+  <li><strong>dependency</strong> blocks read outputs from other stacks (with <code>mock_outputs</code> for planning before the dependency exists), and Terragrunt orders execution accordingly.</li>
+  <li>Running across many stacks: historically <code>terragrunt run-all plan</code>; newer releases use <code>terragrunt run --all plan</code>. It plans or applies every stack under a directory in <strong>dependency order</strong>, in parallel where possible.</li>
+  <li>Hooks, <code>read_terragrunt_config</code> for shared variables per environment or region, and newer <strong>stacks</strong> features for generating units.</li>
+</ul>
+<p>The trade-offs: another binary to install, version and debug; error messages pass through two layers; <code>run --all apply</code> across production is powerful but has a large blast radius; and newer Terraform/OpenTofu features (better module patterns, <code>-chdir</code>, HCP Terraform workspaces and Stacks, OpenTofu early variable evaluation in backends) cover part of the original motivation. Teams adopt Terragrunt mainly when they have many accounts, regions and environments with the same structure.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terragrunt reads the leaf <code>terragrunt.hcl</code> and its includes.</li>
+  <li>It downloads the module source into a cache directory.</li>
+  <li>It generates backend and provider files.</li>
+  <li>It resolves dependencies and injects inputs as variables.</li>
+  <li>It runs the Terraform/OpenTofu command, across many units if requested.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># root.hcl
+remote_state {
+  backend = &quot;s3&quot;
+  generate = { path = &quot;backend.tf&quot;, if_exists = &quot;overwrite&quot; }
+  config = {
+    bucket       = &quot;acme-tfstate-${local.account}&quot;
+    key          = &quot;${path_relative_to_include()}/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    encrypt      = true
+    use_lockfile = true
+  }
+}</code></pre>
+<pre><code class="language-hcl"># prod/eu-west-1/app/terragrunt.hcl
+include &quot;root&quot; { path = find_in_parent_folders(&quot;root.hcl&quot;) }
+
+terraform {
+  source = &quot;git::https://git.acme.local/infra-modules.git//app?ref=v1.4.0&quot;
+}
+
+dependency &quot;network&quot; {
+  config_path = &quot;../network&quot;
+  mock_outputs = { private_subnet_ids = [&quot;subnet-mock&quot;] }
+}
+
+inputs = {
+  instance_count = 4
+  subnet_ids     = dependency.network.outputs.private_subnet_ids
+}</code></pre>
+<pre><code class="language-bash">cd prod/eu-west-1 &amp;&amp; terragrunt run --all plan</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>run --all apply</code> on production without reviewing each plan.</li>
+  <li>Leaf files that pin different module refs by accident.</li>
+  <li>Forgetting mock outputs, breaking plans for new environments.</li>
+  <li>Adopting Terragrunt for a small estate where plain Terraform is enough.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terragrunt is a thin wrapper around Terraform and OpenTofu. With many environments, plain Terraform repeats backend config, provider blocks and module calls in every directory. Terragrunt keeps that DRY: a root file generates backend and provider config for every stack, deriving the state key from the folder path, and each environment folder only declares the module version and its inputs. Dependency blocks pass outputs between stacks, and run-all, now run --all, plans or applies many stacks in dependency order. The trade-off is another tool to learn and debug, and newer Terraform features cover some of these needs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Terragrunt keep module versions consistent?</strong> Version refs centralised in shared HCL (e.g. per-environment <code>env.hcl</code>) read by every leaf, promoted from dev to prod.</li>
+  <li><strong>Does Terragrunt work with OpenTofu?</strong> Yes, it supports both.</li>
+  <li><strong>What are mock_outputs for?</strong> Planning a stack before its dependency has been applied.</li>
+</ul>
+</article>
+</body>
+</html>

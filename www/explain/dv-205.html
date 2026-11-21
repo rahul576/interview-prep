@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-205 · How does Ansible work? Explain inventory, playbooks, modules and idempotency.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-205" data-topic="Configuration Management">
+<h1>How does Ansible work? Explain inventory, playbooks, modules and idempotency.</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Ansible is <strong>agentless</strong>: from a control node it connects over <strong>SSH (or WinRM)</strong> to hosts listed in an <strong>inventory</strong>, runs <strong>playbooks</strong> (YAML plays mapping host groups to <strong>tasks</strong>), and each task calls a <strong>module</strong> (<code>apt</code>, <code>copy</code>, <code>template</code>, <code>service</code>) that is <strong>idempotent</strong>: it checks current state and only changes what differs, so a second run reports no changes.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Agentless architecture:</strong> you install Ansible only on a <strong>control node</strong> (a laptop, CI runner or AWX). Managed nodes need SSH access and <strong>Python</strong>; no daemon runs there. For each task, Ansible copies a small module program to the host, executes it, reads its JSON result and removes it. Windows hosts are managed over WinRM or SSH with PowerShell modules.</p>
+<p><strong>Inventory</strong> lists hosts and groups, statically in INI or YAML, or <strong>dynamically</strong> from cloud APIs (an AWS EC2 or Azure plugin that groups hosts by tags). Groups like <code>webservers</code> and <code>databases</code> can have variables in <strong><code>group_vars</code></strong>, and individual hosts in <strong><code>host_vars</code></strong>.</p>
+<p>A <strong>playbook</strong> is a YAML file with one or more <strong>plays</strong>. Each play says which hosts to target (<code>hosts: webservers</code>), whether to use privilege escalation (<code>become: true</code>) and which <strong>tasks</strong> to run in order. Tasks can use variables, loops, conditionals (<code>when</code>) and <strong>notify handlers</strong>, which run once at the end when something changed, for example restarting Nginx after its config changes.</p>
+<p><strong>Modules</strong> do the actual work: <code>apt</code>/<code>dnf</code>/<code>package</code> install software, <code>copy</code> places files, <code>template</code> renders Jinja2 templates with variables, <code>service</code>/<code>systemd</code> manage services, <code>user</code> manages accounts, and thousands more in collections.</p>
+<p><strong>Idempotency</strong> is the core concept: modules describe <strong>desired state</strong> (&quot;nginx present&quot;, &quot;service started&quot;) rather than actions. The module checks first and acts only if needed, reporting <code>changed</code> or <code>ok</code>. So you can run a playbook repeatedly and safely; the second run shows <code>changed=0</code>. Raw <code>shell</code> and <code>command</code> tasks break this unless guarded. <strong>Roles</strong> package tasks, templates, handlers and defaults for reuse.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Control node reads inventory, variables and the playbook.</li>
+  <li>Connects to target hosts over SSH in parallel (default 5 forks).</li>
+  <li>Gathers facts (OS, IPs) unless disabled.</li>
+  <li>Runs each task's module on every host, in order.</li>
+  <li>Runs notified handlers; prints a recap (ok, changed, failed).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-ini"># inventory.ini
+[webservers]
+web1.example.com
+web2.example.com
+[databases]
+db1.example.com</code></pre>
+<pre><code class="language-yaml"># site.yml
+- hosts: webservers
+  become: true
+  tasks:
+    - name: Install nginx
+      ansible.builtin.apt: { name: nginx, state: present, update_cache: true }
+    - name: Deploy site config
+      ansible.builtin.template: { src: site.conf.j2, dest: /etc/nginx/conf.d/site.conf }
+      notify: Restart nginx
+  handlers:
+    - name: Restart nginx
+      ansible.builtin.service: { name: nginx, state: restarted }</code></pre>
+<pre><code class="language-bash">ansible-playbook -i inventory.ini site.yml
+ansible webservers -i inventory.ini -m ping</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>shell</code> for everything and losing idempotency.</li>
+  <li>Restarting services in tasks instead of handlers.</li>
+  <li>Hard-coding passwords in playbooks instead of Ansible Vault.</li>
+  <li>Forgetting <code>become: true</code> and getting permission errors.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ansible is an agentless configuration management tool: it connects to servers over SSH, or WinRM for Windows, so nothing needs installing on them except Python. The inventory lists hosts and groups, like webservers and databases, with variables per group. A playbook is YAML with plays that map groups to tasks, and each task calls a module, apt to install packages, copy or template for files, service to manage services. Modules are idempotent: they check the current state and only change what differs, so running a playbook twice gives the same result and the second run reports no changes. Handlers restart services only when something changed, and roles organise reusable tasks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep passwords out of playbooks?</strong> Ansible Vault encryption, or lookups from HashiCorp Vault or a cloud secret manager.</li>
+  <li><strong>What are facts?</strong> Host information gathered at play start (OS, memory, IPs) usable as variables.</li>
+  <li><strong>Ad-hoc commands?</strong> One-off module runs like <code>ansible all -m ping</code> without a playbook.</li>
+</ul>
+</article>
+</body>
+</html>

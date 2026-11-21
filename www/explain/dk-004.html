@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-004 · How do you pass configuration to a container with environment variables?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-004" data-topic="Docker">
+<h1>How do you pass configuration to a container with environment variables?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Pass configuration with <strong><code>-e KEY=value</code></strong>, <strong><code>--env-file</code></strong> for many variables, <strong><code>ENV</code></strong> in the Dockerfile for defaults, and the Compose <strong><code>environment</code>/<code>env_file</code></strong> keys, so <strong>one image runs in every environment</strong> (twelve-factor); keep <strong>secrets out of env vars</strong> where possible, because they show up in <strong><code>docker inspect</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Building a separate image per environment is fragile: you want <strong>build once, deploy many</strong>, with the differences injected at run time. Environment variables are the simplest mechanism and the <strong>twelve-factor app</strong> recommendation for config.</p>
+<p><strong>Ways to set them:</strong></p>
+<ul>
+  <li><code>docker run -e SPRING_PROFILES_ACTIVE=prod -e DB_HOST=db myapp</code> sets values directly. <code>-e DB_HOST</code> without a value copies it from your shell.</li>
+  <li><code>--env-file app.env</code> reads <code>KEY=value</code> lines from a file, handy for dozens of variables; keep that file out of git if it contains anything sensitive.</li>
+  <li><code>ENV</code> in the Dockerfile sets <strong>defaults</strong> baked into the image (for example <code>ENV PORT=8080 TZ=UTC</code>).</li>
+  <li>In <strong>Compose</strong>, the <code>environment:</code> map or <code>env_file:</code>; Compose also reads a <code>.env</code> file for <strong>variable substitution</strong> inside the YAML itself, which is a different feature.</li>
+  <li>In Kubernetes: <code>env</code>, <code>envFrom</code> with ConfigMaps and Secrets.</li>
+</ul>
+<p><strong>Precedence:</strong> run-time values win. <code>-e</code> overrides <code>--env-file</code> entries and <code>ENV</code> defaults from the image.</p>
+<p><strong>Secrets:</strong> environment variables are convenient but leaky. They appear in <code>docker inspect</code>, in <code>/proc/&lt;pid&gt;/environ</code>, are inherited by child processes and can end up in crash dumps, debug pages or logs. For passwords and keys prefer <strong>secrets mounted as files</strong> (Docker/Swarm secrets, Compose <code>secrets:</code>, Kubernetes Secrets as volumes, or Vault/CSI), and support the <code>*_FILE</code> convention, for example <code>POSTGRES_PASSWORD_FILE=/run/secrets/db_password</code>, which official images like Postgres and MySQL already do.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Image defines defaults with <code>ENV</code>.</li>
+  <li>Runtime adds or overrides via <code>--env-file</code> then <code>-e</code>.</li>
+  <li>The process reads variables at startup (<code>System.getenv</code>, <code>process.env</code>, <code>os.environ</code>).</li>
+  <li>Changes require restarting the container; env vars are not reloaded live.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">cat &gt; staging.env &lt;&lt;'EOF'
+SPRING_PROFILES_ACTIVE=staging
+DB_HOST=db.staging.internal
+LOG_LEVEL=info
+EOF
+docker run -d --env-file staging.env -e LOG_LEVEL=debug myapp:2.1   # -e wins
+docker exec &lt;id&gt; printenv LOG_LEVEL                                 # debug</code></pre>
+<pre><code class="language-yaml">services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Baking environment-specific values or secrets into the image with <code>ENV</code>.</li>
+  <li>Committing <code>.env</code> files with real credentials.</li>
+  <li>Expecting a changed variable to apply without recreating the container.</li>
+  <li>Logging the full environment at startup.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The simplest way is -e on docker run, like -e SPRING_PROFILES_ACTIVE=prod. With many variables I use --env-file. The Dockerfile's ENV sets defaults that run-time values override, and in Compose I use the environment or env_file keys. That keeps one image deployable to every environment, following twelve-factor. For secrets I'm careful: environment variables are visible through docker inspect and to child processes, so for passwords I prefer Docker or Kubernetes secrets mounted as files, using the _FILE convention that many images support.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Precedence between ENV and <code>-e</code>?</strong> <code>-e</code> at run time overrides the image's <code>ENV</code>.</li>
+  <li><strong>Compose <code>.env</code> vs <code>env_file</code>?</strong> <code>.env</code> substitutes values in the YAML; <code>env_file</code> passes variables into the container.</li>
+  <li><strong>Why files for secrets?</strong> Not visible in inspect output or process environment, and can be rotated.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-048 · How do you authenticate to private registries such as ECR, ACR or GHCR?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-048" data-topic="Docker">
+<h1>How do you authenticate to private registries such as ECR, ACR or GHCR?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>All registries end in <strong><code>docker login</code></strong>, but credentials differ: <strong><code>aws ecr get-login-password</code></strong> for ECR (12-hour token), <strong><code>az acr login</code></strong> for ACR, a <strong>token with package scopes</strong> for GHCR; use <strong>credential helpers</strong>, <strong>short-lived OIDC credentials in CI</strong>, and <strong>node/workload identity or imagePullSecrets</strong> in Kubernetes.</p>
+
+<h2>Detailed explanation</h2>
+<p>Registries implement the OCI distribution API with <strong>token authentication</strong>. <code>docker login</code> exchanges credentials for access and, by default, stores them in <code>~/.docker/config.json</code>, base64-encoded, which is <strong>not encryption</strong>. The question is how to get those credentials safely.</p>
+<p>For <strong>Amazon ECR</strong>, <code>aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin &lt;account&gt;.dkr.ecr.eu-west-1.amazonaws.com</code> uses your AWS identity to fetch a token valid for <strong>12 hours</strong>. For <strong>Azure Container Registry</strong>, <code>az acr login --name myreg</code> uses your Entra ID identity; service principals or managed identities cover automation. <strong>Google Artifact Registry</strong> uses <code>gcloud auth configure-docker</code>. <strong>GHCR</strong> accepts a GitHub token with <code>read:packages</code>/<code>write:packages</code>, and in GitHub Actions the built-in <code>GITHUB_TOKEN</code> can push to the repository's packages.</p>
+<p><strong>Credential helpers</strong> (<code>docker-credential-ecr-login</code>, <code>docker-credential-gcloud</code>, <code>osxkeychain</code>, <code>wincred</code>, <code>pass</code>) fetch or store tokens on demand, so no static password sits in <code>config.json</code>. In <strong>CI</strong>, use <strong>OIDC federation</strong>: the pipeline presents a signed identity token to AWS, Azure or GCP and receives <strong>short-lived</strong> credentials, with no long-lived secret stored in CI variables.</p>
+<p>In <strong>Kubernetes</strong>, nodes on managed clusters usually pull from their own cloud registry using the <strong>node identity</strong> (EKS node role, AKS kubelet identity with AcrPull, GKE service account). For other registries you create an <strong>imagePullSecret</strong> of type <code>kubernetes.io/dockerconfigjson</code> and reference it in the pod or service account. Kubelet credential provider plugins can fetch tokens dynamically.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client requests a token from the cloud provider using its identity.</li>
+  <li><code>docker login</code> presents the token to the registry.</li>
+  <li>The registry issues scoped access for pull or push.</li>
+  <li>Tokens expire and are refreshed by helpers.</li>
+  <li>Kubernetes uses node identity or pull secrets per pod.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ecr get-login-password --region eu-west-1 \
+  | docker login --username AWS --password-stdin 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+az acr login --name acmeregistry
+echo &quot;$GHCR_TOKEN&quot; | docker login ghcr.io -u my-bot --password-stdin
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.partner.com --docker-username=bot --docker-password=&quot;$PW&quot;</code></pre>
+<pre><code class="language-json">{ &quot;credHelpers&quot;: { &quot;123456789012.dkr.ecr.eu-west-1.amazonaws.com&quot;: &quot;ecr-login&quot; } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long-lived personal access tokens stored in CI variables.</li>
+  <li>Passing passwords with <code>-p</code>, visible in shell history.</li>
+  <li>Assuming <code>config.json</code> encrypts credentials.</li>
+  <li>Giving CI push rights to every repository instead of scoped permissions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every registry ultimately uses docker login, but credentials differ. For ECR I pipe aws ecr get-login-password into docker login, which gives a 12-hour token; for ACR, az acr login uses my Azure identity; GHCR accepts a token with package permissions. Credential helpers like docker-credential-ecr-login or the OS keychain fetch and store tokens instead of a plain password in config.json. In CI I use OIDC federation to get short-lived cloud credentials. In Kubernetes, nodes or workloads pull with their cloud identity, or with an imagePullSecret for other registries.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid long-lived registry passwords in CI?</strong> They leak, are rarely rotated and grant broad access.</li>
+  <li><strong>How does OIDC federation work?</strong> The CI issues a signed token the cloud trusts and exchanges for temporary credentials.</li>
+  <li><strong>Where are Docker credentials stored?</strong> <code>~/.docker/config.json</code> or the configured credential store.</li>
+</ul>
+</article>
+</body>
+</html>

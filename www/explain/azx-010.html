@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-010 · What are user-defined routes in Azure, and how do you force traffic through a firewall?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-010" data-topic="Azure">
+<h1>What are user-defined routes in Azure, and how do you force traffic through a firewall?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Azure adds <strong>system routes</strong> automatically; <strong>route tables with user-defined routes (UDRs)</strong> override them per subnet. To <strong>force traffic through a firewall</strong>, give spoke subnets a <strong>0.0.0.0/0 route with next hop &quot;virtual appliance&quot; = firewall private IP</strong>, add routes for other spokes and on-premises, and avoid <strong>asymmetric routing</strong> and unwanted <strong>BGP propagation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every subnet has <strong>system routes</strong>: the VNet address space is routed locally, peered VNets are reachable, <code>0.0.0.0/0</code> goes to the <strong>Internet</strong>, and some reserved ranges go nowhere. Gateways add <strong>BGP-learned routes</strong> from on-premises via VPN or ExpressRoute.</p>
+<p>A <strong>route table</strong> is a resource with <strong>user-defined routes</strong>, associated with one or more <strong>subnets</strong>. Each route has an address prefix and a <strong>next hop type</strong>: <em>VirtualAppliance</em> (with an IP), <em>VirtualNetworkGateway</em>, <em>VnetLocal</em>, <em>Internet</em> or <em>None</em> (drop). Azure picks the route with the <strong>longest prefix match</strong>; for identical prefixes, <strong>UDRs beat BGP routes, which beat system routes</strong>.</p>
+<p><strong>Forcing traffic through Azure Firewall</strong> in hub-and-spoke:</p>
+<ul>
+  <li>On each <strong>spoke workload subnet</strong>: <code>0.0.0.0/0 → VirtualAppliance → &lt;firewall private IP&gt;</code>. This sends internet-bound traffic, and with no more specific route also traffic to other spokes, to the firewall. Since a peered hub VNet's own range is still more specific, add explicit routes if hub-bound traffic should be inspected too.</li>
+  <li>On the <strong>GatewaySubnet</strong>: routes for spoke prefixes pointing to the firewall, so traffic from on-premises is inspected on the way in.</li>
+  <li>Set <strong>&quot;propagate gateway routes&quot; = false</strong> on spoke route tables, so on-premises routes learned via BGP do not bypass the firewall.</li>
+</ul>
+<p><strong>Pitfalls:</strong></p>
+<ul>
+  <li><strong>Asymmetric routing:</strong> traffic goes out through the firewall but returns by a different path (for example directly via a public IP or a gateway); the stateful firewall sees only half the flow and drops it. Make sure both directions use the firewall, and avoid instance-level public IPs behind forced routes.</li>
+  <li><strong>Do not route the firewall's own subnet back to itself.</strong> <code>AzureFirewallSubnet</code> needs direct internet access for its own outbound traffic and management; a <code>0.0.0.0/0</code> UDR pointing elsewhere breaks it unless using forced tunnelling with a management subnet.</li>
+  <li>PaaS services and private endpoints may need specific routes or network policies enabled.</li>
+</ul>
+<p>Verify with <strong>Network Watcher</strong>: <strong>effective routes</strong> on a NIC and <strong>next hop</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deploy Azure Firewall in the hub and note its private IP.</li>
+  <li>Create a route table with 0.0.0.0/0 to the firewall IP.</li>
+  <li>Disable gateway route propagation on it.</li>
+  <li>Associate it with spoke workload subnets.</li>
+  <li>Add GatewaySubnet routes for spoke prefixes via the firewall.</li>
+  <li>Verify effective routes and firewall logs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az network route-table create -g rg-spoke-app -n rt-spoke-app \
+  --disable-bgp-route-propagation true
+az network route-table route create -g rg-spoke-app --route-table-name rt-spoke-app \
+  -n default-via-fw --address-prefix 0.0.0.0/0 \
+  --next-hop-type VirtualAppliance --next-hop-ip-address 10.0.1.4
+az network vnet subnet update -g rg-spoke-app --vnet-name vnet-spoke-app \
+  -n snet-app --route-table rt-spoke-app
+az network nic show-effective-route-table -g rg-spoke-app -n nic-app-vm01 -o table</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting to disable BGP propagation, so on-premises traffic bypasses the firewall.</li>
+  <li>Asymmetric routes through different appliances or public IPs.</li>
+  <li>A 0.0.0.0/0 UDR on AzureFirewallSubnet pointing at the firewall or another NVA.</li>
+  <li>Not adding routes on the GatewaySubnet for inbound inspection.</li>
+  <li>Assuming peering alone routes spoke-to-spoke traffic (it is not transitive).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Azure creates system routes automatically, so VNet subnets, peered VNets and the internet are reachable without configuration. To change that, I create a route table with user-defined routes and associate it with subnets; the longest prefix wins, and for equal prefixes UDRs beat BGP and system routes. To force traffic through Azure Firewall, each spoke subnet gets 0.0.0.0/0 with next hop virtual appliance and the firewall's private IP, plus GatewaySubnet routes so traffic from on-premises is inspected too. I disable gateway route propagation so BGP routes do not bypass the firewall, and watch for asymmetric routing, which a stateful firewall drops. I always verify with Network Watcher effective routes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not put a 0.0.0.0/0 route on AzureFirewallSubnet itself?</strong> The firewall needs direct internet for its traffic and management; it would break or loop.</li>
+  <li><strong>How do you route spoke-to-spoke traffic?</strong> Via the hub firewall with UDRs, since peering is not transitive.</li>
+  <li><strong>What does next hop type None do?</strong> Drops the traffic, useful for blackholing ranges.</li>
+</ul>
+</article>
+</body>
+</html>

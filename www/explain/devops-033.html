@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-033 · What is Ansible, and what makes a good playbook?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-033" data-topic="Configuration Management">
+<h1>What is Ansible, and what makes a good playbook?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Ansible</strong> is an <strong>agentless</strong> automation and configuration management tool that connects over <strong>SSH (or WinRM)</strong>, uses an <strong>inventory</strong> of hosts, and runs <strong>YAML playbooks</strong> of tasks built from <strong>idempotent modules</strong>; a good playbook uses proper modules instead of raw shell, is organised in <strong>roles</strong>, uses <strong>handlers</strong> and <strong>variables</strong>, keeps secrets in <strong>Ansible Vault</strong>, and is tested with <strong>check mode and Molecule</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Ansible needs nothing on the managed nodes except SSH access and <strong>Python</strong> (Windows uses WinRM or SSH with PowerShell). The control node reads an <strong>inventory</strong> (static INI/YAML or dynamic from AWS, Azure, VMware) that groups hosts, for example <code>web</code> and <code>db</code>. A <strong>playbook</strong> contains <strong>plays</strong>, each mapping a host group to a list of <strong>tasks</strong>. Each task calls a <strong>module</strong> (<code>ansible.builtin.package</code>, <code>template</code>, <code>service</code>, <code>user</code>, <code>lineinfile</code>, <code>community.mysql.mysql_user</code>), which Ansible copies to the host, runs and removes, returning JSON with <code>changed</code> or <code>ok</code>.</p>
+<p>The defining quality of a good playbook is <strong>idempotency</strong>: running it once configures the host, running it again changes nothing and reports <code>changed=0</code>. Modules achieve this by checking current state first (&quot;is nginx installed? is the file content identical?&quot;). Raw <code>shell</code> or <code>command</code> tasks are not idempotent by default, so use them only when no module exists, with <code>creates</code>, <code>removes</code> or <code>changed_when</code> guards.</p>
+<p>Good structure:</p>
+<ul>
+  <li><strong>Roles</strong> (<code>roles/nginx/{tasks,handlers,templates,defaults,vars}</code>) for reusable units, shared via <strong>collections</strong> and Galaxy.</li>
+  <li><strong>Variables</strong> in <code>group_vars</code>/<code>host_vars</code>, with sensible <strong>defaults</strong> in the role.</li>
+  <li><strong>Handlers</strong> that restart services only when a config task reports a change.</li>
+  <li><strong>Templates</strong> (Jinja2) for config files.</li>
+  <li><strong>Secrets</strong> encrypted with <strong>Ansible Vault</strong> or looked up from HashiCorp Vault.</li>
+  <li><strong>Testing</strong>: <code>ansible-lint</code>, <code>--check --diff</code> dry runs, and <strong>Molecule</strong> to test roles in containers or VMs.</li>
+</ul>
+<p>Terraform typically <strong>provisions</strong> infrastructure (VMs, networks), while Ansible <strong>configures</strong> what runs on it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Control node reads inventory and variables.</li>
+  <li>For each play, connects to hosts in parallel (<code>forks</code>).</li>
+  <li>Runs each task's module on every host, collecting results.</li>
+  <li>Notified handlers run at the end of the play.</li>
+  <li>A recap shows ok/changed/failed per host.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- name: Configure web servers
+  hosts: web
+  become: true
+  tasks:
+    - name: Install nginx
+      ansible.builtin.package: { name: nginx, state: present }
+    - name: Deploy nginx config
+      ansible.builtin.template: { src: nginx.conf.j2, dest: /etc/nginx/nginx.conf, mode: &quot;0644&quot; }
+      notify: Reload nginx
+    - name: Ensure nginx is running
+      ansible.builtin.service: { name: nginx, state: started, enabled: true }
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service: { name: nginx, state: reloaded }</code></pre>
+<pre><code class="language-bash">ansible-playbook -i inventories/prod site.yml --check --diff --limit web</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>shell: apt-get install -y nginx</code> instead of the package module.</li>
+  <li>Restarting services unconditionally on every run instead of using handlers.</li>
+  <li>Plain-text passwords in <code>group_vars</code>.</li>
+  <li>Huge single playbooks with no roles.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ansible is agentless: it connects over SSH, or WinRM for Windows, and runs modules on the hosts, so only Python is needed on them. The inventory lists hosts in groups, and playbooks are YAML plays mapping those groups to tasks. A good playbook uses idempotent modules like package, template and service rather than raw shell, so a second run changes nothing. It's organised in roles with defaults and variables, uses handlers to restart services only when config changes, keeps secrets in Ansible Vault, and is tested with ansible-lint, check mode and Molecule. I'd use Terraform to provision infrastructure and Ansible to configure what runs on it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Make a shell task idempotent?</strong> Use <code>creates</code>/<code>removes</code>, or register output and set <code>changed_when</code>.</li>
+  <li><strong>Push vs pull?</strong> Ansible pushes by default; <code>ansible-pull</code> lets nodes pull playbooks from Git.</li>
+  <li><strong>How do you speed up large runs?</strong> More forks, SSH pipelining, fact caching, and <code>strategy: free</code> where safe.</li>
+</ul>
+</article>
+</body>
+</html>

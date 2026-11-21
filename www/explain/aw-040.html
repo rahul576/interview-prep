@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-040 · How do you serve a private S3 bucket through CloudFront securely, and how does caching work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-040" data-topic="Cloud (AWS)">
+<h1>How do you serve a private S3 bucket through CloudFront securely, and how does caching work?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Keep the S3 bucket <strong>private with Block Public Access</strong>, let only your distribution read it through <strong>Origin Access Control (OAC)</strong> and a bucket policy scoped to that distribution, serve HTTPS with an <strong>ACM certificate in us-east-1</strong>, and control caching with <strong>cache behaviours, cache policies and TTLs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The secure setup has three pieces. First, <strong>Block Public Access</strong> stays on and there is no public bucket policy, so S3 URLs cannot be used directly. Second, the distribution uses <strong>Origin Access Control</strong>, the successor to the legacy origin access identity (OAI); CloudFront signs origin requests with SigV4, and OAC also works with <strong>SSE-KMS</strong> encrypted objects (the KMS key policy must allow the CloudFront service principal). Third, the bucket policy allows <code>s3:GetObject</code> to the <code>cloudfront.amazonaws.com</code> service principal only when <strong>AWS:SourceArn</strong> equals your distribution's ARN, so no other distribution can read it.</p>
+<p>For a custom domain, the certificate must be in <strong>ACM in us-east-1</strong>, the viewer protocol policy should redirect to HTTPS, and a <strong>response headers policy</strong> can add HSTS and other security headers. For content only some users may see, use <strong>signed URLs or signed cookies</strong> with a trusted key group, and <strong>geo restrictions</strong> or <strong>AWS WAF</strong> if needed.</p>
+<p>Caching is controlled per <strong>cache behaviour</strong>, matched on path patterns like <code>/assets/*</code>. The behaviour's <strong>cache policy</strong> defines the <strong>cache key</strong> (which headers, cookies and query strings are included) and min, default and max <strong>TTLs</strong>, while the <strong>origin request policy</strong> sends extra values to the origin without making them part of the key. The smaller the cache key, the higher the hit ratio. Origin <code>Cache-Control</code> headers are respected within those TTL bounds.</p>
+<p>For deployments, build tools emit <strong>content-hashed file names</strong> like <code>app.3f9c1a.js</code> that can be cached for a year as immutable, while <code>index.html</code> gets a short TTL or <code>no-cache</code>, or is <strong>invalidated</strong> after each release.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A viewer requests https://www.example.com/assets/app.3f9c1a.js.</li>
+  <li>The nearest edge location checks its cache using the cache key.</li>
+  <li>On a hit it returns the object; on a miss it asks a <strong>regional edge cache</strong>, then the origin.</li>
+  <li>CloudFront signs the S3 request with OAC; S3 checks the bucket policy's SourceArn.</li>
+  <li>The object is cached according to Cache-Control and the policy's TTLs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Version&quot;: &quot;2012-10-17&quot;,
+  &quot;Statement&quot;: [{
+    &quot;Sid&quot;: &quot;AllowCloudFrontOAC&quot;,
+    &quot;Effect&quot;: &quot;Allow&quot;,
+    &quot;Principal&quot;: {&quot;Service&quot;: &quot;cloudfront.amazonaws.com&quot;},
+    &quot;Action&quot;: &quot;s3:GetObject&quot;,
+    &quot;Resource&quot;: &quot;arn:aws:s3:::my-site-bucket/*&quot;,
+    &quot;Condition&quot;: {&quot;StringEquals&quot;: {
+      &quot;AWS:SourceArn&quot;: &quot;arn:aws:cloudfront::111122223333:distribution/E2ABCDEF123&quot;}}
+  }]
+}</code></pre>
+<pre><code class="language-bash">aws s3 sync dist/ s3://my-site-bucket/ --exclude index.html \
+  --cache-control &quot;public,max-age=31536000,immutable&quot;
+aws s3 cp dist/index.html s3://my-site-bucket/ --cache-control &quot;no-cache&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the S3 website endpoint, which cannot use OAC, and making the bucket public.</li>
+  <li>Requesting the ACM certificate in the application's region instead of us-east-1.</li>
+  <li>Forwarding all headers and cookies, which destroys the cache hit ratio.</li>
+  <li>Relying on invalidations for every file instead of hashed names.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The bucket stays private with Block Public Access. CloudFront reads it through Origin Access Control, and the bucket policy allows s3:GetObject only to the CloudFront service principal with a SourceArn condition for my distribution, so nobody can bypass the CDN. The custom domain uses an ACM certificate in us-east-1 and HTTPS redirect. Caching is defined per behaviour with a cache policy, which sets the TTLs and the cache key; I keep the key minimal for a good hit ratio. Hashed assets are cached for a year, index.html is no-cache or invalidated, and private files use signed URLs or cookies.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should index.html have a short TTL while JS bundles can have a long one?</strong> index.html points to the current hashed bundles; if it is stale, users load old code, while a hashed file never changes.</li>
+  <li><strong>OAI versus OAC?</strong> OAC supports SSE-KMS, all regions and more methods; OAI is legacy.</li>
+  <li><strong>How do you serve an SPA's client-side routes?</strong> Map 403/404 errors to /index.html with a 200, or use a CloudFront Function.</li>
+</ul>
+</article>
+</body>
+</html>

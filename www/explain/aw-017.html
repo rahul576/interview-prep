@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-017 · How do RDS backups and snapshots work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-017" data-topic="Cloud (AWS)">
+<h1>How do RDS backups and snapshots work?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>RDS takes <strong>automated daily backups plus transaction logs</strong>, kept for a <strong>retention period of 1 to 35 days</strong>, enabling <strong>point-in-time recovery</strong>; <strong>manual snapshots</strong> are kept <strong>until you delete them</strong>; <strong>every restore creates a new instance</strong> with a new endpoint; for DR you <strong>copy snapshots cross-region and cross-account</strong> and <strong>test restores regularly</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Automated backups</strong> are enabled by default. During a daily <strong>backup window</strong>, RDS takes a storage-level snapshot of the instance, and it continuously uploads <strong>transaction logs</strong> (for example every five minutes). With a <strong>retention period</strong> of 1 to 35 days, you can restore to <strong>any second</strong> within that window, typically up to about five minutes before now; this is <strong>point-in-time recovery (PITR)</strong>. On Multi-AZ deployments backups are taken from the standby, avoiding I/O impact on the primary. Automated backups are normally deleted with the instance unless you choose to retain them.</p>
+<p><strong>Manual snapshots</strong> are taken on demand, for example before a risky schema migration or major version upgrade. They are <strong>kept until you delete them</strong>, even after the instance is deleted, and can be <strong>shared</strong> with other accounts and <strong>copied</strong> to other regions. A <strong>final snapshot</strong> is offered when deleting an instance.</p>
+<p><strong>Restoring</strong> from a snapshot or a point in time never overwrites the existing database. It always <strong>creates a new DB instance</strong> with a <strong>new endpoint</strong>. You then point the application to it, often by updating a DNS CNAME or a secret, or rename instances. Restore time depends on database size; data loads lazily from S3, so initial queries may be slow until blocks are read.</p>
+<p>For <strong>disaster recovery</strong>, copy snapshots to another <strong>region</strong> and another <strong>account</strong> (protecting against account compromise or deletion), use <strong>AWS Backup</strong> with cross-region and cross-account copy and <strong>Vault Lock</strong> for immutability, or use cross-region <strong>read replicas</strong> or <strong>automated backup replication</strong>. Aurora works similarly with continuous backups and also offers <strong>Backtrack</strong> (MySQL) and global databases. Backups are only as good as your last <strong>tested restore</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Automated snapshot daily in the backup window.</li>
+  <li>Transaction logs shipped continuously.</li>
+  <li>PITR replays logs on top of the latest snapshot to the chosen time.</li>
+  <li>Manual snapshots persist independently.</li>
+  <li>Restore creates a new instance; switch the application over.</li>
+  <li>Copies go to another region and account for DR.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Snapshot before a migration
+aws rds create-db-snapshot --db-instance-identifier orders-prod \
+  --db-snapshot-identifier orders-prod-pre-v42
+
+# Someone deleted rows at 14:03; restore to 14:00
+aws rds restore-db-instance-to-point-in-time \
+  --source-db-instance-identifier orders-prod \
+  --target-db-instance-identifier orders-restore-1400 \
+  --restore-time 2026-11-20T14:00:00Z
+
+# Copy snapshot to another region for DR
+aws rds copy-db-snapshot --source-region eu-west-1 --region eu-central-1 \
+  --source-db-snapshot-identifier arn:aws:rds:eu-west-1:123456789012:snapshot:orders-prod-pre-v42 \
+  --target-db-snapshot-identifier orders-prod-pre-v42-dr --kms-key-id alias/dr-key</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting a restore to overwrite the existing instance.</li>
+  <li>Retention set to 1 day or backups disabled.</li>
+  <li>Backups only in the same account and region.</li>
+  <li>Never testing how long a restore actually takes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;RDS takes automated daily backups and continuously stores transaction logs, with a retention of 1 to 35 days, which gives point-in-time recovery to almost any second in that window. Manual snapshots are taken on demand, say before a risky migration, and kept until I delete them. Any restore creates a new instance with a new endpoint, so I have to point the application at it. For disaster recovery I copy snapshots to another region and a separate backup account, often with AWS Backup, and I regularly test restores so we know our real recovery time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why copy backups to a separate account?</strong> Protects against account compromise, ransomware or accidental deletion.</li>
+  <li><strong>How do you recover a deleted table?</strong> PITR to a new instance just before the deletion, then export the table back.</li>
+  <li><strong>How do encrypted snapshots cross accounts?</strong> Share with a customer managed KMS key whose policy allows the target account.</li>
+</ul>
+</article>
+</body>
+</html>

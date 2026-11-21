@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-043 · How do IAM roles for EC2 and STS AssumeRole work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-043" data-topic="Cloud (AWS)">
+<h1>How do IAM roles for EC2 and STS AssumeRole work?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>An EC2 instance gets a role through an <strong>instance profile</strong>; the SDK fetches <strong>temporary credentials</strong> from the <strong>instance metadata service (IMDSv2)</strong>, which come from <strong>STS</strong>, and in general <strong>sts:AssumeRole</strong> issues short-lived credentials to any principal allowed by the role's <strong>trust policy</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>IAM role</strong> has two kinds of policy. The <strong>trust policy</strong> (assume-role policy) says who may assume it: the <code>ec2.amazonaws.com</code> service, Lambda, a user or role in another account, or a federated SAML/OIDC identity provider. <strong>Permission policies</strong> say what the role can do once assumed.</p>
+<p>On EC2, the role is wrapped in an <strong>instance profile</strong> attached to the instance. The EC2 service assumes the role and publishes the credentials on the metadata endpoint at 169.254.169.254. With <strong>IMDSv2</strong>, which you should enforce, clients first obtain a session token with a PUT request, protecting against SSRF attacks that could otherwise read credentials. The AWS SDKs and CLI walk the <strong>default credential provider chain</strong>, find the instance credentials automatically and refresh them before expiry. No access keys are ever stored on disk or in code.</p>
+<p><strong>STS AssumeRole</strong> is the general mechanism. A caller with permission for <code>sts:AssumeRole</code> on the role ARN calls it and receives an <strong>access key ID, secret access key and session token</strong>, valid from 15 minutes up to the role's maximum session duration (1 to 12 hours; role chaining limits it to 1 hour). Optional <strong>session policies</strong> can narrow permissions, <strong>session tags</strong> pass attributes for ABAC, an <strong>ExternalId</strong> protects third-party access, and <strong>source identity</strong> records who the human was. Related calls are <strong>AssumeRoleWithWebIdentity</strong> (used by IRSA and GitHub Actions OIDC) and <strong>AssumeRoleWithSAML</strong>. Every assumption is logged in <strong>CloudTrail</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a role whose trust policy allows ec2.amazonaws.com.</li>
+  <li>Attach permission policies, for example read access to one bucket.</li>
+  <li>Attach the instance profile to the instance at launch or later.</li>
+  <li>The SDK requests an IMDSv2 token, then reads the role credentials.</li>
+  <li>Calls are signed with the temporary credentials, which rotate automatically.</li>
+  <li>For another account, the app calls AssumeRole on a role there and uses those credentials.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Version&quot;: &quot;2012-10-17&quot;,
+  &quot;Statement&quot;: [{
+    &quot;Effect&quot;: &quot;Allow&quot;,
+    &quot;Principal&quot;: {&quot;Service&quot;: &quot;ec2.amazonaws.com&quot;},
+    &quot;Action&quot;: &quot;sts:AssumeRole&quot;
+  }]
+}</code></pre>
+<pre><code class="language-bash"># On the instance (IMDSv2)
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H &quot;X-aws-ec2-metadata-token-ttl-seconds: 300&quot;)
+curl -s -H &quot;X-aws-ec2-metadata-token: $TOKEN&quot; \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+# Cross-account
+aws sts assume-role --role-arn arn:aws:iam::444455556666:role/reports-reader \
+  --role-session-name app-on-ec2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying access keys onto servers instead of using instance profiles.</li>
+  <li>Leaving IMDSv1 enabled, exposing credentials to SSRF.</li>
+  <li>Confusing the trust policy (who) with permission policies (what).</li>
+  <li>Caching credentials manually and using them after they expire.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On EC2 I attach a role through an instance profile. The SDK automatically fetches temporary credentials from the metadata service, ideally IMDSv2 only, and refreshes them, so no keys live on the server. Underneath is STS: AssumeRole returns an access key, secret and session token that expire after minutes to hours. The role's trust policy defines who may assume it, the EC2 service, another account or a federated identity, and its permission policies define what it can do. Everything is visible in CloudTrail.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would an app on EC2 access a bucket in another account?</strong> Assume a role in that account, or use a bucket policy granting the instance role, plus KMS permissions if encrypted.</li>
+  <li><strong>Why IMDSv2?</strong> The session token requirement blocks most SSRF credential theft.</li>
+  <li><strong>What is role chaining?</strong> Assuming a role with role credentials; sessions are capped at one hour.</li>
+</ul>
+</article>
+</body>
+</html>

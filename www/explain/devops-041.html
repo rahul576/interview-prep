@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-041 · How do you secure the software supply chain in a CI/CD pipeline?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-041" data-topic="DevSecOps">
+<h1>How do you secure the software supply chain in a CI/CD pipeline?</h1>
+<p class="ex-meta">DevSecOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Secure the supply chain in layers: <strong>SAST, SCA and image scanning</strong> on every change, <strong>secret scanning</strong> and <strong>short-lived OIDC credentials</strong>, <strong>SBOMs, signing (cosign) and SLSA provenance</strong> verified at <strong>admission</strong>, and <strong>hardened pipelines</strong>: ephemeral least-privilege runners, <strong>SHA-pinned actions</strong> and protected branches.</p>
+
+<h2>Detailed explanation</h2>
+<p>Supply chain attacks target everything between a developer's keyboard and production: dependencies (typosquatting, hijacked maintainers), build systems (SolarWinds-style tampering), CI credentials and third-party actions (the 2025 <code>tj-actions/changed-files</code> compromise leaked secrets from thousands of workflows). Defence therefore covers <strong>what goes in</strong>, <strong>how it is built</strong> and <strong>what is allowed to run</strong>.</p>
+<p><strong>What goes in:</strong> <strong>SAST</strong> (Semgrep, CodeQL, SonarQube) on pull requests; <strong>SCA</strong> (Dependabot, Renovate, Snyk, Trivy) for vulnerable or malicious dependencies, with lockfiles and an internal proxy registry so builds pull through a controlled point; <strong>secret scanning</strong> (Gitleaks, GitHub push protection) to stop credentials being committed; <strong>DAST</strong> against staging for runtime issues; <strong>image scanning</strong> that blocks critical, fixable CVEs.</p>
+<p><strong>How it is built:</strong> builds run on <strong>ephemeral runners</strong> that are destroyed after each job, with <strong>least-privilege</strong> tokens (<code>permissions:</code> set explicitly), cloud access via <strong>OIDC short-lived credentials</strong> instead of stored keys, secrets from Vault or a secrets manager, and third-party actions <strong>pinned to a full commit SHA</strong>. <strong>Branch protection</strong> requires reviews and passing checks, and CODEOWNERS protect pipeline files.</p>
+<p><strong>What is allowed to run:</strong> the pipeline generates an <strong>SBOM</strong> (Syft, CycloneDX/SPDX), <strong>signs the image</strong> with cosign (often keyless via Sigstore) and publishes <strong>SLSA provenance</strong> attestations. In the cluster, an admission policy (Kyverno, Sigstore policy-controller) only admits images that are signed by our pipeline identity and come from trusted registries, referenced by <strong>digest</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR → SAST, SCA, secret scan, IaC scan; review required.</li>
+  <li>Merge → build on ephemeral runner with OIDC credentials.</li>
+  <li>Scan image → generate SBOM → sign and attest provenance → push by digest.</li>
+  <li>Deploy → admission controller verifies signature, provenance and registry.</li>
+  <li>Runtime → continuous re-scanning of SBOMs against new CVEs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">permissions:
+  contents: read
+  id-token: write          # OIDC for cloud + keyless signing
+steps:
+  - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # pinned SHA
+  - run: trivy fs --exit-code 1 --severity CRITICAL --scanners vuln,secret,misconfig .
+  - run: docker build -t $IMAGE .
+  - run: syft $IMAGE -o cyclonedx-json &gt; sbom.json
+  - run: |
+      docker push $IMAGE
+      cosign sign --yes $IMAGE@$DIGEST
+      cosign attest --yes --type cyclonedx --predicate sbom.json $IMAGE@$DIGEST</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Actions referenced by mutable tags like <code>@v4</code> or <code>@main</code>.</li>
+  <li>Long-lived cloud keys stored as CI secrets.</li>
+  <li>Signing images but never verifying signatures at deploy time.</li>
+  <li>Scanners in &quot;report only&quot; mode that nobody reads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I secure it in layers. On every pull request: SAST, dependency scanning, secret scanning and IaC checks, plus required reviews. Builds run on ephemeral, least-privilege runners, get cloud access via OIDC rather than stored keys, and pin third-party actions to commit SHAs. The pipeline scans the image, generates an SBOM, signs it with cosign and records SLSA provenance. In the cluster an admission policy only allows signed images from our registries, deployed by digest. SBOMs are kept so new CVEs can be traced to running services quickly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>A popular dependency is compromised?</strong> Use SBOMs to find usage, pin to a safe version, rotate exposed secrets, rebuild and redeploy.</li>
+  <li><strong>Why pin to SHA?</strong> Tags are mutable and can be repointed to malicious code.</li>
+  <li><strong>What does SLSA add over signing?</strong> Verifiable claims about how and from what source the artifact was built.</li>
+</ul>
+</article>
+</body>
+</html>

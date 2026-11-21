@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-017 · How do Ansible variables work, and where can they be defined?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-017" data-topic="Configuration Management">
+<h1>How do Ansible variables work, and where can they be defined?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Ansible variables can live in the <strong>inventory</strong>, <strong>group_vars/host_vars</strong>, <strong>play vars/vars_files</strong>, <strong>role defaults and vars</strong>, <strong>facts</strong>, <strong>registered results</strong> and <strong>extra vars (-e)</strong>, which have the <strong>highest precedence</strong>; you use them with <strong>Jinja2</strong> <code>{{ var }}</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Ansible merges variables from many sources, each with a place in a long <strong>precedence order</strong> (over 20 levels). The ones that matter in practice, roughly from lowest to highest:</p>
+<ul>
+  <li><strong>Role defaults</strong> (<code>roles/x/defaults/main.yml</code>): the lowest precedence, explicitly designed to be overridden.</li>
+  <li><strong>Inventory variables</strong>, and the <strong>group_vars</strong> and <strong>host_vars</strong> directories next to the inventory or playbook: <code>group_vars/all</code>, then specific groups, then <code>host_vars</code> for one host. This is the usual home for environment- and group-specific values.</li>
+  <li><strong>Facts</strong> gathered from hosts, such as <code>ansible_facts['distribution']</code>.</li>
+  <li><strong>Play vars</strong>, <code>vars_files</code> and <code>vars_prompt</code>.</li>
+  <li><strong>Role vars</strong> (<code>roles/x/vars/main.yml</code>): high precedence, meant for internal constants.</li>
+  <li><strong>Registered variables</strong> (<code>register:</code>) and <code>set_fact</code>.</li>
+  <li>Task and block <code>vars</code>, <code>include_vars</code>, role parameters.</li>
+  <li><strong>Extra vars</strong> (<code>-e</code> / <code>--extra-vars</code>): always win.</li>
+</ul>
+<p>Variables are referenced with <strong>Jinja2</strong> syntax: <code>&quot;{{ app_port }}&quot;</code>, with filters like <code>{{ users | length }}</code> or <code>{{ timeout | default(30) }}</code>. When a YAML value starts with <code>{{</code>, it must be <strong>quoted</strong>.</p>
+<p>Because the precedence list is long, teams keep a simple convention: configurable values with defaults go into <strong>role defaults</strong>, environment overrides go into <strong>group_vars</strong>, host exceptions into <strong>host_vars</strong>, and <code>-e</code> is reserved for one-off runs or pipeline parameters. <code>ansible-inventory --host web1 --vars</code> or the <code>debug</code> module show what a host actually gets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ansible loads inventory, group_vars and host_vars.</li>
+  <li>It gathers facts at play start.</li>
+  <li>It loads play and role variables.</li>
+  <li>During execution, register and set_fact add host variables.</li>
+  <li>For each lookup, the highest-precedence definition wins.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">inventory/prod/
+  hosts.ini
+  group_vars/all.yml       # ntp_server: ntp.acme.local
+  group_vars/web.yml       # app_port: 8080
+  host_vars/web03.yml      # app_port: 9090
+roles/app/defaults/main.yml  # app_port: 80, app_workers: 4</code></pre>
+<pre><code class="language-yaml">- name: Configure app
+  hosts: web
+  tasks:
+    - name: Show resolved port
+      ansible.builtin.debug:
+        msg: &quot;{{ inventory_hostname }} listens on {{ app_port }} with {{ app_workers }} workers&quot;
+    - name: Check service
+      ansible.builtin.command: systemctl is-active app
+      register: app_state
+      changed_when: false</code></pre>
+<pre><code class="language-bash">ansible-playbook site.yml -i inventory/prod -e &quot;app_workers=8&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting overridable settings in role <code>vars</code>, so group_vars cannot override them.</li>
+  <li>Unquoted <code>{{ var }}</code> at the start of a YAML value.</li>
+  <li>Defining the same variable in many places and losing track of which wins.</li>
+  <li>Overusing <code>-e</code> so runs are not reproducible.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Variables can come from many places: the inventory and the group_vars and host_vars directories, which is where I keep environment and group specific values; play vars and vars_files; role defaults, which are meant to be overridden, and role vars for internal constants; and extra vars with -e, which always have the highest precedence. Ansible also gathers facts, and tasks can save results with register. I reference them with Jinja2, like {{ app_port }}. Since the precedence rules are long, I keep a convention: defaults in roles, overrides in group_vars, exceptions in host_vars, and -e only for pipeline parameters.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why prefer role defaults over role vars for configurable values?</strong> Defaults have the lowest precedence, so inventory can override them; role vars override inventory.</li>
+  <li><strong>How do you see a host's resolved variables?</strong> <code>ansible-inventory --host &lt;host&gt;</code> or <code>debug: var=hostvars[inventory_hostname]</code>.</li>
+  <li><strong>What is hostvars?</strong> A dictionary to read another host's variables and facts.</li>
+</ul>
+</article>
+</body>
+</html>

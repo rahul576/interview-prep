@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-042 · What are the main building blocks of Amazon EKS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-042" data-topic="Cloud (AWS)">
+<h1>What are the main building blocks of Amazon EKS?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>EKS</strong> gives you an AWS-managed, highly available <strong>Kubernetes control plane</strong>; you add <strong>worker capacity</strong> (managed node groups, <strong>Karpenter</strong>, Fargate or EKS Auto Mode), networking through the <strong>Amazon VPC CNI</strong>, pod permissions through <strong>IRSA or EKS Pod Identity</strong>, and <strong>add-ons</strong> such as CoreDNS, kube-proxy, the EBS CSI driver and the AWS Load Balancer Controller.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>control plane</strong> (API servers and etcd) runs in an AWS-owned account across three availability zones. AWS patches, scales and backs it up, and you pay an hourly fee per cluster, higher when a version moves into <strong>extended support</strong>. You choose a Kubernetes version and must upgrade regularly. Access is managed with <strong>EKS access entries</strong> mapping IAM principals to Kubernetes permissions, replacing the old aws-auth ConfigMap.</p>
+<p><strong>Worker capacity</strong> options: <strong>managed node groups</strong> are EC2 Auto Scaling groups whose AMI updates and draining AWS orchestrates; <strong>self-managed nodes</strong> give full control; <strong>Karpenter</strong> watches pending pods and launches right-sized instances, mixing On-Demand, Spot and Graviton, and consolidates under-used nodes; <strong>Fargate</strong> runs each pod in its own micro-VM with no nodes; <strong>EKS Auto Mode</strong> lets AWS run compute, Karpenter-based scaling, storage and load balancing for you.</p>
+<p>The <strong>Amazon VPC CNI</strong> gives every pod a real VPC IP from the node's ENIs, which makes pods directly routable and lets security groups for pods work, but consumes addresses quickly. Plan large subnets, use <strong>prefix delegation</strong>, or add secondary CIDRs (for example from 100.64.0.0/10) with custom networking.</p>
+<p>Pods need AWS credentials: <strong>IRSA</strong> maps a Kubernetes service account to an IAM role through the cluster's OIDC provider; <strong>EKS Pod Identity</strong> is simpler, using an agent add-on and associations without OIDC trust policies per cluster. Core <strong>add-ons</strong> include CoreDNS, kube-proxy, the VPC CNI, the <strong>EBS CSI driver</strong> for persistent volumes, the <strong>AWS Load Balancer Controller</strong> that turns Ingress into ALBs and Services into NLBs, plus observability agents.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the cluster with subnets in several AZs and an endpoint access mode.</li>
+  <li>Add capacity: a small managed node group for system pods plus Karpenter, or Auto Mode.</li>
+  <li>Install managed add-ons: VPC CNI, CoreDNS, kube-proxy, EBS CSI, Pod Identity agent.</li>
+  <li>Install the AWS Load Balancer Controller for Ingress and Service objects.</li>
+  <li>Map IAM roles to pods; grant people access through access entries.</li>
+  <li>Upgrade control plane, add-ons and nodes one minor version at a time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata: {name: prod, region: eu-west-1, version: &quot;1.33&quot;}
+addons:
+  - name: vpc-cni
+    configurationValues: '{&quot;env&quot;:{&quot;ENABLE_PREFIX_DELEGATION&quot;:&quot;true&quot;}}'
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver
+  - name: eks-pod-identity-agent
+managedNodeGroups:
+  - name: system
+    instanceTypes: [m7g.large]
+    minSize: 2
+    maxSize: 4</code></pre>
+<pre><code class="language-bash">aws eks create-pod-identity-association --cluster-name prod \
+  --namespace orders --service-account orders-api \
+  --role-arn arn:aws:iam::111122223333:role/orders-api</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Small /24 subnets that run out of pod IPs as the cluster grows.</li>
+  <li>Giving the node instance role broad permissions that every pod inherits.</li>
+  <li>Skipping version upgrades until extended support charges or forced upgrades arrive.</li>
+  <li>Running Karpenter on nodes it manages itself, so it can evict its own controller.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;EKS gives me a managed control plane: AWS runs the API servers and etcd across three AZs and I pay per cluster hour. For workers I use managed node groups for system pods and Karpenter for right-sized, Spot-friendly capacity, or Fargate and Auto Mode when I want less to manage. The VPC CNI gives every pod a VPC IP, so I size subnets generously or use prefix delegation. Pods get AWS permissions through IRSA or the newer Pod Identity, and add-ons such as CoreDNS, the EBS CSI driver and the Load Balancer Controller complete the platform.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a busy EKS cluster run out of IP addresses?</strong> Every pod takes a VPC IP; fix with prefix delegation, bigger or secondary CIDRs and custom networking.</li>
+  <li><strong>IRSA or Pod Identity?</strong> Pod Identity avoids per-cluster OIDC trust edits and reuses roles across clusters.</li>
+  <li><strong>How do you upgrade EKS safely?</strong> Check deprecated APIs, upgrade control plane, then add-ons, then nodes, one minor version at a time.</li>
+</ul>
+</article>
+</body>
+</html>

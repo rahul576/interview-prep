@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-032 · How does the overlay2 storage driver and copy-on-write work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-032" data-topic="Docker">
+<h1>How does the overlay2 storage driver and copy-on-write work?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>overlay2</strong> uses Linux <strong>OverlayFS</strong> to stack <strong>read-only image layers</strong> (lowerdirs) under one <strong>writable upper layer</strong> per container; modifying an image file triggers <strong>copy-up (copy-on-write)</strong>, deletions create <strong>whiteout files</strong>, and write-heavy data belongs in <strong>volumes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An image is a stack of layers, each a directory of file changes. overlay2, the default storage driver on modern Linux, asks the kernel's <strong>OverlayFS</strong> to combine them: the image layers become <strong>lower directories</strong>, the container gets an empty <strong>upper directory</strong>, and the kernel presents a <strong>merged</strong> view as the container's root filesystem. Reads are served from the topmost layer containing the file, so many containers can share the same image layers on disk and in the page cache.</p>
+<p>When a process <strong>modifies</strong> a file that exists only in a lower layer, OverlayFS performs a <strong>copy-up</strong>: it copies the entire file into the upper directory and the change is made to that copy. The image itself is never altered. This is <strong>copy-on-write</strong>. Copy-up is per file, not per block, so appending one line to a 2 GB file first copies 2 GB, which is slow and wastes space.</p>
+<p><strong>Deleting</strong> a file from a lower layer cannot actually remove it, because lower layers are read-only. Instead, OverlayFS creates a <strong>whiteout</strong> (a special character device) in the upper layer that hides the file; deleted directories get an <strong>opaque</strong> marker. The same mechanism applies when building images: a <code>RUN rm</code> in a later layer only hides the file, and the bytes still ship in the earlier layer, so image size does not shrink.</p>
+<p>The writable layer disappears when the container is removed, and its performance is worse than a plain filesystem. Databases, queues, logs and uploads should therefore use <strong>volumes</strong> or bind mounts, which bypass the overlay.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each layer is unpacked once into <code>/var/lib/docker/overlay2/&lt;id&gt;/diff</code>.</li>
+  <li>Starting a container mounts overlay with <code>lowerdir=...</code>, <code>upperdir=...</code>, <code>workdir=...</code>.</li>
+  <li>Reads go to the highest layer containing the file.</li>
+  <li>First write to a lower file copies it up, then writes the copy.</li>
+  <li>Deletion creates a whiteout entry in the upper directory.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name t nginx:1.27
+docker inspect -f '{{json .GraphDriver.Data}}' t | jq   # LowerDir, UpperDir, MergedDir
+docker exec t sh -c 'echo test &gt;&gt; /etc/nginx/nginx.conf; rm /usr/share/nginx/html/index.html'
+docker diff t        # C = changed (copied up), D = deleted (whiteout)</code></pre>
+<pre><code class="language-dockerfile"># Wrong: file still in the first layer
+RUN curl -o /tmp/big.tar.gz https://example.com/big.tar.gz
+RUN rm /tmp/big.tar.gz</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running databases on the container writable layer.</li>
+  <li>Deleting files in a later Dockerfile layer to &quot;shrink&quot; the image.</li>
+  <li>Modifying large image files at runtime and paying the copy-up cost.</li>
+  <li>Expecting writable-layer data to survive <code>docker rm</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;overlay2 uses OverlayFS to combine the read-only image layers, the lower directories, with one writable upper directory per container into a merged view. Reads come from whichever layer has the file. When a container changes a file from the image, it's copied up into the writable layer first and the copy is changed, so the image stays untouched and is shared by many containers. Deleting an image file creates a whiteout that hides it. Copy-up of big files is slow and the writable layer is lost on removal, so write-heavy data like databases and logs goes into volumes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't deleting a file in a later layer shrink the image?</strong> The earlier layer still contains it; the whiteout only hides it.</li>
+  <li><strong>What does docker diff show?</strong> Added, changed and deleted paths in the writable layer.</li>
+  <li><strong>Which backing filesystems support overlay2?</strong> ext4 and xfs (with d_type enabled) are standard.</li>
+</ul>
+</article>
+</body>
+</html>

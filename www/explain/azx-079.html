@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-079 · An AKS upgrade failed halfway and the cluster shows a Failed provisioning state. How do you recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-079" data-topic="Azure Kubernetes (AKS)">
+<h1>An AKS upgrade failed halfway and the cluster shows a Failed provisioning state. How do you recover?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>Failed provisioning state</strong> means the <strong>last operation didn't finish</strong>, not that the cluster is down; read the <strong>error details and activity log</strong>, fix the cause (often <strong>PDBs blocking drain, quota or subnet IPs</strong>), then <strong>re-run the upgrade or reconcile</strong> with <code>az aks update</code>, and check that <strong>all node pools end on consistent versions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <code>provisioningState</code> of an AKS cluster or node pool reflects the result of the most recent ARM operation. When an upgrade fails partway, the control plane may already be on the new version and some nodes upgraded, while others are still on the old one. Workloads usually <strong>keep running</strong>, so the first step is to stay calm and confirm impact with <code>kubectl get nodes</code> and application health checks.</p>
+<p><strong>Diagnose</strong> with the <strong>activity log</strong>, the error message in <code>az aks show</code> or the portal, and <code>kubectl get events</code>. Common causes:</p>
+<ul>
+  <li><strong>PodDisruptionBudget blocks eviction</strong>: a PDB with <code>minAvailable</code> equal to replicas, or one replica with <code>maxUnavailable: 0</code>, means the node can never drain, so the drain times out (<code>PodDrainFailure</code>).</li>
+  <li><strong>Quota</strong>: surge nodes need extra vCPUs in the regional or family quota.</li>
+  <li><strong>Subnet IP exhaustion</strong>: surge nodes (and pods with flat or pod-subnet CNI) need free addresses.</li>
+  <li><strong>Policies or locks</strong>: an Azure Policy deny or a resource lock on the node resource group.</li>
+  <li><strong>Custom networking issues</strong>: a firewall or UDR blocking nodes from downloading images or reaching the API server.</li>
+  <li>Occasionally a <strong>transient platform issue</strong>.</li>
+</ul>
+<p><strong>Fix and resume:</strong> temporarily relax the strict PDB or scale the deployment up, request quota, lower <code>max-surge</code>, free IPs or remove the blocking lock. Then <strong>re-run the same upgrade</strong> on the cluster or node pool; it resumes from where it stopped. If nothing needs to change, <code>az aks update</code> without parameters <strong>reconciles</strong> the cluster to its goal state.</p>
+<p><strong>Afterwards,</strong> confirm the control plane and every node pool have the expected <code>currentOrchestratorVersion</code> and node image, and document a prevention action.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check cluster and node pool provisioning state and error messages.</li>
+  <li>Inspect activity log, events and PDBs.</li>
+  <li>Fix the root cause.</li>
+  <li>Re-run the upgrade or reconcile.</li>
+  <li>Verify versions and workload health; write a short postmortem.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks show -g rg-apps -n aks-prod --query &quot;{state:provisioningState, version:currentKubernetesVersion}&quot;
+az aks nodepool list -g rg-apps --cluster-name aks-prod \
+  --query &quot;[].{name:name, state:provisioningState, version:currentOrchestratorVersion}&quot; -o table
+kubectl get pdb -A          # look for ALLOWED DISRUPTIONS = 0
+
+az aks nodepool upgrade -g rg-apps --cluster-name aks-prod -n user1 \
+  --kubernetes-version 1.33.2 --max-surge 10%
+az aks update -g rg-apps -n aks-prod   # reconcile with no changes</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting and recreating node pools in a panic.</li>
+  <li>Removing PDBs permanently instead of fixing their values.</li>
+  <li>Retrying repeatedly without reading the error.</li>
+  <li>Forgetting to check that all node pools finished, not just the control plane.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Failed provisioning means the last operation didn't finish; workloads usually still run. I check the activity log and error details. Typical causes are PDBs that don't allow evictions so drains time out, missing vCPU quota or subnet IPs for surge nodes, policies or locks, or a transient issue. I fix the cause, for example relaxing a PDB or requesting quota, and re-run the upgrade, which resumes, or run az aks update with no changes to reconcile. Then I verify that the control plane and all node pools are on consistent versions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to prevent PDB blocks?</strong> At least two replicas, <code>maxUnavailable: 1</code>, and PDB checks in CI or policy.</li>
+  <li><strong>Is the cluster still supported while failed?</strong> Yes, but resolve it quickly; later operations may be blocked.</li>
+  <li><strong>When open a support case?</strong> When the error points to the platform or reconcile keeps failing.</li>
+</ul>
+</article>
+</body>
+</html>

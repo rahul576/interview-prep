@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-018 · What are the key design decisions when creating a production AKS cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-018" data-topic="Azure Kubernetes (AKS)">
+<h1>What are the key design decisions when creating a production AKS cluster?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Decide <strong>networking</strong> (Azure CNI Overlay as default), <strong>node pool layout</strong> (system versus user pools across <strong>availability zones</strong>, autoscaling), <strong>identity</strong> (Entra ID integration, <strong>workload identity</strong>), <strong>API server access</strong> (private cluster or authorised IPs), and the <strong>upgrade and observability</strong> strategy, because several of these are hard to change later.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Networking</strong> is the most important early decision because it is hard to change. <strong>Azure CNI Overlay</strong> gives pods IPs from a private overlay CIDR, so the VNet only needs IPs for nodes, avoiding IP exhaustion; it is the recommended default. Classic <strong>Azure CNI</strong> (flat) gives pods VNet IPs, useful when other systems must reach pods directly, but consumes many addresses. <strong>Kubenet</strong> is legacy and on a retirement path. <strong>Azure CNI powered by Cilium</strong> adds eBPF-based networking and network policy. Also plan service CIDR, DNS, egress (NAT gateway or user-defined routing through a firewall) and ingress.</p>
+<p><strong>Node pools:</strong> a <strong>system node pool</strong> runs critical add-ons such as CoreDNS and metrics-server, tainted so application pods stay off; <strong>user node pools</strong> run workloads, possibly with different VM sizes, spot instances or GPUs. Spread pools across <strong>availability zones</strong> and enable the <strong>cluster autoscaler</strong> (or node auto-provisioning). Use the <strong>Standard tier</strong> for an uptime SLA on the API server.</p>
+<p><strong>Identity and access:</strong> enable <strong>Microsoft Entra ID integration</strong> with <strong>Azure RBAC for Kubernetes</strong> or Kubernetes RBAC mapped to Entra groups; disable local accounts. Pods use <strong>Entra Workload ID</strong> to access Azure resources without secrets. Grant AKS pull access to <strong>ACR</strong> through the kubelet identity.</p>
+<p><strong>Security:</strong> a <strong>private cluster</strong> or <strong>authorised IP ranges</strong> for the API server, <strong>Azure Policy for AKS</strong> (Gatekeeper) to enforce pod security, Defender for Containers, network policies, and image scanning.</p>
+<p><strong>Operations:</strong> choose an <strong>auto-upgrade channel</strong> (patch or stable) and a <strong>node OS upgrade channel</strong>, with <strong>planned maintenance windows</strong>, <strong>PodDisruptionBudgets</strong> and surge settings. Enable <strong>Container Insights</strong>, <strong>Managed Prometheus</strong> and <strong>Managed Grafana</strong>. Define everything as IaC.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan VNet, subnets and pod/service CIDRs; choose CNI Overlay.</li>
+  <li>Create the cluster (Standard tier) with Entra integration and local accounts disabled.</li>
+  <li>Add a system pool and zone-spread user pools with autoscaling.</li>
+  <li>Enable OIDC issuer and workload identity; attach ACR.</li>
+  <li>Restrict API server access; enable Azure Policy and Defender.</li>
+  <li>Configure upgrade channels, maintenance windows and monitoring.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks create -g rg-aks-prod -n aks-prod --tier standard \
+  --network-plugin azure --network-plugin-mode overlay --pod-cidr 192.168.0.0/16 \
+  --vnet-subnet-id &lt;nodes-subnet-id&gt; --zones 1 2 3 \
+  --nodepool-name system --node-count 3 --node-vm-size Standard_D4ds_v5 \
+  --enable-aad --enable-azure-rbac --disable-local-accounts \
+  --enable-oidc-issuer --enable-workload-identity \
+  --enable-private-cluster --attach-acr acrprod \
+  --auto-upgrade-channel stable --node-os-upgrade-channel NodeImage \
+  --enable-azure-monitor-metrics
+az aks nodepool add -g rg-aks-prod --cluster-name aks-prod -n apps \
+  --mode User --zones 1 2 3 --enable-cluster-autoscaler --min-count 3 --max-count 15</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Flat Azure CNI in a small subnet, exhausting IP addresses.</li>
+  <li>Running application pods on the system node pool.</li>
+  <li>Public API server with no IP restrictions.</li>
+  <li>Never upgrading until the version falls out of support.</li>
+  <li>Storing Azure credentials as Kubernetes secrets instead of workload identity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Networking first: Azure CNI Overlay is the recommended default because pods get IPs from an overlay range without exhausting the VNet, while classic Azure CNI gives pods VNet IPs; kubenet is legacy. I separate a system node pool for critical add-ons from user pools for workloads, spread across availability zones with the cluster autoscaler. Identity uses Entra ID integration with local accounts disabled, and workload identity for pods. For security I prefer a private cluster or authorised IP ranges, Azure Policy and ACR integration. Finally I plan upgrades with auto-upgrade channels, maintenance windows and PodDisruptionBudgets, and enable Container Insights and Managed Prometheus, all defined as IaC.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you upgrade an AKS cluster with minimal disruption?</strong> Control plane first, then node pools with max surge, PDBs and maintenance windows; or blue-green node pools.</li>
+  <li><strong>How do you control egress?</strong> User-defined routing through Azure Firewall or a NAT gateway.</li>
+  <li><strong>Why Standard tier?</strong> Financially backed API server SLA and higher scale limits.</li>
+</ul>
+</article>
+</body>
+</html>

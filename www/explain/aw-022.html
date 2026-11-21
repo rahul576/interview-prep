@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-022 · What is AWS KMS, and how is encryption at rest handled in AWS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-022" data-topic="Cloud (AWS)">
+<h1>What is AWS KMS, and how is encryption at rest handled in AWS?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>AWS KMS</strong> creates and controls <strong>encryption keys</strong> held in <strong>FIPS-validated HSMs</strong> that never leave KMS unencrypted; services encrypt <strong>at rest</strong> using KMS (often <strong>by default</strong>) via <strong>envelope encryption</strong> with <strong>data keys</strong>, and you choose <strong>AWS managed</strong> or <strong>customer managed keys</strong>, controlled by <strong>key policies and IAM</strong> and <strong>audited in CloudTrail</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Encryption at rest protects data on disks, backups and storage media. The hard part is not the algorithm (AES-256) but <strong>key management</strong>: who can use keys, how they are rotated and how usage is audited. KMS centralises this.</p>
+<p>KMS keys (formerly CMKs) live in <strong>hardware security modules</strong> validated under FIPS 140-3; key material cannot be exported in plaintext. Services integrate directly: <strong>S3</strong> encrypts all new objects by default (SSE-S3) and supports <strong>SSE-KMS</strong>; <strong>EBS</strong> volumes and snapshots, <strong>RDS</strong> and <strong>Aurora</strong>, <strong>DynamoDB</strong> (encrypted by default), EFS, SQS, Secrets Manager and many others encrypt with KMS when enabled, and accounts can turn on <strong>EBS encryption by default</strong>.</p>
+<p>There are <strong>AWS owned keys</strong> (invisible, used by some services), <strong>AWS managed keys</strong> (<code>aws/s3</code>, <code>aws/ebs</code>, created automatically, rotated by AWS, but you cannot change their policy or share them cross-account), and <strong>customer managed keys</strong>. With customer managed keys you control the <strong>key policy</strong>, enable or schedule <strong>automatic rotation</strong> (yearly by default, configurable), grant <strong>cross-account</strong> use, separate <strong>key administrators</strong> from <strong>key users</strong>, and can <strong>disable</strong> a key in an emergency, making the data unreadable. Every <code>Encrypt</code>, <code>Decrypt</code> and <code>GenerateDataKey</code> call is logged in <strong>CloudTrail</strong>.</p>
+<p>KMS uses <strong>envelope encryption</strong>. KMS can directly encrypt only up to 4 KB, so for real data a service calls <code>GenerateDataKey</code>: KMS returns a <strong>plaintext data key</strong> and the same key <strong>encrypted under the KMS key</strong>. The service encrypts data locally with the plaintext key, discards it, and stores the <strong>encrypted data key</strong> alongside the data. To read, it sends the encrypted data key to KMS for decryption, which requires permission. This is fast, scales and keeps the master key inside the HSM.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a customer managed key with a key policy.</li>
+  <li>Enable encryption on the resource using that key.</li>
+  <li>The service requests a data key from KMS.</li>
+  <li>Data is encrypted locally; the encrypted data key is stored with it.</li>
+  <li>Reads require <code>kms:Decrypt</code> permission on the key.</li>
+  <li>CloudTrail logs every key use.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws kms create-key --description &quot;orders prod data&quot; \
+  --tags TagKey=Application,TagValue=orders
+aws kms create-alias --alias-name alias/orders-prod --target-key-id &lt;key-id&gt;
+aws kms enable-key-rotation --key-id &lt;key-id&gt;
+
+aws ec2 enable-ebs-encryption-by-default
+aws s3api put-bucket-encryption --bucket orders-data \
+  --server-side-encryption-configuration '{&quot;Rules&quot;:[{&quot;ApplyServerSideEncryptionByDefault&quot;:
+  {&quot;SSEAlgorithm&quot;:&quot;aws:kms&quot;,&quot;KMSMasterKeyID&quot;:&quot;alias/orders-prod&quot;},&quot;BucketKeyEnabled&quot;:true}]}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking encryption at rest protects against a role that can read the data.</li>
+  <li>Key policies that lock out all administrators.</li>
+  <li>Using AWS managed keys when cross-account sharing is needed.</li>
+  <li>Scheduling key deletion without checking what uses the key.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;KMS creates and manages encryption keys stored in HSMs that never leave KMS unencrypted. Most services encrypt at rest with KMS by default or with a setting: S3, EBS, RDS, DynamoDB and so on. I can use AWS managed keys, which are simple, or customer managed keys, where I control the key policy, rotation and who can use or administer the key, share it across accounts, and disable it in an emergency. Every use is logged in CloudTrail. Under the hood it's envelope encryption: KMS generates a data key that encrypts the data, and only the encrypted data key is stored with it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why a customer managed key?</strong> Control over policy, cross-account access, rotation settings, separation of duties and the ability to disable.</li>
+  <li><strong>What is an S3 Bucket Key?</strong> A bucket-level data key that cuts KMS request costs for SSE-KMS.</li>
+  <li><strong>What is CloudHSM?</strong> Dedicated single-tenant HSMs you manage, for strict compliance needs.</li>
+</ul>
+</article>
+</body>
+</html>

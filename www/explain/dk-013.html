@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-013 · What are Docker restart policies?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-013" data-topic="Docker">
+<h1>What are Docker restart policies?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>The <strong><code>--restart</code></strong> policy tells the Docker daemon what to do when a container exits: <strong><code>no</code></strong> (default), <strong><code>on-failure[:max-retries]</code></strong> (non-zero exit only), <strong><code>always</code></strong> (also after daemon restart) and <strong><code>unless-stopped</code></strong> (like always, but <strong>respects a manual stop</strong> across reboots); orchestrators handle this in production.</p>
+
+<h2>Detailed explanation</h2>
+<p>Restart policies make a single Docker host self-healing for simple setups.</p>
+<ul>
+  <li><strong><code>no</code></strong>: never restart. Fine for one-off jobs and development.</li>
+  <li><strong><code>on-failure</code></strong>: restart only if the process exits with a <strong>non-zero</strong> code, optionally capped, e.g. <strong><code>on-failure:5</code></strong>. A clean exit (0) stays stopped. Good for batch-like workers that should retry on crashes but finish normally.</li>
+  <li><strong><code>always</code></strong>: restart whenever the container stops, regardless of exit code. If you stop it manually with <code>docker stop</code>, it stays stopped <strong>until the Docker daemon restarts</strong> (for example after a host reboot), then it starts again.</li>
+  <li><strong><code>unless-stopped</code></strong>: like <code>always</code>, except a container you stopped manually <strong>stays stopped even after the daemon or host restarts</strong>. Usually the most intuitive choice for long-running services.</li>
+</ul>
+<p>Set it with <code>docker run --restart unless-stopped …</code>, change it on an existing container with <code>docker update --restart on-failure:3 name</code>, or in Compose with <code>restart: unless-stopped</code>.</p>
+<p><strong>Crash loops:</strong> if a container with <code>always</code> crashes immediately on every start, Docker does not spin at full speed. It adds an <strong>increasing delay</strong>, doubling from 100 ms, between restarts and resets the delay once the container stays up for a while. <code>docker ps</code> shows <code>Restarting (1) 3 seconds ago</code> and the restart count grows (<code>docker inspect -f '{{.RestartCount}}'</code>). The root cause, such as a bad config or missing dependency, must still be fixed; check <code>docker logs</code>.</p>
+<p>Restart policies do not replace <strong>health-based</strong> recovery: a hung process that never exits is not restarted. And in production clusters, <strong>Kubernetes</strong> (<code>restartPolicy</code>, liveness probes, ReplicaSets rescheduling on other nodes) or ECS handles restarts, so you would not rely on Docker policies there.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Container exits; daemon records exit code.</li>
+  <li>Daemon checks the policy and whether the stop was manual.</li>
+  <li>If a restart applies, it waits the back-off delay, then starts the container again.</li>
+  <li>On daemon start, containers with <code>always</code> (and <code>unless-stopped</code> not manually stopped) are started.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name app --restart unless-stopped -p 80:8080 shop-api:1.4.2
+docker run -d --name worker --restart on-failure:5 report-worker:2.0
+docker update --restart always app
+docker inspect -f '{{.HostConfig.RestartPolicy.Name}} restarts={{.RestartCount}}' worker</code></pre>
+<pre><code class="language-yaml">services:
+  api:
+    image: shop-api:1.4.2
+    restart: unless-stopped</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>always</code> and being surprised that a manually stopped container comes back after a reboot.</li>
+  <li>Treating restart policies as a fix for crash loops instead of reading logs.</li>
+  <li>Expecting restart policies to recover hung (not exited) processes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A restart policy tells the Docker daemon what to do when a container exits. no, the default, never restarts. on-failure restarts only on a non-zero exit code, optionally limited, like on-failure:5. always restarts whenever it stops and also when the daemon starts after a reboot. unless-stopped is like always, except a container I stopped manually stays stopped after a reboot, which is usually what I want for services. I set it with --restart or restart in Compose. It's fine for single-host setups; in production an orchestrator like Kubernetes handles restarts, health checks and rescheduling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Container with <code>always</code> crashes immediately?</strong> It restarts with increasing back-off delays; fix the cause using logs.</li>
+  <li><strong>Restart on a failed health check?</strong> Plain Docker does not; orchestrators or tools like autoheal do.</li>
+  <li><strong>Change policy on a running container?</strong> <code>docker update --restart</code>.</li>
+</ul>
+</article>
+</body>
+</html>

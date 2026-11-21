@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-009 · What is the difference between NSGs, application security groups and Azure Firewall?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-009" data-topic="Azure">
+<h1>What is the difference between NSGs, application security groups and Azure Firewall?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>NSGs</strong> are <strong>stateful layer 4 allow/deny rules</strong> on subnets or NICs, <strong>application security groups</strong> let those rules target <strong>groups of VMs by role</strong> instead of IPs, and <strong>Azure Firewall</strong> is a <strong>central managed firewall</strong> with <strong>FQDN rules, threat intelligence and (Premium) TLS inspection and IDPS</strong>, usually in the <strong>hub</strong>; use NSGs for micro-segmentation and the firewall for central policy.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Network security groups (NSGs)</strong> contain prioritised rules (100 to 4096) matching <strong>source, destination, port and protocol</strong>, with allow or deny actions, for inbound and outbound traffic. They are <strong>stateful</strong>: return traffic for an allowed flow is permitted automatically. They can be attached to a <strong>subnet</strong> and/or a <strong>NIC</strong>; for inbound traffic the subnet NSG is evaluated first, then the NIC NSG, and both must allow. Default rules allow VNet-internal traffic and Azure Load Balancer probes, and deny inbound internet. NSGs support <strong>service tags</strong> such as <code>Storage.WestEurope</code> or <code>AzureLoadBalancer</code>. They are free and the basic building block for <strong>micro-segmentation</strong>. <strong>NSG flow logs</strong> are being replaced by <strong>VNet flow logs</strong> for visibility.</p>
+<p><strong>Application security groups (ASGs)</strong> are labels you attach to NICs, such as <em>asg-web</em>, <em>asg-api</em>, <em>asg-db</em>. NSG rules then say &quot;allow <em>asg-api</em> to <em>asg-db</em> on 5432&quot; instead of listing IP ranges. When VMs are added or removed, you only change their ASG membership, so rules remain correct and readable.</p>
+<p><strong>Azure Firewall</strong> is a managed, highly available, auto-scaling firewall deployed in its own subnet (<code>AzureFirewallSubnet</code>), usually in the <strong>hub VNet</strong>. It supports <strong>network rules</strong> (IP, port), <strong>application rules</strong> with <strong>FQDN filtering</strong> for outbound HTTP/S, <strong>DNAT</strong> for inbound, <strong>threat intelligence</strong> filtering, a <strong>DNS proxy</strong>, and centralised logging. The <strong>Premium</strong> SKU adds <strong>TLS inspection</strong>, <strong>IDPS</strong>, URL filtering and web categories. Rules are managed with <strong>Firewall Policy</strong>, often via Firewall Manager. <strong>User-defined routes</strong> send spoke egress and spoke-to-spoke (east-west) traffic through it.</p>
+<p>Together: NSGs enforce local segmentation close to workloads (defence in depth), while the firewall provides central inspection, outbound control and audit.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create ASGs per application role and assign NICs.</li>
+  <li>Write NSG rules using ASGs and service tags; deny by default.</li>
+  <li>Deploy Azure Firewall in the hub with a firewall policy.</li>
+  <li>Route spoke traffic to the firewall with UDRs.</li>
+  <li>Allow only approved FQDNs and ports for egress.</li>
+  <li>Send firewall and flow logs to Log Analytics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az network asg create -g rg-app -n asg-api
+az network asg create -g rg-app -n asg-db
+az network nsg rule create -g rg-app --nsg-name nsg-db -n allow-api-to-db \
+  --priority 200 --direction Inbound --access Allow --protocol Tcp \
+  --source-asgs asg-api --destination-asgs asg-db --destination-port-ranges 5432
+az network firewall policy rule-collection-group collection add-filter-collection \
+  -g rg-hub --policy-name fwpol-hub --rule-collection-group-name app-rules \
+  --name allow-egress --collection-priority 200 --action Allow \
+  --rule-type ApplicationRule --rule-name allow-github \
+  --source-addresses 10.42.0.0/22 --protocols Https=443 --target-fqdns github.com &quot;*.github.com&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>NSG</th><th>ASG</th><th>Azure Firewall</th></tr></thead>
+<tbody>
+<tr><td>Layer</td><td>4</td><td>Grouping for NSG</td><td>3–7</td></tr>
+<tr><td>FQDN filtering</td><td>No</td><td>No</td><td>Yes</td></tr>
+<tr><td>Placement</td><td>Subnet/NIC</td><td>NIC membership</td><td>Hub subnet</td></tr>
+<tr><td>Cost</td><td>Free</td><td>Free</td><td>Paid</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on NSGs for egress control to the internet.</li>
+  <li>Hard-coding IP addresses instead of ASGs and service tags.</li>
+  <li>Overly broad &quot;allow any&quot; rules at high priority.</li>
+  <li>Forgetting that both subnet and NIC NSGs must allow traffic.</li>
+  <li>Deploying the firewall without routes, so traffic bypasses it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;NSGs are stateful layer 4 filters with prioritised allow and deny rules on source, destination, port and protocol, attached to subnets or NICs; they are free and the basic building block for micro-segmentation. Application security groups let me group VMs by role, like web or db, and use those groups in NSG rules instead of IP addresses, so rules stay correct as machines change. Azure Firewall is a managed, highly available central firewall, usually in the hub, with FQDN-based application rules, threat intelligence, DNS proxy and central logging, plus TLS inspection and IDPS in Premium. User-defined routes send egress and east-west traffic through it. I use both: NSGs close to workloads and the firewall for central policy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you troubleshoot traffic blocked between a VM and the internet?</strong> Network Watcher IP flow verify, effective security rules, effective routes, then firewall logs.</li>
+  <li><strong>Can NSGs filter by domain name?</strong> No; use Azure Firewall application rules.</li>
+  <li><strong>When choose Firewall Premium?</strong> When you need TLS inspection, IDPS or URL categories.</li>
+</ul>
+</article>
+</body>
+</html>

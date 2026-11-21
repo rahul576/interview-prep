@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-104 · What are Docker image layers and how does the build cache work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-104" data-topic="Docker">
+<h1>What are Docker image layers and how does the build cache work?</h1>
+<p class="ex-meta">Docker · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>An image is a stack of <strong>read-only, content-addressed layers</strong>, one per filesystem-changing instruction, <strong>shared between images</strong>; the <strong>build cache</strong> reuses each layer until an instruction or its inputs change, after which <strong>all later layers rebuild</strong>, so put <strong>dependencies before source code</strong>, use <strong><code>.dockerignore</code></strong>, and remember a container adds only a thin <strong>writable layer</strong> on top.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each <code>RUN</code>, <code>COPY</code> or <code>ADD</code> produces a <strong>layer</strong>: a set of filesystem changes (added, modified, deleted files) on top of the previous ones. Layers are identified by a <strong>digest</strong> (hash of their content), so if ten images use the same base, that base is stored and downloaded <strong>once</strong>. The <strong>overlay2</strong> driver stacks them into one filesystem view.</p>
+<p>When a container starts, Docker adds a thin <strong>writable container layer</strong>. Changes are written there using <strong>copy-on-write</strong>: modifying a file from a lower layer copies it up first. When the container is removed, that layer and its changes are gone, which is why persistent data belongs in <strong>volumes</strong>.</p>
+<p>The <strong>build cache</strong> works instruction by instruction. For <code>RUN</code>, the cache key is the instruction text plus the parent layer; for <code>COPY</code>/<code>ADD</code>, it also includes a checksum of the copied files. As soon as one instruction misses the cache, that step and <strong>every step after it</strong> run again. So order matters:</p>
+<ol>
+  <li>Base image and system packages (rarely change).</li>
+  <li>Dependency manifest (<code>pom.xml</code>, <code>package.json</code> + lock file) and the install step.</li>
+  <li>Application source (changes every commit).</li>
+</ol>
+<p>A <strong><code>.dockerignore</code></strong> keeps <code>.git</code>, <code>node_modules</code>, build output and secrets out of the build context, which makes the context upload faster and prevents unrelated files from invalidating <code>COPY . .</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Docker evaluates each instruction and computes its cache key.</li>
+  <li>Cache hit → reuse the existing layer; cache miss → execute and create a new layer.</li>
+  <li>All subsequent instructions are executed fresh after the first miss.</li>
+  <li>Layers are pushed/pulled individually; only missing ones transfer.</li>
+  <li>At runtime, overlay2 merges layers and adds a writable layer.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+RUN mvn -q dependency:go-offline     # cached until pom.xml changes
+COPY src ./src
+RUN mvn -q package -DskipTests       # rebuilt on code changes only</code></pre>
+<pre><code class="language-text"># .dockerignore
+.git
+target/
+*.log
+.env</code></pre>
+<pre><code class="language-bash">docker history myapp:1.0    # shows each layer and its size</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>COPY . .</code> near the top, so any file change reinstalls dependencies.</li>
+  <li><code>RUN apt-get update</code> in one layer and <code>apt-get install</code> in another, leading to stale package lists.</li>
+  <li>Deleting large files or secrets in a later layer and believing they're gone.</li>
+  <li>No <code>.dockerignore</code>, uploading gigabytes of context.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An image is a stack of read-only layers, one for each instruction that changes the filesystem, like RUN or COPY. Layers are content-addressed, so images that share a base store and download it only once. On rebuild, Docker reuses each cached layer until it hits an instruction whose text or input files changed; that layer and everything after it is rebuilt. So I copy only the dependency manifest and install dependencies first, then copy the source, and a code change doesn't reinstall everything. A <code>.dockerignore</code> keeps unneeded files out of the context. A running container adds a thin writable layer on top, which is lost when it's removed, so data goes in volumes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do containers lose data when removed?</strong> The writable layer is deleted with the container; use volumes or bind mounts.</li>
+  <li><strong>What is copy-on-write?</strong> A file from a lower layer is copied into the writable layer the first time it is modified.</li>
+  <li><strong>How do you see layer sizes?</strong> <code>docker history</code> or tools like dive.</li>
+</ul>
+</article>
+</body>
+</html>

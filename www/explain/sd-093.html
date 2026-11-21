@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-093 · Design a webhook delivery system that reliably notifies thousands of customer endpoints about events.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-093" data-topic="Classic Design Problems">
+<h1>Design a webhook delivery system that reliably notifies thousands of customer endpoints about events.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A webhook system <strong>persists events</strong>, delivers them <strong>asynchronously</strong> from queues with <strong>per-endpoint isolation</strong>, <strong>retries with exponential backoff</strong> for days, <strong>signs payloads with HMAC</strong>, guarantees <strong>at-least-once</strong> delivery with event IDs, and gives customers <strong>logs, replay and auto-disable</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Webhooks push events to servers we do not control. Those endpoints are slow, down, misconfigured or rate-limited, so the system must be designed around failure. The first rule: the core business flow must never wait on a customer's server. The producer writes the event (ideally via the <strong>outbox pattern</strong>, in the same transaction as the business change) and delivery happens asynchronously.</p>
+<p><strong>Isolation</strong> matters most at scale. If all deliveries share one queue, one endpoint timing out for 10 seconds per request ties up workers and delays everyone: a <strong>noisy neighbour</strong>. Use per-endpoint queues or partitions, per-endpoint concurrency limits, and short timeouts.</p>
+<p>Delivery is <strong>at-least-once</strong>: a request may succeed but the response is lost, so we retry. Each event carries a unique <strong>event ID</strong> so receivers dedupe (<strong>idempotency</strong>). <strong>Ordering is not guaranteed</strong>; receivers should use timestamps or fetch the latest state via API. Payloads are signed with an <strong>HMAC-SHA256</strong> of the timestamp plus body using a per-endpoint secret, so receivers verify authenticity and reject replays outside a tolerance window.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Event is committed and published to a stream (Kafka, SQS).</li>
+  <li>A fan-out service finds matching subscriptions and creates one delivery task per endpoint.</li>
+  <li>Delivery workers POST with a 5-10 second timeout; 2xx means success.</li>
+  <li>Failures are rescheduled with exponential backoff plus jitter (e.g. 1 min, 5 min, 30 min ... up to 3 days) in a durable delay queue.</li>
+  <li>Every attempt is logged (status, latency, response snippet) for the customer dashboard.</li>
+  <li>Endpoints failing continuously for days are disabled and the customer notified; failed events can be replayed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import hmac, hashlib, time, json
+
+def sign(secret: bytes, body: bytes) -&gt; dict:
+    ts = str(int(time.time()))
+    sig = hmac.new(secret, f&quot;{ts}.&quot;.encode() + body, hashlib.sha256).hexdigest()
+    return {&quot;Webhook-Id&quot;: &quot;evt_01HZX...&quot;, &quot;Webhook-Timestamp&quot;: ts,
+            &quot;Webhook-Signature&quot;: f&quot;v1={sig}&quot;}
+
+body = json.dumps({&quot;id&quot;: &quot;evt_01HZX...&quot;, &quot;type&quot;: &quot;payment.succeeded&quot;,
+                   &quot;data&quot;: {&quot;payment_id&quot;: &quot;pay_42&quot;}}).encode()
+headers = sign(b&quot;whsec_...&quot;, body)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sending webhooks synchronously inside the request that created the event.</li>
+  <li>One shared queue, so a single dead endpoint delays all customers.</li>
+  <li>Retrying immediately in a tight loop and hammering a recovering server.</li>
+  <li>No event ID, leaving receivers unable to handle duplicates.</li>
+  <li>Following redirects or allowing internal IPs, creating an <strong>SSRF</strong> risk.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd persist each event with an outbox and publish it to a queue, so delivery is decoupled from the business flow. Delivery workers send signed POSTs with short timeouts, and failures retry with exponential backoff and jitter for up to a few days. Each endpoint is isolated with its own queue or concurrency limit, so one slow customer can't block others. Delivery is at-least-once with a unique event ID for idempotency, and customers get delivery logs, manual replay, and automatic disabling with a notification if their endpoint fails for days.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Should webhooks be ordered?</strong> Usually no; ordering per endpoint forces serial delivery and head-of-line blocking. Send IDs and timestamps instead.</li>
+  <li><strong>How do you prevent SSRF?</strong> Resolve and block private IP ranges, disallow redirects, egress through a proxy.</li>
+  <li><strong>How do you rotate secrets?</strong> Support two active secrets and send both signatures during rotation.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-047 · How do you build Docker images efficiently in a CI pipeline?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-047" data-topic="Docker">
+<h1>How do you build Docker images efficiently in a CI pipeline?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Build with <strong>BuildKit/buildx</strong> and a <strong>remote layer cache</strong> (<code>--cache-from/--cache-to</code> to a registry or the GitHub Actions cache), tag with the <strong>commit SHA</strong>, <strong>scan and sign</strong>, <strong>push once and promote</strong>, and avoid <strong>privileged Docker-in-Docker</strong> by using <strong>rootless builders</strong> such as BuildKit rootless, kaniko or buildah.</p>
+
+<h2>Detailed explanation</h2>
+<p>CI runners are usually <strong>ephemeral</strong>: each job starts with an empty Docker cache, so without help every build downloads base images and reinstalls all dependencies. <strong>BuildKit</strong>, via <code>docker buildx build</code>, can <strong>export its cache</strong> to an external location and <strong>import it</strong> on the next run. <code>--cache-to type=registry,ref=...:buildcache,mode=max</code> stores all intermediate layers in a registry, and <code>type=gha</code> uses GitHub Actions' cache service. Combined with a Dockerfile that installs dependencies before copying source, typical builds reuse most layers.</p>
+<p>Each build is tagged with an <strong>immutable identifier</strong>, typically the <strong>commit SHA</strong>, plus semantic version tags for releases. In the same pipeline the image is <strong>scanned</strong> (Trivy, Grype, Docker Scout) with a policy that fails on critical issues, an <strong>SBOM</strong> and <strong>provenance attestation</strong> are generated, and the image is <strong>signed</strong> with <strong>cosign</strong> (Sigstore), often keyless through OIDC. It is pushed <strong>once</strong>, and the <strong>same digest</strong> is promoted from dev to staging to production, never rebuilt per environment, so what was tested is what runs.</p>
+<p>Where builds happen matters for security. Mounting the host's <code>/var/run/docker.sock</code> into CI jobs gives every job <strong>root on the build node</strong> and lets jobs see each other's containers. <strong>Docker-in-Docker</strong> needs <code>--privileged</code>, which disables most isolation. On Kubernetes-based runners, prefer <strong>rootless BuildKit</strong>, <strong>kaniko</strong> (Google archived the original project in 2025; maintained forks exist) or <strong>buildah</strong>, or a dedicated remote BuildKit service. Multi-platform images can be built with <code>--platform</code> using QEMU or native ARM runners.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Checkout and set up buildx.</li>
+  <li>Authenticate to the registry with short-lived credentials (OIDC).</li>
+  <li>Build with cache import/export, tag with the SHA.</li>
+  <li>Scan, generate SBOM and provenance, sign.</li>
+  <li>Push; deploy jobs reference the digest and promote it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitHub Actions
+- uses: docker/setup-buildx-action@v3
+- uses: docker/login-action@v3
+  with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+- uses: docker/build-push-action@v6
+  id: build
+  with:
+    push: true
+    tags: ghcr.io/acme/orders:${{ github.sha }}
+    cache-from: type=gha
+    cache-to: type=gha,mode=max
+    provenance: true
+    sbom: true
+- run: trivy image --exit-code 1 --severity CRITICAL ghcr.io/acme/orders:${{ github.sha }}
+- run: cosign sign --yes ghcr.io/acme/orders@${{ steps.build.outputs.digest }}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No cache export, making every CI build cold.</li>
+  <li>Rebuilding separately for each environment.</li>
+  <li>Mounting the host Docker socket into untrusted jobs.</li>
+  <li>Tagging only <code>latest</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Runners usually start empty, so I use BuildKit through docker buildx with a remote cache, cache-from and cache-to pointing at the registry or the GitHub Actions cache, and a Dockerfile ordered so dependency layers rarely change. Each build is tagged with the commit SHA, scanned with Trivy, signed with cosign and pushed once, and the same digest is promoted through environments instead of rebuilding. On Kubernetes runners I avoid privileged Docker-in-Docker or mounting the host socket, and use rootless builders like BuildKit rootless, kaniko or buildah.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of mounting the host Docker socket?</strong> Any job gets root on the node and can access other jobs' containers.</li>
+  <li><strong>mode=max vs min cache?</strong> max exports all intermediate layers, min only final image layers.</li>
+  <li><strong>How to build ARM images on x86?</strong> buildx with QEMU emulation or native ARM runners.</li>
+</ul>
+</article>
+</body>
+</html>

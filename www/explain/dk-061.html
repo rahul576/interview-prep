@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-061 · How does Docker isolate containers from each other and from the host?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-061" data-topic="Docker">
+<h1>How does Docker isolate containers from each other and from the host?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Containers are ordinary processes isolated by <strong>namespaces</strong> (pid, net, mnt, uts, ipc, user, cgroup), limited by <strong>cgroups</strong>, hardened with <strong>dropped capabilities</strong>, a <strong>seccomp</strong> syscall filter and <strong>AppArmor/SELinux</strong> profiles, but they <strong>share the host kernel</strong>, so isolation is <strong>weaker than VMs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>There is no &quot;container&quot; object in the Linux kernel. A container is a process tree that the runtime wraps in several kernel features, each addressing a different risk.</p>
+<p><strong>Namespaces</strong> control what a process can <strong>see</strong>. The <strong>PID</strong> namespace gives the container its own process tree with its main process as PID 1. The <strong>network</strong> namespace gives it its own interfaces, routes and ports. The <strong>mount</strong> namespace gives it its own filesystem view, rooted in the image. <strong>UTS</strong> isolates the hostname, <strong>IPC</strong> isolates shared memory and message queues, the <strong>cgroup</strong> namespace hides the host's cgroup tree, and the optional <strong>user</strong> namespace maps container UIDs to unprivileged host UIDs.</p>
+<p><strong>Control groups</strong> control what a process can <strong>use</strong>: CPU, memory, block I/O and the number of processes, preventing one container from starving the host or fork-bombing it.</p>
+<p>Several layers restrict what a process can <strong>do</strong>. <strong>Linux capabilities</strong> split root's powers; Docker keeps only a small default set and drops dangerous ones like <code>SYS_ADMIN</code>, <code>SYS_MODULE</code> and <code>SYS_TIME</code>, so root in a container cannot load kernel modules or change the clock. A default <strong>seccomp</strong> profile blocks dozens of risky system calls (such as <code>kexec_load</code>, <code>mount</code> without privileges, <code>keyctl</code>). <strong>AppArmor</strong> (Ubuntu, Debian) or <strong>SELinux</strong> (RHEL, Fedora) apply <strong>mandatory access control</strong> to files and resources. <strong>no-new-privileges</strong> and read-only root filesystems add more.</p>
+<p>All containers still run on the <strong>same kernel</strong>. A kernel vulnerability or a misconfiguration (privileged mode, host mounts, socket access) can allow an <strong>escape</strong>. For untrusted or multi-tenant workloads, add <strong>sandboxed runtimes</strong> such as <strong>gVisor</strong> or <strong>Kata Containers</strong>, or microVMs like Firecracker.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Runtime creates new namespaces for the process.</li>
+  <li>It places the process in a cgroup with limits.</li>
+  <li>It pivots root to the image filesystem.</li>
+  <li>It drops capabilities and applies seccomp and LSM profiles.</li>
+  <li>It executes the container's command inside this sandbox.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run --rm alpine sh -c 'echo $$; hostname; ip addr | grep inet'  # PID 1, own hostname, own IPs
+docker run --rm alpine grep Cap /proc/self/status                     # reduced capability set
+docker inspect -f '{{.HostConfig.SecurityOpt}}' app
+lsns -p $(docker inspect -f '{{.State.Pid}}' app)                     # namespaces on the host</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Containers</th><th>Virtual machines</th></tr></thead>
+<tbody>
+<tr><td>Kernel</td><td>Shared with host</td><td>Own guest kernel</td></tr>
+<tr><td>Boundary</td><td>Namespaces, cgroups, LSM</td><td>Hypervisor</td></tr>
+<tr><td>Start-up</td><td>Milliseconds</td><td>Seconds</td></tr>
+<tr><td>Isolation strength</td><td>Good, kernel-dependent</td><td>Stronger</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating containers as a strong security boundary for untrusted code.</li>
+  <li>Using <code>--privileged</code>, which disables most of these layers.</li>
+  <li>Running as root without user namespaces.</li>
+  <li>Disabling seccomp or AppArmor to &quot;fix&quot; a failing app.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Containers are ordinary Linux processes with several isolation layers. Namespaces give each container its own view of process IDs, network, mounts, hostname, IPC and optionally user IDs. cgroups limit CPU, memory, I/O and process counts. Docker drops most capabilities, so even root in a container can't load kernel modules or change the clock; a default seccomp profile blocks dangerous syscalls, and AppArmor or SELinux restrict file access. But all containers share the host kernel, so a kernel bug can allow an escape, which is why containers are weaker isolation than VMs, and for untrusted code I'd add gVisor or Kata.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does --privileged turn off?</strong> Capability dropping, seccomp, AppArmor/SELinux confinement and device restrictions.</li>
+  <li><strong>How do user namespaces help?</strong> Container root maps to an unprivileged host UID.</li>
+  <li><strong>When use gVisor or Kata?</strong> Multi-tenant or untrusted workloads.</li>
+</ul>
+</article>
+</body>
+</html>

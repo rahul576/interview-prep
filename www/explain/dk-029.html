@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-029 · What does docker system df show, and why does Docker use so much disk space?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-029" data-topic="Docker">
+<h1>What does docker system df show, and why does Docker use so much disk space?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>docker system df</code></strong> shows disk used by <strong>images, containers, local volumes and build cache</strong> and how much is <strong>reclaimable</strong>; disks fill because of <strong>old and dangling images</strong>, <strong>stopped containers</strong>, <strong>build cache</strong> and <strong>unbounded container logs</strong>, so use <strong>prune</strong> commands and <strong>log rotation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker keeps everything until told otherwise, and on a busy build or application host the data directory (<code>/var/lib/docker</code>) grows steadily. <code>docker system df</code> gives a summary per category with a <strong>RECLAIMABLE</strong> column, the space used by items nothing currently references. <code>docker system df -v</code> lists individual images, containers, volumes and cache entries.</p>
+<p>The usual growth sources are: every rebuild leaves the previous image as a <strong>dangling image</strong> (<code>&lt;none&gt;:&lt;none&gt;</code>) or as an unused old tag; <strong>stopped containers</strong> keep their writable layers; <strong>BuildKit's build cache</strong> grows with each build and branch; <strong>unused volumes</strong> remain after containers are removed (especially anonymous ones); and container <strong>logs</strong> with the default <code>json-file</code> driver have <strong>no size limit</strong>, so a chatty application can write tens of gigabytes. Note that logs are not shown by <code>system df</code>; they live under <code>/var/lib/docker/containers/&lt;id&gt;/</code>.</p>
+<p>Cleaning is done with <strong>prune</strong> commands. <code>docker image prune</code> removes dangling images and <code>-a</code> all unused ones; <code>docker container prune</code>, <code>docker builder prune</code> and <code>docker volume prune</code> target the others; <code>docker system prune</code> combines several. Filters such as <code>--filter until=168h</code> keep recent items. For logs, configure <strong><code>max-size</code></strong> and <strong><code>max-file</code></strong> in <code>daemon.json</code> (applies to new containers) or use the <code>local</code> driver, which rotates by default.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Images, layers, containers and cache are stored under <code>/var/lib/docker</code>.</li>
+  <li>Docker tracks which items are referenced by containers or tags.</li>
+  <li><code>system df</code> sums sizes and calculates unreferenced space.</li>
+  <li>Prune commands delete unreferenced items matching filters.</li>
+  <li>Log rotation caps per-container log files.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker system df
+docker builder prune --filter until=168h -f
+docker image prune -a --filter until=168h -f
+docker container prune -f
+du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail</code></pre>
+<pre><code class="language-json">{ &quot;log-driver&quot;: &quot;json-file&quot;, &quot;log-opts&quot;: { &quot;max-size&quot;: &quot;20m&quot;, &quot;max-file&quot;: &quot;5&quot; } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running <code>docker volume prune</code> or <code>system prune --volumes</code> on a production host and deleting database data.</li>
+  <li>Forgetting log rotation, the most common cause of full disks.</li>
+  <li>Pruning only when the disk is already full instead of scheduling it.</li>
+  <li>Expecting <code>daemon.json</code> log options to apply to already running containers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;docker system df summarises disk usage by images, containers, volumes and build cache and shows what's reclaimable; -v gives per-item details. Docker fills disks because every rebuild leaves old and dangling layers, stopped containers keep their writable layers, the BuildKit cache grows with each build, and json-file logs have no size limit by default. I schedule targeted prunes with an until filter, like builder prune and image prune for anything older than a week, and configure max-size and max-file log rotation in daemon.json. On production I never prune volumes automatically.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What would you never clean on production?</strong> Volumes, because they hold persistent data.</li>
+  <li><strong>What is a dangling image?</strong> An untagged image left after a rebuild replaced its tag.</li>
+  <li><strong>Where are container logs stored?</strong> Under <code>/var/lib/docker/containers/&lt;id&gt;/</code> with json-file.</li>
+</ul>
+</article>
+</body>
+</html>

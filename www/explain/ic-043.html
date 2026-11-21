@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-043 · How do you enforce policies on Terraform changes with policy as code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-043" data-topic="Infrastructure as Code">
+<h1>How do you enforce policies on Terraform changes with policy as code?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Policy as code</strong> turns rules (encryption, tags, regions, instance types, no open SSH) into <strong>automated checks</strong>: <strong>static scanners</strong> (Checkov, Trivy) on code and <strong>plan-based policies</strong> (OPA/Conftest, Sentinel) on <code>terraform show -json</code>, with <strong>advisory</strong> and <strong>mandatory</strong> enforcement levels.</p>
+
+<h2>Detailed explanation</h2>
+<p>Wiki pages listing rules like &quot;all buckets must be encrypted&quot; are ignored under time pressure. Policy as code makes those rules executable and runs them on every change.</p>
+<p><strong>Static scanning</strong> analyses Terraform source without running it. <strong>Checkov</strong> and <strong>Trivy</strong> (which absorbed <strong>tfsec</strong>) ship hundreds of built-in checks mapped to CIS and other benchmarks: unencrypted storage, public buckets, security groups open to <code>0.0.0.0/0</code> on port 22, missing logging, IAM wildcards. They're fast and good for developer feedback in pre-commit. Their limit: they see code, not computed values, and can miss what modules or variables produce.</p>
+<p><strong>Plan-based checks</strong> evaluate the <strong>JSON plan</strong>: <code>terraform plan -out=tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json</code>. The JSON contains the <strong>resolved values</strong> after variables, modules, defaults and functions, plus the <strong>actions</strong> (create, update, delete) for each resource. <strong>OPA</strong> with <strong>Conftest</strong> uses <strong>Rego</strong> policies; HCP Terraform supports <strong>Sentinel</strong> and OPA natively, and cloud platforms add their own guardrails (AWS SCPs and Config rules, Azure Policy) as a last line of defence at the API.</p>
+<p>Typical rules: required tags (<code>owner</code>, <code>cost-center</code>), allowed regions, allowed instance families, encryption on storage, no public IPs on databases, no deletes of protected resource types, cost thresholds.</p>
+<p><strong>Enforcement levels</strong> make rollout practical. <strong>Advisory</strong> policies warn but don't block; <strong>mandatory</strong> policies fail the run (Sentinel also has <strong>soft-mandatory</strong>, which an authorised person can override). New rules start advisory, teams fix violations, then the rule becomes mandatory. Exceptions are explicit, reviewed and time-limited, for example inline skip comments with justification or exception lists in the policy data.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write policies in a repo, versioned and tested.</li>
+  <li>PR pipeline runs static scanners on code.</li>
+  <li>Pipeline creates a plan and converts it to JSON.</li>
+  <li>Policy engine evaluates the JSON; results posted to the PR.</li>
+  <li>Mandatory failures block merge or apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-rego">package main
+
+deny contains msg if {
+  rc := input.resource_changes[_]
+  rc.type == &quot;aws_s3_bucket&quot;
+  &quot;create&quot; in rc.change.actions
+  not rc.change.after.tags.owner
+  msg := sprintf(&quot;%s must have an owner tag&quot;, [rc.address])
+}
+
+deny contains msg if {
+  rc := input.resource_changes[_]
+  rc.type == &quot;aws_instance&quot;
+  not startswith(rc.change.after.instance_type, &quot;t3.&quot;)
+  not startswith(rc.change.after.instance_type, &quot;m7i.&quot;)
+  msg := sprintf(&quot;%s uses a non-approved instance type&quot;, [rc.address])
+}</code></pre>
+<pre><code class="language-bash">terraform plan -out=tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
+conftest test plan.json --policy policy/
+checkov -d . --framework terraform</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only scanning code, missing values computed by modules.</li>
+  <li>Making every rule blocking on day one, so teams disable the checks.</li>
+  <li>Policies without tests, which break unexpectedly.</li>
+  <li>Unlimited, undocumented exceptions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Policy as code turns rules like every bucket encrypted, every resource has an owner tag, only approved regions and instance types, and no SSH open to the world into automated checks. Static scanners like Checkov or Trivy analyse the Terraform code with hundreds of built-in rules. Plan-based tools evaluate terraform show -json, which includes computed values: OPA with Conftest using Rego, or Sentinel in HCP Terraform. They run on every PR, and policies are either advisory, warning only, or mandatory, blocking the merge, so new rules start soft and become hard once teams comply.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is checking the plan JSON more reliable than checking code text?</strong> It contains resolved values from variables and modules and the actual actions.</li>
+  <li><strong>How do you test policies?</strong> Rego unit tests with <code>opa test</code> and sample plan fixtures.</li>
+  <li><strong>What is the last line of defence?</strong> Cloud-native guardrails like SCPs or Azure Policy that apply to every tool.</li>
+</ul>
+</article>
+</body>
+</html>

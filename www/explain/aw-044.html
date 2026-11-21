@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-044 · How do you set up cross-account access in AWS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-044" data-topic="Cloud (AWS)">
+<h1>How do you set up cross-account access in AWS?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Create a <strong>role in the target account</strong> whose <strong>trust policy</strong> allows a principal from the source account, give that principal <strong>sts:AssumeRole</strong> on the role ARN, require an <strong>external ID</strong> for third parties, use <strong>resource-based policies</strong> where a service supports them, and give people access with <strong>IAM Identity Center permission sets</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Cross-account access needs both sides to agree. In the <strong>target account</strong> (B), a role trusts the source account (A) or, better, a specific role in A. In the <strong>source account</strong>, the calling identity needs an identity policy allowing <code>sts:AssumeRole</code> on B's role ARN. The caller then receives temporary credentials scoped to B's role permissions. If the trust policy names only the account root, A's administrators decide which of their identities may use it, so naming the exact role is tighter.</p>
+<p>When a <strong>third party</strong> such as a monitoring or cost vendor assumes your role, you add an <strong>sts:ExternalId</strong> condition with a unique value they give you. This prevents the <strong>confused deputy</strong> problem: without it, another customer of the vendor could provide your role ARN and trick the vendor into accessing your account.</p>
+<p>Some services support <strong>resource-based policies</strong> that grant another account directly without role switching: S3 bucket policies, KMS key policies, SQS and SNS policies, Lambda resource policies, Secrets Manager and ECR repository policies. The caller keeps its own identity, which helps for audit, but it still needs an identity policy allowing the action, and with <strong>KMS</strong> both key policy and caller policy matter. <strong>AWS RAM</strong> shares resources such as subnets, Transit Gateways and Resolver rules across accounts.</p>
+<p>For humans, <strong>IAM Identity Center</strong> connects to the corporate identity provider and assigns <strong>permission sets</strong> to groups per account; it creates the roles in every account and gives users short-lived credentials and a portal. Conditions such as <strong>aws:PrincipalOrgID</strong> restrict access to your own organisation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>In account B, create a role with a trust policy for account A's CI role.</li>
+  <li>Attach least-privilege permissions to that role.</li>
+  <li>In account A, allow the CI role to call sts:AssumeRole on B's role.</li>
+  <li>The CI job calls AssumeRole and receives temporary credentials.</li>
+  <li>It acts in account B; CloudTrail in both accounts records the session.</li>
+</ol>
+
+<h2>Example</h2>
+<p>Trust policy in the target account:</p>
+<pre><code class="language-json">{
+  &quot;Version&quot;: &quot;2012-10-17&quot;,
+  &quot;Statement&quot;: [{
+    &quot;Effect&quot;: &quot;Allow&quot;,
+    &quot;Principal&quot;: {&quot;AWS&quot;: &quot;arn:aws:iam::111122223333:role/ci-deployer&quot;},
+    &quot;Action&quot;: &quot;sts:AssumeRole&quot;
+  }, {
+    &quot;Effect&quot;: &quot;Allow&quot;,
+    &quot;Principal&quot;: {&quot;AWS&quot;: &quot;arn:aws:iam::999988887777:root&quot;},
+    &quot;Action&quot;: &quot;sts:AssumeRole&quot;,
+    &quot;Condition&quot;: {&quot;StringEquals&quot;: {&quot;sts:ExternalId&quot;: &quot;vendor-7f3a91&quot;}}
+  }]
+}</code></pre>
+<pre><code class="language-ini"># ~/.aws/config
+[profile prod-deploy]
+role_arn = arn:aws:iam::444455556666:role/deployer
+source_profile = ci</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trusting a whole account with Principal &quot;*&quot; or without conditions.</li>
+  <li>Forgetting the sts:AssumeRole permission on the source side.</li>
+  <li>Granting S3 cross-account access but not KMS key access for encrypted objects.</li>
+  <li>Creating IAM users in every account instead of using Identity Center.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The standard pattern is a role in the target account with a trust policy that allows a specific principal in the source account, and an identity policy in the source account that allows sts:AssumeRole on that role ARN. The caller gets temporary credentials for the target. For third parties I require an external ID to prevent the confused deputy problem. Where services support resource policies, like S3, KMS or SQS, I can grant the other account directly. For people I use IAM Identity Center permission sets so they get SSO into many accounts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the confused deputy problem?</strong> A trusted service is tricked into using its permissions on behalf of someone else; external IDs and source ARN conditions prevent it.</li>
+  <li><strong>When prefer a resource policy over a role?</strong> When the caller must keep its own identity or needs data from many accounts at once.</li>
+  <li><strong>How restrict access to your organisation only?</strong> Use aws:PrincipalOrgID in resource or trust policies.</li>
+</ul>
+</article>
+</body>
+</html>

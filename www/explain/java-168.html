@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-168 · How do you design a multi-tenant SaaS backend?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-168" data-topic="Architecture">
+<h1>How do you design a multi-tenant SaaS backend?</h1>
+<p class="ex-meta">Architecture · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>A multi-tenant SaaS backend chooses an <strong>isolation model</strong> (shared schema, schema per tenant, database per tenant), <strong>propagates tenant context</strong> from the token on every request and message, <strong>enforces tenant filtering centrally</strong> (Hibernate filters, PostgreSQL RLS), controls <strong>noisy neighbours</strong> with quotas, and tracks <strong>per-tenant observability and cost</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Isolation models</strong> trade cost against isolation:</p>
+<ul>
+  <li><strong>Shared schema</strong> with a <code>tenant_id</code> column: cheapest, easiest migrations, scales to thousands of small tenants; risk is a missed filter leaking data.</li>
+  <li><strong>Schema per tenant:</strong> stronger logical separation, per-tenant backup/restore, but migrations run N times and connection pools grow.</li>
+  <li><strong>Database per tenant:</strong> strongest isolation, per-tenant encryption keys, residency and performance; costly, often a <strong>premium or enterprise tier</strong>.</li>
+</ul>
+<p>Many products use a <strong>hybrid</strong>: pooled for small tenants, siloed for large or regulated ones, with a <strong>tenant catalogue</strong> recording each tenant's placement.</p>
+<p><strong>Tenant context</strong> must come from a trusted source: the authenticated <strong>JWT claim</strong> (or subdomain verified against the token), never a free-form header. It is set in a request-scoped context, propagated to async jobs and <strong>Kafka message headers</strong>, and included in logs and traces.</p>
+<p><strong>Enforcement must be central</strong>, not left to every developer remembering a <code>WHERE</code>. Options: <strong>Hibernate 6 <code>@TenantId</code></strong> or filters, Spring's <code>AbstractRoutingDataSource</code> for schema/database routing, and <strong>PostgreSQL row-level security</strong> policies using a session variable, which protects even raw SQL. Add automated tests that attempt cross-tenant access. Caches, search indexes and object storage keys must include the tenant ID too.</p>
+<p><strong>Noisy neighbours:</strong> per-tenant rate limits, quotas, job concurrency limits, and moving heavy tenants to dedicated resources. <strong>Per-tenant metrics and cost attribution</strong> support pricing and capacity decisions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives with a JWT containing <code>tenant_id</code>.</li>
+  <li>A filter sets <code>TenantContext</code> and MDC for logging.</li>
+  <li>Data layer routes to the right DB/schema or sets <code>app.tenant_id</code> for RLS.</li>
+  <li>Queries are automatically filtered; caches use <code>tenant:{id}:...</code> keys.</li>
+  <li>Messages carry tenant ID headers; consumers restore context.</li>
+  <li>Rate limiter and quotas apply per tenant; metrics tagged by tenant.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON invoices
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);</code></pre>
+<pre><code class="language-java">@Component
+class TenantConnectionPreparer {
+    @Transactional
+    void apply(JdbcTemplate jdbc) {
+        jdbc.queryForObject(&quot;select set_config('app.tenant_id', ?, true)&quot;, String.class,
+                            TenantContext.current().toString());   // true = local to this transaction
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Taking tenant ID from a client-controlled header.</li>
+  <li>Relying on developers to add <code>WHERE tenant_id = ?</code> manually.</li>
+  <li>Forgetting tenant scoping in caches, search and file storage.</li>
+  <li>Losing tenant context in async threads and consumers.</li>
+  <li>One giant tenant degrading everyone with no quotas.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd choose the isolation model: shared schema with a tenant ID for most tenants because it's cheapest, and schema or database per tenant for large or regulated customers as a premium tier, tracked in a tenant catalogue. The tenant comes from the authenticated token and is propagated to every request, async job and message. Filtering is enforced centrally with Hibernate tenant support or PostgreSQL row-level security, not by each developer. I'd add per-tenant rate limits and quotas for noisy neighbours, and tag metrics and cost by tenant.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Migrating a big tenant to its own DB?</strong> Copy data, sync changes via CDC, switch the catalogue entry during a short write freeze, verify.</li>
+  <li><strong>Schema migrations with 500 schemas?</strong> Automated, idempotent Flyway runs per schema with progress tracking and backward-compatible changes.</li>
+  <li><strong>Tenant-specific customisation?</strong> Configuration and feature flags, not forked code.</li>
+</ul>
+</article>
+</body>
+</html>

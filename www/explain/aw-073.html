@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-073 · Users get 502 and 504 errors from an Application Load Balancer. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-073" data-topic="Cloud (AWS)">
+<h1>Users get 502 and 504 errors from an Application Load Balancer. How do you investigate?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>502 Bad Gateway</strong> means the ALB got an <strong>invalid or no response</strong> from the target (crash, connection reset, malformed response, TLS or protocol mismatch, often a <strong>keep-alive shorter than the ALB idle timeout</strong>), while <strong>504 Gateway Timeout</strong> means the target <strong>did not respond in time</strong>; investigate with <strong>ALB access logs</strong>, <strong>CloudWatch target metrics</strong> and application logs.</p>
+
+<h2>Detailed explanation</h2>
+<p>First check whether the errors come from the ALB or the app. <strong>HTTPCode_ELB_5XX_Count</strong> (split into ELB 502, 503 and 504) means the load balancer generated the error, while <strong>HTTPCode_Target_5XX_Count</strong> means your application returned it. A <strong>503</strong> from the ALB usually means <strong>no healthy targets</strong> in the group.</p>
+<p><strong>502</strong> causes: the target <strong>closed or reset the connection</strong> (process crash, OOM kill, restart), returned a <strong>malformed HTTP response</strong> or headers too large, the target group protocol <strong>mismatches</strong> the app (HTTPS target group to an HTTP port, or vice versa), a TLS handshake failed, or a Lambda target returned an invalid response format. The classic intermittent cause: the app server's <strong>keep-alive timeout is shorter than the ALB idle timeout</strong> (default 60 seconds), so the server closes an idle connection exactly as the ALB reuses it. Fix by setting the server keep-alive longer, for example 65 seconds in Node.js or Gunicorn. During deployments, 502s appear when targets are killed before <strong>deregistration</strong> finishes or without graceful shutdown.</p>
+<p><strong>504</strong> causes: the target accepted the connection but did not send a response within the <strong>idle timeout</strong>, usually due to a slow database or downstream API, thread or connection pool exhaustion, or long-running requests that should be asynchronous. It can also happen when security groups or NACLs block traffic so the connection never completes.</p>
+<p><strong>ALB access logs</strong> (to S3, query with Athena) show per request: target IP, <code>request_processing_time</code>, <code>target_processing_time</code>, <code>response_processing_time</code>, ELB and target status codes and <code>error_reason</code>. A target time of -1 means the target did not respond. CloudWatch <strong>TargetResponseTime</strong>, <strong>HealthyHostCount</strong>, <strong>TargetConnectionErrorCount</strong> and per-AZ views narrow it to a target, AZ or time window, then correlate with app logs and traces.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Split ELB versus target 5xx in CloudWatch.</li>
+  <li>Query access logs for failing requests, targets and timings.</li>
+  <li>502: check crashes, restarts, keep-alive, protocol and TLS settings.</li>
+  <li>504: check downstream latency, thread pools and timeouts.</li>
+  <li>Check health checks, healthy host count and capacity.</li>
+  <li>Fix and confirm metrics return to baseline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT target_ip, elb_status_code, target_status_code,
+       target_processing_time, error_reason, count(*) AS n
+FROM alb_logs
+WHERE day = '2026/11/20' AND elb_status_code IN (502, 504)
+GROUP BY 1,2,3,4,5 ORDER BY n DESC LIMIT 20;</code></pre>
+<pre><code class="language-javascript">// Node.js: keep-alive longer than ALB idle timeout (60s)
+const server = app.listen(8080);
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising the ALB idle timeout to hide slow requests instead of fixing them.</li>
+  <li>Ignoring the difference between ELB-generated and target-generated 5xx.</li>
+  <li>No graceful shutdown, so deployments produce 502 bursts.</li>
+  <li>Health checks too lenient, keeping broken targets in rotation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I separate the codes. A 502 means the ALB got an invalid or no response: the app crashed, reset the connection, returned something malformed, or there is a protocol mismatch. A classic cause is the app keep-alive being shorter than the ALB idle timeout, so the server closes connections the ALB reuses; I set the server keep-alive longer. A 504 means the target did not respond within the idle timeout, usually a slow database or downstream API or exhausted threads. ALB access logs give per-request target and timings, and CloudWatch target response time, healthy hosts and target 5xx narrow it down.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why would 502s appear only during deployments?</strong> Targets stop before draining completes or without graceful shutdown; align deregistration delay and SIGTERM handling.</li>
+  <li><strong>What does a 503 from the ALB mean?</strong> No healthy registered targets in the group.</li>
+  <li><strong>Should you increase the idle timeout?</strong> Only for legitimate long requests; otherwise make them asynchronous.</li>
+</ul>
+</article>
+</body>
+</html>

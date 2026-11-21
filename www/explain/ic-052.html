@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-052 · How do you handle errors in Ansible playbooks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-052" data-topic="Configuration Management">
+<h1>How do you handle errors in Ansible playbooks?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>block / rescue / always</strong> for try-catch-finally with rollback and cleanup, <strong>failed_when</strong> and (sparingly) <strong>ignore_errors</strong> to define failure, <strong>any_errors_fatal</strong> and <strong>max_fail_percentage</strong> with <strong>serial</strong> to stop bad rollouts, and <strong>until/retries</strong> for transient errors.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default, when a task fails on a host, Ansible stops running further tasks <strong>for that host</strong>, while other hosts continue; the play recap shows it as failed. That is reasonable for configuration, but deployments need more control.</p>
+<p><strong>block / rescue / always</strong> groups tasks like try/catch/finally. If any task in <code>block</code> fails, the <code>rescue</code> tasks run, for example restoring the previous configuration, switching a symlink back to the last release or rolling back a package version. Inside rescue, <code>ansible_failed_task</code> and <code>ansible_failed_result</code> describe what went wrong. <code>always</code> runs whether the block succeeded or failed, which is the place for cleanup such as re-enabling the host in the load balancer or removing a maintenance flag. If rescue succeeds, the host is not counted as failed (it shows as rescued), so add an explicit <code>fail</code> at the end of rescue if you want the run to be red.</p>
+<p><strong>failed_when</strong> defines what failure means for a task, beyond the exit code, such as a specific string in output. <strong>ignore_errors: true</strong> continues past an error, but it hides problems and should be reserved for genuinely expected failures; <code>failed_when</code> is usually more precise. <code>ignore_unreachable</code> handles hosts that cannot be contacted.</p>
+<p><strong>Rolling updates</strong> need to stop early. With <code>serial: 2</code> or <code>serial: &quot;10%&quot;</code>, hosts are updated in batches. <strong>max_fail_percentage</strong> aborts the play when more than the given percentage of a batch fails, and <strong>any_errors_fatal: true</strong> aborts the whole play as soon as any host fails, preventing a bad change from reaching the entire fleet.</p>
+<p><strong>until / retries / delay</strong> retry transient failures, such as waiting for a service to become healthy or an API to respond.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Task fails → host marked failed, skipped for later tasks (default).</li>
+  <li>Within a block, failure jumps to rescue.</li>
+  <li>always runs in every case.</li>
+  <li>Batch-level thresholds decide whether the play continues.</li>
+  <li>Retries handle transient conditions before declaring failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- hosts: web
+  serial: 2
+  max_fail_percentage: 0
+  become: true
+  tasks:
+    - name: Deploy with rollback
+      block:
+        - name: Take out of load balancer
+          ansible.builtin.command: /usr/local/bin/lb drain {{ inventory_hostname }}
+          delegate_to: localhost
+        - name: Deploy new config
+          ansible.builtin.template:
+            src: app.conf.j2
+            dest: /etc/app/app.conf
+            backup: true
+          register: cfg
+        - name: Restart app
+          ansible.builtin.service: { name: app, state: restarted }
+        - name: Wait for health
+          ansible.builtin.uri: { url: &quot;http://localhost:8080/health&quot; }
+          register: health
+          until: health.status == 200
+          retries: 10
+          delay: 3
+      rescue:
+        - name: Restore previous config
+          ansible.builtin.copy:
+            src: &quot;{{ cfg.backup_file }}&quot;
+            dest: /etc/app/app.conf
+            remote_src: true
+          when: cfg.backup_file is defined
+        - name: Restart with old config
+          ansible.builtin.service: { name: app, state: restarted }
+        - name: Mark host as failed
+          ansible.builtin.fail:
+            msg: &quot;Deployment failed at {{ ansible_failed_task.name }}; rolled back&quot;
+      always:
+        - name: Return to load balancer
+          ansible.builtin.command: /usr/local/bin/lb enable {{ inventory_hostname }}
+          delegate_to: localhost</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sprinkling <code>ignore_errors</code> instead of fixing or defining failure.</li>
+  <li>Rescue blocks that hide failures, leaving runs green.</li>
+  <li>No <code>serial</code> or failure threshold, so a bad change hits every host.</li>
+  <li>Cleanup placed after the block instead of in <code>always</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default a failed task stops further tasks for that host while others continue. For more control I use block, rescue and always: rescue runs if any task in the block fails, like a catch, so I can roll back to the previous config, and always runs regardless, for cleanup like putting the server back in the load balancer. failed_when defines what counts as failure, and ignore_errors is only for expected failures. For rolling updates I use serial with max_fail_percentage or any_errors_fatal so a bad change stops before it reaches the whole fleet, and until with retries for transient issues like waiting for a service.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you safely roll back a failed configuration change on a web server?</strong> block with a backed-up template, rescue restoring the backup and restarting, always re-enabling the host, serial batches with a zero failure threshold.</li>
+  <li><strong>Does a rescued host count as failed?</strong> No, unless you add an explicit fail task.</li>
+  <li><strong>any_errors_fatal vs max_fail_percentage?</strong> Abort on the first failure versus abort past a percentage threshold.</li>
+</ul>
+</article>
+</body>
+</html>

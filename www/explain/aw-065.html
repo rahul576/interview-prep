@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-065 · Design a secure multi-tier VPC for a web application across availability zones.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-065" data-topic="Cloud (AWS)">
+<h1>Design a secure multi-tier VPC for a web application across availability zones.</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Build a VPC with <strong>public, private application and isolated data subnets in each of three AZs</strong>, put only the <strong>ALB and NAT gateways</strong> in public subnets, give each AZ its <strong>own NAT gateway</strong>, keep AWS traffic private with <strong>VPC endpoints</strong>, chain <strong>security groups</strong> by reference, and add <strong>WAF, flow logs and Session Manager</strong> instead of SSH.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start with a <strong>non-overlapping CIDR</strong>, allocated from central IPAM, large enough to grow, such as a /16 or /20 per environment. Create three tiers per AZ across <strong>three AZs</strong>. <strong>Public subnets</strong> have a route to the <strong>internet gateway</strong> and host only the internet-facing <strong>ALB</strong> and <strong>NAT gateways</strong>. <strong>Private application subnets</strong> host EC2, ECS or EKS workloads, routing outbound traffic through the NAT gateway in the <strong>same AZ</strong>, so one AZ failure does not break egress elsewhere. <strong>Isolated data subnets</strong> have no internet route at all and host RDS, Aurora and ElastiCache in subnet groups spanning AZs.</p>
+<p><strong>VPC endpoints</strong> cut NAT cost and keep traffic private: free <strong>gateway endpoints</strong> for S3 and DynamoDB, and <strong>interface endpoints</strong> (PrivateLink) for ECR, CloudWatch Logs, STS, Secrets Manager, SSM and KMS, with endpoint policies restricting which resources can be reached.</p>
+<p><strong>Security groups</strong> are the main control and reference each other rather than CIDRs: the ALB allows 443 from the internet (or CloudFront prefix list), the app SG allows the app port only from the ALB SG, and the database SG allows 5432 only from the app SG. <strong>NACLs</strong> stay mostly default, used for coarse subnet-level blocks. <strong>AWS WAF</strong> with managed rule groups and rate limiting protects the ALB, and CloudFront plus <strong>Shield</strong> add DDoS resilience. <strong>VPC flow logs</strong> go to S3 or CloudWatch, <strong>Route 53 Resolver DNS Firewall</strong> can block malicious domains, and <strong>Network Firewall</strong> can inspect egress when required.</p>
+<p>Administration uses <strong>Systems Manager Session Manager</strong>, so no bastion hosts, SSH keys or inbound port 22. Data is encrypted with KMS and TLS end to end.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User hits CloudFront or the ALB over HTTPS; WAF filters requests.</li>
+  <li>ALB forwards to app targets in private subnets across AZs.</li>
+  <li>App calls the database in isolated subnets via SG references.</li>
+  <li>App reaches AWS APIs through VPC endpoints, internet via same-AZ NAT.</li>
+  <li>Flow logs, ALB logs and CloudTrail feed central logging.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">module &quot;vpc&quot; {
+  source  = &quot;terraform-aws-modules/vpc/aws&quot;
+  name    = &quot;shop-prod&quot;
+  cidr    = &quot;10.20.0.0/16&quot;
+  azs     = [&quot;eu-west-1a&quot;, &quot;eu-west-1b&quot;, &quot;eu-west-1c&quot;]
+  public_subnets   = [&quot;10.20.0.0/24&quot;, &quot;10.20.1.0/24&quot;, &quot;10.20.2.0/24&quot;]
+  private_subnets  = [&quot;10.20.16.0/20&quot;, &quot;10.20.32.0/20&quot;, &quot;10.20.48.0/20&quot;]
+  database_subnets = [&quot;10.20.64.0/24&quot;, &quot;10.20.65.0/24&quot;, &quot;10.20.66.0/24&quot;]
+  create_database_internet_gateway_route = false
+  enable_nat_gateway     = true
+  one_nat_gateway_per_az = true
+  enable_flow_log        = true
+}
+
+resource &quot;aws_security_group_rule&quot; &quot;db_from_app&quot; {
+  type                     = &quot;ingress&quot;
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = &quot;tcp&quot;
+  security_group_id        = aws_security_group.db.id
+  source_security_group_id = aws_security_group.app.id
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A single NAT gateway for all AZs, a hidden single point of failure.</li>
+  <li>Tiny subnets that run out of IPs once EKS or Lambda ENIs arrive.</li>
+  <li>CIDR-based SG rules like 10.0.0.0/8 instead of SG references.</li>
+  <li>Bastion hosts with SSH open to the world.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use a non-overlapping CIDR and three subnet tiers in each of three AZs: public subnets only for the ALB and NAT gateways, private app subnets for workloads, and isolated data subnets with no internet route for RDS and ElastiCache. Each AZ has its own NAT gateway, and gateway and interface endpoints keep S3, ECR and Secrets Manager traffic private and cheaper. Security groups reference each other: ALB allows 443, app only from the ALB, database only from the app. WAF protects the ALB, flow logs are on, and admins use Session Manager, never SSH.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How size CIDRs so the VPC can grow?</strong> Use a large block from IPAM, big private subnets, and leave unallocated space for new tiers.</li>
+  <li><strong>Why one NAT per AZ?</strong> AZ resilience and avoiding cross-AZ data charges.</li>
+  <li><strong>Where would you inspect egress?</strong> AWS Network Firewall in a central inspection VPC via Transit Gateway.</li>
+</ul>
+</article>
+</body>
+</html>

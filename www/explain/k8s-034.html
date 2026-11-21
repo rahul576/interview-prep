@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-034 · What is node-pressure eviction, and how does it differ from API-initiated eviction?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-034" data-topic="Kubernetes">
+<h1>What is node-pressure eviction, and how does it differ from API-initiated eviction?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Node-pressure eviction</strong> is the <strong>kubelet</strong> killing pods when the node runs low on <strong>memory, disk, inodes or PIDs</strong>, using <strong>soft and hard eviction thresholds</strong> and ranking victims by <strong>usage above requests and priority</strong>; it <strong>ignores PodDisruptionBudgets</strong>. <strong>API-initiated eviction</strong> (drain, autoscaler, upgrades) goes through the <strong>Eviction API</strong>, which <strong>respects PDBs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Node-pressure eviction</strong> protects the node itself. The kubelet monitors signals such as <code>memory.available</code>, <code>nodefs.available</code>, <code>nodefs.inodesFree</code>, <code>imagefs.available</code> and <code>pid.available</code>. When a signal crosses a threshold:</p>
+<ul>
+  <li><strong>Hard threshold</strong> (default for memory is around <code>memory.available&lt;100Mi</code>): evict immediately, with no graceful termination period.</li>
+  <li><strong>Soft threshold:</strong> must be exceeded for <code>evictionSoftGracePeriod</code>; pods then get up to <code>evictionMaxPodGracePeriod</code> to terminate.</li>
+</ul>
+<p>The node also gets a condition (MemoryPressure, DiskPressure, PIDPressure) and a taint so new pods aren't scheduled there.</p>
+<p>For disk pressure the kubelet first reclaims node resources: garbage-collect dead containers and unused images. If that isn't enough, it evicts pods.</p>
+<p><strong>Victim selection</strong> for memory: first pods whose usage <strong>exceeds their requests</strong>, ordered by <strong>priority</strong> and then by how far above requests they are. Consequently <strong>BestEffort</strong> pods (no requests) and <strong>Burstable</strong> pods far above requests go first; <strong>Guaranteed</strong> pods (requests = limits) and pods within requests go last. Evicted pods show <code>Status: Failed, Reason: Evicted</code>; their controllers create replacements elsewhere. Because the node must protect itself, <strong>PDBs are not consulted</strong>.</p>
+<p>If memory spikes faster than the kubelet's polling, the <strong>kernel OOM killer</strong> acts first, killing a process inside a container: that shows as <strong>OOMKilled</strong> (exit code 137), not Evicted. The kubelet sets <code>oom_score_adj</code> so BestEffort processes are preferred victims.</p>
+<p><strong>API-initiated eviction</strong> is a request to the Eviction API (<code>pods/eviction</code> subresource) made by <code>kubectl drain</code>, Cluster Autoscaler, Karpenter or managed upgrades. The API server checks PDBs and can refuse with 429, and the pod is terminated gracefully with its normal grace period.</p>
+<p>Protecting nodes: set <code>system-reserved</code> and <code>kube-reserved</code> so the OS and kubelet keep memory, set realistic requests, and avoid BestEffort for anything important.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Kubelet samples node signals periodically.</li>
+  <li>Threshold crossed → node condition and taint set.</li>
+  <li>Reclaim images and dead containers (disk).</li>
+  <li>Rank pods by usage over requests and priority.</li>
+  <li>Evict pods until the signal recovers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># KubeletConfiguration excerpt
+evictionHard:
+  memory.available: &quot;200Mi&quot;
+  nodefs.available: &quot;10%&quot;
+  pid.available: &quot;5%&quot;
+evictionSoft:
+  memory.available: &quot;500Mi&quot;
+evictionSoftGracePeriod:
+  memory.available: &quot;1m&quot;
+systemReserved: { cpu: 500m, memory: 1Gi }
+kubeReserved:   { cpu: 500m, memory: 1Gi }</code></pre>
+<pre><code class="language-bash">kubectl get pods -A --field-selector=status.phase=Failed | grep Evicted
+kubectl describe node node-3 | grep -A5 Conditions</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing PDBs protect against node-pressure evictions.</li>
+  <li>Running important workloads as BestEffort.</li>
+  <li>No system or kube reserved, so the kubelet itself gets starved.</li>
+  <li>Confusing Evicted with OOMKilled.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Node-pressure eviction is done by the kubelet when the node runs low on memory, disk, inodes or PIDs. Soft thresholds have a grace period, hard thresholds evict immediately. It picks pods whose usage exceeds their requests first, then by priority, so BestEffort pods and pods far over their requests go first and Guaranteed pods last. It ignores PDBs because the node is protecting itself. API-initiated eviction from drain, autoscalers or upgrades goes through the Eviction API, which respects PDBs. If the kernel OOM killer acts first, the container is OOMKilled rather than evicted.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you size system-reserved and kube-reserved?</strong> Measure kubelet, runtime and OS usage under load; providers publish formulas by node size.</li>
+  <li><strong>Why do evicted pods linger?</strong> Failed pod objects stay until garbage-collected; clean them up.</li>
+  <li><strong>What does PIDPressure mean?</strong> Too many processes, often a fork bomb; set pod PID limits.</li>
+</ul>
+</article>
+</body>
+</html>

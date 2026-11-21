@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-034 · What is the PID 1 problem in containers, and how do you solve it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-034" data-topic="Docker">
+<h1>What is the PID 1 problem in containers, and how do you solve it?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The main process is <strong>PID 1</strong> in the container's PID namespace, and PID 1 <strong>ignores signals without explicit handlers</strong> and must <strong>reap zombie processes</strong>; fix it with <strong>exec form / <code>exec</code></strong> so the app is PID 1, <strong>SIGTERM handling</strong>, and a tiny init such as <strong>tini</strong> (<code>docker run --init</code>).</p>
+
+<h2>Detailed explanation</h2>
+<p>Inside a container the first process gets <strong>PID 1</strong>, the role normally held by <code>systemd</code> or <code>init</code>. The kernel treats PID 1 specially in two ways that surprise applications.</p>
+<p>First, <strong>signals</strong>. For PID 1 the kernel does not apply the <strong>default action</strong> of signals like SIGTERM and SIGINT; if the process has not installed a handler, the signal is simply <strong>ignored</strong>. Many applications rely on the default &quot;terminate&quot; behaviour, so <code>docker stop</code> sends SIGTERM, nothing happens, and after the timeout (10 seconds) Docker sends <strong>SIGKILL</strong>. The app never shuts down gracefully: in-flight requests are cut and connections are not closed. The same happens when a <strong>shell is PID 1</strong>, as with shell-form <code>CMD</code>: <code>/bin/sh</code> does not forward SIGTERM to its child.</p>
+<p>Second, <strong>zombie reaping</strong>. When a process exits, its parent must call <code>wait()</code> to collect its status. If the parent dies first, orphans are re-parented to PID 1, which is expected to reap them. An application that spawns subprocesses (headless browsers, shell scripts, CI agents) but never reaps orphans accumulates <strong>zombies</strong>, which can exhaust the PID limit.</p>
+<p>The solutions combine: use the <strong>exec form</strong> of <code>CMD</code>/<code>ENTRYPOINT</code> and <code>exec &quot;$@&quot;</code> at the end of entrypoint scripts so the real application is PID 1; implement a <strong>SIGTERM handler</strong> for graceful shutdown; and when the app spawns children, run a minimal init such as <strong>tini</strong> or <strong>dumb-init</strong> as PID 1, which forwards signals and reaps zombies. <code>docker run --init</code> or <code>init: true</code> in Compose injects tini automatically. In Kubernetes, <code>shareProcessNamespace</code> makes the pause container PID 1.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Docker starts the configured command as PID 1.</li>
+  <li><code>docker stop</code> sends SIGTERM to PID 1.</li>
+  <li>Without a handler, PID 1 ignores it; SIGKILL follows after the grace period.</li>
+  <li>With tini, tini is PID 1, forwards the signal to the app and reaps orphans.</li>
+  <li>The app shuts down and exits; the container stops promptly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM node:22-slim
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends tini &amp;&amp; rm -rf /var/lib/apt/lists/*
+COPY . /app
+ENTRYPOINT [&quot;/usr/bin/tini&quot;, &quot;--&quot;]
+CMD [&quot;node&quot;, &quot;/app/server.js&quot;]</code></pre>
+<pre><code class="language-bash">docker run --init myapp        # alternative: Docker injects tini
+time docker stop myapp         # should be well under 10 s</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shell-form <code>CMD</code>, making <code>sh</code> PID 1 and swallowing SIGTERM.</li>
+  <li>Entrypoint scripts that run the app without <code>exec</code>.</li>
+  <li>Assuming the app handles SIGTERM because it does so outside containers.</li>
+  <li>Ignoring zombie processes in containers that spawn subprocesses.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The main process of a container is PID 1 in its namespace, and Linux treats PID 1 specially. Signals like SIGTERM are ignored unless the process installs a handler, so docker stop waits for the timeout and then kills it, with no graceful shutdown. PID 1 also has to reap orphaned children, otherwise zombies pile up. I make the app itself PID 1 with exec-form CMD or exec in entrypoint scripts, make sure it handles SIGTERM, and if it spawns child processes I run tini as init, for example with docker run --init.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can shell-form CMD block SIGTERM?</strong> The shell becomes PID 1 and does not forward signals to the app.</li>
+  <li><strong>What does tini do?</strong> Forwards signals to the child and reaps zombies.</li>
+  <li><strong>How do you test it?</strong> Time <code>docker stop</code> and check the app logs a graceful shutdown.</li>
+</ul>
+</article>
+</body>
+</html>

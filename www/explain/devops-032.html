@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-032 · How do you structure Terraform for multiple environments, and how do you handle drift?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-032" data-topic="Infrastructure as Code">
+<h1>How do you structure Terraform for multiple environments, and how do you handle drift?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Build <strong>small reusable modules</strong>, compose them in <strong>thin root configurations per environment with separate state</strong> (directory per environment, or workspaces only for near-identical ones), differentiate with <strong>tfvars</strong>, <strong>pin provider and module versions</strong> with the <strong>lock file</strong>, and handle <strong>drift</strong> by running <strong>scheduled <code>terraform plan</code></strong> in CI, then <strong>reverting or codifying</strong> changes and adopting unmanaged resources with <strong>import blocks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Structure:</strong> reusable <strong>modules</strong> (VPC, EKS cluster, a standard service with its IAM and alarms) live in a modules repo or registry with <strong>semantic versions</strong>. Each environment has a <strong>root configuration</strong> that calls these modules with environment-specific values. A common layout is <code>live/dev/network</code>, <code>live/prod/network</code>, each with its <strong>own backend key</strong>, so a mistake in dev can never touch prod and plans stay fast. <strong>Workspaces</strong> reuse one configuration with several states; they suit truly identical environments or ephemeral ones, but give weaker isolation (same code version, same backend credentials, easy to apply to the wrong workspace). Environment differences come from <strong><code>.tfvars</code></strong> files or module inputs.</p>
+<p><strong>Versioning:</strong> pin providers in <code>required_providers</code> with constraints like <code>~&gt; 5.0</code> and commit <strong><code>.terraform.lock.hcl</code></strong> so everyone and CI use identical provider builds. Reference modules by tag (<code>?ref=v2.3.0</code> or registry version). Promote module upgrades dev → staging → prod.</p>
+<p><strong>Drift</strong> is any difference between real infrastructure and code, typically from console changes during an incident. Detect it with a <strong>scheduled CI job</strong> running <code>terraform plan -detailed-exitcode</code> (exit code 2 means changes) or <code>-refresh-only</code>, alerting on differences; HCP Terraform and some tools offer built-in drift detection. Then decide: <strong>revert</strong> by applying the code, or <strong>codify</strong> the change into the code if it was intentional.</p>
+<p><strong>Unmanaged resources</strong> created manually are adopted with <strong><code>import</code> blocks</strong> (Terraform 1.5+), which are reviewed in plan like any change; <code>terraform plan -generate-config-out</code> can draft their configuration. <strong>Terragrunt</strong> helps keep backends and inputs DRY across many roots, and <strong>Atlantis</strong> or similar tools give PR-driven plan and apply.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Modules: versioned, small, documented inputs/outputs.</li>
+  <li>Roots: one per environment/component with its own state.</li>
+  <li>CI: plan on PR, apply on merge, per root.</li>
+  <li>Nightly drift job: plan all roots, alert on changes.</li>
+  <li>Fix drift by apply or code change; import strays.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">modules/  vpc/  eks/  service/
+live/
+  dev/   network/  eks/  apps/
+  prod/  network/  eks/  apps/</code></pre>
+<pre><code class="language-hcl"># live/prod/network/main.tf
+module &quot;vpc&quot; {
+  source     = &quot;git::https://github.com/acme/tf-modules.git//vpc?ref=v2.3.0&quot;
+  cidr_block = var.cidr_block
+  azs        = [&quot;eu-west-1a&quot;, &quot;eu-west-1b&quot;, &quot;eu-west-1c&quot;]
+}
+
+import {
+  to = aws_s3_bucket.legacy_reports
+  id = &quot;acme-legacy-reports&quot;
+}</code></pre>
+<pre><code class="language-bash">terraform plan -detailed-exitcode -lock=false || [ $? -eq 2 ] &amp;&amp; echo &quot;DRIFT DETECTED&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One state for all environments, so a typo can destroy prod.</li>
+  <li>Unpinned providers, so a new major version breaks plans.</li>
+  <li>Copy-pasting resources per environment instead of using modules.</li>
+  <li>Ignoring drift reports until an apply unexpectedly reverts an emergency fix.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I write reusable, versioned modules, say for a VPC, an EKS cluster or a standard service, and compose them in thin root configurations, usually a directory per environment with its own state, so dev can never affect prod. Workspaces are fine for near-identical environments but isolate less. Differences come from tfvars. I pin provider and module versions and commit the lock file. For drift, a scheduled CI job runs <code>terraform plan</code> against every root and alerts on differences; then we either apply to revert the manual change or update the code if it was intentional. Existing unmanaged resources are adopted with import blocks, and tools like Terragrunt or Atlantis help with orchestration and PR-based applies.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you rename a resource without destroying it?</strong> A <code>moved</code> block (or <code>terraform state mv</code>).</li>
+  <li><strong>Directories vs workspaces?</strong> Directories give separate code, credentials and state; workspaces share code and backend.</li>
+  <li><strong>How do you stop drift happening?</strong> Restrict console write access, use break-glass roles, and alert on changes outside the pipeline.</li>
+</ul>
+</article>
+</body>
+</html>

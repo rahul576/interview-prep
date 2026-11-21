@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-071 · Data transfer and NAT gateway charges are a large part of your AWS bill. How do you reduce them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-071" data-topic="Cloud (AWS)">
+<h1>Data transfer and NAT gateway charges are a large part of your AWS bill. How do you reduce them?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Find the <strong>top talkers</strong> with <strong>Cost Explorer usage types</strong> and <strong>VPC flow logs</strong>, then remove NAT traffic with <strong>gateway endpoints</strong> (S3, DynamoDB) and <strong>interface endpoints</strong> (ECR, CloudWatch, STS), keep traffic <strong>within an AZ</strong> with topology-aware routing, serve internet egress through <strong>CloudFront</strong>, and compress and cache data.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Diagnose</strong> before fixing. In Cost Explorer group by <strong>usage type</strong>: <code>NatGateway-Bytes</code> (NAT processing, charged per GB on top of hourly fees), <code>DataTransfer-Regional-Bytes</code> (cross-AZ, charged in both directions), inter-region transfer and <code>DataTransfer-Out-Bytes</code> (internet egress). Then use <strong>VPC flow logs</strong> with Athena or CloudWatch Logs Insights, or <strong>NAT gateway CloudWatch metrics</strong>, to identify which source IPs, workloads and destinations generate the bytes.</p>
+<p><strong>NAT costs</strong> typically come from workloads in private subnets talking to AWS services through NAT: pulling container images from ECR (image layers are stored in S3), shipping logs and metrics to CloudWatch, reading and writing S3, calling STS, SQS or Secrets Manager. <strong>Gateway endpoints</strong> for S3 and DynamoDB are <strong>free</strong> and remove that traffic from NAT entirely. <strong>Interface endpoints</strong> for ECR (api and dkr), CloudWatch Logs, STS, SQS and others cost per hour per AZ plus a small per-GB fee, but are much cheaper than NAT processing at volume. Also cache images (pull-through cache, larger nodes, image streaming) and check for workloads repeatedly downloading the same data from the internet.</p>
+<p><strong>Cross-AZ costs</strong> come from chatty microservices, load balancers sending traffic across zones, Kafka brokers and consumers or database replicas in other AZs. Fixes include <strong>Kubernetes topology-aware routing</strong> or traffic distribution preferences, <strong>zone-aware clients</strong> (Kafka rack awareness with follower fetching), disabling cross-zone load balancing where safe, and co-locating chatty services, balanced against resilience.</p>
+<p><strong>Internet egress</strong> is cheaper and faster through <strong>CloudFront</strong>, which also has no charge for origin fetches from AWS origins. <strong>Compression</strong>, efficient formats and caching reduce volume across the board.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Break down the bill by data transfer usage type.</li>
+  <li>Map bytes to workloads with flow logs and NAT metrics.</li>
+  <li>Add gateway endpoints and route tables for S3 and DynamoDB.</li>
+  <li>Add interface endpoints for the heaviest AWS APIs.</li>
+  <li>Localise cross-AZ traffic and push egress through CloudFront.</li>
+  <li>Re-measure and set budgets on data transfer usage types.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ec2 create-vpc-endpoint --vpc-id vpc-123 --vpc-endpoint-type Gateway \
+  --service-name com.amazonaws.eu-west-1.s3 --route-table-ids rtb-a rtb-b rtb-c
+
+for svc in ecr.api ecr.dkr logs sts; do
+  aws ec2 create-vpc-endpoint --vpc-id vpc-123 --vpc-endpoint-type Interface \
+    --service-name com.amazonaws.eu-west-1.$svc --private-dns-enabled \
+    --subnet-ids subnet-a subnet-b subnet-c --security-group-ids sg-endpoints
+done</code></pre>
+<pre><code class="language-sql">SELECT srcaddr, dstaddr, SUM(bytes)/1e9 AS gb
+FROM vpc_flow_logs
+WHERE interface_id = 'eni-natgw123' AND day = '2026/11/20'
+GROUP BY srcaddr, dstaddr ORDER BY gb DESC LIMIT 20;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Guessing instead of measuring, then optimising the wrong flow.</li>
+  <li>Adding interface endpoints for tiny traffic where hourly fees exceed savings.</li>
+  <li>Forgetting cross-AZ traffic is billed on both sides.</li>
+  <li>Breaking resilience by pinning everything to one AZ.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I find the source: Cost Explorer by usage type separates NAT processing, cross-AZ, inter-region and internet egress, and VPC flow logs show which workloads generate it. Large NAT bills usually come from pulling images and sending logs or objects to AWS services through NAT, so I add free gateway endpoints for S3 and DynamoDB and interface endpoints for ECR, CloudWatch and STS. Cross-AZ charges come from chatty services, Kafka or replicas in other zones, which topology-aware routing and zone-aware clients reduce. Internet egress goes through CloudFront, plus compression and caching.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a busy Kubernetes cluster generate surprising cross-AZ costs?</strong> Services load-balance randomly across pods in all AZs, so most calls cross zones.</li>
+  <li><strong>Are gateway endpoints really free?</strong> Yes, no hourly or per-GB charges for S3 and DynamoDB gateway endpoints.</li>
+  <li><strong>How do you prevent regressions?</strong> Budgets and anomaly detection on data transfer usage types.</li>
+</ul>
+</article>
+</body>
+</html>

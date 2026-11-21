@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-001 · What are providers and resources in Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-001" data-topic="Infrastructure as Code">
+<h1>What are providers and resources in Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>provider</strong> is a <strong>plugin</strong> that knows how to talk to one API (AWS, Azure, Google Cloud, Kubernetes, GitHub) and translate Terraform resources into API calls; a <strong>resource</strong> block describes <strong>one infrastructure object</strong> identified by its <strong>type and local name</strong>, and other blocks reference its attributes as <strong><code>type.name.attribute</code></strong>, which also defines <strong>dependency order</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform's core knows nothing about clouds. All knowledge of specific platforms lives in <strong>providers</strong>, separate binaries that Terraform downloads during <strong><code>terraform init</code></strong> from the <strong>Terraform Registry</strong> (or the OpenTofu registry, or a private mirror). Each provider defines <strong>resource types</strong> (like <code>aws_s3_bucket</code>, <code>azurerm_resource_group</code>, <code>kubernetes_namespace</code>) and <strong>data sources</strong>, and implements create, read, update and delete calls for them.</p>
+<p>You declare which providers and versions you need in <strong><code>required_providers</code></strong>, with a source address (<code>hashicorp/aws</code>) and a version constraint (<code>~&gt; 5.0</code>). The exact chosen versions are recorded in <strong><code>.terraform.lock.hcl</code></strong>. A <strong><code>provider</code> block</strong> configures it: region, subscription, endpoint, and authentication, preferably from the environment (AWS profiles or roles, Azure CLI or managed identity, OIDC in CI) rather than hard-coded keys. You can define <strong>several configurations</strong> of the same provider with an <strong><code>alias</code></strong>, for example two AWS regions, and choose one per resource with <code>provider = aws.us</code>.</p>
+<p>A <strong>resource block</strong> has the form <code>resource &quot;&lt;TYPE&gt;&quot; &quot;&lt;NAME&gt;&quot; { ... }</code>. The <strong>type</strong> (prefix = provider name) says what kind of object; the <strong>local name</strong> is only for referencing within the module. Arguments configure it (bucket name, tags, instance size). After creation, Terraform knows <strong>attributes</strong> such as <code>id</code> and <code>arn</code>. Referencing <code>aws_s3_bucket.logs.arn</code> in another resource does two things: it passes the value, and it creates an <strong>implicit dependency</strong>, so Terraform builds its <strong>dependency graph</strong> and creates the bucket first. <code>depends_on</code> handles the rare hidden dependencies. <strong>Meta-arguments</strong> like <code>count</code>, <code>for_each</code>, <code>lifecycle</code> and <code>provider</code> work on any resource.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare providers and versions in <code>required_providers</code>.</li>
+  <li><code>terraform init</code> downloads them and writes the lock file.</li>
+  <li>Configure each provider (region, credentials, aliases).</li>
+  <li>Declare resources; references build the dependency graph.</li>
+  <li>On <code>plan</code>/<code>apply</code>, Terraform calls the provider to read and change real objects in graph order.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_providers {
+    aws = { source = &quot;hashicorp/aws&quot;, version = &quot;~&gt; 5.0&quot; }
+  }
+}
+
+provider &quot;aws&quot; { region = &quot;eu-west-1&quot; }
+provider &quot;aws&quot; {
+  alias  = &quot;us&quot;
+  region = &quot;us-east-1&quot;
+}
+
+resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {
+  bucket = &quot;acme-logs-eu&quot;
+  tags   = { team = &quot;platform&quot; }
+}
+
+resource &quot;aws_s3_bucket&quot; &quot;logs_us&quot; {
+  provider = aws.us
+  bucket   = &quot;acme-logs-us&quot;
+}
+
+resource &quot;aws_cloudtrail&quot; &quot;main&quot; {
+  name           = &quot;main&quot;
+  s3_bucket_name = aws_s3_bucket.logs.id   # reference = implicit dependency
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hard-coding access keys in the provider block.</li>
+  <li>No version constraints, so a new major provider version breaks the code.</li>
+  <li>Changing a resource's local name and accidentally destroying and recreating it (use <code>moved</code>).</li>
+  <li>Adding <code>depends_on</code> everywhere instead of relying on references.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A provider is a plugin that knows how to talk to a particular API, like aws, azurerm, google, kubernetes or github, and turns Terraform resources into API calls. I declare it in required_providers with a pinned version, <code>terraform init</code> downloads it from the registry, and the provider block sets things like the region and authentication, ideally from roles or OIDC rather than keys. A resource block describes one infrastructure object, for example <code>resource \&quot;aws_s3_bucket\&quot; \&quot;logs\&quot;</code> with arguments like the name and tags. The type plus local name identify it, and other resources reference its attributes as <code>aws_s3_bucket.logs.arn</code>, which also tells Terraform the order in which to create things.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Two AWS regions in one configuration?</strong> Two provider blocks, one with an <code>alias</code>, and <code>provider = aws.alias</code> on resources or modules.</li>
+  <li><strong>Explicit vs implicit dependencies?</strong> References create implicit ones; <code>depends_on</code> adds explicit ones for hidden relationships.</li>
+  <li><strong>Where are providers stored?</strong> Downloaded to <code>.terraform/providers</code>, optionally cached via a plugin cache or mirror.</li>
+</ul>
+</article>
+</body>
+</html>

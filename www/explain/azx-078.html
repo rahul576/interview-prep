@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-078 · What is the Istio-based service mesh add-on for AKS, and how are its upgrades handled?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-078" data-topic="Azure Kubernetes (AKS)">
+<h1>What is the Istio-based service mesh add-on for AKS, and how are its upgrades handled?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The <strong>Istio-based service mesh add-on</strong> gives AKS a <strong>Microsoft-managed, supported Istio control plane</strong> for <strong>mTLS, traffic management and telemetry</strong>; workloads join via a <strong>revision label</strong> on namespaces, <strong>minor upgrades are canary upgrades between revisions</strong> that you complete or roll back, and <strong>patch upgrades are automatic</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Running upstream Istio yourself means installing it, tuning it, and above all upgrading it safely every few months. The add-on moves that responsibility to Microsoft: AKS installs <code>istiod</code> in <code>aks-istio-system</code>, keeps it patched and supports a defined set of <strong>revisions</strong> (named like <code>asm-1-26</code>) for each Kubernetes version.</p>
+<p><strong>Capabilities:</strong> automatic <strong>mutual TLS</strong> between workloads (with <code>PeerAuthentication</code> set to STRICT), <strong>traffic management</strong> with <code>VirtualService</code> and <code>DestinationRule</code> (retries, timeouts, weighted canaries, fault injection, circuit breaking), <strong>ingress and egress gateways</strong> (managed external or internal ingress gateways can be enabled), and <strong>telemetry</strong> that integrates with Managed Prometheus and Grafana.</p>
+<p><strong>Joining the mesh:</strong> you label a namespace with <code>istio.io/rev=asm-1-26</code> (not the generic <code>istio-injection=enabled</code>), and new pods get an <strong>Envoy sidecar</strong> injected for that revision.</p>
+<p><strong>Upgrades:</strong></p>
+<ul>
+  <li><strong>Patch</strong> versions of the current revision are rolled out automatically by AKS; sidecars pick up the patched proxy on the next pod restart.</li>
+  <li><strong>Minor</strong> upgrades are <strong>canary upgrades</strong>: <code>az aks mesh upgrade start</code> deploys a second control plane revision side by side. You relabel namespaces to the new revision and <strong>restart workloads gradually</strong>, because sidecars are injected only when a pod is created. When everything is healthy you run <code>upgrade complete</code> to remove the old revision, or <code>upgrade rollback</code> to return.</li>
+</ul>
+<p>Because supported mesh revisions depend on the AKS Kubernetes version, <strong>mesh and cluster upgrades must be planned together</strong>; an old revision can block a Kubernetes upgrade or fall out of support.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>az aks mesh get-revisions</code> to see available revisions.</li>
+  <li>Enable the mesh with a chosen revision.</li>
+  <li>Label namespaces with <code>istio.io/rev</code> and restart deployments.</li>
+  <li>For a minor upgrade: start canary, relabel, roll restart, verify, complete.</li>
+  <li>Monitor proxy versions and control plane health.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks mesh enable -g rg-apps -n aks-prod --revision asm-1-25
+kubectl label namespace orders istio.io/rev=asm-1-25
+kubectl rollout restart deployment -n orders
+
+# Minor upgrade
+az aks mesh get-upgrades -g rg-apps -n aks-prod
+az aks mesh upgrade start -g rg-apps -n aks-prod --revision asm-1-26
+kubectl label namespace orders istio.io/rev=asm-1-26 --overwrite
+kubectl rollout restart deployment -n orders
+az aks mesh upgrade complete -g rg-apps -n aks-prod   # or: upgrade rollback</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>istio-injection=enabled</code> instead of the revision label.</li>
+  <li>Relabelling namespaces but forgetting to restart pods, leaving old sidecars.</li>
+  <li>Customising istiod in unsupported ways that the add-on overwrites.</li>
+  <li>Ignoring the compatibility table and blocking cluster upgrades.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The add-on installs a Microsoft-managed Istio control plane, so I get mTLS, traffic management like retries, timeouts and canary splitting, and telemetry without operating Istio myself. Namespaces join by labelling them with the specific revision. Patch upgrades are automatic. Minor upgrades are canary upgrades: a second control plane revision runs alongside, I relabel namespaces and restart workloads gradually so sidecars move to the new revision, then complete or roll back. Supported revisions depend on the Kubernetes version, so I plan mesh and cluster upgrades together.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why restart workloads?</strong> Sidecars are injected at pod creation, so only new pods get the new proxy.</li>
+  <li><strong>Does it support ambient mode?</strong> Check current add-on support; the add-on has focused on sidecar mode.</li>
+  <li><strong>How do you enforce mTLS?</strong> A mesh-wide <code>PeerAuthentication</code> with mode STRICT.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-012 · How do you configure and use the AWS CLI with multiple accounts?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-012" data-topic="Cloud (AWS)">
+<h1>How do you configure and use the AWS CLI with multiple accounts?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>The AWS CLI reads <strong><code>~/.aws/config</code></strong> and <strong><code>~/.aws/credentials</code></strong>; for multiple accounts you define <strong>named profiles</strong> and select them with <strong><code>--profile</code></strong> or <strong><code>AWS_PROFILE</code></strong>, preferably using <strong>IAM Identity Center</strong> with <strong><code>aws sso login</code></strong> for short-lived credentials, <strong>assuming roles</strong> with <code>role_arn</code> and <code>source_profile</code>, and checking with <strong><code>aws sts get-caller-identity</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>aws configure</code> writes a <strong>default profile</strong> with region, output format and, if you supply them, access keys. That works for one account, but real organisations have many accounts: dev, staging, production, security, shared services. Long-lived access keys for each one on a laptop are a security risk.</p>
+<p><strong>Named profiles</strong> solve the switching problem. Each <code>[profile name]</code> section in <code>~/.aws/config</code> describes how to get credentials for one account and role. You select a profile per command with <code>--profile prod</code> or for the whole shell with <code>export AWS_PROFILE=prod</code>. SDKs and tools such as Terraform honour the same files and variables.</p>
+<p>The recommended source of credentials is <strong>IAM Identity Center</strong> (formerly AWS SSO). <code>aws configure sso</code> creates an <strong><code>[sso-session]</code></strong> block with the start URL and region, and profiles referencing it with an <code>sso_account_id</code> and <code>sso_role_name</code>. <code>aws sso login --sso-session acme</code> opens the browser for your corporate login and MFA, then caches <strong>short-lived tokens</strong>; every profile using that session works until the token expires. No access keys are stored.</p>
+<p>Profiles can also <strong>assume roles</strong>: <code>role_arn</code> plus <code>source_profile</code> (or <code>credential_source</code> on EC2) makes the CLI call STS AssumeRole automatically, optionally requiring <code>mfa_serial</code>. This is common for cross-account access.</p>
+<p>Safety habits: always run <strong><code>aws sts get-caller-identity</code></strong> before destructive commands, show the active profile in your shell prompt, give production profiles read-only roles by default, and never put keys in scripts. <strong>Precedence</strong> matters: command-line options override environment variables (<code>AWS_ACCESS_KEY_ID</code> etc.), which override profile settings, so stale environment variables can silently target the wrong account.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>aws configure sso</code> to create the SSO session and profiles.</li>
+  <li><code>aws sso login</code> to get cached short-lived tokens.</li>
+  <li>Choose a profile with <code>--profile</code> or <code>AWS_PROFILE</code>.</li>
+  <li>The CLI exchanges the token for role credentials.</li>
+  <li>Verify with <code>aws sts get-caller-identity</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-ini"># ~/.aws/config
+[sso-session acme]
+sso_start_url = https://acme.awsapps.com/start
+sso_region = eu-west-1
+sso_registration_scopes = sso:account:access
+
+[profile dev]
+sso_session = acme
+sso_account_id = 111111111111
+sso_role_name = Developer
+region = eu-west-1
+
+[profile prod-readonly]
+sso_session = acme
+sso_account_id = 222222222222
+sso_role_name = ReadOnly
+region = eu-west-1
+
+[profile prod-deploy]
+role_arn = arn:aws:iam::222222222222:role/Deployer
+source_profile = prod-readonly</code></pre>
+<pre><code class="language-bash">aws sso login --sso-session acme
+export AWS_PROFILE=dev
+aws sts get-caller-identity
+aws s3 ls --profile prod-readonly</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long-lived admin access keys in <code>~/.aws/credentials</code>.</li>
+  <li>Leftover <code>AWS_ACCESS_KEY_ID</code> variables overriding the chosen profile.</li>
+  <li>Not checking the identity before destructive commands.</li>
+  <li>Using the default profile for production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The CLI reads ~/.aws/config and ~/.aws/credentials. With several accounts I define named profiles, one per account and role, and pick them with --profile or AWS_PROFILE. The setup I recommend is IAM Identity Center: aws configure sso creates an SSO session, aws sso login opens the browser and caches short-lived credentials, so there are no access keys on my laptop. Profiles can also assume roles in other accounts with role_arn and source_profile. Before anything destructive I run aws sts get-caller-identity to confirm which account and role I'm using.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid running commands in production by mistake?</strong> Read-only default role for prod, profile shown in the prompt, identity check, separate deploy role.</li>
+  <li><strong>What is the credential precedence?</strong> Command-line options, then environment variables, then profile files, then container or instance roles.</li>
+  <li><strong>How does CI authenticate?</strong> OIDC federation to an IAM role, not stored keys.</li>
+</ul>
+</article>
+</body>
+</html>

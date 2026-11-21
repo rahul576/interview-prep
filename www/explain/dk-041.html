@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-041 · How do you manage different Compose configurations for development, CI and production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-041" data-topic="Docker">
+<h1>How do you manage different Compose configurations for development, CI and production?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Keep shared settings in <strong>compose.yaml</strong>, development tweaks in the automatically merged <strong>compose.override.yaml</strong>, other environments in extra files passed with <strong>multiple <code>-f</code></strong>, optional services behind <strong>profiles</strong>, and values in a <strong><code>.env</code> file with variable interpolation</strong>; real production usually moves to an <strong>orchestrator</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Different environments need the same services with different details: developers want source code mounted and debuggers exposed, CI wants a clean build with test dependencies, and a small production host wants pinned images, restart policies and resource limits. Copying whole files leads to drift, so Compose supports <strong>layering</strong>.</p>
+<p>By default <code>docker compose</code> reads <code>compose.yaml</code> and, if present, <strong><code>compose.override.yaml</code></strong>, merging the override on top. This makes the override file a natural home for <strong>development-only</strong> settings: bind-mounting the source, enabling hot reload, publishing debug ports, using a <code>target: dev</code> build stage. For other environments you pass files explicitly, for example <code>docker compose -f compose.yaml -f compose.ci.yaml up</code>; later files override earlier ones (scalars replaced, lists like <code>ports</code> merged, maps merged by key). The <code>include</code> top-level key and <code>extends</code> let you reuse fragments across projects.</p>
+<p><strong>Profiles</strong> mark optional services: a mail catcher, pgAdmin or a load generator gets <code>profiles: [tools]</code> and starts only with <code>--profile tools</code> or <code>COMPOSE_PROFILES=tools</code>. <strong>Variable interpolation</strong> (<code>${IMAGE_TAG:?required}</code> or <code>${PORT:-8080}</code>) takes values from the shell environment or the project <strong><code>.env</code> file</strong>, which is different from a service's <strong><code>env_file</code></strong>, which injects variables into the container. <code>docker compose config</code> shows the final merged result and is the best debugging tool.</p>
+<p>For production, Compose is fine on a <strong>single simple host</strong>, but anything needing multi-host scheduling, rolling updates or autoscaling usually moves to <strong>Kubernetes</strong>, <strong>ECS</strong> or another managed container service.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compose loads <code>compose.yaml</code>.</li>
+  <li>It merges <code>compose.override.yaml</code> or the <code>-f</code> files in order.</li>
+  <li>It interpolates <code>${VAR}</code> from the shell and <code>.env</code>.</li>
+  <li>It filters services by active profiles.</li>
+  <li>It applies the resulting model to Docker.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># compose.yaml
+services:
+  api:
+    image: registry.local/api:${IMAGE_TAG:-dev}
+    env_file: .env.api
+  mailpit:
+    image: axllent/mailpit
+    profiles: [tools]</code></pre>
+<pre><code class="language-yaml"># compose.override.yaml (dev, merged automatically)
+services:
+  api:
+    build: { context: ., target: dev }
+    volumes: [&quot;./src:/app/src&quot;]
+    ports: [&quot;8080:8080&quot;, &quot;5005:5005&quot;]</code></pre>
+<pre><code class="language-bash">docker compose up -d                                   # base + override
+docker compose -f compose.yaml -f compose.ci.yaml up --abort-on-container-exit
+docker compose --profile tools up -d
+docker compose -f compose.yaml -f compose.prod.yaml config</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing <code>.env</code> files with real secrets.</li>
+  <li>Accidentally applying the dev override in production because it is merged automatically.</li>
+  <li>Confusing project <code>.env</code> (interpolation) with <code>env_file</code> (container environment).</li>
+  <li>Duplicating whole files per environment.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The base compose.yaml holds everything common. Compose automatically merges compose.override.yaml, which I use for development settings like bind-mounting the source, debug ports and hot reload. For CI or production I pass several files with -f, and later files override earlier ones. Profiles mark optional services like a mail catcher that start only with --profile. Image tags and ports come from a .env file through variable interpolation, and docker compose config shows the merged result. For real production most teams use Compose only on simple single hosts and move to Kubernetes or a managed container service.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>env_file vs project .env?</strong> env_file sets container variables; .env feeds interpolation in the Compose file.</li>
+  <li><strong>How do you avoid the dev override in production?</strong> Always pass explicit <code>-f</code> files there.</li>
+  <li><strong>How do you require a variable?</strong> <code>${VAR:?error message}</code>.</li>
+</ul>
+</article>
+</body>
+</html>

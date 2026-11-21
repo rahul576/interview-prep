@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-286 · How would you design an inventory management system with concurrent updates?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-286" data-topic="System Design">
+<h1>How would you design an inventory management system with concurrent updates?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Prevent overselling with an <strong>atomic conditional update</strong> (<code>... WHERE quantity &gt;= :n</code>), or <strong>optimistic locking with retry</strong> / <strong>pessimistic locks</strong> for short contended transactions, hold stock with <strong>expiring reservations</strong>, publish changes via <strong>outbox events to idempotent consumers</strong>, and handle <strong>hot SKUs</strong> with <strong>Redis counters, queues and sharding</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Inventory has many writers (orders, returns, warehouse receipts, manual adjustments) touching the same rows. The core invariant is <strong>available stock never goes below zero</strong>.</p>
+<p><strong>Atomic conditional update:</strong> the database does the check and decrement in one statement: <code>UPDATE stock SET quantity = quantity - :n WHERE sku = :sku AND warehouse = :w AND quantity &gt;= :n</code>. If zero rows are updated, the item is out of stock. It is simple, fast and correct under any concurrency, because the row lock is held only for the statement.</p>
+<p><strong>Optimistic locking:</strong> read the row with a <code>version</code>, compute, then <code>UPDATE ... WHERE version = :v</code>. JPA's <code>@Version</code> throws <code>OptimisticLockException</code> on conflict; retry a few times. Good when conflicts are rare and the logic is complex.</p>
+<p><strong>Pessimistic locking:</strong> <code>SELECT ... FOR UPDATE</code> locks the row for the transaction. Useful for short, highly contended operations that need several reads, but holding locks during remote calls kills throughput and risks deadlocks (lock rows in a consistent order).</p>
+<p><strong>Reservations:</strong> at checkout, move units from <code>available</code> to <code>reserved</code> with an <strong>expiry</strong>; payment success confirms (commits) the reservation, failure or timeout releases it via a scheduled job. Track <strong>on-hand, reserved and available</strong> separately.</p>
+<p><strong>Events and idempotency:</strong> stock changes emit events via the <strong>transactional outbox</strong> to Kafka for search, analytics and other channels. Consumers are <strong>idempotent</strong> (dedupe by event ID or order ID).</p>
+<p><strong>Hot items:</strong> a flash sale concentrates writes on one row. Use <strong>Redis atomic counters</strong> (<code>DECRBY</code> with a Lua check) as a fast gate, then persist asynchronously and reconcile; <strong>queue requests per SKU</strong> for serial processing; or split stock into several <strong>sub-rows</strong> (buckets) and pick one randomly. Shard by SKU and warehouse.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Checkout -&gt; <code>reserve(orderId, sku, n)</code> atomically; insert reservation with expiry.</li>
+  <li>Payment success -&gt; confirm: decrement on-hand, delete reservation.</li>
+  <li>Payment failure/expiry -&gt; release: return units to available.</li>
+  <li>Every change writes an outbox event in the same transaction.</li>
+  <li>Consumers update read models idempotently.</li>
+  <li>Nightly reconciliation compares counters with physical counts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class StockItem {
+    @Id String sku;
+    int available;
+    int reserved;
+    @Version long version;          // optimistic locking alternative
+}
+
+@Modifying
+@Query(value = &quot;&quot;&quot;
+    UPDATE stock_item SET available = available - :n, reserved = reserved + :n
+    WHERE sku = :sku AND available &gt;= :n&quot;&quot;&quot;, nativeQuery = true)
+int tryReserve(String sku, int n);
+
+// Redis gate for a flash sale (Lua keeps check-and-decrement atomic)
+String LUA = &quot;local q = tonumber(redis.call('GET', KEYS[1]) or '0') &quot; +
+             &quot;if q &gt;= tonumber(ARGV[1]) then return redis.call('DECRBY', KEYS[1], ARGV[1]) else return -1 end&quot;;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading stock in Java, checking, then writing (race condition).</li>
+  <li>Holding <code>SELECT FOR UPDATE</code> locks while calling the payment gateway.</li>
+  <li>Reservations without expiry, locking stock forever.</li>
+  <li>Treating Redis as the source of truth with no reconciliation.</li>
+  <li>Non-idempotent event consumers double-counting.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The key requirement is never overselling while many orders hit the same stock. The simplest robust approach is an atomic conditional update, decrementing only where quantity is at least n, and treating zero updated rows as out of stock. Alternatives are optimistic locking with a version and retry, or SELECT FOR UPDATE for short contended transactions. Checkout creates a reservation with expiry, released by a job if payment doesn't complete. Changes go out through an outbox to idempotent consumers. For flash sales I'd use Redis atomic counters or a queue per SKU, and shard by SKU and warehouse.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Reconciling Redis with the DB?</strong> Redis is a gate; the DB is the record. Periodic jobs compare and correct, and orders are confirmed only after the DB write.</li>
+  <li><strong>Multiple warehouses?</strong> Reserve per warehouse and choose by availability and distance.</li>
+  <li><strong>Backorders?</strong> Allow negative available only for flagged SKUs with explicit customer messaging.</li>
+</ul>
+</article>
+</body>
+</html>

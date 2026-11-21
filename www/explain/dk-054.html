@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-054 · An application in a container cannot reach the internet or another service. How do you troubleshoot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-054" data-topic="Docker">
+<h1>An application in a container cannot reach the internet or another service. How do you troubleshoot?</h1>
+<p class="ex-meta">Docker · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Test <strong>layer by layer from inside the container</strong> (or a <strong>netshoot</strong> debug container on the same network): <strong>which network</strong> it is on, <strong>DNS</strong> (<code>/etc/resolv.conf</code>, <code>nslookup</code>), <strong>TCP connectivity</strong> (<code>curl</code>, <code>nc</code>), whether the <strong>target listens on 0.0.0.0</strong> and the <strong>container port</strong>, then <strong>host firewall, iptables and proxy settings</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Network problems are solved fastest by testing from the <strong>same network namespace</strong> as the failing application, because what works on the host proves little. If the app image has no tools, start a throwaway <strong><code>nicolaka/netshoot</code></strong> container with <code>--network container:&lt;app&gt;</code> (sharing the app's exact namespace) or on the same Docker network.</p>
+<p>First, <strong>topology</strong>: <code>docker inspect</code> and <code>docker network inspect</code> show which networks each container is attached to. Containers on <strong>different user-defined networks cannot talk</strong> unless one is connected to both, and on the <strong>default bridge</strong> names do not resolve. Second, <strong>DNS</strong>: <code>nslookup db</code> or <code>getent hosts db</code> should return the peer's IP via Docker's embedded DNS at <code>127.0.0.11</code>; for external names check <code>/etc/resolv.conf</code> and whether corporate DNS is reachable. Third, <strong>connectivity</strong>: <code>nc -zv db 5432</code> or <code>curl -v http://api:8080/health</code> distinguishes &quot;connection refused&quot; (reachable, nothing listening) from &quot;timeout&quot; (filtered or wrong route).</p>
+<p>The most common bug is a service that <strong>listens on <code>127.0.0.1</code></strong> inside its own container, so it accepts only connections from itself; it must bind to <strong><code>0.0.0.0</code></strong>. The second is using the <strong>published host port</strong> or <code>localhost</code> instead of the <strong>service name and container port</strong>. For <strong>internet access</strong>, check the host's IP forwarding, <strong>iptables/nftables</strong> rules and firewalls (ufw, firewalld), whether the network was created with <code>--internal</code>, <strong>MTU</strong> issues on VPNs or overlays, and corporate <strong>proxy</strong> variables (<code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code>, <code>NO_PROXY</code>), which must also be set in the container or daemon.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify networks of client and target containers.</li>
+  <li>Resolve the target name from the client namespace.</li>
+  <li>Test TCP to IP and port; note refused vs timeout.</li>
+  <li>Verify the target's listen address and port (<code>ss -lntp</code>).</li>
+  <li>For egress, check host forwarding, firewall, proxy, DNS and MTU.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker network inspect appnet -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{&quot;\n&quot;}}{{end}}'
+docker run --rm -it --network container:api nicolaka/netshoot
+# inside netshoot:
+cat /etc/resolv.conf
+nslookup db
+nc -zv db 5432
+curl -sv https://api.github.com -o /dev/null
+docker exec db ss -lntp          # is it on 0.0.0.0:5432 or 127.0.0.1:5432?
+sysctl net.ipv4.ip_forward       # on the host</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing from the host and concluding the network is fine.</li>
+  <li>Using <code>localhost</code> to reach another container.</li>
+  <li>Apps bound to <code>127.0.0.1</code> inside the container.</li>
+  <li>Forgetting <code>NO_PROXY</code> for internal names when a proxy is configured.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I test step by step from inside the container, or from a netshoot debug container on the same network. docker network inspect shows whether both are on the same network, because containers on different user-defined networks can't talk. Then DNS: does nslookup of the service name or external host work, and what's in resolv.conf. Then connectivity with nc or curl to the IP and port, where refused versus timeout tells me a lot. A classic bug is a service listening on localhost inside its container, so it must bind to 0.0.0.0. For internet access I check host firewall and iptables, proxy variables, and that clients use the container port, not the published one.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't localhost in a container reach the host?</strong> The container has its own network namespace; use <code>host.docker.internal</code> or the bridge gateway.</li>
+  <li><strong>Refused vs timeout?</strong> Refused means reachable but nothing listening; timeout suggests firewall or routing.</li>
+  <li><strong>What is an internal network?</strong> A Docker network created with <code>--internal</code> that has no external connectivity.</li>
+</ul>
+</article>
+</body>
+</html>

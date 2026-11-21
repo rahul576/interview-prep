@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-083 · How do multi-architecture images work, and what pitfalls exist with ARM and x86?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-083" data-topic="Docker">
+<h1>How do multi-architecture images work, and what pitfalls exist with ARM and x86?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>A multi-architecture image is an <strong>OCI image index (manifest list)</strong> that maps one tag to <strong>per-platform images</strong> (for example <code>linux/amd64</code> and <code>linux/arm64</code>); clients pull the matching one automatically. Build them with <strong><code>docker buildx --platform</code></strong> using <strong>QEMU emulation, cross-compilation or native builders</strong>, and watch for <strong>architecture-specific binaries</strong>, missing base variants and untested ARM paths.</p>
+
+<h2>Detailed explanation</h2>
+<p>ARM servers (AWS Graviton, Azure Cobalt, Google Axion, Ampere) and Apple Silicon laptops make <strong>arm64</strong> common alongside <strong>amd64</strong>. A single tag like <code>orders:1.9</code> should work on both. The registry stores an <strong>image index</strong> listing several manifests, each with a <code>platform</code> field. When a node pulls the tag, the runtime picks the manifest matching its own OS and architecture, so users never need to choose.</p>
+<p><strong>Building:</strong> <code>docker buildx build --platform linux/amd64,linux/arm64 --push</code> builds each variant and pushes the index. There are three ways to build the foreign architecture:</p>
+<ul>
+  <li><strong>QEMU emulation</strong> (binfmt_misc): simplest, but CPU-heavy steps can be many times slower, often around 5-10x or worse.</li>
+  <li><strong>Cross-compilation</strong>: Go, Rust and others can compile for the target from the native builder using the <code>BUILDPLATFORM</code>/<code>TARGETARCH</code> build args, which is fast.</li>
+  <li><strong>Native builders</strong>: a buildx builder with an amd64 node and an arm64 node, each building its own platform.</li>
+</ul>
+<p><strong>Pitfalls:</strong> a Dockerfile that <code>curl</code>s an <code>amd64</code> binary produces an arm64 image that fails with <strong><code>exec format error</code></strong>. Some base images or third-party images have <strong>no arm64 variant</strong>. Native modules (Node, Python wheels) may need compiling and system headers. Performance and memory behaviour can differ. And tests on x86 do not prove ARM works, so <strong>test each architecture</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Make the Dockerfile architecture-aware with <code>ARG TARGETARCH</code>.</li>
+  <li>Create a buildx builder (multi-node or with QEMU).</li>
+  <li>Build all platforms and push the index.</li>
+  <li>Inspect with <code>docker buildx imagetools inspect</code>.</li>
+  <li>Run tests on each architecture (ARM CI runners).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.23 AS build
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/app ./cmd/app
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/app /app
+ENTRYPOINT [&quot;/app&quot;]</code></pre>
+<pre><code class="language-bash">docker buildx build --platform linux/amd64,linux/arm64 -t registry.example.com/app:1.9 --push .
+docker buildx imagetools inspect registry.example.com/app:1.9</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hard-coding <code>amd64</code> download URLs in <code>RUN curl</code> steps.</li>
+  <li>Building arm64 under QEMU for heavy compile steps and accepting 40-minute builds.</li>
+  <li>Assuming every base image is multi-arch.</li>
+  <li>Testing only on amd64.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A multi-arch image is an image index, or manifest list, that points to separate images for each platform, like linux/amd64 and linux/arm64, under one tag, and each node pulls the variant for its own architecture automatically. I build them with <code>docker buildx build --platform</code>, either with QEMU emulation, which is easy but slow, or better with cross-compilation using TARGETARCH, or native builders per architecture. The classic pitfall is downloading an architecture-specific binary in the Dockerfile, which gives <code>exec format error</code> on the other platform. Other pitfalls are base images without ARM variants and native dependencies, so I test on each architecture in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does <code>exec format error</code> mean?</strong> The binary is for a different CPU architecture (or a script lacks a valid shebang).</li>
+  <li><strong>Why move to ARM?</strong> Often better price-performance and energy efficiency, for example on Graviton.</li>
+  <li><strong>Can you run amd64 images on arm64?</strong> With emulation (QEMU, Rosetta on Macs), but slower and not recommended in production.</li>
+</ul>
+</article>
+</body>
+</html>

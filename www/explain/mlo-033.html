@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-033 · Latency of a prediction API increased significantly after a new model release. How do you investigate and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-033" data-topic="MLOps">
+<h1>Latency of a prediction API increased significantly after a new model release. How do you investigate and fix it?</h1>
+<p class="ex-meta">MLOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Compare old and new versions directly: <strong>profile</strong> the request path with traces (preprocessing, <strong>feature lookups</strong>, <strong>inference</strong>, postprocessing), check for a <strong>larger model or heavier architecture</strong> and <strong>resource saturation</strong>, <strong>roll back first if the SLO is breached</strong>, then optimise with <strong>quantisation, ONNX Runtime/TensorRT, distillation, batching, caching and autoscaling</strong>, and add <strong>latency as a promotion gate</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Because latency changed with a release, the release is the prime suspect, and the investigation is a diff.</p>
+<p><strong>Profile the request path.</strong> Distributed tracing (OpenTelemetry spans around preprocessing, feature store calls, model inference and postprocessing) shows where the extra time goes. Compare p50 and p99 per span between versions.</p>
+<p><strong>Model cost.</strong> The new model may simply be bigger: more trees or deeper trees in a gradient boosting model, more layers or parameters in a neural network, longer input sequences, an ensemble instead of a single model, or a heavier tokeniser. Per-request compute grows accordingly, and on CPU, thread settings (intra-op threads) may now cause contention.</p>
+<p><strong>New preprocessing or features.</strong> An added feature might require an extra feature store lookup or a synchronous call to another service; an expensive regex or text normalisation step can dominate.</p>
+<p><strong>Resource saturation.</strong> CPU throttling from container limits, memory pressure causing swapping or garbage-collection pauses, GPU utilisation or GPU memory limits, and fewer requests per replica, which autoscaling hasn't adjusted for.</p>
+<p>If the <strong>SLO is breached, roll back first</strong>, then optimise offline. Options: <strong>quantisation</strong> (INT8), conversion to <strong>ONNX Runtime</strong> or <strong>TensorRT</strong>, <strong>distillation</strong> into a smaller model, <strong>dynamic batching</strong> on GPUs, <strong>caching</strong> frequent predictions or features, parallelising feature lookups, more replicas and better autoscaling. To prevent recurrence, include <strong>latency and cost under load</strong> in model selection and the promotion gate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm the regression with metrics per version (canary split if possible).</li>
+  <li>Trace spans to find which stage grew.</li>
+  <li>Compare model size, FLOPs and input lengths.</li>
+  <li>Check CPU throttling, memory, GC and GPU metrics.</li>
+  <li>Roll back if SLO breached; optimise and load-test the fix.</li>
+  <li>Add a latency gate to promotion.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Trace comparison (p99, ms)        v11     v12
+  preprocessing                     4       5
+  feature_store lookups             9      31   &lt;- 3 new sequential lookups
+  inference                        12      19   &lt;- 800 -&gt; 2,000 trees
+  total                            28      58   (SLO 40)
+Fix: rollback; batch feature lookups into one multi-get; prune trees to 1,000;
+     export to ONNX Runtime -&gt; v12.1 p99 = 33 ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising in production while users suffer instead of rolling back.</li>
+  <li>Assuming the model is the cause without tracing feature lookups.</li>
+  <li>Benchmarking on a laptop instead of production-like hardware.</li>
+  <li>No latency criteria in model selection.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since it started with a release, I'd diff old and new. Tracing shows where time goes: preprocessing, feature lookups, inference or postprocessing. Often the new model is just bigger, or new features added lookups. I'd check CPU throttling, memory, GC and GPU utilisation too. If the SLO is breached I roll back first. Then I optimise: quantisation, ONNX Runtime or TensorRT, distillation, batching, caching and parallel feature lookups, plus autoscaling. Finally I add latency under load as an explicit gate so a slower model can't be promoted unnoticed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you include latency in model selection?</strong> Report latency and cost per candidate and set a hard p99 limit in the gate.</li>
+  <li><strong>Why does p99 grow more than p50?</strong> Queuing, GC pauses and contention hit the tail first.</li>
+  <li><strong>CPU or GPU for this model?</strong> Depends on size and batchability; benchmark both.</li>
+</ul>
+</article>
+</body>
+</html>

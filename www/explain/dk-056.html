@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-056 · What is the difference between docker buildx and the classic docker build?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-056" data-topic="Docker">
+<h1>What is the difference between docker buildx and the classic docker build?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Today <strong><code>docker build</code> already uses BuildKit</strong>; <strong><code>docker buildx</code></strong> is the extended CLI for it, adding <strong>multi-platform builds</strong> (<code>--platform</code>), <strong>builder instances with drivers</strong> (docker-container, kubernetes, remote), <strong>advanced cache import/export</strong>, extra <strong>output types</strong> and <strong><code>buildx bake</code></strong> for many images.</p>
+
+<h2>Detailed explanation</h2>
+<p>Historically, <code>docker build</code> used the <strong>legacy builder</strong>, which executed Dockerfile steps sequentially and had a simple local cache. <strong>BuildKit</strong> replaced it with a concurrent, graph-based engine that skips unused stages, supports cache and secret mounts, and is the <strong>default builder since Docker Engine 23</strong>. On current Docker, <code>docker build</code> is effectively an alias for <code>docker buildx build</code> using the default builder.</p>
+<p><strong>buildx</strong> exposes BuildKit's full feature set. The headline is <strong>multi-platform builds</strong>: <code>--platform linux/amd64,linux/arm64</code> builds both variants in one command and pushes a <strong>multi-architecture image index</strong>, so the same tag works on x86 servers and ARM (Graviton, Apple silicon). Platforms are built via <strong>QEMU emulation</strong>, <strong>cross-compilation</strong> in the Dockerfile using <code>BUILDPLATFORM</code>/<code>TARGETPLATFORM</code>, or <strong>native nodes</strong> combined into one builder.</p>
+<p>buildx manages <strong>builder instances</strong> with different <strong>drivers</strong>. The default <code>docker</code> driver uses the daemon's built-in BuildKit and the local image store. The <strong><code>docker-container</code></strong> driver runs BuildKit in its own container, enabling multi-platform output and all cache exporters. The <strong><code>kubernetes</code></strong> driver runs builder pods in a cluster, and <strong><code>remote</code></strong> connects to an existing BuildKit daemon, including services such as Docker Build Cloud.</p>
+<p>It supports <strong>cache export and import</strong> (<code>type=registry</code>, <code>local</code>, <code>gha</code>, <code>s3</code>, <code>azblob</code>), outputs other than images (<code>--output type=local,dest=out</code> to extract build artifacts, <code>type=tar</code>, <code>type=oci</code>), and attestations such as <strong>SBOM and provenance</strong>. <strong><code>docker buildx bake</code></strong> reads an <strong>HCL, JSON or Compose</strong> file defining many targets, variables and groups and builds them in parallel, which is convenient for monorepos.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>docker buildx create</code> defines a builder with a driver.</li>
+  <li>The build request goes to that builder's BuildKit.</li>
+  <li>BuildKit solves the build graph, in parallel where possible.</li>
+  <li>For each platform it builds or cross-compiles.</li>
+  <li>Results are exported as an image index, tarball or files, plus cache.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker buildx create --name multi --driver docker-container --use
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --cache-from type=registry,ref=ghcr.io/acme/api:cache \
+  --cache-to type=registry,ref=ghcr.io/acme/api:cache,mode=max \
+  -t ghcr.io/acme/api:1.4.0 --push .
+docker buildx imagetools inspect ghcr.io/acme/api:1.4.0</code></pre>
+<pre><code class="language-hcl"># docker-bake.hcl
+group &quot;default&quot; { targets = [&quot;api&quot;, &quot;worker&quot;] }
+target &quot;api&quot;    { context = &quot;./api&quot;    tags = [&quot;ghcr.io/acme/api:1.4.0&quot;] }
+target &quot;worker&quot; { context = &quot;./worker&quot; tags = [&quot;ghcr.io/acme/worker:1.4.0&quot;] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking buildx is a separate builder from BuildKit.</li>
+  <li>Expecting multi-platform images to load into the classic local image store with <code>--load</code>.</li>
+  <li>Emulating heavy compiles with QEMU instead of cross-compiling or using native runners.</li>
+  <li>Forgetting <code>--push</code> or an output type, so the result stays only in the builder cache.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The classic docker build used the legacy builder; today docker build uses BuildKit by default, and buildx is the extended CLI to it. buildx adds multi-platform builds, like --platform linux/amd64,linux/arm64 producing a multi-architecture image in one command, and lets me create builder instances with drivers such as docker-container, Kubernetes or remote builders. It supports advanced cache import and export to registries or CI caches, other output types, and attestations. docker buildx bake builds many images in parallel from one HCL, JSON or Compose file.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you build ARM images on x86 CI?</strong> QEMU via <code>docker/setup-qemu-action</code>, cross-compilation, or native ARM runners.</li>
+  <li><strong>What are BUILDPLATFORM and TARGETPLATFORM?</strong> Build args for cross-compiling from the build host to the target.</li>
+  <li><strong>Why use the docker-container driver?</strong> It supports multi-platform builds and every cache exporter.</li>
+</ul>
+</article>
+</body>
+</html>

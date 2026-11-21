@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-054 · What problem does RDS Proxy solve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-054" data-topic="Cloud (AWS)">
+<h1>What problem does RDS Proxy solve?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>RDS Proxy</strong> is a managed <strong>connection pooler</strong> in front of RDS and Aurora that multiplexes many short-lived client connections, especially from <strong>Lambda</strong>, over a warm pool of database connections, speeds up <strong>failover</strong>, and adds <strong>IAM authentication</strong> with credentials from <strong>Secrets Manager</strong>; session state can cause <strong>pinning</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every database connection consumes memory and CPU on the server, and engines have a <strong>max_connections</strong> limit. Creating connections is also expensive (TLS handshake, authentication, backend process creation in PostgreSQL). Serverless and highly scaled applications break this model: a traffic spike can start hundreds of <strong>Lambda execution environments</strong>, each opening its own connection, quickly exhausting the limit and adding connection churn that slows the database.</p>
+<p><strong>RDS Proxy</strong> sits between the application and the database. Clients connect to the proxy endpoint, and the proxy keeps a <strong>pool</strong> of database connections, sized by a percentage of max_connections. It <strong>multiplexes</strong> clients by lending a database connection per transaction and returning it afterwards, so thousands of client connections can share a few dozen backend connections. Excess requests queue briefly instead of failing.</p>
+<p>On <strong>failover</strong>, the proxy keeps client connections open and reconnects to the new writer, bypassing DNS propagation, which AWS says can cut failover time by up to two thirds for Aurora and RDS. It supports <strong>IAM database authentication</strong> from clients, so Lambda uses its role instead of passwords, and fetches database credentials from <strong>Secrets Manager</strong>. It runs in your VPC across multiple AZs and can provide read-only endpoints for replicas.</p>
+<p><strong>Pinning</strong> happens when a session uses state that cannot be shared, such as temporary tables, session variables via SET, prepared statements in some cases, advisory locks or user-defined variables; that client then holds a dedicated connection, reducing efficiency. Monitor DatabaseConnectionsCurrentlySessionPinned and avoid such features or use initialization queries.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Lambda opens a connection to the proxy endpoint with an IAM auth token.</li>
+  <li>Proxy authenticates the client and gets DB credentials from Secrets Manager.</li>
+  <li>For each transaction, it borrows a pooled database connection.</li>
+  <li>After commit, the connection returns to the pool.</li>
+  <li>On failover, the proxy redirects to the new primary while clients stay connected.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws rds create-db-proxy --db-proxy-name orders-proxy --engine-family POSTGRESQL \
+  --auth '[{&quot;AuthScheme&quot;:&quot;SECRETS&quot;,&quot;SecretArn&quot;:&quot;arn:aws:secretsmanager:eu-west-1:111122223333:secret:orders-db&quot;,&quot;IAMAuth&quot;:&quot;REQUIRED&quot;}]' \
+  --role-arn arn:aws:iam::111122223333:role/rds-proxy-secrets \
+  --vpc-subnet-ids subnet-a subnet-b --require-tls
+aws rds register-db-proxy-targets --db-proxy-name orders-proxy \
+  --db-cluster-identifiers orders</code></pre>
+<pre><code class="language-python">token = rds.generate_db_auth_token(DBHostname=PROXY, Port=5432, DBUsername=&quot;app&quot;)
+conn = psycopg.connect(host=PROXY, user=&quot;app&quot;, password=token, sslmode=&quot;require&quot;)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on in-function pooling and assuming Lambda scale will not exhaust connections.</li>
+  <li>Heavy use of session state, causing pinning and no real pooling.</li>
+  <li>Forgetting the proxy needs a role that can read the secret.</li>
+  <li>Expecting the proxy to fix slow queries rather than connection pressure.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Databases have limited connections and each costs memory. Lambda and other highly scaled apps open many short-lived connections, which can exhaust max_connections and overload the database with churn. RDS Proxy is a managed pooler: it keeps a warm pool of database connections and multiplexes many client connections over them per transaction. It also shortens failover by keeping client connections open while it reconnects to the new primary, and supports IAM auth with credentials in Secrets Manager. Session features like temporary tables cause pinning, which reduces pooling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is pooling inside Lambda not enough?</strong> Each execution environment has its own pool; concurrency multiplies connections.</li>
+  <li><strong>Does RDS Proxy cost extra?</strong> Yes, billed per vCPU or ACU of the target database.</li>
+  <li><strong>What alternatives exist?</strong> PgBouncer on EC2 or ECS, or the Aurora Data API for HTTP-based access.</li>
+</ul>
+</article>
+</body>
+</html>

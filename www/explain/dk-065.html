@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-065 · How does graceful shutdown work for containers, and how do you get it right?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-065" data-topic="Docker">
+<h1>How does graceful shutdown work for containers, and how do you get it right?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>On stop, the runtime sends <strong>SIGTERM</strong> (or <strong>STOPSIGNAL</strong>), waits a <strong>grace period</strong>, then sends <strong>SIGKILL</strong>; getting it right requires the app to <strong>receive the signal (PID 1 / init)</strong>, <strong>handle it by draining work</strong>, a <strong>grace period longer than the drain</strong>, and <strong>removing traffic first</strong> via load balancer deregistration or readiness.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>docker stop</code> sends the container's <strong>stop signal</strong>, <strong>SIGTERM</strong> by default or whatever the Dockerfile's <strong><code>STOPSIGNAL</code></strong> specifies (nginx uses SIGQUIT for graceful shutdown). It then waits the <strong>timeout</strong>, 10 seconds by default (<code>--time</code>, <code>--stop-timeout</code>, or <strong><code>stop_grace_period</code></strong> in Compose), and finally sends <strong>SIGKILL</strong>, which cannot be caught. Kubernetes does the same with <strong><code>terminationGracePeriodSeconds</code></strong> (30 seconds default), after running any <strong>preStop hook</strong>.</p>
+<p>Graceful shutdown needs <strong>four pieces</strong> to line up. First, <strong>signal delivery</strong>: the application must be PID 1 through the <strong>exec form</strong> or <code>exec &quot;$@&quot;</code>, or run under an init like <strong>tini</strong> that forwards signals; a shell PID 1 swallows SIGTERM. Second, <strong>handling</strong>: on SIGTERM the app stops accepting new connections, finishes <strong>in-flight requests</strong>, stops consuming from queues, <strong>commits offsets</strong> or acknowledges messages, flushes buffers and closes database connections. Frameworks help: <code>server.shutdown=graceful</code> with <code>spring.lifecycle.timeout-per-shutdown-phase</code> in Spring Boot, <code>server.close()</code> in Node, <code>Shutdown(ctx)</code> in Go's <code>http.Server</code>, Gunicorn's graceful worker timeout.</p>
+<p>Third, the <strong>grace period must exceed the drain time</strong>; otherwise SIGKILL arrives mid-request, producing errors, duplicated or lost messages. Fourth, <strong>traffic removal</strong>: the load balancer must stop sending new requests <strong>before</strong> the app closes. In Kubernetes, endpoint removal and SIGTERM happen in parallel, so a short <strong>preStop sleep</strong> (5-10 s), or failing readiness, gives kube-proxy, ingress controllers and cloud load balancers time to update. With cloud load balancers, the <strong>deregistration delay</strong> or connection draining setting must fit inside the grace period.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Orchestrator marks the instance terminating and starts traffic removal.</li>
+  <li>Optional preStop hook delays shutdown.</li>
+  <li>Stop signal reaches the application.</li>
+  <li>App stops accepting work and drains in-flight work.</li>
+  <li>App exits 0; if the grace period expires, SIGKILL is sent.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Kubernetes
+spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+    - name: orders
+      image: ghcr.io/acme/orders@sha256:&lt;digest&gt;
+      lifecycle:
+        preStop:
+          sleep: { seconds: 10 }      # or exec: [&quot;sleep&quot;,&quot;10&quot;] on older clusters
+      readinessProbe:
+        httpGet: { path: /actuator/health/readiness, port: 8080 }</code></pre>
+<pre><code class="language-properties"># Spring Boot
+server.shutdown=graceful
+spring.lifecycle.timeout-per-shutdown-phase=25s</code></pre>
+<pre><code class="language-yaml"># Compose
+services:
+  worker:
+    stop_grace_period: 60s
+    stop_signal: SIGTERM</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shell-form CMD, so the app never sees SIGTERM.</li>
+  <li>Drain timeouts longer than the grace period.</li>
+  <li>Closing the server immediately while the load balancer still routes traffic.</li>
+  <li>Queue consumers that ack messages before finishing work, or never commit offsets on shutdown.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When a container stops, Docker sends SIGTERM or the STOPSIGNAL, waits the grace period, 10 seconds by default or stop_grace_period in Compose, then sends SIGKILL. To get it right, the app must actually receive the signal, so it must be PID 1 via exec form or run under an init that forwards signals. It must handle SIGTERM by stopping new work, finishing in-flight requests or messages, committing offsets and closing connections, for example server.shutdown=graceful in Spring Boot. The grace period must be longer than that drain time, and traffic must be removed first through load balancer deregistration, a preStop delay or failing readiness.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if the grace period is too short?</strong> SIGKILL cuts in-flight requests, causing errors and possibly duplicate or lost work.</li>
+  <li><strong>Why a preStop sleep in Kubernetes?</strong> Endpoint removal is asynchronous, so the delay lets proxies stop routing first.</li>
+  <li><strong>How do you test it?</strong> Load test while rolling a deployment and watch for errors.</li>
+</ul>
+</article>
+</body>
+</html>

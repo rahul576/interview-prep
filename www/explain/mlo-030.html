@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-030 · A backfill changes historical feature values. How do you handle it without breaking reproducibility?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-030" data-topic="MLOps">
+<h1>A backfill changes historical feature values. How do you handle it without breaking reproducibility?</h1>
+<p class="ex-meta">MLOps · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Never overwrite historical feature values in place</strong>: write a <strong>new version or snapshot</strong> (Delta Lake or Iceberg versions), store features <strong>effective-dated</strong> with both <strong>event time and the time they became known</strong>, keep <strong>old training runs pointing at their snapshots</strong>, and record the backfill in an <strong>audit trail with an impact assessment</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Backfills happen for good reasons: a bug fix in feature logic, a new definition, late data. But if the backfill <strong>overwrites history</strong>, two things break. First, <strong>reproducibility</strong>: a model trained in March can no longer be retrained or explained with the data it actually saw. Second, <strong>correctness</strong>: corrected values were not available at prediction time, so training on them creates <strong>leakage</strong>—the model learns from cleaner data than it will ever get in production.</p>
+<p>So backfills write a <strong>new version</strong>. Table formats like <strong>Delta Lake, Apache Iceberg and Apache Hudi</strong> support versioned tables and <strong>time travel</strong>, so old versions remain queryable by version number or timestamp. Alternatively, write to a new table or path with a version suffix.</p>
+<p>Features are best stored <strong>bitemporally</strong>: the <strong>event or effective time</strong> the value applies to, and the <strong>knowledge time</strong> (ingestion or as-of time) when it became known. Point-in-time correct training sets then use values &quot;as known at prediction time&quot;, while analysis can use corrected values. Feature stores with point-in-time joins (Feast, Databricks, SageMaker, Vertex) rely on these timestamps.</p>
+<p><strong>Existing training runs</strong> record which snapshot they used, so they remain reproducible. The backfill itself is documented: why, what changed, which version, which <strong>downstream models</strong> consume the feature (from lineage), and an <strong>impact assessment</strong>—compare model performance on old versus corrected features and decide whether to retrain.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write backfilled values to a new table version or path; keep the old one.</li>
+  <li>Record effective time and knowledge time for each value.</li>
+  <li>Update the feature registry with the new version and change notes.</li>
+  <li>Use lineage to notify owners of affected models.</li>
+  <li>Evaluate models on corrected data; retrain if beneficial.</li>
+  <li>Expire old versions only after dependent models are retired.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Delta Lake: backfill writes a new version; old training runs used version 41
+SELECT * FROM features.customer_spend VERSION AS OF 41;     -- reproduce March model
+SELECT * FROM features.customer_spend VERSION AS OF 42;     -- corrected values
+
+-- point-in-time join using knowledge time
+SELECT l.app_id, f.spend_30d
+FROM labels l JOIN features.customer_spend_history f
+  ON f.customer_id = l.customer_id
+ AND f.known_at &lt;= l.prediction_ts
+QUALIFY ROW_NUMBER() OVER (PARTITION BY l.app_id ORDER BY f.known_at DESC) = 1;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>INSERT OVERWRITE</code> on historical partitions without versioning.</li>
+  <li>Training on corrected values that weren't known at prediction time.</li>
+  <li>Vacuuming old table versions still used by production models.</li>
+  <li>Backfilling silently without telling model owners.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I never overwrite history in place. The backfill writes a new table version, using Delta or Iceberg time travel, while the old version stays available. Features are effective-dated with both the time a value applies to and when it became known, so training sets use values as known at prediction time and avoid leakage from corrections. Existing models keep pointing to their snapshot, so they stay reproducible. The backfill is logged with reason and scope, lineage tells us which models use the feature, and we assess impact and retrain if it helps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you notify model owners?</strong> Feature registry change events and lineage-driven notifications to subscribed owners.</li>
+  <li><strong>How long keep old versions?</strong> At least as long as any model trained on them is in production or under audit.</li>
+  <li><strong>Is backfilled data ever right for training?</strong> Yes, if production now computes features the corrected way at serving time.</li>
+</ul>
+</article>
+</body>
+</html>

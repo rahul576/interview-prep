@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-075 · An application gets AccessDenied when reading from S3. How do you find the cause?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-075" data-topic="Cloud (AWS)">
+<h1>An application gets AccessDenied when reading from S3. How do you find the cause?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Confirm the <strong>actual calling principal</strong> (sts get-caller-identity, CloudTrail), then check each layer: the <strong>identity policy</strong> for the exact action and <strong>object ARN</strong>, the <strong>bucket policy</strong> for explicit denies and conditions, the <strong>KMS key policy</strong> for encrypted objects, and <strong>SCPs, RCPs, permission boundaries, VPC endpoint policies and object ownership</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Who is calling?</strong> Applications often run with a different role than you think: the node role instead of the pod's IRSA role, a missing environment variable falling back to another profile, or a stale credential. Run <code>aws sts get-caller-identity</code> from the same context, or find the <strong>CloudTrail</strong> event (data events must be enabled for S3 object-level calls) to see the principal and error.</p>
+<p><strong>Identity policy</strong>: it must allow the exact action on the correct resource. <code>s3:GetObject</code> applies to <code>arn:aws:s3:::bucket/*</code> (objects), while <code>s3:ListBucket</code> applies to <code>arn:aws:s3:::bucket</code> (the bucket). Without ListBucket, a missing object returns <strong>403 instead of 404</strong>, which misleads debugging. Check prefixes and conditions too.</p>
+<p><strong>Bucket policy</strong>: look for <strong>explicit denies</strong> with conditions such as <code>aws:SecureTransport</code>, <code>aws:SourceVpce</code> (only via a specific endpoint), <code>aws:PrincipalOrgID</code> or IP ranges. A deny for requests not through a VPC endpoint blocks developers' laptops. <strong>Block Public Access</strong> does not affect authenticated access, but <strong>access points</strong> may have their own policies.</p>
+<p><strong>KMS</strong>: for SSE-KMS objects, the caller needs <code>kms:Decrypt</code> allowed by the <strong>key policy</strong> (and the identity policy if the key policy delegates to IAM). Cross-account it must be a customer managed key, because AWS managed keys cannot be shared. This is one of the most common hidden causes.</p>
+<p><strong>Other layers</strong>: <strong>SCPs and RCPs</strong> from Organizations, <strong>permission boundaries</strong>, <strong>session policies</strong>, <strong>VPC endpoint policies</strong> on the S3 gateway endpoint, and for cross-account uploads <strong>Object Ownership</strong>: with ACLs enabled, objects uploaded by another account may be owned by the uploader; setting <strong>BucketOwnerEnforced</strong> solves this. Modern AccessDenied messages often say which policy type denied the request and whether the deny was explicit, and the <strong>IAM policy simulator</strong> helps confirm.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce the call and capture the full error message.</li>
+  <li>Confirm the principal via get-caller-identity or CloudTrail.</li>
+  <li>Check identity policy action and resource ARN.</li>
+  <li>Check bucket policy, access point and endpoint policy.</li>
+  <li>Check KMS key policy if encrypted.</li>
+  <li>Check SCPs, boundaries and object ownership; test with the simulator.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws sts get-caller-identity
+aws s3api head-object --bucket reports-prod --key 2026/11/summary.csv
+# An error occurred (403) ... User: arn:aws:sts::111122223333:assumed-role/app-node/i-0abc
+#   is not authorized to perform: kms:Decrypt on resource: arn:aws:kms:... because
+#   no resource-based policy allows the kms:Decrypt action
+aws s3api get-object-attributes --bucket reports-prod --key 2026/11/summary.csv \
+  --object-attributes ObjectParts 2&gt;/dev/null
+aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::111122223333:role/app \
+  --action-names s3:GetObject --resource-arns arn:aws:s3:::reports-prod/2026/11/summary.csv</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting s3:GetObject on the bucket ARN instead of bucket/*.</li>
+  <li>Forgetting kms:Decrypt for SSE-KMS objects.</li>
+  <li>Debugging the role you expect rather than the one actually used.</li>
+  <li>Missing VPC endpoint conditions in the bucket policy.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I confirm which identity is really calling, with get-caller-identity or the CloudTrail event, because apps often run with a different role than expected. Then I go layer by layer. The identity policy must allow s3:GetObject on the object ARN, bucket/*, not just the bucket. The bucket policy may have an explicit deny or conditions like a required VPC endpoint, TLS or org ID. If objects use a customer managed KMS key, the role needs kms:Decrypt in the key policy, a very common cause. Finally SCPs, boundaries, endpoint policies and object ownership for cross-account uploads. The error message often names the policy type.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does s3:ListBucket need a different ARN than GetObject?</strong> ListBucket acts on the bucket resource; GetObject acts on object resources.</li>
+  <li><strong>Why do I get 403 for an object that does not exist?</strong> Without ListBucket permission, S3 hides existence by returning 403.</li>
+  <li><strong>How fix cross-account object ownership?</strong> Set Object Ownership to BucketOwnerEnforced, disabling ACLs.</li>
+</ul>
+</article>
+</body>
+</html>

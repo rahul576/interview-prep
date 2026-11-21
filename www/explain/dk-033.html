@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-033 · How do you limit CPU and memory for a container, and what happens when the limit is exceeded?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-033" data-topic="Docker">
+<h1>How do you limit CPU and memory for a container, and what happens when the limit is exceeded?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Docker uses <strong>cgroups</strong>: <strong><code>--memory</code></strong> sets a hard memory limit and exceeding it gets the process <strong>OOM-killed (exit 137, OOMKilled=true)</strong>; <strong><code>--cpus</code></strong> caps CPU time and <strong><code>--cpu-shares</code></strong> sets relative weight, and exceeding a CPU limit causes <strong>throttling, not killing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without limits, a container can consume all of a host's memory and CPU and starve its neighbours. Docker passes limits to the kernel's <strong>control groups</strong>, which enforce them.</p>
+<p><strong>Memory</strong> is incompressible: it cannot be slowed down, only taken away. <code>--memory 512m</code> sets a hard limit for all processes in the container. When the cgroup tries to exceed it and the kernel cannot reclaim page cache, the <strong>OOM killer</strong> terminates a process in the cgroup, usually the main one, so the container exits with <strong>code 137</strong> (128 + SIGKILL) and <code>docker inspect</code> shows <code>OOMKilled: true</code>. <code>--memory-swap</code> sets memory plus swap; setting it equal to <code>--memory</code> disables swap for the container. <code>--memory-reservation</code> is a soft limit used under host pressure.</p>
+<p><strong>CPU</strong> is compressible. <code>--cpus 1.5</code> uses the CFS quota to allow 1.5 cores worth of CPU time per scheduling period (100 ms by default). If the container wants more, it is <strong>throttled</strong>: its threads wait until the next period. Nothing crashes, but latency rises, which is a classic hidden cause of slow p99s, particularly for multi-threaded runtimes. <code>--cpu-shares</code> (or CPU weight on cgroup v2) is only a <strong>relative priority</strong> applied when CPUs are contended, and <code>--cpuset-cpus</code> pins to specific cores. <code>--pids-limit</code> protects against fork bombs.</p>
+<p>Applications must also know their limits. Modern JVMs, Node.js and Go read cgroup limits, but heaps and thread pools still need sensible configuration.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Docker creates a cgroup for the container with the requested limits.</li>
+  <li>The kernel accounts memory and CPU per cgroup.</li>
+  <li>Memory over limit: reclaim, then OOM kill inside the cgroup.</li>
+  <li>CPU over quota: threads are throttled until the next period.</li>
+  <li>Counters (<code>memory.events</code>, <code>cpu.stat</code>) expose OOMs and throttling.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name api --memory 512m --memory-swap 512m --cpus 1.5 --pids-limit 200 registry.local/api:1.4
+docker stats --no-stream api
+docker inspect -f '{{.State.ExitCode}} {{.State.OOMKilled}}' api</code></pre>
+<pre><code class="language-yaml"># compose.yaml
+services:
+  api:
+    deploy:
+      resources:
+        limits: { cpus: &quot;1.5&quot;, memory: 512M }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting a JVM heap equal to the memory limit, leaving no room for native memory.</li>
+  <li>Expecting CPU limits to kill runaway processes.</li>
+  <li>No limits at all on shared hosts.</li>
+  <li>Very tight CPU limits on latency-sensitive services, causing throttling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Docker uses cgroups. --memory 512m is a hard limit; if processes exceed it, the kernel OOM killer terminates the process, the container exits with 137 and docker inspect shows OOMKilled true. --memory-swap controls swap. For CPU, --cpus 1.5 allows one and a half cores of CPU time and --cpu-shares is a relative weight under contention. Exceeding CPU doesn't kill anything; the process is throttled and gets slower, which shows up as latency. Limits protect neighbours on the same host, and the app, like the JVM, must be configured to fit inside them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How should a JVM respect the limit?</strong> Use <code>-XX:MaxRAMPercentage</code> around 70-75% to leave native headroom.</li>
+  <li><strong>How do you detect CPU throttling?</strong> <code>nr_throttled</code> and <code>throttled_usec</code> in <code>cpu.stat</code> or cAdvisor metrics.</li>
+  <li><strong>What does --memory-reservation do?</strong> A soft limit enforced when the host is under memory pressure.</li>
+</ul>
+</article>
+</body>
+</html>

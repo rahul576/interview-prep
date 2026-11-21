@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-031 · Offline and online features for the same metric disagree, and production performance lags offline results. What do you check?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-031" data-topic="MLOps">
+<h1>Offline and online features for the same metric disagree, and production performance lags offline results. What do you check?</h1>
+<p class="ex-meta">MLOps · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>This is <strong>training-serving skew</strong>: check <strong>definitional differences</strong> (windows, time zones, null handling, rounding), <strong>data timing</strong> such as <strong>late-arriving events</strong> seen offline but not online, then <strong>measure</strong> it by <strong>logging online feature vectors at inference time</strong> and comparing with offline values for the <strong>same entity and timestamp</strong>, looking at the <strong>distribution of differences</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When offline metrics look great but production lags, and the &quot;same&quot; feature differs between paths, the model is effectively being served different inputs from those it learned on.</p>
+<p><strong>Definitional differences</strong> are the most common cause, especially when the offline feature is SQL in the warehouse and the online one is Java or Flink code written by another team: a 30-day window inclusive versus exclusive of today, UTC versus local time and daylight saving, how nulls become zeros or defaults, rounding, deduplication of events, currency conversion rates, or case and whitespace handling of categories.</p>
+<p><strong>Data timing</strong>: offline pipelines run later and see <strong>late-arriving events</strong> (delayed mobile uploads, batch files from partners), so offline features are more complete than what the online system knew at prediction time. Training on the complete version is a form of leakage. Stale online features due to pipeline lag have the same effect.</p>
+<p>The strongest approach is <strong>measurement, not inspection</strong>. Log the exact feature vector used online at inference, recompute the offline feature for the same entity and <strong>as-of timestamp</strong>, and compute per-feature differences: mismatch rate, mean absolute difference and distribution. That quickly shows which features diverge, how often and by how much, and whether retraining or evaluating with the online values explains the performance gap.</p>
+<p>The long-term fix is a <strong>single feature definition</strong> executed for both paths (a feature store or shared transformation code), <strong>training on logged online features</strong> where possible, and <strong>continuous skew monitoring</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable logging of online feature vectors with entity ID and timestamp.</li>
+  <li>Recompute offline features as of those timestamps.</li>
+  <li>Join and compute per-feature mismatch statistics.</li>
+  <li>Rank features by mismatch times importance.</li>
+  <li>Inspect code for the top offenders: windows, time zones, nulls, late data.</li>
+  <li>Fix definitions, unify code and add a skew monitor.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">skew = online_log.merge(offline_recomputed, on=[&quot;customer_id&quot;, &quot;ts&quot;], suffixes=(&quot;_on&quot;, &quot;_off&quot;))
+for f in FEATURES:
+    diff = (skew[f + &quot;_on&quot;] - skew[f + &quot;_off&quot;]).abs()
+    print(f, &quot;mismatch_rate=%.1f%%&quot; % (100 * (diff &gt; 1e-6).mean()), &quot;p95_diff=%.2f&quot; % diff.quantile(0.95))
+# txn_count_30d   mismatch_rate=38.0%  p95_diff=4.00   &lt;- window boundary / late events
+# avg_amount_7d   mismatch_rate=0.4%   p95_diff=0.00</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Comparing a few examples by eye instead of measuring distributions.</li>
+  <li>Recomputing &quot;online&quot; values offline instead of logging what was actually served.</li>
+  <li>Two teams implementing the same feature in two languages.</li>
+  <li>Ignoring late-arriving data in training sets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That's classic training-serving skew. I'd look for definitional differences: window boundaries, time zones, null and default handling, rounding and deduplication. Then timing: offline pipelines see late events that the online system didn't have. But mostly I'd measure: log the exact online feature vectors at inference time, compute offline values for the same entity and timestamp, and look at the distribution of differences per feature. That shows which features diverge and whether it explains the gap. Long term, one feature definition for both paths and continuous skew monitoring.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you prevent this class of bug for new features?</strong> Shared definitions via a feature store, skew tests in CI and monitoring.</li>
+  <li><strong>Should you train on logged online features?</strong> Often yes, because they reflect what serving actually sees.</li>
+  <li><strong>What if online is more correct than offline?</strong> Then fix the offline definition and retrain.</li>
+</ul>
+</article>
+</body>
+</html>

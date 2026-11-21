@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-169 · Design a distributed job scheduler that runs millions of scheduled tasks reliably.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-169" data-topic="System Design">
+<h1>Design a distributed job scheduler that runs millions of scheduled tasks reliably.</h1>
+<p class="ex-meta">System Design · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>A distributed job scheduler keeps jobs in a <strong>persistent store indexed by next run time</strong>, <strong>partitions</strong> due-job scanning across nodes, <strong>claims jobs with leases</strong> to avoid double execution, hands work to <strong>workers via a queue</strong>, requires <strong>idempotent jobs with retries</strong>, and <strong>monitors lag and missed runs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Millions of scheduled tasks (reminders, billing runs, report generation) cannot live in in-memory timers on one server: a restart loses them and one node cannot keep up. The design separates <strong>scheduling</strong> (deciding what is due) from <strong>execution</strong> (doing it).</p>
+<p><strong>Job store:</strong> a table such as <code>jobs(id, tenant, schedule, next_run_at, status, lease_owner, lease_until, attempts)</code> with an index on <code>next_run_at</code>. For recurring jobs, the schedule is a cron expression plus a <strong>time zone</strong>; after each run the next fire time is computed.</p>
+<p><strong>Partitioning:</strong> scheduler nodes do not all scan the whole table. Jobs are hashed into N <strong>shards</strong>; each node owns a set of shards (assigned via a coordinator, Kubernetes leader election, or Kafka consumer group rebalancing). This scales horizontally and avoids contention.</p>
+<p><strong>Claiming with leases:</strong> a node atomically claims due jobs: <code>UPDATE ... SET lease_owner = me, lease_until = now() + 60s WHERE id = ? AND (lease_until IS NULL OR lease_until &lt; now())</code>, or uses <code>SELECT ... FOR UPDATE SKIP LOCKED</code> in PostgreSQL. If the node dies, the lease expires and another node picks the job up. Use <strong>fencing tokens</strong> (an incrementing lease version) so a slow former owner cannot overwrite results.</p>
+<p><strong>Execution:</strong> claimed jobs are pushed to a <strong>queue</strong> (Kafka, SQS) consumed by worker pools, which allows independent scaling and priorities. Delivery is <strong>at-least-once</strong>, so jobs must be <strong>idempotent</strong>, with retries, exponential backoff and a dead-letter queue. Existing tools include <strong>Quartz</strong> (clustered JDBC mode), <strong>db-scheduler</strong>, <strong>JobRunr</strong>, and workflow engines like Temporal.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client registers a job with schedule and time zone; <code>next_run_at</code> computed and stored.</li>
+  <li>Each scheduler node polls its shards every second for <code>next_run_at &lt;= now()</code>.</li>
+  <li>It claims jobs with a lease and publishes them to the execution queue.</li>
+  <li>Worker executes idempotently, reports success or failure.</li>
+  <li>Scheduler computes the next run, clears the lease, or schedules a retry.</li>
+  <li>Metrics: scheduling lag, missed runs, failures; alerts on thresholds.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- PostgreSQL: claim up to 500 due jobs for shard 7 without blocking other nodes
+WITH due AS (
+  SELECT id FROM jobs
+  WHERE shard = 7 AND next_run_at &lt;= now() AND status = 'SCHEDULED'
+  ORDER BY next_run_at
+  LIMIT 500
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE jobs j
+SET status = 'CLAIMED', lease_owner = 'node-3', lease_until = now() + interval '60 seconds',
+    lease_version = lease_version + 1
+FROM due WHERE j.id = due.id
+RETURNING j.id, j.payload, j.lease_version;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>In-memory <code>@Scheduled</code> timers on every instance, causing duplicates.</li>
+  <li>Locks without expiry, so a crashed node blocks jobs forever.</li>
+  <li>Assuming exactly-once execution.</li>
+  <li>Storing cron times in UTC and breaking local-time schedules at DST changes.</li>
+  <li>No visibility into missed or late runs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Jobs live in a persistent store with the next run time indexed. Scheduler nodes each own shards of the job space, so they don't compete, and claim due jobs with a lease: an atomic conditional update or SKIP LOCKED with an expiry, so if a node dies another takes over. Claimed jobs go onto a queue for worker pools. Delivery is at-least-once, so jobs are idempotent with retries, backoff and a DLQ. I'd monitor scheduling lag and missed runs, and use fencing tokens so a stale node can't commit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Cron in different time zones?</strong> Store the zone ID with the schedule and compute next run with <code>ZonedDateTime</code>; define DST gap/overlap behaviour.</li>
+  <li><strong>What about missed runs after an outage?</strong> A per-job misfire policy: run once, run all, or skip.</li>
+  <li><strong>Quartz or a custom system?</strong> Quartz/db-scheduler for moderate scale; custom or Temporal for millions with complex workflows.</li>
+</ul>
+</article>
+</body>
+</html>

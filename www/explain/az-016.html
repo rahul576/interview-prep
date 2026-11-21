@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-016 · How do you connect Azure Pipelines to Azure securely, without long-lived secrets?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-016" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you connect Azure Pipelines to Azure securely, without long-lived secrets?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use an <strong>Azure Resource Manager service connection</strong> with <strong>workload identity federation (OIDC)</strong>: each pipeline run gets a short-lived token that <strong>Entra ID trusts</strong>, so there is <strong>no client secret</strong> to store or rotate, combined with <strong>least-privilege scope</strong> and <strong>pipeline permissions, approvals and checks</strong> on the connection.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pipelines need an identity in Entra ID to deploy to Azure. Traditionally this was a <strong>service principal with a client secret</strong>, stored in the service connection. Secrets expire (causing failed deployments), must be rotated, and if leaked can be used from anywhere until revoked.</p>
+<p><strong>Workload identity federation</strong> removes the secret. You create an <strong>app registration</strong> or a <strong>user-assigned managed identity</strong> and add a <strong>federated identity credential</strong> that trusts tokens from Azure DevOps: the <strong>issuer</strong> is your Azure DevOps organisation's token endpoint, and the <strong>subject</strong> identifies the specific service connection (organisation, project and connection name). At run time, Azure DevOps issues a short-lived <strong>OIDC token</strong> for the job; the Azure task exchanges it with Entra ID for an access token. Nothing long-lived exists to leak. Azure DevOps can create this automatically, and existing secret-based connections can be converted.</p>
+<p><strong>Least privilege</strong> still matters. Scope the identity's role assignment to the specific <strong>resource group or subscription</strong>, with a role like Contributor or narrower custom roles, rather than Owner on the subscription. Use separate connections and identities per environment, so a dev pipeline cannot touch production.</p>
+<p>Protect the <strong>service connection</strong> itself: disable &quot;grant access to all pipelines&quot; and authorise specific pipelines; add <strong>approvals and checks</strong> (manual approval, required template, branch control so only <code>main</code> can deploy to production); restrict who can manage the connection. Audit usage through the connection's history.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a service connection of type Azure Resource Manager with workload identity federation.</li>
+  <li>Entra ID gets an identity with a federated credential for that connection.</li>
+  <li>Grant the identity a least-privilege role on the target scope.</li>
+  <li>Configure pipeline permissions, branch control and approvals on the connection.</li>
+  <li>At run time the job receives an OIDC token and exchanges it for an Azure token.</li>
+  <li>Tasks such as <code>AzureCLI@2</code> deploy using that token.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- task: AzureCLI@2
+  inputs:
+    azureSubscription: sc-orders-prod-wif    # federated service connection
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      az deployment group create -g rg-orders-prod \
+        --template-file infra/main.bicep --parameters env=prod</code></pre>
+<p>Federated credential subject format (for reference):</p>
+<pre><code class="language-text">issuer:  https://vstoken.dev.azure.com/&lt;organization-id&gt;
+subject: sc://&lt;organization&gt;/&lt;project&gt;/&lt;service-connection-name&gt;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping secret-based service principals with long expiry.</li>
+  <li>One subscription-wide Owner connection shared by every pipeline.</li>
+  <li>Allowing all pipelines to use the production connection.</li>
+  <li>No branch control, so feature branches can deploy to production.</li>
+  <li>Same identity for dev and prod.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pipelines authenticate to Azure through an Azure Resource Manager service connection. Instead of a service principal with a client secret that must be rotated, I use workload identity federation: Azure DevOps issues an OIDC token for each run, and Entra ID trusts it through a federated credential tied to that specific service connection, so there is no secret to leak or rotate. The identity is scoped to the specific subscription or resource group with least-privilege roles, and separate per environment. On the connection I restrict pipeline permissions so only approved pipelines can use it, and add approvals, branch control and checks for production.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How is this similar to GitHub Actions OIDC with AWS?</strong> Same pattern: the CI platform issues an OIDC token that the cloud trusts via a federated role or credential.</li>
+  <li><strong>How do you migrate existing secret-based connections?</strong> Convert them in Azure DevOps to workload identity federation and remove the old secret.</li>
+  <li><strong>What about self-hosted agents in Azure?</strong> They can also use a managed identity, but federation per connection gives better separation.</li>
+</ul>
+</article>
+</body>
+</html>

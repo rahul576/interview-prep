@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-140 · How do S3 storage classes, lifecycle policies and security work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-140" data-topic="Cloud (AWS)">
+<h1>How do S3 storage classes, lifecycle policies and security work?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Storage classes</strong> trade retrieval cost and latency for cheaper storage (Standard → IA → Glacier tiers, or <strong>Intelligent-Tiering</strong>), <strong>lifecycle rules</strong> transition and expire objects automatically, and security relies on <strong>Block Public Access</strong>, <strong>least-privilege IAM and bucket policies</strong>, <strong>encryption (SSE-S3/SSE-KMS)</strong>, <strong>versioning, Object Lock</strong> and <strong>presigned URLs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Storage classes:</strong> <em>S3 Standard</em> for hot data; <em>Standard-IA</em> and <em>One Zone-IA</em> for data read rarely but needed quickly (cheaper storage, per-GB retrieval fee, 30-day minimum); <em>Glacier Instant Retrieval</em> for archives read a few times a year with millisecond access; <em>Glacier Flexible Retrieval</em> (minutes to hours) and <em>Glacier Deep Archive</em> (hours, cheapest) for long-term retention; <em>Intelligent-Tiering</em> moves objects between tiers automatically based on access, ideal when patterns are unknown. <em>Express One Zone</em> serves very low-latency workloads in a single AZ.</p>
+<p><strong>Lifecycle policies</strong> act on prefixes or tags: transition logs to IA after 30 days and Glacier after 90, expire them after a year, delete <strong>noncurrent versions</strong> after N days and abort incomplete multipart uploads. Without these, versioned buckets quietly grow forever.</p>
+<p><strong>Security:</strong> new buckets have <strong>Block Public Access</strong> enabled and ACLs disabled by default, and I keep it that way at account level; public content goes through <strong>CloudFront with Origin Access Control</strong>. Access is granted via <strong>IAM roles</strong> and <strong>bucket policies</strong> (for example, deny non-TLS requests, allow only a specific VPC endpoint or organisation). All objects are encrypted at rest by default with SSE-S3; I use <strong>SSE-KMS</strong> with a customer managed key when I need key-level access control and audit. <strong>Presigned URLs</strong> give time-limited upload or download access without making anything public.</p>
+<p><strong>Data protection:</strong> <strong>versioning</strong> keeps previous versions so deletes become recoverable delete markers; <strong>Object Lock</strong> in compliance mode makes backups immutable for a retention period, which defends against ransomware and malicious admins. <strong>Replication</strong> copies data to another region or account.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose the class at upload or let Intelligent-Tiering decide.</li>
+  <li>Lifecycle rules run daily, transitioning or expiring matching objects.</li>
+  <li>Each request is evaluated against IAM, bucket policy, BPA, KMS key policy and endpoint policies; an explicit deny anywhere wins.</li>
+  <li>CloudTrail data events and server access logs record who did what.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Rules&quot;: [{
+    &quot;ID&quot;: &quot;logs-tiering&quot;,
+    &quot;Filter&quot;: { &quot;Prefix&quot;: &quot;logs/&quot; },
+    &quot;Status&quot;: &quot;Enabled&quot;,
+    &quot;Transitions&quot;: [
+      { &quot;Days&quot;: 30, &quot;StorageClass&quot;: &quot;STANDARD_IA&quot; },
+      { &quot;Days&quot;: 90, &quot;StorageClass&quot;: &quot;GLACIER&quot; }
+    ],
+    &quot;Expiration&quot;: { &quot;Days&quot;: 365 },
+    &quot;NoncurrentVersionExpiration&quot;: { &quot;NoncurrentDays&quot;: 30 },
+    &quot;AbortIncompleteMultipartUpload&quot;: { &quot;DaysAfterInitiation&quot;: 7 }
+  }]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Moving millions of tiny objects to IA or Glacier, where per-object fees and minimum sizes cost more than they save.</li>
+  <li>Versioning without noncurrent-version expiry.</li>
+  <li>Disabling Block Public Access to serve a website instead of using CloudFront.</li>
+  <li>Using SSE-KMS at very high request rates without S3 Bucket Keys, inflating KMS costs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Storage classes trade storage price against access cost: Standard for hot data, Standard-IA for infrequent access, Glacier Instant, Flexible and Deep Archive for archives, and Intelligent-Tiering when I don't know the pattern. Lifecycle rules move objects down the tiers and expire old objects, noncurrent versions and incomplete uploads. For security I keep Block Public Access on, grant access through roles and bucket policies with least privilege, use KMS encryption where key control matters, and hand out presigned URLs for temporary access. Versioning protects against accidental deletes, and Object Lock gives immutable backups against ransomware.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Who deleted an object?</strong> CloudTrail data events (DeleteObject) or server access logs; versioning lets you restore it.</li>
+  <li><strong>Serve a private bucket publicly?</strong> CloudFront with Origin Access Control.</li>
+  <li><strong>Governance vs compliance mode?</strong> Governance can be bypassed with special permission; compliance cannot, even by root.</li>
+</ul>
+</article>
+</body>
+</html>

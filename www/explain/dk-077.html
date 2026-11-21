@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-077 · How would you migrate a legacy application running on VMs to containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-077" data-topic="Docker">
+<h1>How would you migrate a legacy application running on VMs to containers?</h1>
+<p class="ex-meta">Docker · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Migrate a VM application to containers by first <strong>assessing</strong> its dependencies, state and OS assumptions, then making it <strong>container-friendly</strong> (config from env/files, <strong>logs to stdout</strong>, <strong>state moved out</strong> to databases, Redis or object storage, health endpoints), <strong>containerising incrementally</strong> starting with stateless parts, testing for <strong>parity</strong>, and <strong>cutting over gradually</strong> with a <strong>rollback plan</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A &quot;lift and shift&quot; that copies a VM into a giant container usually brings all the VM's problems plus new ones. Legacy apps often assume things containers break: a <strong>fixed hostname or IP</strong>, files written to the install directory, <strong>sticky sessions</strong> stored in memory, local <strong>cron jobs</strong>, log files rotated by logrotate, configuration edited by hand on the server, or licences tied to a MAC address.</p>
+<p><strong>Assessment</strong> comes first: inventory runtime versions and OS packages, inbound and outbound connections, where state lives (local disk, sessions, caches), how it is configured, how it logs, and its startup and shutdown behaviour. This also identifies <strong>poor candidates</strong>: apps needing kernel modules, special hardware, GUI desktops, or vendor software that isn't supported in containers.</p>
+<p><strong>Refactoring for containers</strong> follows the twelve-factor ideas: configuration from <strong>environment variables or mounted files</strong>, <strong>logs to stdout</strong>, sessions moved to Redis or a database, uploads to object storage, cron jobs turned into scheduled jobs (Kubernetes CronJobs), graceful handling of <strong>SIGTERM</strong>, and <strong>health/readiness endpoints</strong>.</p>
+<p><strong>Delivery:</strong> build the image in CI, run the same functional and <strong>performance tests</strong> against the container as against the VM, and watch memory behaviour under limits (old JVMs especially). Deploy <strong>side by side</strong>, shift traffic gradually through the load balancer (or by feature), compare error rates and latency, and keep the VMs ready for <strong>rollback</strong> until confidence is high.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assess: dependencies, state, config, logging, network, licensing.</li>
+  <li>Externalise config, logs and state; add health checks and SIGTERM handling.</li>
+  <li>Write a multi-stage Dockerfile; pin versions; run as non-root.</li>
+  <li>Containerise stateless components first; leave the database on its current platform initially.</li>
+  <li>Parity and load test; then canary traffic (5% → 25% → 100%).</li>
+  <li>Decommission VMs after a stable period; document runbooks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:8-jre
+RUN useradd -r -u 10001 app
+COPY --chown=app build/legacy-app.war /opt/app/app.war
+ENV JAVA_OPTS=&quot;-XX:MaxRAMPercentage=75&quot;
+USER app
+EXPOSE 8080
+HEALTHCHECK CMD curl -fs http://localhost:8080/health || exit 1
+ENTRYPOINT [&quot;sh&quot;, &quot;-c&quot;, &quot;exec java $JAVA_OPTS -jar /opt/app/app.war&quot;]</code></pre>
+<p>Sessions moved to Redis and uploads to S3 made this container stateless, so it could run three replicas behind the existing load balancer alongside the old VMs during cut-over.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating the container like a VM: SSH, systemd and multiple services inside.</li>
+  <li>Leaving sessions or uploads on local disk, then scaling out.</li>
+  <li>Skipping performance tests; container memory limits change JVM behaviour.</li>
+  <li>Big-bang cut-over without a rollback path.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd start with an assessment: runtime and OS dependencies, where the app keeps state, how it's configured and logs, and assumptions like fixed hostnames or cron jobs. Then I'd make it container-friendly: config from environment or mounted files, logs to stdout, sessions and uploads moved to Redis, a database or object storage, health endpoints and proper SIGTERM handling. I'd containerise incrementally, starting with stateless components and leaving the database where it is at first. The same functional and load tests run against the container as against the VM. Then I'd run both side by side, shift traffic gradually, compare metrics, and keep the VMs as a rollback until we're confident.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Poor candidates for containers?</strong> Apps needing special kernel modules or hardware, GUI desktops, or vendor-unsupported licensed software.</li>
+  <li><strong>Why do old JVMs misbehave?</strong> Pre-8u191 JVMs ignore cgroup limits and size heaps from host memory.</li>
+  <li><strong>Should the database move too?</strong> Usually later, or to a managed service; it carries the most risk.</li>
+</ul>
+</article>
+</body>
+</html>

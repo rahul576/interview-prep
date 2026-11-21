@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-036 · How do you choose between namespaces, virtual clusters and separate clusters for multi-tenancy?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-036" data-topic="Kubernetes">
+<h1>How do you choose between namespaces, virtual clusters and separate clusters for multi-tenancy?</h1>
+<p class="ex-meta">Kubernetes · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Namespaces</strong> give <strong>soft multi-tenancy</strong> (RBAC, quotas, NetworkPolicies, Pod Security) on a <strong>shared control plane and nodes</strong>; <strong>virtual clusters</strong> such as <strong>vcluster</strong> give each tenant <strong>its own API server</strong> inside a host namespace; <strong>separate clusters</strong> give <strong>hard isolation</strong> for untrusted tenants, compliance or different lifecycles, at the highest <strong>cost and operational overhead</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Multi-tenancy is a spectrum of isolation versus cost.</p>
+<p><strong>Namespaces per tenant:</strong> each team gets one or more namespaces with RoleBindings, ResourceQuota and LimitRange, default-deny NetworkPolicies, Pod Security Admission at restricted, and policy engines for extra rules. Benefits: cheap, efficient bin-packing, one platform to upgrade. Limits:</p>
+<ul>
+  <li><strong>Cluster-scoped resources</strong> are shared: tenants can't install their own <strong>CRDs</strong>, webhooks, ClusterRoles or operators without affecting others, and CRD version conflicts appear.</li>
+  <li><strong>Shared kernel and nodes:</strong> a container escape or kernel exploit crosses tenants. Mitigate with dedicated node pools (taints, node affinity), sandboxed runtimes (gVisor, Kata) and strict Pod Security.</li>
+</ul>
+<p>Suitable for trusted internal teams.</p>
+<p><strong>Virtual clusters (vcluster and similar):</strong> each tenant gets a lightweight control plane (API server, backing store, syncer) running as pods in a host namespace. Tenants see a full cluster: they can install CRDs, operators, Helm charts with cluster roles, and choose some versions, while the syncer maps their pods onto the host's nodes. Good for dev, test and CI environments. Isolation of the data plane is still the host's, so node-level controls still matter.</p>
+<p><strong>Separate clusters:</strong> strongest isolation of control plane, network and nodes; required for untrusted or external customers, strict compliance scopes such as PCI-DSS, different regions or data residency, or very different upgrade cadences. Cost: control plane fees, idle capacity, duplicated add-ons, and fleet operations. That requires <strong>fleet tooling</strong>: cluster API or Terraform modules, GitOps (Argo CD ApplicationSets, Flux) for consistent add-ons, central policy and observability.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify tenants: trust level, compliance, need for cluster-scoped resources.</li>
+  <li>Trusted, standard workloads → namespaces with guard rails.</li>
+  <li>Need own CRDs or admin, moderate trust → virtual clusters.</li>
+  <li>Untrusted or regulated → dedicated clusters.</li>
+  <li>Standardise provisioning and add-ons via GitOps across all models.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vcluster create team-a --namespace vc-team-a
+vcluster connect team-a --namespace vc-team-a
+kubectl get crds        # tenant's own API, separate from the host</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Namespaces</th><th>Virtual clusters</th><th>Separate clusters</th></tr></thead>
+<tbody>
+<tr><td>Isolation</td><td>Soft</td><td>Control plane per tenant</td><td>Hard</td></tr>
+<tr><td>Own CRDs/operators</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Cost</td><td>Lowest</td><td>Low-medium</td><td>Highest</td></tr>
+<tr><td>Ops effort</td><td>Low</td><td>Medium</td><td>High (fleet)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using namespaces to isolate hostile tenants.</li>
+  <li>Letting every team install cluster-wide CRDs in a shared cluster.</li>
+  <li>One cluster per team without fleet automation.</li>
+  <li>Assuming a virtual cluster isolates nodes and kernels.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Namespaces give soft multi-tenancy: RBAC, quotas, LimitRanges, NetworkPolicies and Pod Security per team, sharing the control plane and nodes. That's cheap and fine for trusted internal teams, but tenants can't own cluster-scoped resources like CRDs, and a kernel escape crosses boundaries unless I add dedicated node pools or sandboxed runtimes. Virtual clusters like vcluster give each tenant its own API server inside a host namespace, so they can install CRDs and operators while sharing nodes. Separate clusters give hard isolation for untrusted tenants, PCI-style compliance or different upgrade cycles, but cost more and need fleet tooling and GitOps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Signals to move a team to its own cluster?</strong> Compliance scope, untrusted code, conflicting CRDs, noisy-neighbour incidents, special hardware or upgrade needs.</li>
+  <li><strong>How do you stop noisy tenants overloading the API?</strong> API Priority and Fairness plus quotas.</li>
+  <li><strong>What is a sandboxed runtime?</strong> gVisor or Kata via RuntimeClass, adding a kernel boundary.</li>
+</ul>
+</article>
+</body>
+</html>

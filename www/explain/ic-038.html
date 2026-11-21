@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-038 · How do you share values between separate Terraform configurations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-038" data-topic="Infrastructure as Code">
+<h1>How do you share values between separate Terraform configurations?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Share values between stacks with <strong>terraform_remote_state</strong> (simple but needs <strong>read access to the whole state</strong> and couples tightly), <strong>data sources</strong> that look up resources by <strong>tags/names</strong>, or a <strong>parameter store</strong> (SSM, Consul) acting as an explicit <strong>contract</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Large estates are split into several states: network, shared platform, data stores, applications. Consumers need values from producers, such as VPC and subnet IDs, a cluster name or a DNS zone ID.</p>
+<p><strong>terraform_remote_state</strong> reads the <strong>outputs</strong> of another state from its backend. It's simple and exact. The drawbacks: the consumer needs <strong>read access to the entire state file</strong>, which may contain secrets, not just the outputs; it couples the consumer to the producer's <strong>backend location</strong> and <strong>output names</strong>; and refactoring the producer can break consumers silently.</p>
+<p><strong>Data sources</strong> query the cloud directly: <code>data &quot;aws_vpc&quot; &quot;shared&quot; { tags = { network = &quot;shared&quot; } }</code>, <code>aws_subnets</code> filtered by tags, <code>aws_route53_zone</code> by name. The consumer depends on <strong>real infrastructure and tag conventions</strong>, not on another team's Terraform layout, and needs only read API permissions. They require consistent tagging and fail if the lookup finds zero or several matches.</p>
+<p><strong>Parameter stores</strong> make the contract explicit: the producer writes values to <strong>SSM Parameter Store</strong> paths like <code>/platform/network/prod/vpc_id</code>, <strong>Consul KV</strong>, Azure App Configuration or similar, and consumers read them with data sources. Access can be granted per path, values are usable by non-Terraform tools as well, and the paths form a documented API between teams.</p>
+<p>The general principle is <strong>loose coupling with narrow permissions</strong>: consumers should depend on a small, stable interface, not on the producer's internals. In HCP Terraform, workspaces can share outputs with selected workspaces, and the <code>tfe_outputs</code> data source reads outputs without full state access. Terragrunt <code>dependency</code> blocks are another option in Terragrunt setups.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer creates resources and exposes values (outputs, tags or parameters).</li>
+  <li>Consumer reads them during plan via a data source.</li>
+  <li>Values feed consumer resources like any other attribute.</li>
+  <li>Changes in the producer propagate on the consumer's next plan.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Option 1: remote state
+data &quot;terraform_remote_state&quot; &quot;network&quot; {
+  backend = &quot;s3&quot;
+  config = {
+    bucket = &quot;acme-tfstate-prod&quot;
+    key    = &quot;network/terraform.tfstate&quot;
+    region = &quot;eu-west-1&quot;
+  }
+}
+# subnet_ids = data.terraform_remote_state.network.outputs.private_subnet_ids
+
+# Option 2: tag lookup
+data &quot;aws_vpc&quot; &quot;shared&quot; {
+  tags = { network = &quot;shared&quot;, env = &quot;prod&quot; }
+}
+
+# Option 3: parameter store contract (producer)
+resource &quot;aws_ssm_parameter&quot; &quot;vpc_id&quot; {
+  name  = &quot;/platform/network/prod/vpc_id&quot;
+  type  = &quot;String&quot;
+  value = aws_vpc.main.id
+}
+# consumer
+data &quot;aws_ssm_parameter&quot; &quot;vpc_id&quot; {
+  name = &quot;/platform/network/prod/vpc_id&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting every app pipeline read access to the network state with its secrets.</li>
+  <li>Tag lookups without unique tags, matching several resources.</li>
+  <li>Renaming outputs without coordinating with consumers.</li>
+  <li>Circular dependencies between stacks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When the estate is split into network, platform and app states, they need values from each other, like subnet IDs. terraform_remote_state reads another state's outputs directly; it's simple, but the consumer needs read access to that whole state, which can contain secrets, and it couples them tightly. Alternatives are data sources looking resources up by tags or names, like the VPC tagged network=shared, or having the producer publish values to SSM Parameter Store or Consul as an explicit contract. Those keep stacks loosely coupled and permissions narrow.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to consumers if the producer renames an output?</strong> Their next plan fails with an unsupported attribute error; treat outputs as an API and deprecate gradually.</li>
+  <li><strong>How do you avoid exposing secrets via remote state?</strong> Use parameter stores or tfe_outputs, and keep secrets out of shared outputs.</li>
+  <li><strong>Does reading another state create ordering?</strong> Only at plan time; there's no automatic cross-stack apply ordering.</li>
+</ul>
+</article>
+</body>
+</html>

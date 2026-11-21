@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-048 · How do you upgrade a Terraform provider major version safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-048" data-topic="Infrastructure as Code">
+<h1>How do you upgrade a Terraform provider major version safely?</h1>
+<p class="ex-meta">Infrastructure as Code · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Read the <strong>upgrade guide and changelog</strong>, fix <strong>deprecation warnings</strong> on the old version, upgrade in a <strong>branch</strong> with <code>init -upgrade</code>, run <strong>plan in every environment</strong> looking for unexpected changes and replacements, ensure <strong>state backups</strong>, and roll out <strong>dev first, prod last</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A major provider release, such as AWS 5 to 6 or AzureRM 3 to 4, can remove resources, rename or retype arguments, change defaults and alter how attributes are stored. Upgrading carelessly can produce plans that modify or replace hundreds of resources.</p>
+<p><strong>1. Research.</strong> Read the provider's <strong>upgrade guide</strong> (major providers publish one per major version) and the changelog for breaking changes affecting resources you use. Check open issues for the new version; waiting for the first patch release is often wise.</p>
+<p><strong>2. Clean up on the old version.</strong> Many breaking changes are announced as <strong>deprecation warnings</strong> first. Fix them while still on the old version, where both old and new syntax usually work, so the upgrade diff is small.</p>
+<p><strong>3. Upgrade in a branch.</strong> Raise the constraint in <code>required_providers</code> (e.g. <code>~&gt; 5.80</code> to <code>~&gt; 6.0</code>), run <code>terraform init -upgrade</code>, and review the <strong>lock file</strong> diff. Upgrade shared modules first if they constrain the version.</p>
+<p><strong>4. Plan everywhere.</strong> Run <code>terraform plan</code> for <strong>every environment and state</strong> using the code. The goal is an empty plan or only explained changes. Watch especially for <strong>replacements</strong> caused by changed defaults or new force-new behaviour, and for mass changes caused by attribute format differences.</p>
+<p><strong>5. Protect state.</strong> Providers may <strong>upgrade the state schema</strong> on the first apply, after which older provider versions cannot read it. Ensure the backend is <strong>versioned</strong> or take a backup (<code>terraform state pull &gt; backup.tfstate</code>) before applying.</p>
+<p><strong>6. Roll out gradually.</strong> Merge and apply to <strong>dev</strong>, observe, then staging, then <strong>production</strong>. Keep the change separate from feature work so any diff is attributable to the upgrade.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read upgrade guide; list affected resources.</li>
+  <li>Resolve deprecations on the current version.</li>
+  <li>Bump constraint, init -upgrade, update lock file.</li>
+  <li>Plan each environment; fix code until plans are clean.</li>
+  <li>Backup state, apply dev → staging → prod.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_providers {
+    aws = {
+      source  = &quot;hashicorp/aws&quot;
+      version = &quot;~&gt; 6.0&quot;   # was ~&gt; 5.80
+    }
+  }
+}</code></pre>
+<pre><code class="language-bash">git switch -c chore/aws-provider-6
+terraform init -upgrade
+git diff .terraform.lock.hcl
+for env in dev staging prod; do
+  terraform -chdir=envs/$env init -upgrade -input=false
+  terraform -chdir=envs/$env plan -input=false -out=$env.tfplan | tee $env.plan.txt
+done
+terraform -chdir=envs/prod state pull &gt; prod-backup-$(date +%F).tfstate</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Bundling a provider major upgrade with feature changes.</li>
+  <li>Planning only in dev and assuming prod is the same.</li>
+  <li>Skipping several majors at once.</li>
+  <li>No state backup before the schema upgrade.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with the provider's upgrade guide and changelog to find breaking changes like removed resources, renamed arguments or changed defaults. While still on the old version I fix deprecation warnings, since most breaking changes are announced that way first. Then in a branch I bump the constraint, run init -upgrade, and run plan for every environment that uses the code, checking for unexpected changes, especially replacements caused by changed defaults. Providers may upgrade the state schema on apply, so I make sure state is versioned or backed up. Then I roll out dev first and production last, with the lock file change reviewed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a provider upgrade suddenly show changes to hundreds of resources?</strong> Changed defaults, renamed or restructured attributes, or different normalisation; resolve them in code or with explicit values before applying.</li>
+  <li><strong>How do you roll back?</strong> Revert the constraint and lock file; restore the state version if the schema was upgraded.</li>
+  <li><strong>How do you keep up regularly?</strong> Renovate/Dependabot PRs for minor versions so majors are smaller steps.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-012 · What is the difference between ARG and ENV in a Dockerfile?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-012" data-topic="Docker">
+<h1>What is the difference between ARG and ENV in a Dockerfile?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>ARG</code></strong> is a <strong>build-time variable</strong> set with <strong><code>--build-arg</code></strong>, available only during the build (and not persisted in the container environment); <strong><code>ENV</code></strong> sets an <strong>environment variable stored in the image</strong> and present at <strong>runtime</strong>, overridable with <strong><code>-e</code></strong>; <strong>neither should carry secrets</strong>, because both are visible in image metadata or history.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>ARG NAME[=default]</code></strong> declares a variable for the build. You pass values with <code>docker build --build-arg APP_VERSION=1.4.2 .</code>. Typical uses: choosing a base image tag, a tool version to download, a build profile, or labels like commit SHA. Key rules:</p>
+<ul>
+  <li>An ARG <strong>before <code>FROM</code></strong> can be used in <code>FROM</code> lines (<code>ARG NODE_VERSION=22</code> then <code>FROM node:${NODE_VERSION}-slim</code>). To use it again after <code>FROM</code>, re-declare <code>ARG NODE_VERSION</code> without a value inside that stage.</li>
+  <li>ARGs are <strong>scoped per stage</strong> in multi-stage builds.</li>
+  <li>They are not set in the running container's environment.</li>
+  <li>Predefined ARGs exist, such as <code>HTTP_PROXY</code> and, with BuildKit, <code>TARGETPLATFORM</code>, <code>TARGETARCH</code> and <code>BUILDPLATFORM</code>.</li>
+</ul>
+<p><strong><code>ENV NAME=value</code></strong> sets a variable that applies to later build steps <strong>and</strong> is saved in the image config, so every container from that image has it. Use it for runtime defaults: <code>PORT</code>, <code>JAVA_OPTS</code>, <code>PATH</code> additions, <code>TZ</code>, <code>NODE_ENV=production</code>. Runtime overrides with <code>-e</code> or <code>--env-file</code>, and Kubernetes <code>env</code>, take precedence.</p>
+<p><strong>Combining them</strong> when a build-time value is also needed at runtime:</p>
+<pre><code class="language-text">ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}</code></pre>
+<p><strong>Secrets:</strong> values used in <code>RUN</code> with ARGs can be seen in <code>docker history</code> and the build's provenance metadata; ENV values are visible to anyone who can <code>docker inspect</code> the image. Use <strong>BuildKit secret mounts</strong> (<code>RUN --mount=type=secret,id=npm_token …</code> with <code>docker build --secret id=npm_token,env=NPM_TOKEN</code>) at build time and runtime secrets (files, Vault, Kubernetes Secrets) at run time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Builder resolves ARG values from <code>--build-arg</code> or defaults.</li>
+  <li>ARG and ENV are substituted into later instructions.</li>
+  <li>ENV is written into the image config; ARG is not.</li>
+  <li>At <code>docker run</code>, image ENV + runtime <code>-e</code> form the container environment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">ARG NODE_VERSION=22
+FROM node:${NODE_VERSION}-bookworm-slim
+ARG APP_VERSION=dev
+ARG GIT_SHA
+LABEL org.opencontainers.image.revision=${GIT_SHA}
+ENV NODE_ENV=production \
+    APP_VERSION=${APP_VERSION}
+WORKDIR /app
+COPY package*.json ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci
+COPY . .
+CMD [&quot;node&quot;, &quot;server.js&quot;]</code></pre>
+<pre><code class="language-bash">docker build --build-arg APP_VERSION=1.4.2 --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --secret id=npmrc,src=$HOME/.npmrc -t web:1.4.2 .
+docker run --rm -e NODE_ENV=staging web:1.4.2 node -e 'console.log(process.env.NODE_ENV, process.env.APP_VERSION)'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Passing tokens with <code>--build-arg</code> and assuming they disappear.</li>
+  <li>Expecting an ARG to be available in the running container.</li>
+  <li>Declaring ARG before <code>FROM</code> and wondering why it is empty inside the stage.</li>
+  <li>Baking environment-specific values like database hosts into ENV.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ARG is a build-time variable: it exists only while the image is built and I set it with docker build --build-arg, for example to pick a base image tag or a version to download. ENV sets an environment variable that's stored in the image and present in every container, so the app can read it at runtime, and it can be overridden with -e. When I need a build value at runtime I do ARG APP_VERSION then ENV APP_VERSION=$APP_VERSION. Neither is for secrets: build args show up in image history and metadata, so I use BuildKit secret mounts during builds and mounted secrets at runtime.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can an ARG be used before FROM?</strong> Yes, for the FROM line; re-declare it inside the stage to use it later.</li>
+  <li><strong>Does ENV carry into later stages?</strong> Only into stages built <code>FROM</code> that stage.</li>
+  <li><strong>Precedence of ENV vs <code>-e</code>?</strong> Runtime <code>-e</code> wins.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-016 · What are S3 presigned URLs, and when would you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-016" data-topic="Cloud (AWS)">
+<h1>What are S3 presigned URLs, and when would you use them?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>presigned URL</strong> is a <strong>temporary, signed link</strong> to <strong>one S3 object and one operation</strong> (GET or PUT), created with the signer's credentials and <strong>expiring</strong> after a set time; it keeps the <strong>bucket private</strong> while letting browsers and apps <strong>upload or download directly</strong>, offloading traffic from your servers.</p>
+
+<h2>Detailed explanation</h2>
+<p>Typical problem: users must upload profile photos or 2 GB videos, or download private invoices. Streaming those bytes through your API servers wastes bandwidth and CPU and hits request size and timeout limits. Making the bucket public is unacceptable.</p>
+<p>A presigned URL solves both. Your backend, after authenticating the user and deciding what they may do, calls the SDK to <strong>sign</strong> a request for a specific <strong>bucket, key and HTTP method</strong> with an <strong>expiry</strong>. The URL includes the signature (Signature Version 4) and query parameters such as <code>X-Amz-Expires</code>. Anyone holding it can perform exactly that operation until it expires; no AWS credentials are needed on the client. S3 validates the signature and also checks that the <strong>signer still has permission</strong>, so if the signing role loses access, the URL stops working. URLs signed with temporary credentials also stop when those credentials expire, which can be shorter than the requested expiry; the maximum is 7 days with SigV4.</p>
+<p>For uploads, a <strong>presigned PUT</strong> or a <strong>presigned POST</strong> is used; POST policies allow conditions such as a <strong>maximum content length</strong> and content type prefix, which is useful for browser forms. Multipart uploads can presign each part for very large files.</p>
+<p>Security practice: keep <strong>expiry short</strong> (minutes), generate a <strong>server-chosen key</strong> (for example <code>uploads/{userId}/{uuid}.jpg</code>) instead of trusting client file names, restrict content type and size, and <strong>validate after upload</strong>: an S3 event triggers a Lambda that checks the file type, scans for malware, creates thumbnails, and only then marks it available. Because the URL is a bearer token, treat it as sensitive and avoid logging it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client asks your API for an upload URL.</li>
+  <li>API authenticates the user and picks the object key.</li>
+  <li>API signs a PUT for that key with a 5-minute expiry.</li>
+  <li>Client uploads directly to S3 with the URL.</li>
+  <li>S3 event triggers validation and processing.</li>
+  <li>Downloads work the same way with a presigned GET.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import boto3, uuid
+s3 = boto3.client(&quot;s3&quot;)
+
+def create_upload_url(user_id):
+    key = f&quot;uploads/{user_id}/{uuid.uuid4()}.jpg&quot;
+    url = s3.generate_presigned_url(
+        &quot;put_object&quot;,
+        Params={&quot;Bucket&quot;: &quot;acme-user-media&quot;, &quot;Key&quot;: key, &quot;ContentType&quot;: &quot;image/jpeg&quot;},
+        ExpiresIn=300,
+    )
+    return {&quot;url&quot;: url, &quot;key&quot;: key}</code></pre>
+<pre><code class="language-bash"># Browser or CLI then uploads directly
+curl -X PUT -H &quot;Content-Type: image/jpeg&quot; --upload-file photo.jpg &quot;$URL&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long expiries such as 7 days for sensitive files.</li>
+  <li>Letting clients choose arbitrary keys and overwrite others' files.</li>
+  <li>No post-upload validation or malware scanning.</li>
+  <li>Missing CORS configuration for browser uploads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A presigned URL is a temporary link to one S3 object for one operation, signed with the credentials of whoever generated it, and it expires. The bucket stays private. I use them for direct browser or mobile uploads and for private downloads, so large files don't stream through my servers. My backend checks the user is allowed, picks the key itself, signs with a short expiry and a content type, and an S3 event triggers a Lambda to validate or scan the file afterwards. If the signer loses permissions, the URL stops working.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if the signing role loses permissions before expiry?</strong> Requests fail, because S3 checks the signer's current permissions.</li>
+  <li><strong>Presigned PUT vs POST?</strong> POST supports policy conditions like size limits and is suited to HTML forms.</li>
+  <li><strong>Alternative for private downloads at scale?</strong> CloudFront signed URLs or cookies.</li>
+</ul>
+</article>
+</body>
+</html>

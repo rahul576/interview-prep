@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-052 · How do you use ElastiCache for Redis, and which caching patterns do you know?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-052" data-topic="Cloud (AWS)">
+<h1>How do you use ElastiCache for Redis, and which caching patterns do you know?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>ElastiCache</strong> provides managed in-memory <strong>Valkey, Redis OSS or Memcached</strong> with sub-millisecond latency; the main pattern is <strong>cache-aside (lazy loading) with TTLs</strong>, complemented by <strong>write-through</strong>, and Redis-style data structures power <strong>sessions, rate limiting, leaderboards and queues</strong>, run in production with <strong>cluster mode, replicas and Multi-AZ failover</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Cache-aside</strong> is the default: the application reads the cache; on a miss it queries the database, stores the result with a <strong>TTL</strong>, and returns it. On updates it writes to the database and <strong>deletes</strong> the cache key. It caches only data that is actually read and survives cache outages (just slower), but the first read after expiry is a miss and stale data is possible until TTL or invalidation.</p>
+<p><strong>Write-through</strong> writes the cache whenever the database is updated, so reads are always warm and fresh, at the cost of extra write latency and caching data nobody reads; combine it with TTLs. <strong>Write-behind</strong> batches writes to the database later, faster but risky. Add <strong>TTL jitter</strong> to avoid mass expiry.</p>
+<p>Valkey and Redis data structures enable more than caching: <strong>sessions</strong> in hashes with expiry, <strong>rate limiting</strong> with INCR and EXPIRE or sliding windows in sorted sets, <strong>leaderboards</strong> with sorted sets (ZADD, ZREVRANGE), <strong>distributed locks</strong>, <strong>pub/sub</strong> and lightweight <strong>queues</strong> with lists or streams. <strong>Memcached</strong> is simpler, multi-threaded and only for plain key-value caching without replication or persistence.</p>
+<p>Production setup: <strong>cluster mode enabled</strong> shards data across node groups for horizontal scaling; each shard has <strong>replicas in other AZs</strong> and <strong>automatic failover</strong>; enable <strong>encryption in transit and at rest</strong>, <strong>AUTH or RBAC users</strong>, place nodes in private subnets, and size memory with an <strong>eviction policy</strong> such as allkeys-lru. <strong>ElastiCache Serverless</strong> removes node sizing entirely. Valkey is the open-source fork AWS now promotes, usually at lower price.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives; app computes a key like product:42.</li>
+  <li>GET from cache; hit returns immediately.</li>
+  <li>Miss: query the database, SET with TTL plus jitter.</li>
+  <li>On writes: update database, delete or overwrite the key.</li>
+  <li>Replicas and Multi-AZ keep the cache available during node failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def get_product(pid):
+    key = f&quot;product:{pid}&quot;
+    cached = r.get(key)
+    if cached:
+        return json.loads(cached)
+    row = db.query(&quot;SELECT * FROM products WHERE id=%s&quot;, pid)
+    r.set(key, json.dumps(row), ex=600 + random.randint(0, 120))
+    return row
+
+def allow_request(user_id, limit=100):
+    key = f&quot;rate:{user_id}:{int(time.time() // 60)}&quot;
+    count = r.incr(key)
+    if count == 1:
+        r.expire(key, 60)
+    return count &lt;= limit</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No TTLs, so stale data lives forever and memory fills.</li>
+  <li>Treating the cache as the source of truth for critical data.</li>
+  <li>Same TTL for every key, causing cache stampedes.</li>
+  <li>Using KEYS * or large blocking commands in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ElastiCache is managed in-memory Valkey, Redis OSS or Memcached with sub-millisecond reads. My default is cache-aside: check the cache, on a miss read the database and set the value with a TTL, and on updates delete the key. Write-through keeps the cache fresh by writing on every update, at the cost of caching unread data. Redis structures also give me sessions, rate limiters, leaderboards with sorted sets and simple queues. In production I use cluster mode for sharding, replicas across AZs with automatic failover, encryption and auth.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How prevent a cache stampede?</strong> Lock or single-flight on rebuild, serve stale while revalidating, and jitter TTLs.</li>
+  <li><strong>Valkey, Redis or Memcached?</strong> Valkey or Redis for data structures and replication; Memcached for simple multi-threaded caching.</li>
+  <li><strong>What happens on failover?</strong> A replica is promoted; clients reconnect via the primary endpoint, losing only unreplicated writes.</li>
+</ul>
+</article>
+</body>
+</html>

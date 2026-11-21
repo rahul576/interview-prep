@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-044 · How do you manage multiple regions or accounts in one Terraform configuration?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-044" data-topic="Infrastructure as Code">
+<h1>How do you manage multiple regions or accounts in one Terraform configuration?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Declare the provider several times with <strong>aliases</strong> (one per region or account, using <strong>assume_role</strong> for other accounts), select them with <strong>provider = aws.alias</strong>, pass them to modules via the <strong>providers map</strong> with <strong>configuration_aliases</strong>, and keep <strong>blast radius small</strong> with separate states per account.</p>
+
+<h2>Detailed explanation</h2>
+<p>A provider block configures how Terraform talks to an API: region, credentials, default tags. A configuration can contain multiple configurations of the same provider by giving extra ones an <strong>alias</strong>. The block without an alias is the <strong>default</strong>, used by every resource that doesn't say otherwise.</p>
+<p><strong>Multiple regions</strong>: a common case is CloudFront, which only accepts ACM certificates from <strong>us-east-1</strong>, while the rest of the stack lives in eu-west-1. Add <code>provider &quot;aws&quot; { alias = &quot;us_east_1&quot; region = &quot;us-east-1&quot; }</code> and set <code>provider = aws.us_east_1</code> on the certificate. Similar needs arise for disaster-recovery replicas, cross-region S3 replication or global services.</p>
+<p><strong>Multiple accounts</strong>: each aliased provider uses an <strong>assume_role</strong> block with a role ARN in the target account, starting from the pipeline's base credentials (ideally OIDC). Typical uses: creating a DNS delegation in a central networking account, a VPC peering accepter, or log destinations in a security account.</p>
+<p><strong>Modules</strong> do not inherit aliased providers automatically. The caller passes them explicitly: <code>providers = { aws = aws, aws.dns = aws.network_account }</code>. Inside the module, <code>required_providers</code> declares <code>configuration_aliases = [aws.dns]</code> so Terraform knows the module expects that additional configuration.</p>
+<p>While this works, managing <strong>many accounts from one state</strong> concentrates risk: one apply can affect many accounts, plans get slow, and the pipeline needs permissions everywhere. The usual pattern is <strong>one state and pipeline per account/environment</strong>, with cross-account providers used only for genuinely cross-cutting resources like DNS delegations or peering. Account vending and baselines at scale often use tools such as AWS Control Tower/Account Factory for Terraform or a loop of pipelines.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define default and aliased provider configurations.</li>
+  <li>Each aliased provider authenticates (assume_role for other accounts).</li>
+  <li>Resources pick a provider with the <code>provider</code> meta-argument.</li>
+  <li>Modules receive providers through the <code>providers</code> map.</li>
+  <li>Terraform routes each API call through the selected configuration.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">provider &quot;aws&quot; {
+  region = &quot;eu-west-1&quot;
+}
+
+provider &quot;aws&quot; {
+  alias  = &quot;us_east_1&quot;
+  region = &quot;us-east-1&quot;
+}
+
+provider &quot;aws&quot; {
+  alias  = &quot;network&quot;
+  region = &quot;eu-west-1&quot;
+  assume_role {
+    role_arn = &quot;arn:aws:iam::444455556666:role/terraform-dns&quot;
+  }
+}
+
+resource &quot;aws_acm_certificate&quot; &quot;cdn&quot; {
+  provider          = aws.us_east_1
+  domain_name       = &quot;www.example.com&quot;
+  validation_method = &quot;DNS&quot;
+}
+
+module &quot;app_dns&quot; {
+  source    = &quot;./modules/app-dns&quot;
+  providers = {
+    aws     = aws
+    aws.dns = aws.network
+  }
+}</code></pre>
+<pre><code class="language-hcl"># modules/app-dns/versions.tf
+terraform {
+  required_providers {
+    aws = {
+      source                = &quot;hashicorp/aws&quot;
+      configuration_aliases = [aws.dns]
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>provider =</code> on a resource, so it silently goes to the default region.</li>
+  <li>Configuring providers inside reusable modules instead of passing them.</li>
+  <li>Managing dozens of accounts in one state.</li>
+  <li>Removing an aliased provider while resources in state still use it (destroy them first).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I declare the provider several times with aliases, for example the default AWS provider in eu-west-1 and one aliased us_east_1, which I need for ACM certificates used by CloudFront. For other accounts, each aliased provider has an assume_role block with a role in that account. Resources choose with provider = aws.us_east_1, and modules get them explicitly through the providers map, declaring configuration_aliases inside the module. It works, but many accounts in one state means a big blast radius and slow plans, so usually each account or environment gets its own state and pipeline.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why must the ACM certificate for CloudFront be in us-east-1?</strong> CloudFront is a global service whose control plane reads certificates only from us-east-1.</li>
+  <li><strong>Can you loop providers with for_each?</strong> Recent OpenTofu supports for_each on providers; in Terraform you declare each alias explicitly.</li>
+  <li><strong>How do you remove an aliased provider safely?</strong> Destroy or move its resources first, then delete the block.</li>
+</ul>
+</article>
+</body>
+</html>

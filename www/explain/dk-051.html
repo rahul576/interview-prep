@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-051 · How do Docker health checks and restart policies work together, and what are the limits?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-051" data-topic="Docker">
+<h1>How do Docker health checks and restart policies work together, and what are the limits?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>In plain Docker, <strong>restart policies react only to process exit</strong> and an <strong>unhealthy container keeps running</strong>; <strong>Swarm and Kubernetes replace or restart unhealthy containers</strong>; on single hosts use an <strong>autoheal</strong> helper or make the app <strong>exit when broken</strong>, and keep checks <strong>cheap and local</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker has two independent mechanisms. A <strong>restart policy</strong> (<code>no</code>, <code>on-failure[:N]</code>, <code>always</code>, <code>unless-stopped</code>) tells the daemon what to do when the container's <strong>main process exits</strong>. A <strong>health check</strong> periodically runs a command and sets the container's status to healthy or unhealthy. In standalone Docker these are <strong>not connected</strong>: an unhealthy container stays running and unhealthy indefinitely, and the restart policy never fires because the process is still alive. Many people discover this only when a deadlocked service sits &quot;unhealthy&quot; for hours.</p>
+<p>Orchestrators do connect them. <strong>Docker Swarm</strong> treats an unhealthy task as failed and schedules a replacement, and uses health during rolling updates. <strong>Kubernetes</strong> ignores Docker health checks and uses its own probes: a failing <strong>liveness probe</strong> makes the kubelet restart the container, a failing <strong>readiness probe</strong> removes the pod from Service endpoints without restarting it, and a <strong>startup probe</strong> protects slow-booting apps.</p>
+<p>On a single Docker host or with Compose, there are two common workarounds. A small <strong>autoheal</strong> container watches the Docker events API and restarts containers labelled for it when they turn unhealthy (it needs socket access, so it is privileged in practice). Alternatively, the <strong>application exits itself</strong> when an internal watchdog detects it is broken, letting <code>restart: unless-stopped</code> take over.</p>
+<p>Health checks must be designed carefully. They should be <strong>cheap</strong>, have a <strong>timeout</strong>, and test <strong>the process itself</strong> (can it serve a request, is the event loop alive) rather than every <strong>downstream dependency</strong>. If the check calls the database and the database has a brief outage, every instance turns unhealthy and restarts simultaneously, adding a restart storm to the outage.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Process exits → restart policy decides whether to restart.</li>
+  <li>Health check fails N times → status <code>unhealthy</code>.</li>
+  <li>Standalone Docker: no automatic action.</li>
+  <li>Swarm: task replaced; Kubernetes: liveness restarts, readiness removes traffic.</li>
+  <li>Autoheal or self-exit bridges the gap on single hosts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">services:
+  api:
+    image: registry.local/api:1.4
+    restart: unless-stopped
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;/app/healthcheck&quot;]   # local check, no DB call
+      interval: 15s
+      timeout: 2s
+      retries: 3
+    labels: [&quot;autoheal=true&quot;]
+  autoheal:
+    image: willfarrell/autoheal
+    environment: [AUTOHEAL_CONTAINER_LABEL=autoheal]
+    volumes: [&quot;/var/run/docker.sock:/var/run/docker.sock&quot;]
+    restart: always</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting <code>restart: always</code> to fix unhealthy containers.</li>
+  <li>Liveness checks that depend on databases or other services.</li>
+  <li>Using the same endpoint for liveness and readiness in Kubernetes.</li>
+  <li>Heavy health checks that consume real capacity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In plain Docker they're independent: the restart policy only reacts when the main process exits, and an unhealthy container just keeps running and stays unhealthy. Swarm replaces unhealthy tasks, and Kubernetes uses liveness probes to restart containers and readiness probes to stop routing traffic. On a single host I'd use a small autoheal container or make the application exit itself when it detects it's broken, so the restart policy applies. Health checks should be cheap and check the app itself rather than every dependency, otherwise one database outage restarts everything.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a DB-calling health check cause cascades?</strong> All instances fail together and restart simultaneously during a DB blip.</li>
+  <li><strong>always vs unless-stopped?</strong> unless-stopped does not restart containers you stopped manually after a daemon restart.</li>
+  <li><strong>Liveness vs readiness?</strong> Liveness restarts; readiness only removes traffic.</li>
+</ul>
+</article>
+</body>
+</html>

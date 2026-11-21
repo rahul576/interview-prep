@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-031 · How do you configure a Kubernetes Job for reliability: retries, parallelism, failure handling and cleanup?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-031" data-topic="Kubernetes">
+<h1>How do you configure a Kubernetes Job for reliability: retries, parallelism, failure handling and cleanup?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A reliable Job sets <strong>completions</strong> and <strong>parallelism</strong> (optionally <strong>Indexed</strong> mode), limits retries with <strong>backoffLimit</strong> (or <strong>backoffLimitPerIndex</strong>), caps runtime with <strong>activeDeadlineSeconds</strong>, classifies failures with a <strong>podFailurePolicy</strong>, cleans up with <strong>ttlSecondsAfterFinished</strong>, and does <strong>idempotent</strong> work because pods can run more than once.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Job runs pods until a target number of them <strong>succeed</strong>. <code>completions</code> is how many successful pods are needed; <code>parallelism</code> is how many run at once. With <code>completionMode: Indexed</code>, each pod gets a stable index (<code>JOB_COMPLETION_INDEX</code> env var) from 0 to completions-1, ideal for sharded work: pod 7 processes shard 7. Without completions, a Job is a work queue: pods pull items until the queue is empty.</p>
+<p><strong>Retries:</strong> failed pods are recreated with exponential backoff (10 s, 20 s, 40 s… capped at six minutes). <code>backoffLimit</code> (default 6) is the number of failures before the whole Job fails. For indexed Jobs, <code>backoffLimitPerIndex</code> retries each index independently so one bad shard doesn't fail all the others. <code>restartPolicy</code> in the template must be <code>Never</code> or <code>OnFailure</code>; with <code>OnFailure</code>, the kubelet restarts containers in place, and with <code>Never</code>, new pods are created, keeping failed pods for debugging.</p>
+<p><strong>Time limits:</strong> <code>activeDeadlineSeconds</code> terminates the Job and its pods once exceeded, regardless of retries, so a hung job can't run forever.</p>
+<p><strong>podFailurePolicy</strong> distinguishes failure types by container <strong>exit code</strong> or pod <strong>condition</strong>:</p>
+<ul>
+  <li><code>FailJob</code> on an exit code that means a permanent error (bad config, invalid input), avoiding pointless retries.</li>
+  <li><code>Ignore</code> failures caused by disruption (<code>DisruptionTarget</code> condition, for example preemption or node drain) so they don't consume backoffLimit.</li>
+  <li><code>Count</code> for normal failures.</li>
+</ul>
+<p><strong>Cleanup:</strong> <code>ttlSecondsAfterFinished</code> lets the TTL controller delete the finished Job and its pods after a delay, avoiding thousands of leftover objects.</p>
+<p><strong>Idempotency:</strong> a pod can be retried, and in rare cases two pods can run for the same index (for example when a node becomes unreachable), so work must tolerate reruns: upserts, checkpoints, or output written atomically by key.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Job controller creates up to <code>parallelism</code> pods.</li>
+  <li>Each success counts towards <code>completions</code> (or marks its index done).</li>
+  <li>Failures are matched against podFailurePolicy rules.</li>
+  <li>Counted failures are retried with backoff until backoffLimit.</li>
+  <li>Deadline exceeded or limit hit → Job Failed; else Complete.</li>
+  <li>TTL controller deletes the Job later.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata: { name: reindex }
+spec:
+  completions: 50
+  parallelism: 10
+  completionMode: Indexed
+  backoffLimitPerIndex: 3
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  podFailurePolicy:
+    rules:
+    - action: FailJob
+      onExitCodes: { containerName: worker, operator: In, values: [42] }
+    - action: Ignore
+      onPodConditions: [ { type: DisruptionTarget } ]
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: worker
+        image: registry.example.com/reindex:1.3
+        args: [&quot;--shard=$(JOB_COMPLETION_INDEX)&quot;, &quot;--shards=50&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No <code>activeDeadlineSeconds</code>, so a hung Job runs for days.</li>
+  <li>Retrying permanent errors six times.</li>
+  <li>Non-idempotent work that double-charges or duplicates on rerun.</li>
+  <li>Finished Jobs never cleaned up, cluttering the API.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Job runs pods until a number of completions succeed, with parallelism controlling concurrency, and Indexed mode gives each pod a shard index. backoffLimit caps retries, which use exponential backoff, and activeDeadlineSeconds caps total runtime. A podFailurePolicy lets me fail fast on exit codes that mean a permanent error, and ignore failures caused by disruption like node drains so they don't burn the retry budget. ttlSecondsAfterFinished cleans up finished Jobs. Because pods can be retried or even run twice, the work must be idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>One million items with 50 workers?</strong> Indexed Job with 50 or more shards, or a queue with 50 parallel consumers; checkpoint progress.</li>
+  <li><strong>OnFailure vs Never?</strong> OnFailure restarts in place; Never creates new pods and keeps failed ones for logs.</li>
+  <li><strong>What is a successPolicy?</strong> Lets an indexed Job succeed when specific indexes or a count succeed, for leader-worker patterns.</li>
+</ul>
+</article>
+</body>
+</html>

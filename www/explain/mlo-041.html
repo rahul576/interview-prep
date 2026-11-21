@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-041 · How do you build and optimise container images for ML training and inference?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-041" data-topic="MLOps">
+<h1>How do you build and optimise container images for ML training and inference?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Build ML images on <strong>CUDA or framework base images matching node drivers</strong>, use <strong>separate training and slim multi-stage inference images</strong>, <strong>pin dependencies with lock files</strong>, <strong>order layers for caching</strong>, keep <strong>model weights out of the image</strong> where possible, and <strong>scan and sign</strong> images.</p>
+
+<h2>Detailed explanation</h2>
+<p>ML images are often 10 to 20 GB, slow to pull and fragile, which hurts cold starts, CI time and reliability.</p>
+<p><strong>Base images.</strong> For GPU workloads, start from an official <strong>CUDA</strong> image (<code>nvidia/cuda:*-runtime</code>) or a framework image such as PyTorch or NVIDIA NGC containers. The CUDA version inside must be compatible with the <strong>node's driver</strong> and with how the framework was built; mismatches give &quot;no kernel image&quot; or driver errors at runtime. Use <code>runtime</code> rather than <code>devel</code> variants for inference.</p>
+<p><strong>Separate images.</strong> Training images contain compilers, CUDA dev tools, notebooks and profilers. Inference images should be slim, built with <strong>multi-stage builds</strong> that compile wheels in a builder stage and copy only what serving needs.</p>
+<p><strong>Pinning.</strong> All packages pinned with lock files (<code>uv.lock</code>, <code>poetry.lock</code>, <code>requirements.txt</code> with hashes), and base images referenced by digest, so builds are reproducible and a silent upgrade can't change predictions.</p>
+<p><strong>Layer ordering.</strong> System packages first, then Python dependencies, then application code, so code changes rebuild only the last thin layer. Use BuildKit cache mounts for pip.</p>
+<p><strong>Model weights.</strong> Baking a multi-gigabyte model into the image couples model and code versions and bloats every pull. Usually load weights at startup from the registry or object storage, or from a <strong>node-level cache or pre-pulled volume</strong> (KServe's model cache or modelcar/OCI artefacts help). Baking in is reasonable for small models or air-gapped sites.</p>
+<p><strong>Security.</strong> Scan with Trivy or Grype, run as non-root, generate an SBOM and <strong>sign</strong> with cosign.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose base image by CUDA and driver compatibility.</li>
+  <li>Builder stage installs pinned dependencies into a venv.</li>
+  <li>Runtime stage copies the venv and code only.</li>
+  <li>Model weights fetched at startup or mounted from cache.</li>
+  <li>CI scans, generates SBOM, signs and pushes by digest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends python3.11 python3.11-venv \
+ &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+FROM base AS builder
+RUN python3.11 -m venv /opt/venv
+COPY requirements.lock .
+RUN --mount=type=cache,target=/root/.cache/pip /opt/venv/bin/pip install --require-hashes -r requirements.lock
+
+FROM base
+COPY --from=builder /opt/venv /opt/venv
+COPY app/ /app/
+USER 1000
+ENV PATH=/opt/venv/bin:$PATH MODEL_URI=s3://models/ranker/v7
+CMD [&quot;python3.11&quot;, &quot;/app/serve.py&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>devel</code> CUDA images for inference.</li>
+  <li>Unpinned <code>pip install torch</code> producing different builds.</li>
+  <li>Copying code before installing dependencies, breaking the cache.</li>
+  <li>Baking huge weights into every image version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ML images get huge and fragile, so I start from an official CUDA or framework base image whose CUDA version matches the node drivers. Training and inference get separate images; inference uses a multi-stage build so only the runtime and venv ship. Dependencies are pinned with lock files and base images by digest. Layers go from least to most frequently changing so caching works. Large weights stay out of the image and load at startup from the registry or a node cache. Images are scanned, run as non-root and signed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Bake the model in or load at startup?</strong> Baked is simpler and immutable but large and coupled; loading keeps images small and versions independent but adds startup time.</li>
+  <li><strong>How do you speed up cold starts?</strong> Pre-pulled images, node-level model caches and smaller images.</li>
+  <li><strong>How do you check driver compatibility?</strong> Follow NVIDIA's compatibility matrix and test on target nodes.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-078 · How would you secure a shared build infrastructure that builds untrusted pull request code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-078" data-topic="Docker">
+<h1>How would you secure a shared build infrastructure that builds untrusted pull request code?</h1>
+<p class="ex-meta">Docker · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Treat untrusted PR builds as <strong>hostile code</strong>: run each job on an <strong>ephemeral, isolated runner</strong> (ideally a <strong>microVM or separate VM</strong>), never give it <strong>privileged containers or the host Docker socket</strong>, build images with <strong>rootless BuildKit</strong>, give <strong>no secrets</strong> to untrusted PRs, keep <strong>trusted pipelines separate</strong>, restrict <strong>network egress</strong> and <strong>audit</strong> everything.</p>
+
+<h2>Detailed explanation</h2>
+<p>A pull request, especially from a fork, can change the build script, the Dockerfile and the tests. Anything the build can reach, the attacker can reach: secrets in environment variables, cloud credentials from the instance metadata service, the runner's filesystem, other jobs on the same host, and the internal network. Shared, long-lived runners are the worst case, because one malicious job can <strong>persist</strong> a backdoor that affects later, trusted builds.</p>
+<p><strong>Isolation:</strong> use <strong>ephemeral runners</strong> that are created for one job and destroyed afterwards. Containers alone are a weak boundary for hostile code, so for untrusted work use <strong>VM-level isolation</strong>: one VM per job, or <strong>microVMs</strong> such as Firecracker, or sandboxed runtimes like gVisor or Kata. Never mount <code>/var/run/docker.sock</code> or run <code>--privileged</code> (both equal host root). Build images with <strong>rootless BuildKit</strong> or similar daemonless builders inside the sandbox.</p>
+<p><strong>Secrets and trust tiers:</strong> untrusted PR builds get <strong>no secrets</strong>, no push rights to production registries and no deploy credentials. On GitHub Actions, <code>pull_request</code> from forks runs without secrets by default; avoid <code>pull_request_target</code> workflows that check out PR code, because they run with secrets. Trusted pipelines (publishing, deploying) run only on <strong>protected branches</strong> after review, on separate runner pools.</p>
+<p><strong>Network and audit:</strong> block the cloud <strong>metadata endpoint</strong>, limit egress to package mirrors and the cache registry, set short job timeouts, and log commands, network flows and runner lifecycle for investigation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened → job scheduled on the &quot;untrusted&quot; ephemeral runner pool.</li>
+  <li>Runner is a fresh microVM/VM with no credentials and restricted egress.</li>
+  <li>Build and test with rootless BuildKit; artifacts kept only for the PR.</li>
+  <li>Runner destroyed after the job.</li>
+  <li>After review and merge, the trusted pipeline rebuilds from the protected branch with credentials and pushes/deploys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitHub Actions: untrusted PR tests, no secrets, read-only token
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: [self-hosted, ephemeral, untrusted]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - run: docker buildx build --target test .</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shared, persistent self-hosted runners for public repositories.</li>
+  <li><code>pull_request_target</code> workflows that build the PR's code with secrets available.</li>
+  <li>Docker-in-Docker with <code>--privileged</code> or socket mounts on shared hosts.</li>
+  <li>Leaving the cloud metadata service reachable from build jobs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I assume PR code is malicious, because it can change the build itself. Every job runs on an ephemeral runner that's destroyed afterwards, so nothing persists between builds, and for untrusted code I want VM-level isolation, a VM or Firecracker microVM per job, not just a container. Builds never get privileged mode or the Docker socket; images are built with rootless BuildKit. Untrusted PRs get no secrets and can't push to real registries; only reviewed code on protected branches runs in a separate trusted pipeline with credentials. I also block the metadata endpoint, restrict egress to package mirrors, and log everything.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do forked PRs run tests safely?</strong> In the untrusted tier with no secrets; integration tests needing credentials run after a maintainer approves or after merge.</li>
+  <li><strong>Why is the Docker socket so dangerous?</strong> It allows starting privileged containers that mount the host filesystem.</li>
+  <li><strong>Why VMs instead of containers?</strong> Containers share the host kernel; a kernel exploit escapes, a VM boundary is much harder.</li>
+</ul>
+</article>
+</body>
+</html>

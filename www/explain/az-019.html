@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-019 · How do pods in AKS securely access Azure resources such as Key Vault or Storage?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-019" data-topic="Azure Kubernetes (AKS)">
+<h1>How do pods in AKS securely access Azure resources such as Key Vault or Storage?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>Microsoft Entra Workload ID</strong>: the cluster's <strong>OIDC issuer</strong> issues tokens to a <strong>Kubernetes service account</strong>, a <strong>federated credential</strong> on a <strong>user-assigned managed identity</strong> trusts that service account, and the Azure SDK <strong>exchanges the projected token</strong> for an Entra token, so <strong>no secrets live in the cluster</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pods often need to reach Azure resources: Key Vault for secrets, Storage for files, Service Bus for messages. Storing a client secret in a Kubernetes Secret is risky: secrets are only base64-encoded by default, they leak through manifests or logs, and they need rotation.</p>
+<p><strong>Workload identity</strong> builds on <strong>OIDC federation</strong>. When enabled, the AKS cluster exposes an <strong>OIDC issuer URL</strong>, and Kubernetes issues <strong>projected service account tokens</strong> signed by the cluster. In Entra ID, you create a <strong>user-assigned managed identity</strong> (or app registration) and add a <strong>federated identity credential</strong> that says: &quot;trust tokens from this issuer whose subject is <code>system:serviceaccount:&lt;namespace&gt;:&lt;service-account&gt;</code> with audience <code>api://AzureADTokenExchange</code>&quot;.</p>
+<p>In the cluster you create a <strong>service account annotated with the identity's client ID</strong>, and label the pod with <code>azure.workload.identity/use: &quot;true&quot;</code>. A mutating webhook then injects environment variables (client ID, tenant ID, token file path) and mounts the projected token. The <strong>Azure Identity SDK</strong> (<code>DefaultAzureCredential</code> or <code>WorkloadIdentityCredential</code>) reads the token and exchanges it with Entra ID for an access token. Permissions are controlled by <strong>RBAC role assignments</strong> on the target resource, such as <em>Key Vault Secrets User</em>.</p>
+<p>This replaced <strong>AAD Pod Identity</strong>, which relied on intercepting IMDS calls through a node-level component; it was deprecated and is retired. Workload identity is standards-based, works for any OIDC-trusting service, and scopes identity per service account rather than per node.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable the OIDC issuer and workload identity on the cluster.</li>
+  <li>Create a user-assigned managed identity; grant RBAC on the target.</li>
+  <li>Create a federated credential for the namespace and service account.</li>
+  <li>Create the annotated service account; label pods to use it.</li>
+  <li>Webhook injects token and environment variables.</li>
+  <li>SDK exchanges the token for an Entra access token and calls the resource.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks update -g rg-aks -n aks-prod --enable-oidc-issuer --enable-workload-identity
+ISSUER=$(az aks show -g rg-aks -n aks-prod --query oidcIssuerProfile.issuerUrl -o tsv)
+az identity create -g rg-aks -n id-orders
+az identity federated-credential create -g rg-aks --identity-name id-orders \
+  -n fc-orders --issuer &quot;$ISSUER&quot; \
+  --subject system:serviceaccount:orders:orders-sa --audience api://AzureADTokenExchange</code></pre>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orders-sa
+  namespace: orders
+  annotations:
+    azure.workload.identity/client-id: &quot;&lt;client-id-of-id-orders&gt;&quot;
+---
+# in the Deployment pod template
+metadata:
+  labels:
+    azure.workload.identity/use: &quot;true&quot;
+spec:
+  serviceAccountName: orders-sa</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Subject mismatch: wrong namespace or service account name in the federated credential.</li>
+  <li>Forgetting the pod label, so no token is injected.</li>
+  <li>Granting the identity broad roles instead of a resource-scoped data role.</li>
+  <li>Using old SDK versions that do not support workload identity.</li>
+  <li>Continuing to use the retired pod identity add-on.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use Microsoft Entra Workload ID. The cluster has its OIDC issuer enabled. I create a user-assigned managed identity and a federated credential that trusts tokens for a specific Kubernetes service account in a specific namespace. The service account is annotated with the identity's client ID, pods are labelled to use workload identity, and they receive a projected token that the Azure SDK exchanges for an Entra token. No secrets are stored in the cluster, and access is controlled with least-privilege RBAC on the target resource, like Key Vault Secrets User on one vault. It replaces the deprecated pod identity add-on.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you troubleshoot a pod getting 403 from Key Vault?</strong> 403 means authenticated but not authorised: check role assignment, scope, vault permission model and network rules; 401 would point to federation issues.</li>
+  <li><strong>Can several service accounts use one identity?</strong> Yes, with one federated credential per subject.</li>
+  <li><strong>How does this compare with AWS IRSA?</strong> Same OIDC federation pattern.</li>
+</ul>
+</article>
+</body>
+</html>

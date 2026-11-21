@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-058 · What are the security risks of the Docker daemon socket and Docker-in-Docker?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-058" data-topic="Docker">
+<h1>What are the security risks of the Docker daemon socket and Docker-in-Docker?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Access to <code>docker.sock</code> equals root on the host</strong>, so <strong>mounting the socket</strong> into a container hands the host to whoever compromises it, and <strong>Docker-in-Docker needs <code>--privileged</code></strong>; use <strong>rootless BuildKit, kaniko or buildah</strong> for builds, <strong>read-only socket proxies</strong> for monitoring, <strong>mTLS</strong> for remote access, and <strong>restrict and audit</strong> daemon access.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Docker daemon runs as root and does whatever its API asks. Anyone who can reach the socket can run <code>docker run --privileged -v /:/host alpine chroot /host</code>, getting a root shell on the host, reading every secret and installing persistence. The Unix socket's permissions (root and the docker group) are therefore the real security boundary.</p>
+<p><strong>Mounting <code>/var/run/docker.sock</code> into a container</strong> is common for CI agents that build images, for monitoring and log tools, and for reverse proxies like Traefik that discover containers. It means any compromise of that container, a malicious CI job, or a vulnerable dashboard, becomes a <strong>full host compromise</strong>, and it also lets one CI job see and manipulate other jobs' containers. Mounting the socket read-only does not help, because the API still accepts write requests.</p>
+<p><strong>Docker-in-Docker (DinD)</strong> runs a separate daemon inside a container, so jobs do not share the host daemon, but that inner daemon needs <strong><code>--privileged</code></strong>, which grants all capabilities, disables seccomp and AppArmor and exposes host devices. An escape from a privileged container is trivial.</p>
+<p>Safer alternatives: for <strong>image builds</strong>, use <strong>rootless BuildKit</strong>, <strong>kaniko</strong> or <strong>buildah</strong> (which build without a daemon or root), or a remote, isolated BuildKit service. For <strong>monitoring and discovery</strong> tools, put a <strong>socket proxy</strong> (for example <code>tecnativa/docker-socket-proxy</code>) in front of the socket that allows only specific read-only endpoints such as <code>GET /containers/json</code>. For remote management, never expose TCP 2375; use <strong>SSH contexts</strong> or TCP 2376 with <strong>mutual TLS</strong>. Consider <strong>rootless Docker</strong> or Podman for user workloads. Finally, keep docker group membership minimal, and <strong>audit</strong> daemon use (auditd rules on the socket, daemon logs, authorization plugins).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client reaches the socket → full API access.</li>
+  <li>API can create privileged containers with host mounts.</li>
+  <li>Host root obtained through the container.</li>
+  <li>Proxy filters API paths and methods to a safe subset.</li>
+  <li>Rootless builders build images without host daemon access.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    environment: { CONTAINERS: 1, POST: 0 }        # allow listing only, no writes
+    volumes: [&quot;/var/run/docker.sock:/var/run/docker.sock:ro&quot;]
+  monitor:
+    image: registry.local/monitor:1.0
+    environment: { DOCKER_HOST: tcp://socket-proxy:2375 }</code></pre>
+<pre><code class="language-bash"># Audit access to the socket
+auditctl -w /var/run/docker.sock -k docker-socket</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing a <code>:ro</code> socket mount makes it safe.</li>
+  <li>Running untrusted CI jobs with the host socket mounted.</li>
+  <li>Using <code>--privileged</code> DinD as the default build approach.</li>
+  <li>Exposing the daemon on TCP 2375 without TLS.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Anyone who can talk to the Docker socket can start a privileged container that mounts the host root filesystem, so access to docker.sock is effectively root. Mounting it into a container, common for CI agents or monitoring, means a compromise of that container is a host compromise; read-only mounts don't help because the API still accepts writes. Docker-in-Docker avoids sharing the host daemon but needs privileged mode, which removes most isolation. I use rootless BuildKit, kaniko or buildah for builds, a socket proxy allowing only read-only calls for monitoring, mTLS or SSH for remote access, and I restrict and audit who can reach the daemon.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would a monitoring tool list containers safely?</strong> Through a socket proxy that allows only GET container endpoints.</li>
+  <li><strong>Is rootless Docker a fix?</strong> It reduces blast radius: socket access then equals that user, not root.</li>
+  <li><strong>What do authorization plugins do?</strong> They allow or deny API requests by policy.</li>
+</ul>
+</article>
+</body>
+</html>

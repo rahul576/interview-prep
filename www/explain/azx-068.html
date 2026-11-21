@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-068 · Compare Azure CNI Overlay, Azure CNI with pod subnet, Azure CNI powered by Cilium and kubenet on AKS.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-068" data-topic="Azure Kubernetes (AKS)">
+<h1>Compare Azure CNI Overlay, Azure CNI with pod subnet, Azure CNI powered by Cilium and kubenet on AKS.</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Azure CNI Overlay</strong> gives pods IPs from a <strong>private range outside the VNet</strong> (saving address space), <strong>Azure CNI with pod subnet</strong> gives pods <strong>real VNet IPs</strong> (directly reachable), <strong>Cilium</strong> replaces the dataplane with <strong>eBPF</strong>, and <strong>kubenet</strong> is legacy, <strong>retiring on 31 March 2028</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The main question is: <strong>must pods be directly reachable from the network, and how much IP space do you have?</strong></p>
+<p><strong>Azure CNI Overlay:</strong> nodes get IPs from the VNet subnet, but pods get IPs from a separate <strong>pod CIDR</strong> (for example <code>10.244.0.0/16</code>) that is not part of the VNet. Traffic between pods is routed by Azure without consuming VNet addresses, and traffic leaving the cluster is <strong>SNATed to the node IP</strong>. This scales to large clusters with small subnets and is the recommended default. The downside: external systems cannot reach pods directly; they go through a load balancer, ingress or gateway.</p>
+<p><strong>Azure CNI with pod subnet</strong> (dynamic IP allocation) or the older <strong>flat</strong> Azure CNI: pods receive <strong>real VNet IPs</strong>, either from a dedicated pod subnet or the node subnet. Other VNets, on-premises systems and firewalls see actual pod IPs, which some legacy integrations require. It consumes much more address space and needs careful subnet planning.</p>
+<p><strong>Azure CNI powered by Cilium</strong> is a <strong>dataplane</strong> choice combined with overlay or pod subnet IPAM. It uses <strong>eBPF</strong> instead of iptables for routing and <strong>network policy</strong>, giving better performance at scale, and with <strong>Advanced Container Networking Services</strong> adds flow observability and FQDN-based policies.</p>
+<p><strong>kubenet</strong> used a separate pod range with user-defined routes, limited to 400 nodes and lacking some features. It is being <strong>retired on 31 March 2028</strong>, and clusters should migrate to <strong>Azure CNI Overlay</strong>, which AKS supports as an in-place upgrade.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide IP strategy: overlay unless pods need direct reachability.</li>
+  <li>Size the node subnet (nodes plus surge) and pick a pod CIDR that does not overlap with any network.</li>
+  <li>Choose the dataplane: Cilium for eBPF and network policy.</li>
+  <li>Create the cluster with matching flags.</li>
+  <li>Expose services through load balancers or gateways.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks create -g rg-net -n aks-prod \
+  --network-plugin azure --network-plugin-mode overlay \
+  --pod-cidr 10.244.0.0/16 --network-dataplane cilium \
+  --vnet-subnet-id $NODE_SUBNET_ID
+
+# Migrate a kubenet cluster to overlay
+az aks update -g rg-net -n aks-old --network-plugin azure --network-plugin-mode overlay</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Pod IPs</th><th>IP usage</th><th>Direct pod reachability</th></tr></thead>
+<tbody>
+<tr><td>CNI Overlay</td><td>Private CIDR</td><td>Low</td><td>No</td></tr>
+<tr><td>CNI pod subnet</td><td>VNet</td><td>High</td><td>Yes</td></tr>
+<tr><td>Cilium</td><td>Either</td><td>Either</td><td>Depends on mode</td></tr>
+<tr><td>kubenet</td><td>Private + UDRs</td><td>Low</td><td>No (retiring)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Choosing a pod CIDR that overlaps with on-premises or peered ranges.</li>
+  <li>Sizing the subnet for nodes only, forgetting upgrade surge.</li>
+  <li>Using flat CNI by default and running out of IPs.</li>
+  <li>Leaving kubenet clusters until the retirement deadline.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Overlay gives nodes VNet IPs but pods IPs from a private CIDR outside the VNet, so it saves address space and scales well; outbound pod traffic is translated to the node IP. Pod subnet mode gives pods real VNet IPs so other systems can reach them directly, but uses a lot more IP space. Cilium is the eBPF dataplane, combined with either mode, giving efficient network policy and observability. kubenet retires in March 2028, so I'd migrate those clusters to overlay. My default is overlay with Cilium, unless pods must be directly addressable.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What changes for on-premises callers with overlay?</strong> They must use an internal load balancer or gateway, not pod IPs.</li>
+  <li><strong>Can you change from overlay to pod subnet later?</strong> Not easily; plan at creation.</li>
+  <li><strong>Why eBPF?</strong> Avoids large iptables rule sets, improving performance and visibility.</li>
+</ul>
+</article>
+</body>
+</html>

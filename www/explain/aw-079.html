@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-079 · How do KMS key policies, envelope encryption and key rotation work in detail?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-079" data-topic="Cloud (AWS)">
+<h1>How do KMS key policies, envelope encryption and key rotation work in detail?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>key policy</strong> is the primary access control for each KMS key, ideally separating <strong>key administrators</strong> from <strong>key users</strong>; <strong>envelope encryption</strong> encrypts data locally with a <strong>data key</strong> that is itself encrypted by the KMS key; <strong>automatic rotation</strong> adds new key material while keeping old material for decryption; and <strong>grants, encryption context and CloudTrail</strong> refine and audit access.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Key policies</strong>: every KMS key has exactly one key policy. Unlike most resources, IAM policies alone cannot grant access unless the key policy includes the statement that <strong>enables IAM policies</strong> for the account (the default key policy does). Good policies separate <strong>administrators</strong> (kms:Create<em>, Put</em>, Enable<em>, ScheduleKeyDeletion, but not Encrypt or Decrypt) from <strong>users</strong> (Encrypt, Decrypt, ReEncrypt</em>, GenerateDataKey*, DescribeKey). Condition keys like <strong>kms:ViaService</strong> restrict use to a service such as S3 in one region, and <strong>kms:CallerAccount</strong> or principal conditions limit cross-account use.</p>
+<p><strong>Envelope encryption</strong>: KMS encrypts at most <strong>4 KB</strong> directly, and sending large data to KMS would be slow. So clients call <strong>GenerateDataKey</strong>, receiving a <strong>plaintext data key</strong> and the same key <strong>encrypted under the KMS key</strong>. The plaintext key encrypts the data locally with AES-256-GCM and is then wiped from memory; the encrypted data key is stored alongside the ciphertext. To decrypt, the client sends the encrypted data key to KMS <strong>Decrypt</strong>, which checks permissions and returns the plaintext key. The KMS key never leaves the HSMs. S3, EBS, RDS and the <strong>AWS Encryption SDK</strong> all use this pattern, and S3 Bucket Keys reduce KMS calls.</p>
+<p><strong>Rotation</strong>: for symmetric customer managed keys, <strong>automatic rotation</strong> creates new key material yearly by default, or on a custom period from 90 days to 7 years, with <strong>on-demand rotation</strong> also available. The key ID and ARN stay the same; new encryptions use new material and old material is kept forever to decrypt existing data, so nothing needs re-encrypting. AWS managed keys rotate yearly automatically. Imported key material and asymmetric keys need manual rotation via aliases.</p>
+<p><strong>Grants</strong> give temporary, programmatic permissions (used by EBS and RDS). <strong>Encryption context</strong> is non-secret key-value data bound to the ciphertext as additional authenticated data; decryption fails if it differs, and it appears in CloudTrail and can be required in policy conditions. <strong>CloudTrail</strong> logs every KMS API call.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App calls GenerateDataKey with the key ID and encryption context.</li>
+  <li>KMS checks the key policy and IAM, returns plaintext and encrypted data key.</li>
+  <li>App encrypts data locally and discards the plaintext key.</li>
+  <li>App stores ciphertext and encrypted data key together.</li>
+  <li>For reading, app calls Decrypt with the encrypted key and same context.</li>
+  <li>Rotation adds new material; old ciphertexts still decrypt.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Sid&quot;: &quot;KeyUsers&quot;,
+  &quot;Effect&quot;: &quot;Allow&quot;,
+  &quot;Principal&quot;: {&quot;AWS&quot;: &quot;arn:aws:iam::111122223333:role/orders-api&quot;},
+  &quot;Action&quot;: [&quot;kms:Encrypt&quot;, &quot;kms:Decrypt&quot;, &quot;kms:GenerateDataKey*&quot;, &quot;kms:DescribeKey&quot;],
+  &quot;Resource&quot;: &quot;*&quot;,
+  &quot;Condition&quot;: {&quot;StringEquals&quot;: {
+    &quot;kms:ViaService&quot;: &quot;s3.eu-west-1.amazonaws.com&quot;,
+    &quot;kms:EncryptionContext:aws:s3:arn&quot;: &quot;arn:aws:s3:::orders-data&quot;}}
+}</code></pre>
+<pre><code class="language-bash">aws kms enable-key-rotation --key-id $KEY --rotation-period-in-days 180
+aws kms generate-data-key --key-id alias/orders --key-spec AES_256 \
+  --encryption-context tenant=acme</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Removing the account root statement and locking everyone out of the key.</li>
+  <li>Giving administrators decrypt rights by default.</li>
+  <li>Thinking rotation re-encrypts existing data or changes the key ARN.</li>
+  <li>Scheduling deletion of a key still protecting data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every KMS key has a key policy, the primary control; IAM policies only work if the key policy delegates to the account. I separate key administrators, who manage but cannot use the key, from key users who encrypt and decrypt. KMS only encrypts 4 KB directly, so services use envelope encryption: GenerateDataKey returns a plaintext data key used locally and discarded, plus an encrypted copy stored next to the data. Automatic rotation creates new material yearly or on a custom period and keeps old material for decryption. Grants give temporary access, encryption context binds ciphertext to metadata, and CloudTrail logs every use.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if a customer managed key is deleted?</strong> All data encrypted under it becomes unrecoverable; deletion has a 7 to 30 day waiting period to cancel.</li>
+  <li><strong>How share encrypted data cross-account?</strong> Customer managed key with key policy allowing the other account, plus their IAM permissions.</li>
+  <li><strong>What is a multi-Region key?</strong> Related keys with the same material in several regions, for decrypting replicated data locally.</li>
+</ul>
+</article>
+</body>
+</html>

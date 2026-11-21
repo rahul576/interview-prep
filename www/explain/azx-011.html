@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-011 · Compare Azure VPN Gateway and ExpressRoute for hybrid connectivity.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-011" data-topic="Azure">
+<h1>Compare Azure VPN Gateway and ExpressRoute for hybrid connectivity.</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>VPN Gateway</strong> builds <strong>encrypted IPsec tunnels over the internet</strong>, quick and cheap but with variable latency; <strong>ExpressRoute</strong> is a <strong>private connection through a provider</strong> with <strong>predictable latency, higher bandwidth and an SLA</strong>, but <strong>not encrypted by default</strong>; a common design uses <strong>ExpressRoute primary with VPN as backup</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Azure VPN Gateway</strong> is deployed in a <code>GatewaySubnet</code> and supports <strong>site-to-site</strong> IPsec/IKE tunnels from an on-premises VPN device, <strong>point-to-site</strong> connections for individual users (OpenVPN, IKEv2, Entra ID authentication), and VNet-to-VNet. It can run <strong>active-active</strong> with BGP for resilience, and zone-redundant SKUs exist. Throughput depends on the SKU, from a few hundred Mbps up to around 10 Gbps aggregate on the largest SKUs, with per-tunnel limits lower. Because traffic crosses the <strong>public internet</strong>, latency and jitter vary. It can be set up in under an hour once the on-premises device is configured.</p>
+<p><strong>ExpressRoute</strong> is a <strong>private layer 2/3 connection</strong> between your network and Microsoft's edge through a <strong>connectivity provider</strong> (MPLS, colocation cross-connect or point-to-point Ethernet), with circuits from 50 Mbps to 10 Gbps, or <strong>ExpressRoute Direct</strong> with 10 or 100 Gbps ports directly into Microsoft. Each circuit has two redundant connections and an availability SLA. <strong>Private peering</strong> connects to your VNets; <strong>Microsoft peering</strong> reaches Microsoft 365 and public Azure services. Add-ons include <strong>Global Reach</strong> (connect on-premises sites through Microsoft's backbone), <strong>FastPath</strong> (bypass the gateway for performance) and premium for global VNet reach. An <strong>ExpressRoute gateway</strong> in the VNet connects to the circuit. Provisioning takes weeks because a provider is involved.</p>
+<p><strong>Encryption:</strong> ExpressRoute is private but <strong>not encrypted</strong> by default. For sensitive data, use <strong>MACsec</strong> on ExpressRoute Direct ports, <strong>IPsec over ExpressRoute</strong> (VPN tunnels on private peering, for example via Virtual WAN), or application-level TLS.</p>
+<p><strong>Resilience:</strong> for critical connectivity use two circuits in different peering locations, or ExpressRoute as primary with <strong>site-to-site VPN as failover</strong>. Both gateways can coexist in the same VNet; with BGP, Azure prefers ExpressRoute routes and falls back to VPN when they are withdrawn.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assess bandwidth, latency, compliance and timeline needs.</li>
+  <li>VPN: deploy gateway, configure on-premises device, create connection.</li>
+  <li>ExpressRoute: order circuit with provider, create ER gateway, link circuit.</li>
+  <li>Configure BGP and route advertisements.</li>
+  <li>Add encryption (MACsec or IPsec) where required.</li>
+  <li>Configure VPN as backup and test failover.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az network vnet-gateway create -g rg-hub -n vpngw-hub --vnet vnet-hub \
+  --gateway-type Vpn --vpn-type RouteBased --sku VpnGw2AZ \
+  --public-ip-addresses pip-vpngw-1 pip-vpngw-2 --asn 65515
+az network vpn-connection create -g rg-hub -n conn-onprem-dc1 \
+  --vnet-gateway1 vpngw-hub --local-gateway2 lgw-dc1 \
+  --shared-key &quot;$PSK&quot; --enable-bgp
+az network vnet-gateway list-learned-routes -g rg-hub -n vpngw-hub -o table</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>VPN Gateway</th><th>ExpressRoute</th></tr></thead>
+<tbody>
+<tr><td>Path</td><td>Public internet, IPsec</td><td>Private provider connection</td></tr>
+<tr><td>Bandwidth</td><td>Up to ~10 Gbps aggregate</td><td>50 Mbps – 100 Gbps</td></tr>
+<tr><td>Latency</td><td>Variable</td><td>Predictable</td></tr>
+<tr><td>Encryption</td><td>Yes, built-in</td><td>No by default; add MACsec/IPsec</td></tr>
+<tr><td>Setup time</td><td>Hours</td><td>Weeks</td></tr>
+<tr><td>Cost</td><td>Lower</td><td>Higher</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming ExpressRoute traffic is encrypted.</li>
+  <li>A single ExpressRoute circuit at one peering location with no backup.</li>
+  <li>VPN backup configured but never tested.</li>
+  <li>Overlapping address spaces between on-premises and Azure.</li>
+  <li>Ignoring route preference, so traffic takes the VPN unexpectedly.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Azure VPN Gateway creates encrypted IPsec tunnels over the public internet, site-to-site from an on-premises device or point-to-site for users. It is quick and cheap to set up, with bandwidth up to several gigabits per second depending on the SKU, but latency depends on the internet path. ExpressRoute is a private connection through a provider or ExpressRoute Direct, with predictable latency, bandwidth up to 100 Gbps and an SLA, and it does not traverse the public internet. However, it is not encrypted by default, so for sensitive data I add MACsec on ExpressRoute Direct or IPsec over it. A common design uses ExpressRoute as the primary path and a site-to-site VPN as BGP-based backup, which I test regularly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you test that the VPN backup works?</strong> Planned test: disable the ExpressRoute connection or withdraw routes in a maintenance window, then check effective routes and Connection Monitor.</li>
+  <li><strong>What is ExpressRoute Global Reach?</strong> It connects on-premises sites to each other through Microsoft's backbone via their circuits.</li>
+  <li><strong>When is VPN alone enough?</strong> Small sites, dev environments or low, non-critical bandwidth.</li>
+</ul>
+</article>
+</body>
+</html>

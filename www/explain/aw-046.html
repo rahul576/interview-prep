@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-046 · What are service control policies and permission boundaries, and when do you use each?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-046" data-topic="Cloud (AWS)">
+<h1>What are service control policies and permission boundaries, and when do you use each?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Service control policies</strong> cap permissions for <strong>whole accounts or OUs</strong> in AWS Organizations and act as organisation <strong>guardrails</strong>, while <strong>permission boundaries</strong> cap a <strong>single IAM user or role</strong> and enable <strong>safe delegation</strong> of role creation; <strong>neither grants</strong> anything.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>SCPs</strong> are attached to the organisation root, an <strong>organisational unit</strong> or an account. They limit every IAM principal in member accounts, including the account root user and administrators, but not the management account or service-linked roles. Typical guardrails deny use of <strong>unapproved regions</strong> (with exceptions for global services), deny stopping or deleting <strong>CloudTrail</strong>, <strong>GuardDuty</strong> or <strong>Config</strong>, deny <strong>leaving the organisation</strong>, deny deleting backup vaults or disabling <strong>S3 Block Public Access</strong>, and deny creating IAM users with access keys. Most organisations keep the default FullAWSAccess and add <strong>deny-list</strong> statements, which are easier to maintain than allow lists. <strong>RCPs</strong> complement SCPs by capping access to resources, for example blocking principals outside the organisation.</p>
+<p>A <strong>permission boundary</strong> is a managed policy set as the boundary on a user or role. The effective permissions are the intersection of the identity policies and the boundary. The main use case is <strong>delegated administration</strong>: platform teams let developers create roles for their Lambda functions or pipelines, but only if those roles carry the company boundary. The developers' own policy has a condition <code>iam:PermissionsBoundary</code> equal to the boundary ARN on <code>iam:CreateRole</code> and <code>iam:PutRolePolicy</code>, and denies removing or editing the boundary. So even if a developer attaches AdministratorAccess to a new role, that role can do no more than the boundary allows, and privilege escalation is blocked.</p>
+<p>Use <strong>SCPs</strong> for broad, non-negotiable rules across many accounts; use <strong>boundaries</strong> for fine-grained limits inside an account where IAM creation is delegated.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Organisation admin attaches SCPs to OUs such as Workloads or Sandbox.</li>
+  <li>Every request in member accounts is checked against the SCP chain.</li>
+  <li>In an account, the platform team publishes a boundary policy.</li>
+  <li>Developers may create roles only with that boundary attached.</li>
+  <li>Effective permissions are identity policy intersected with boundary and SCPs.</li>
+</ol>
+
+<h2>Example</h2>
+<p>SCP denying regions outside the EU (global services excluded):</p>
+<pre><code class="language-json">{
+  &quot;Effect&quot;: &quot;Deny&quot;,
+  &quot;NotAction&quot;: [&quot;iam:*&quot;, &quot;organizations:*&quot;, &quot;sts:*&quot;, &quot;cloudfront:*&quot;, &quot;route53:*&quot;, &quot;support:*&quot;],
+  &quot;Resource&quot;: &quot;*&quot;,
+  &quot;Condition&quot;: {&quot;StringNotEquals&quot;: {&quot;aws:RequestedRegion&quot;: [&quot;eu-west-1&quot;, &quot;eu-central-1&quot;]}}
+}</code></pre>
+<p>Developer policy forcing the boundary on new roles:</p>
+<pre><code class="language-json">{
+  &quot;Effect&quot;: &quot;Allow&quot;,
+  &quot;Action&quot;: [&quot;iam:CreateRole&quot;, &quot;iam:AttachRolePolicy&quot;, &quot;iam:PutRolePolicy&quot;],
+  &quot;Resource&quot;: &quot;arn:aws:iam::111122223333:role/app-*&quot;,
+  &quot;Condition&quot;: {&quot;StringEquals&quot;: {
+    &quot;iam:PermissionsBoundary&quot;: &quot;arn:aws:iam::111122223333:policy/DevBoundary&quot;}}
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking SCPs grant permissions or restrict the management account.</li>
+  <li>Region-deny SCPs that forget global services and break IAM or CloudFront.</li>
+  <li>Boundaries without a deny on changing or deleting the boundary itself.</li>
+  <li>Testing SCPs directly on production OUs instead of a test OU.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;SCPs belong to AWS Organizations and apply to accounts or OUs. They set the maximum permissions for everyone in those accounts, even admins, so I use them as guardrails: deny unapproved regions, deny disabling CloudTrail or GuardDuty, deny leaving the organisation. Permission boundaries attach to one user or role and cap that identity. Their main purpose is safe delegation: developers can create roles only with the company boundary attached, so they cannot escalate. Neither grants permissions; they only limit what other policies allow.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How let developers create IAM roles without becoming admins?</strong> Require the boundary via the iam:PermissionsBoundary condition and deny changing it.</li>
+  <li><strong>Deny list or allow list SCPs?</strong> Deny lists are easier to maintain; allow lists are stricter but break when new services appear.</li>
+  <li><strong>How do you test an SCP safely?</strong> Attach it to a test OU first and check CloudTrail for denials.</li>
+</ul>
+</article>
+</body>
+</html>

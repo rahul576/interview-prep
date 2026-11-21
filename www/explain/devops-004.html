@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-004 · How do Jenkins pipelines work? Explain the Jenkinsfile, stages, agents and credentials.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-004" data-topic="DevOps &amp; CI/CD">
+<h1>How do Jenkins pipelines work? Explain the Jenkinsfile, stages, agents and credentials.</h1>
+<p class="ex-meta">DevOps &amp; CI/CD · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>Jenkinsfile</strong> defines the pipeline <strong>as code in source control</strong>, written as <strong>declarative</strong> or <strong>scripted</strong> Groovy, divided into <strong>stages</strong> of <strong>steps</strong>, run on <strong>agents</strong> (not the controller), with secrets from the <strong>credentials store</strong> via <code>withCredentials</code>, shared logic in <strong>shared libraries</strong>, and <strong>multibranch pipelines</strong> building every branch and PR.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pipeline as code:</strong> the <code>Jenkinsfile</code> lives in the application repository, so pipeline changes are <strong>versioned and reviewed</strong> like code, and each branch can evolve its pipeline with the code it builds.</p>
+<p><strong>Declarative vs scripted:</strong> <strong>declarative</strong> syntax uses a structured <code>pipeline { }</code> block with <code>agent</code>, <code>stages</code>, <code>steps</code>, <code>environment</code>, <code>when</code>, <code>post</code> and <code>options</code>. It is easier to read, validate and lint, and is the recommended default. <strong>Scripted</strong> pipelines use full <strong>Groovy</strong> in <code>node { }</code> blocks, which is more flexible but harder to maintain; inside declarative you can still use a <code>script { }</code> block for small pieces of logic.</p>
+<p><strong>Stages and steps:</strong> stages (Build, Test, Scan, Deploy) structure the pipeline and appear in the UI; <strong>steps</strong> are the actual actions, such as <code>sh</code>, <code>bat</code>, <code>junit</code>, <code>archiveArtifacts</code> or plugin-provided steps. <code>parallel</code> runs stages concurrently, and <code>post</code> blocks handle always, success and failure actions like notifications.</p>
+<p><strong>Agents:</strong> the <code>agent</code> directive says where work runs. The <strong>controller</strong> should only <strong>orchestrate</strong>; running builds on it is a security risk, because build code could read Jenkins secrets and configuration. Work runs on <strong>agents</strong>: static nodes, <strong>Docker containers</strong> or ephemeral <strong>Kubernetes pods</strong> created per build with the Kubernetes plugin, giving clean, isolated environments.</p>
+<p><strong>Credentials:</strong> secrets live in the <strong>Jenkins credentials store</strong> (or an external store such as Vault). <code>withCredentials</code> or <code>credentials()</code> in <code>environment</code> inject them into a block, and Jenkins <strong>masks</strong> them in logs.</p>
+<p><strong>Shared libraries</strong> hold reusable Groovy steps (for example <code>standardBuild()</code>) in a separate repo, versioned and loaded with <code>@Library</code>. <strong>Multibranch pipelines</strong> and organisation folders discover branches and <strong>pull requests</strong> automatically and build each one.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer pushes; a webhook triggers the multibranch job.</li>
+  <li>Jenkins reads the Jenkinsfile from that branch.</li>
+  <li>The controller schedules stages on matching agents.</li>
+  <li>Steps run; credentials are injected only where needed.</li>
+  <li>Results, test reports and artifacts are recorded; <code>post</code> sends notifications.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-groovy">@Library('platform-lib@v2') _
+pipeline {
+  agent { kubernetes { yamlFile 'ci/pod.yaml' } }
+  options { timeout(time: 30, unit: 'MINUTES') }
+  stages {
+    stage('Build') { steps { sh './mvnw -B package' } }
+    stage('Test')  { steps { sh './mvnw -B verify' }
+                     post { always { junit 'target/surefire-reports/*.xml' } } }
+    stage('Push') {
+      when { branch 'main' }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'registry',
+                         usernameVariable: 'U', passwordVariable: 'P')]) {
+          sh 'echo &quot;$P&quot; | docker login -u &quot;$U&quot; --password-stdin registry.example.com'
+          sh 'docker push registry.example.com/app:${GIT_COMMIT}'
+        }
+      }
+    }
+  }
+  post { failure { slackSend channel: '#builds', message: &quot;Failed: ${env.JOB_NAME}&quot; } }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running builds on the controller (executors &gt; 0).</li>
+  <li>Hard-coding secrets or echoing them in scripts.</li>
+  <li>Huge scripted pipelines copied across repos instead of shared libraries.</li>
+  <li>Outdated plugins with known vulnerabilities.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Jenkinsfile defines the pipeline as code in the repo, so it's versioned and reviewed. It can be declarative, the structured pipeline block I prefer, or scripted Groovy. It's split into stages like build, test and deploy, each with steps such as sh. The agent directive decides where it runs: the controller only orchestrates, and agents, often ephemeral Kubernetes pods, do the work. Secrets come from the credentials store through withCredentials and are masked. Shared libraries hold common logic, and multibranch pipelines build every branch and PR.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risks of building on the controller?</strong> Build code can access Jenkins home, secrets and configuration, compromising everything.</li>
+  <li><strong>How to make agents scalable?</strong> Kubernetes plugin with ephemeral pod agents.</li>
+  <li><strong>How to manage Jenkins config?</strong> Configuration as Code (JCasC) and pinned plugin versions.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-010 · How do you protect important resources from being destroyed by Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-010" data-topic="Infrastructure as Code">
+<h1>How do you protect important resources from being destroyed by Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Use <strong>lifecycle prevent_destroy</strong>, but back it with <strong>cloud-level deletion protection</strong>, <strong>backups/versioning</strong>, <strong>separate state</strong> for critical resources, careful <strong>plan review</strong> and <strong>policy checks</strong> that block destructive plans.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>lifecycle { prevent_destroy = true }</code> makes Terraform <strong>reject any plan</strong> that would destroy the resource, including replacements caused by an argument that forces a new resource. It is valuable for production databases, KMS keys and buckets with data. But it has a big weakness: it lives in the <strong>resource block</strong>. If someone deletes the block, or removes the whole module, the protection disappears with it, and the plan simply shows a destroy. It also does not protect against changes made outside Terraform.</p>
+<p>So I add <strong>defence in depth</strong> at the cloud layer, which works no matter which tool calls the API: <code>deletion_protection</code> on RDS and Aurora, load balancers and DynamoDB tables; <strong>termination protection</strong> for EC2 instances and CloudFormation stacks; <strong>S3 versioning</strong>, <strong>MFA delete</strong> or <strong>Object Lock</strong>; KMS key deletion windows; Azure <strong>resource locks</strong>; and <strong>backups</strong> in a separate account. These make a mistaken destroy fail at the API.</p>
+<p>Organisationally, critical and rarely changing resources, such as the core network or databases, often live in a <strong>separate state</strong> with stricter permissions, so an application team's routine apply cannot touch them. Every plan is <strong>reviewed for destroy and replace</strong> actions, and <strong>policy as code</strong> (OPA/Conftest on <code>terraform show -json</code>, or Sentinel in HCP Terraform) can fail the pipeline automatically when a plan deletes protected resource types without explicit approval.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Mark critical resources with <code>prevent_destroy</code>.</li>
+  <li>Enable provider-side deletion protection arguments.</li>
+  <li>Keep backups and versioning independent of Terraform.</li>
+  <li>Isolate critical resources in their own state and pipeline.</li>
+  <li>Policy checks parse the plan JSON and block delete actions on protected types.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_db_instance&quot; &quot;prod&quot; {
+  identifier          = &quot;orders-prod&quot;
+  deletion_protection = true
+  skip_final_snapshot = false
+  backup_retention_period = 14
+  lifecycle {
+    prevent_destroy = true
+  }
+}</code></pre>
+<pre><code class="language-rego">package terraform
+deny[msg] {
+  rc := input.resource_changes[_]
+  rc.type == &quot;aws_db_instance&quot;
+  rc.change.actions[_] == &quot;delete&quot;
+  msg := sprintf(&quot;Deleting database %s requires approval&quot;, [rc.address])
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on <code>prevent_destroy</code>, which vanishes with the block.</li>
+  <li>Skimming the plan summary and missing a <code>-/+</code> replacement.</li>
+  <li><code>skip_final_snapshot = true</code> on production databases.</li>
+  <li>Keeping backups in the same account the pipeline can delete from.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Inside Terraform I use lifecycle prevent_destroy, so any plan that would destroy, say, the production database fails. But that protection is lost if someone deletes the resource block, so I always add cloud-level protection too: deletion_protection on RDS and load balancers, termination protection, S3 versioning or Object Lock, and backups in a separate account. Critical, rarely changed resources live in their own state with tighter access. And every plan is reviewed for destroys and replacements, with a policy check in CI that blocks deletes of protected resource types unless explicitly approved.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is prevent_destroy alone not enough?</strong> It's removed with the block and doesn't stop out-of-band deletions.</li>
+  <li><strong>How do you stop managing a resource without deleting it?</strong> A <code>removed</code> block with <code>destroy = false</code>, or <code>terraform state rm</code>.</li>
+  <li><strong>How do you catch replacements?</strong> Look for &quot;forces replacement&quot; and <code>-/+</code> in the plan; policy on <code>delete</code> actions.</li>
+</ul>
+</article>
+</body>
+</html>

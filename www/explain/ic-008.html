@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-008 · Which tools help keep Terraform code clean and correct before planning?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-008" data-topic="Infrastructure as Code">
+<h1>Which tools help keep Terraform code clean and correct before planning?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Run <strong>terraform fmt</strong> (style), <strong>terraform validate</strong> (syntax, types, references), <strong>tflint</strong> (provider-aware linting) and <strong>security scanners</strong> like <strong>Checkov</strong> or <strong>Trivy</strong> (misconfigurations) in <strong>pre-commit hooks and CI</strong> before <code>terraform plan</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Cheap, fast checks catch most problems before anyone looks at a plan, so reviewers can focus on design.</p>
+<p><strong>terraform fmt</strong> rewrites <code>.tf</code> files into the canonical style (indentation, alignment of <code>=</code>). In CI, <code>terraform fmt -check -recursive</code> fails the build when files are not formatted, which removes style debates from code review.</p>
+<p><strong>terraform validate</strong> checks that the configuration is syntactically valid and internally consistent: correct argument names, types, references to existing variables and resources. It needs <code>terraform init</code> (it can use <code>-backend=false</code>) to load provider schemas, but it does not call cloud APIs or read state.</p>
+<p><strong>tflint</strong> goes further with pluggable rule sets for AWS, Azure and Google. It catches errors validate cannot know about, such as an invalid instance type or region, deprecated syntax, unused declarations and missing version constraints, and can enforce naming conventions.</p>
+<p><strong>Security and compliance scanners</strong> look for risky configuration: unencrypted buckets or disks, public S3 access, security groups open to <code>0.0.0.0/0</code> on SSH, missing logging. <strong>Checkov</strong> and <strong>Trivy</strong> are the common choices; <strong>tfsec</strong> has been merged into Trivy, which is now the recommended path for tfsec users. Cost tools like <strong>Infracost</strong> are often added to the same pipeline.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer commits; <strong>pre-commit</strong> runs fmt, validate and tflint locally.</li>
+  <li>The pull request pipeline repeats them, so nothing depends on local setup.</li>
+  <li>A security scanner runs and fails on high-severity findings.</li>
+  <li>Only then <code>terraform plan</code> runs and its output is posted for review.</li>
+  <li>Accepted risks are suppressed explicitly with a justification.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.96.1
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_tflint
+      - id: terraform_trivy</code></pre>
+<pre><code class="language-bash">terraform fmt -check -recursive
+terraform init -backend=false &amp;&amp; terraform validate
+tflint --init &amp;&amp; tflint --recursive
+checkov -d . --quiet</code></pre>
+<pre><code class="language-hcl">resource &quot;aws_s3_bucket&quot; &quot;public_site&quot; {
+  #checkov:skip=CKV_AWS_18:Access logging not required for static marketing site
+  bucket = &quot;example-site&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running checks only locally, so they are skipped by anyone without hooks.</li>
+  <li>Thinking <code>validate</code> catches wrong instance types or permissions; it does not.</li>
+  <li>Blanket-disabling scanner rules instead of inline, justified suppressions.</li>
+  <li>Scanning only code and never the plan for computed values.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I layer the checks. terraform fmt, with -check in CI, keeps formatting consistent. terraform validate checks syntax, types and references without touching the cloud. tflint adds provider-aware rules, like invalid instance types, deprecated arguments, unused variables and naming conventions. Then a security scanner such as Checkov or Trivy flags things like unencrypted buckets or SSH open to the world. All of them run as pre-commit hooks and again in the pull request pipeline before plan, so reviewers spend their time on real design questions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you suppress a scanner finding that is an accepted risk?</strong> An inline skip comment with the rule ID and a reason, or a reviewed baseline/config file.</li>
+  <li><strong>Does validate need credentials?</strong> No, only provider schemas from init.</li>
+  <li><strong>Code scanning vs plan scanning?</strong> Plan scanning sees computed values and module results.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-043 · How do you analyse and reduce the size of a Docker image?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-043" data-topic="Docker">
+<h1>How do you analyse and reduce the size of a Docker image?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Analyse with <strong><code>docker history</code></strong> and <strong>dive</strong> to find large layers, then shrink with a <strong>smaller base image</strong>, <strong>multi-stage builds</strong>, <strong>install-and-clean in the same RUN</strong>, <strong><code>--no-install-recommends</code></strong>, a <strong><code>.dockerignore</code></strong>, and copying <strong>only the built artifact</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Image size affects pull time, cold-start and autoscaling speed, registry storage and egress costs, and the number of packages a scanner reports. Before optimising, measure. <strong><code>docker history &lt;image&gt;</code></strong> lists each layer with its size and the instruction that created it, which quickly shows whether the base image, the dependency install or a stray <code>COPY . .</code> is responsible. <strong>dive</strong> is an interactive tool that browses each layer's files and calculates an <strong>efficiency score</strong> and <strong>wasted space</strong>, such as files added in one layer and deleted or overwritten in another.</p>
+<p>The main techniques follow from how layers work. Because every instruction creates an immutable layer, files deleted in a later layer still exist in an earlier one, so <strong>package installation and cleanup must be in the same <code>RUN</code></strong>: <code>apt-get install --no-install-recommends ... &amp;&amp; rm -rf /var/lib/apt/lists/*</code>, <code>pip install --no-cache-dir</code>, <code>npm cache clean</code>. <strong>Multi-stage builds</strong> are the biggest win: compile in a full SDK image and copy only the JAR, binary or <code>dist/</code> folder into a slim, distroless or scratch runtime image, so compilers, headers and test dependencies never ship. Choose a <strong>smaller base</strong> (slim, distroless, Alpine where compatible). A <strong><code>.dockerignore</code></strong> excludes <code>.git</code>, <code>node_modules</code>, build outputs and local secrets from the context, which also speeds builds and prevents accidental leaks.</p>
+<p>Finally, look at the application itself: production-only dependencies, a <strong>jlink</strong> custom Java runtime, or stripping debug symbols from Go binaries (<code>-ldflags=&quot;-s -w&quot;</code>).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure with <code>docker images</code>, <code>docker history</code> and <code>dive</code>.</li>
+  <li>Identify the largest layers and wasted files.</li>
+  <li>Move build tooling into a builder stage.</li>
+  <li>Combine install and cleanup into single RUN steps.</li>
+  <li>Exclude context files with <code>.dockerignore</code>.</li>
+  <li>Re-measure and add a size check in CI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker history --no-trunc --format &quot;{{.Size}}\t{{.CreatedBy}}&quot; api:1.4 | sort -h | tail
+dive api:1.4</code></pre>
+<pre><code class="language-dockerfile">FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags=&quot;-s -w&quot; -o /out/app ./cmd/app
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/app /app
+ENTRYPOINT [&quot;/app&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>RUN rm</code> in a separate layer and expecting the image to shrink.</li>
+  <li><code>COPY . .</code> without <code>.dockerignore</code>, shipping <code>.git</code> and <code>node_modules</code>.</li>
+  <li>Shipping the full SDK image to production.</li>
+  <li>Squashing everything into one layer and losing cache reuse.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure: docker history shows each layer's size and the instruction behind it, and dive lets me browse layers and highlights wasted space. Then I reduce: a slimmer base like slim or distroless, and a multi-stage build so compilers and build tools never reach the final image. Installation and cleanup go in the same RUN, with no-install-recommends and removing the apt lists, because files deleted in a later layer still exist in earlier ones. A .dockerignore keeps junk out of the context, and I copy only the built artifact.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a smaller image matter?</strong> Faster pulls and scaling, lower costs, fewer CVEs.</li>
+  <li><strong>Is fewer layers always better?</strong> No, well-ordered layers improve caching and reuse.</li>
+  <li><strong>How do you prevent regressions?</strong> Fail CI when the image exceeds a size budget.</li>
+</ul>
+</article>
+</body>
+</html>

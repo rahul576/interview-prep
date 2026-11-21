@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-120 · How do you build multi-architecture images and speed up Docker builds with BuildKit?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-120" data-topic="Docker">
+<h1>How do you build multi-architecture images and speed up Docker builds with BuildKit?</h1>
+<p class="ex-meta">Docker · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>BuildKit</strong>, the default Docker builder, speeds builds with <strong>parallel stages</strong>, <strong>skipping unused stages</strong>, <strong>cache mounts</strong> and <strong>secret mounts</strong>; <strong>docker buildx</strong> uses it to build <strong>multi-platform images</strong> (amd64/arm64) via <strong>QEMU emulation, native builders or cross-compilation</strong>, pushing a <strong>manifest list/OCI index</strong>, with <strong>registry or GitHub Actions cache</strong> for ephemeral CI runners.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>BuildKit</strong> (default since Docker Engine 23) turns the Dockerfile into a dependency graph. Independent stages build <strong>in parallel</strong>, stages the target does not need are <strong>skipped</strong>, and caching is more precise than the legacy builder. Dockerfile features it enables:</p>
+<ul>
+  <li><code>RUN --mount=type=cache,target=/root/.m2</code> keeps package manager caches between builds without putting them in layers.</li>
+  <li><code>RUN --mount=type=secret,id=npmrc</code> exposes a secret for one step only; it never lands in a layer or history.</li>
+  <li><code>RUN --mount=type=ssh</code> forwards an SSH agent for private git dependencies.</li>
+  <li><code>COPY --link</code> creates layers that do not need rebuilding when earlier layers change.</li>
+</ul>
+<p><strong>Multi-architecture images:</strong> Graviton servers, Apple silicon laptops and Raspberry Pis are arm64, most CI and many servers are amd64. <code>docker buildx build --platform linux/amd64,linux/arm64</code> builds one image per platform and pushes a <strong>manifest list</strong> (OCI image index) under a single tag; when a node pulls <code>myapp:1.4</code>, the registry serves the variant for its architecture. Three ways to build the foreign platform:</p>
+<ul>
+  <li><strong>QEMU emulation</strong> (binfmt): easy, but CPU-heavy steps such as compiling can be <strong>5-20x slower</strong>.</li>
+  <li><strong>Native builders</strong>: a buildx builder with nodes on both architectures, or separate jobs on amd64 and arm64 runners (GitHub offers arm64 hosted runners), merged into one manifest with <code>docker buildx imagetools create</code>.</li>
+  <li><strong>Cross-compilation</strong>: run the build stage on <code>$BUILDPLATFORM</code> and compile for <code>$TARGETARCH</code> (easy in Go, Rust, .NET), so no emulation is needed.</li>
+</ul>
+<p><strong>CI caching:</strong> runners are ephemeral, so local cache disappears. Export and import it with <code>--cache-to</code> / <code>--cache-from</code>, using <code>type=registry</code> (a cache image in your registry), <code>type=gha</code> (GitHub Actions cache) or <code>type=s3</code>. <code>mode=max</code> caches intermediate stages too.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a buildx builder (docker-container driver for multi-platform).</li>
+  <li>BuildKit resolves the graph, pulling cache metadata.</li>
+  <li>Builds each platform (emulated, native or cross-compiled).</li>
+  <li>Pushes per-platform images and the index; exports cache.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.23 AS build
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/api ./cmd/api
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/api /api
+ENTRYPOINT [&quot;/api&quot;]</code></pre>
+<pre><code class="language-bash">docker buildx create --use --name multi
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/acme/api:1.4.0 --push \
+  --cache-from type=registry,ref=ghcr.io/acme/api:buildcache \
+  --cache-to type=registry,ref=ghcr.io/acme/api:buildcache,mode=max .</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Compiling heavy code under QEMU and accepting 40-minute builds.</li>
+  <li>Pushing separate <code>-arm64</code> tags instead of one manifest list.</li>
+  <li>No cache export in CI, so every build starts cold.</li>
+  <li>Native dependencies (glibc vs musl, binary downloads) hard-coded for amd64.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;BuildKit is the modern builder: it runs independent stages in parallel, skips unused ones, and supports cache mounts so package caches survive between builds and secret mounts so credentials never land in layers. With docker buildx I build multi-platform images, for example amd64 and arm64 for Graviton and Apple silicon, and push a manifest list so each node pulls the right variant. Emulation through QEMU works but is slow for compilation, so I prefer native arm64 runners or cross-compiling with BUILDPLATFORM and TARGETARCH. In CI I use registry or GitHub Actions cache with cache-from and cache-to, since runners are ephemeral.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is QEMU slow?</strong> Every instruction is emulated in software; use native builders or cross-compilation.</li>
+  <li><strong>How do you check an image's platforms?</strong> <code>docker buildx imagetools inspect image:tag</code>.</li>
+  <li><strong>mode=min vs mode=max?</strong> Min caches only final layers; max also caches intermediate stages.</li>
+</ul>
+</article>
+</body>
+</html>

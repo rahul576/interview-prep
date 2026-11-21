@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-020 · What are Systems Manager Session Manager and Parameter Store?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-020" data-topic="Cloud (AWS)">
+<h1>What are Systems Manager Session Manager and Parameter Store?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Session Manager</strong> gives <strong>shell access to instances</strong> through the <strong>SSM agent and IAM</strong>, with <strong>no SSH keys, bastions or open inbound ports</strong>, and <strong>logs every session</strong>; <strong>Parameter Store</strong> is a <strong>hierarchical, versioned key-value store</strong> for configuration, with <strong>SecureString</strong> values <strong>encrypted by KMS</strong>, read at runtime with IAM permissions.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both are capabilities of <strong>AWS Systems Manager</strong>.</p>
+<p><strong>Session Manager</strong> replaces SSH. The <strong>SSM agent</strong>, preinstalled on Amazon Linux, Ubuntu and Windows AMIs, makes an <strong>outbound</strong> HTTPS connection to the Systems Manager service. When an authorised user runs <code>aws ssm start-session</code> or clicks Connect in the console, the session is tunnelled through that channel. Benefits: no <strong>port 22</strong> open in security groups, no SSH keys to distribute and rotate, no <strong>bastion host</strong>, and instances can sit in private subnets with only NAT or <strong>VPC endpoints</strong> (<code>ssm</code>, <code>ssmmessages</code>, <code>ec2messages</code>). Access is controlled by <strong>IAM</strong> policies (which instances, by tag, which documents), sessions can be <strong>logged</strong> to S3 or CloudWatch Logs and recorded in CloudTrail, and it supports <strong>port forwarding</strong>, for example to reach a private RDS database from a laptop. The instance needs an instance profile with <code>AmazonSSMManagedInstanceCore</code>. It also works for on-premises servers registered as hybrid nodes.</p>
+<p><strong>Parameter Store</strong> stores configuration values as parameters named in <strong>hierarchies</strong>, such as <code>/orders/prod/db-url</code> and <code>/orders/prod/feature-x</code>. Types are <code>String</code>, <code>StringList</code> and <strong><code>SecureString</code></strong>, which is encrypted with a <strong>KMS</strong> key. Every change creates a new <strong>version</strong>, and <strong>labels</strong> can point to versions. <strong>Standard</strong> parameters are free (up to 4 KB, 10,000 per region); <strong>advanced</strong> parameters allow 8 KB, more parameters and <strong>policies</strong> such as expiration, at a cost. Applications, ECS task definitions, Lambda, CloudFormation and pipelines read parameters at runtime with <strong>IAM permissions</strong> scoped by path, so configuration stays out of code and images. <code>GetParametersByPath</code> loads a whole application's config at once.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Instance runs the SSM agent with an instance profile.</li>
+  <li>Agent connects outbound to Systems Manager.</li>
+  <li>User with IAM permission starts a session; traffic flows over that channel.</li>
+  <li>Session activity is logged.</li>
+  <li>Apps call <code>GetParameter(s)</code> with their role; SecureStrings are decrypted via KMS.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Shell on a private instance, no SSH
+aws ssm start-session --target i-0abc123def456
+
+# Port-forward to a private RDS database
+aws ssm start-session --target i-0abc123def456 \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{&quot;host&quot;:[&quot;orders.cluster-xyz.eu-west-1.rds.amazonaws.com&quot;],&quot;portNumber&quot;:[&quot;5432&quot;],&quot;localPortNumber&quot;:[&quot;5432&quot;]}'
+
+# Store and read configuration
+aws ssm put-parameter --name /orders/prod/db-password --type SecureString --value 'S3cr3t!'
+aws ssm get-parameters-by-path --path /orders/prod --with-decryption</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping port 22 open &quot;just in case&quot; after adopting Session Manager.</li>
+  <li>Missing VPC endpoints or instance profile, so instances never register.</li>
+  <li>Granting <code>ssm:GetParameter<em></code> on <code></em></code> instead of a path.</li>
+  <li>No session logging.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Session Manager, part of Systems Manager, gives me a shell on EC2 or on-prem servers through the SSM agent and the AWS API, so I don't need SSH keys, a bastion host or an open port 22. Access is controlled with IAM, and every session can be logged to S3 or CloudWatch. It can also port-forward to private databases. Parameter Store is a key-value store for configuration organised in hierarchies like /orders/prod/db-url, with versioning; SecureString parameters are encrypted with KMS, so it can hold simple secrets. Applications read parameters at runtime with their IAM role, keeping configuration out of code and images.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When Secrets Manager instead?</strong> When you need automatic rotation, cross-region replication or cross-account sharing.</li>
+  <li><strong>What endpoints does a private instance need?</strong> <code>ssm</code>, <code>ssmmessages</code> and <code>ec2messages</code> interface endpoints.</li>
+  <li><strong>How do apps get parameter changes?</strong> Reload periodically or use caching extensions such as the Parameters and Secrets Lambda extension.</li>
+</ul>
+</article>
+</body>
+</html>

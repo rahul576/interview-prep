@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-046 · How do you validate inputs and assumptions in Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-046" data-topic="Infrastructure as Code">
+<h1>How do you validate inputs and assumptions in Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>strong types</strong> (objects with <strong>optional</strong> attributes), <strong>variable validation</strong> blocks with clear <strong>error_message</strong>, <strong>preconditions/postconditions</strong> on resources, data sources and outputs, and <strong>check blocks</strong> for non-blocking assertions, so failures happen <strong>early and clearly</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without validation, a typo in an input surfaces as an obscure provider error halfway through an apply, or worse, succeeds and creates the wrong thing. Terraform offers several layers.</p>
+<p><strong>Types.</strong> <code>type = string</code> is the minimum; for complex inputs use <code>object({...})</code> with <code>optional(attr, default)</code> (Terraform 1.3+). Terraform rejects inputs with the wrong shape or type at plan time and the type documents the interface.</p>
+<p><strong>Variable validation.</strong> A <code>validation</code> block has a <code>condition</code> and an <code>error_message</code>. Examples: <code>contains([&quot;dev&quot;, &quot;test&quot;, &quot;prod&quot;], var.environment)</code>, <code>can(cidrhost(var.vpc_cidr, 0))</code> to ensure a valid CIDR, regex checks on names, numeric ranges. Since Terraform 1.9, conditions can reference <strong>other variables</strong> and objects, not just the variable itself, which enables cross-field checks.</p>
+<p><strong>Preconditions and postconditions</strong> live in a <code>lifecycle</code> block of resources and data sources, or in outputs. A <strong>precondition</strong> checks assumptions before Terraform plans or changes the object: the selected AMI must be <code>arm64</code>, the subnet must belong to the expected VPC, the instance type must be allowed in this environment. A <strong>postcondition</strong> checks the result: the certificate status is <code>ISSUED</code>, the looked-up VPC has DNS support enabled. When they fail, Terraform stops with your message, and the failure is attributed to the right object.</p>
+<p><strong>Check blocks</strong> (1.5+) express continuous assertions about the infrastructure as a whole, optionally with a <strong>scoped data source</strong> such as an HTTP request to a health endpoint. They run on every plan and apply but only produce <strong>warnings</strong>, never block, so they suit health and compliance signals, and HCP Terraform uses them for continuous validation.</p>
+<p>The goal across all of them is to <strong>fail early with a clear message</strong> that tells the caller what to fix.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Type conversion and checking of inputs.</li>
+  <li>Variable validation conditions evaluated.</li>
+  <li>Preconditions evaluated before planning each resource (or at apply if values are unknown).</li>
+  <li>Postconditions evaluated after a resource is planned or applied.</li>
+  <li>Check blocks evaluated at the end, producing warnings.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;environment&quot; {
+  type = string
+  validation {
+    condition     = contains([&quot;dev&quot;, &quot;test&quot;, &quot;prod&quot;], var.environment)
+    error_message = &quot;environment must be dev, test or prod.&quot;
+  }
+}
+
+variable &quot;vpc_cidr&quot; {
+  type = string
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr, 0))
+    error_message = &quot;vpc_cidr must be a valid CIDR block, e.g. 10.0.0.0/16.&quot;
+  }
+}
+
+resource &quot;aws_instance&quot; &quot;app&quot; {
+  ami           = data.aws_ami.app.id
+  instance_type = var.instance_type
+  lifecycle {
+    precondition {
+      condition     = data.aws_ami.app.architecture == &quot;arm64&quot;
+      error_message = &quot;The AMI must be arm64 for Graviton instances.&quot;
+    }
+  }
+}
+
+check &quot;health&quot; {
+  data &quot;http&quot; &quot;app&quot; { url = &quot;https://${aws_lb.app.dns_name}/health&quot; }
+  assert {
+    condition     = data.http.app.status_code == 200
+    error_message = &quot;Application health endpoint is not returning 200.&quot;
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>type = any</code> everywhere, losing all checking.</li>
+  <li>Vague error messages such as &quot;invalid value&quot;.</li>
+  <li>Using check blocks expecting them to block applies.</li>
+  <li>Validating in the provider error instead of the module interface.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Strong types come first: object types with optional attributes and defaults document the interface and reject wrong shapes. Then validation blocks on variables, with a condition and error message, for example that environment is dev, test or prod, or that a CIDR is valid using can(cidrhost(...)). Preconditions and postconditions in a resource or output check assumptions at plan or apply time, like that the AMI has the right architecture or that a certificate was issued. Check blocks add assertions that run on every plan but only warn, like a health endpoint responding. All of these fail early with a clear message instead of an obscure API error.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the difference between a validation block and a precondition?</strong> Validation checks an input variable (at the module boundary); preconditions check assumptions about a specific resource, data source or output, possibly using other objects.</li>
+  <li><strong>Do check blocks stop an apply?</strong> No, failures are warnings.</li>
+  <li><strong>When are preconditions with unknown values evaluated?</strong> Deferred to apply when values become known.</li>
+</ul>
+</article>
+</body>
+</html>

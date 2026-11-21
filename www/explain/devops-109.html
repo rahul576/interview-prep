@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-109 · When does Helm make things worse than plain manifests or Kustomize?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-109" data-topic="GitOps &amp; Helm">
+<h1>When does Helm make things worse than plain manifests or Kustomize?</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Helm shines for <strong>packaging and distributing reusable charts</strong> (especially <strong>third-party software</strong>) with releases and rollback, but makes things worse when <strong>internal charts are over-templated</strong> into unreadable logic; for your own services with small environment differences, <strong>Kustomize overlays on plain YAML</strong> are often clearer, and whatever you use, <strong>render and diff the output</strong> in CI.</p>
+
+<h2>Detailed explanation</h2>
+<p>Helm combines three things: a <strong>template engine</strong> (Go templates plus Sprig functions), a <strong>package format</strong> (charts with versions and dependencies, published to chart repositories or OCI registries) and <strong>release management</strong> (revisions stored in the cluster, <code>helm rollback</code>). For installing ingress controllers, cert-manager, Prometheus or databases, this is excellent: the vendor maintains the chart and you only set values.</p>
+<p>The problems start with <strong>internal charts that try to be generic</strong>. Every field becomes a value, then a conditional, then a helper in <code>_helpers.tpl</code>. You end up with <code>{{- if and .Values.ingress.enabled (not .Values.global.disableIngress) }}</code>, whitespace-sensitive <code>nindent</code> calls and values files nobody fully understands. Reviewers can't tell what YAML will be produced; a typo silently renders an empty field; and YAML-generating-YAML has no type checking. Charts become a <strong>second programming language</strong> with poor tooling. Helm's release state can also confuse things when combined with GitOps tools that render charts themselves.</p>
+<p><strong>Kustomize</strong> takes the opposite approach: <strong>no templates</strong>, just plain, valid YAML bases plus <strong>overlays</strong> that patch them per environment (replicas, image tag, resources). It is built into <code>kubectl</code> and easy to read. Its limits: complex parameterisation and distributing reusable packages to others.</p>
+<p>Good practice either way: keep charts simple and opinionated, use a <strong>shared library chart</strong> for common patterns, and in CI run <strong><code>helm template</code></strong> or <strong><code>helm diff upgrade</code></strong> (or Argo CD's diff) so reviewers see the <strong>rendered manifests</strong>, plus <code>helm lint</code> and schema validation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Third-party software → upstream Helm chart with a small values file.</li>
+  <li>Own services → Kustomize base + overlays, or one simple shared chart.</li>
+  <li>CI renders final manifests and validates them (kubeconform, policies).</li>
+  <li>The PR shows the rendered diff; reviewers approve the real output.</li>
+  <li>GitOps applies the rendered result.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># overlays/prod/kustomization.yaml
+resources: [ ../../base ]
+images:
+  - name: orders
+    newName: registry.example.com/orders
+    newTag: &quot;1.4.2&quot;
+patches:
+  - target: { kind: Deployment, name: orders }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 6</code></pre>
+<pre><code class="language-bash">helm template orders ./chart -f values-prod.yaml | kubeconform -strict -
+helm diff upgrade orders ./chart -f values-prod.yaml -n orders</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Helm</th><th>Kustomize</th></tr></thead>
+<tbody>
+<tr><td>Approach</td><td>Templates + values</td><td>Patches on plain YAML</td></tr>
+<tr><td>Packaging/versioning</td><td>Yes (charts, repos, OCI)</td><td>No</td></tr>
+<tr><td>Readability</td><td>Drops with complexity</td><td>High</td></tr>
+<tr><td>Best for</td><td>Third-party, reusable apps</td><td>Own services, env variants</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Exposing every Kubernetes field as a value &quot;for flexibility&quot;.</li>
+  <li>Reviewing <code>values.yaml</code> changes without seeing rendered output.</li>
+  <li>Copy-pasting charts per service instead of a library chart.</li>
+  <li>Forgetting that Helm and Kustomize can be combined (Kustomize can inflate Helm charts).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Helm is great for packaging and distributing reusable software, especially third-party things like ingress controllers or Prometheus, where you just set values and get versioning and rollback. It gets worse when our own charts are over-templated: every field a value, nested conditionals and helpers, until nobody can tell what will be deployed. For our own services with a few environment differences, Kustomize overlays patching plain YAML are usually clearer. Whichever I use, CI renders the manifests with <code>helm template</code> or <code>helm diff</code> and validates them, so reviewers approve the actual YAML, not just a values change.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test a Helm chart?</strong> <code>helm lint</code>, schema validation with <code>values.schema.json</code>, <code>helm template</code> + kubeconform, helm-unittest, and <code>helm test</code> in a test cluster.</li>
+  <li><strong>What is a library chart?</strong> A chart of reusable templates that other charts include, not installable itself.</li>
+  <li><strong>Can Kustomize use Helm charts?</strong> Yes, via the <code>helmCharts</code> field with <code>--enable-helm</code>.</li>
+</ul>
+</article>
+</body>
+</html>

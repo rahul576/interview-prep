@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-021 · What is the difference between Secrets Manager and Parameter Store?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-021" data-topic="Cloud (AWS)">
+<h1>What is the difference between Secrets Manager and Parameter Store?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Both store values <strong>encrypted with KMS</strong> and read via <strong>IAM</strong>, but <strong>Secrets Manager</strong> is built for secrets with <strong>automatic rotation</strong>, <strong>cross-region replication</strong> and <strong>resource policies</strong> for cross-account sharing at a <strong>per-secret cost</strong>, while <strong>Parameter Store</strong> is a general <strong>configuration store</strong> whose <strong>standard tier is free</strong> and has <strong>no native rotation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Secrets Manager</strong> is purpose-built for credentials: database passwords, API keys, OAuth tokens. Its key feature is <strong>automatic rotation</strong> on a schedule: a <strong>Lambda rotation function</strong> creates a new credential, sets it in the target system, tests it and switches the <code>AWSCURRENT</code> label. AWS provides <strong>managed rotation</strong> for RDS, Aurora, Redshift and DocumentDB, and RDS can even <strong>manage the master password</strong> in Secrets Manager for you. It supports <strong>cross-region replication</strong> for multi-region applications and DR, <strong>resource-based policies</strong> for sharing a secret with another account, versioning with staging labels, and secrets up to 64 KB. It costs a small monthly fee per secret plus a charge per API calls.</p>
+<p><strong>Parameter Store</strong> (part of Systems Manager) is for <strong>configuration in general</strong>: feature settings, URLs, AMI IDs, and also simple secrets as <strong>SecureString</strong>. <strong>Standard parameters are free</strong> with generous limits; advanced parameters cost a little. It has hierarchies, versions and labels, and integrates widely with ECS, Lambda, CloudFormation and CodeBuild. It has <strong>no built-in rotation</strong>, though you can build it yourself. Parameter Store can even reference Secrets Manager secrets via the <code>/aws/reference/secretsmanager/</code> path, giving one API for both.</p>
+<p>A common split: <strong>Parameter Store for configuration and static values</strong>, <strong>Secrets Manager for credentials that should rotate or be shared across accounts or regions</strong>. For applications, caching clients and the <strong>AWS Parameters and Secrets Lambda Extension</strong> reduce API calls and cost.</p>
+<p>Rotation only helps if applications <strong>pick up new values</strong>: they should fetch secrets at runtime with a short cache rather than baking them into environment variables at deploy time, and connection pools should handle re-authentication.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Store the value; KMS encrypts it.</li>
+  <li>App role is granted <code>GetSecretValue</code> or <code>GetParameter</code> on that resource.</li>
+  <li>App fetches at startup and refreshes from a cache.</li>
+  <li>Secrets Manager rotation Lambda creates and tests a new credential.</li>
+  <li>Labels switch to the new version; the old one is retired.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws secretsmanager create-secret --name prod/orders/db \
+  --secret-string '{&quot;username&quot;:&quot;orders_app&quot;,&quot;password&quot;:&quot;initial-Pa55&quot;}'
+aws secretsmanager rotate-secret --secret-id prod/orders/db \
+  --rotation-lambda-arn arn:aws:lambda:eu-west-1:123456789012:function:rds-rotation \
+  --rotation-rules AutomaticallyAfterDays=30
+
+aws ssm put-parameter --name /orders/prod/payment-api-url \
+  --type String --value https://api.payments.example.com</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Paying for Secrets Manager for plain configuration.</li>
+  <li>Putting rotating DB passwords in Parameter Store with no rotation.</li>
+  <li>Reading the secret only at deploy time, so rotation breaks the app.</li>
+  <li>Over-broad <code>GetSecretValue</code> permissions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both encrypt values with KMS and are read at runtime with IAM. Secrets Manager is built for secrets: it rotates them automatically with a Lambda, with managed rotation for RDS and other databases, supports cross-region replication and sharing through resource policies, and costs a bit per secret plus API calls. Parameter Store is for configuration in general; standard parameters are free and SecureString handles simple secrets, but there's no native rotation. So I use Parameter Store for config and static values, and Secrets Manager for database passwords and API keys that must rotate, making sure apps fetch with a cache so rotation doesn't break them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does an app pick up a rotated secret without restarting?</strong> Fetch at runtime with a short-lived cache and retry auth failures with a refreshed secret.</li>
+  <li><strong>What is the alternating-users rotation strategy?</strong> Two DB users alternate so one is always valid during rotation.</li>
+  <li><strong>Can ECS inject secrets?</strong> Yes, task definitions reference Secrets Manager or Parameter Store ARNs.</li>
+</ul>
+</article>
+</body>
+</html>

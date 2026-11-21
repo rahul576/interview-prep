@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-424 · Design a news feed system like the one on LinkedIn or Twitter.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-424" data-topic="System Design">
+<h1>Design a news feed system like the one on LinkedIn or Twitter.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A news feed stores posts separately and builds per-user <strong>timelines of post IDs in Redis</strong>, using <strong>fan-out on write</strong> for normal accounts and <strong>fan-out on read</strong> for <strong>celebrities</strong> (a <strong>hybrid</strong>), then a <strong>ranking service</strong> orders candidates and the API pages with <strong>cursors</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Two operations matter: <strong>publishing a post</strong> and <strong>reading a feed</strong>. Reads vastly outnumber writes, and users expect the feed in well under 200 ms.</p>
+<p><strong>Fan-out on write (push):</strong> when a user posts, a background worker inserts the post ID into each follower's precomputed timeline (a Redis list or sorted set capped at, say, 800 entries). Reads are just a cache lookup plus hydration. The problem: an account with 50 million followers creates 50 million writes per post, delaying delivery and wasting work for inactive followers.</p>
+<p><strong>Fan-out on read (pull):</strong> at read time, fetch recent posts from everyone the user follows and merge them. Writes are cheap but reads are expensive, especially for users following thousands of accounts.</p>
+<p><strong>Hybrid:</strong> push for normal accounts; for accounts above a follower threshold, skip fan-out and <strong>pull their recent posts at read time</strong>, merging them with the precomputed timeline. Also skip fan-out to inactive users and rebuild their timeline when they return.</p>
+<p><strong>Ranking:</strong> modern feeds are not chronological. Candidate generation (timeline + celebrity posts + recommendations) feeds a <strong>ranking service</strong> that scores with an ML model on features like affinity, engagement, recency and content type, then applies diversity rules.</p>
+<p><strong>Storage:</strong> posts in a sharded store (Cassandra, MySQL shards) keyed by post ID, media in object storage behind a CDN, social graph in a dedicated store. <strong>Cursor pagination</strong> (opaque cursor of last score/ID) avoids duplicates as new posts arrive.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User posts -&gt; stored in posts DB -&gt; event to Kafka.</li>
+  <li>Fan-out workers fetch followers; if author is not a celebrity, <code>ZADD timeline:{follower}</code> with score = timestamp.</li>
+  <li>Read: get top N IDs from <code>timeline:{user}</code>, plus recent posts from followed celebrities.</li>
+  <li>Merge candidates, call ranking, hydrate posts (cache) and authors.</li>
+  <li>Return page with <code>nextCursor</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public FeedPage getFeed(long userId, String cursor) {
+    List&lt;Long&gt; pushed = redis.zrevrangeByScore(&quot;timeline:&quot; + userId, Cursor.maxScore(cursor), 200);
+    List&lt;Long&gt; pulled = graph.followedCelebrities(userId).stream()
+            .flatMap(c -&gt; postsRepo.recentIds(c, 20).stream()).toList();
+    List&lt;Post&gt; candidates = postCache.hydrate(union(pushed, pulled));
+    List&lt;Post&gt; ranked = rankingClient.rank(userId, candidates).subList(0, 20);
+    return new FeedPage(ranked, Cursor.after(ranked.get(ranked.size() - 1)));
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Write cost</th><th>Read cost</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>Fan-out on write</td><td>High (per follower)</td><td>Very low</td><td>Normal users</td></tr>
+<tr><td>Fan-out on read</td><td>Low</td><td>High</td><td>Celebrities, inactive users</td></tr>
+<tr><td>Hybrid</td><td>Balanced</td><td>Low</td><td>Real social networks</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pure fan-out on write, ignoring celebrities.</li>
+  <li>Offset pagination that duplicates or skips posts.</li>
+  <li>Storing full posts in every timeline instead of IDs.</li>
+  <li>Fanning out synchronously in the post request.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Posts go into a sharded posts store, and each user has a precomputed timeline of post IDs in Redis. With fan-out on write, a new post is pushed asynchronously through Kafka to followers' timelines, which makes reads fast but is too expensive for accounts with millions of followers. So I'd use a hybrid: push for normal users and pull celebrity posts at read time, merging them. A ranking service scores the candidates, posts are hydrated from cache, and the API uses cursor-based pagination.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>User following 5,000 accounts?</strong> Precomputed timeline still works; cap fan-in for pull sources and rely on ranking.</li>
+  <li><strong>Deleting a post?</strong> Mark deleted in posts store; filter on hydration, lazily clean timelines.</li>
+  <li><strong>New user with empty feed?</strong> Recommendations and popular content as candidates.</li>
+</ul>
+</article>
+</body>
+</html>

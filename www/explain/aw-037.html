@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-037 · How do ALB listener rules, target groups and target types work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-037" data-topic="Cloud (AWS)">
+<h1>How do ALB listener rules, target groups and target types work?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>An ALB <strong>listener</strong> accepts connections on a port and protocol, its ordered <strong>rules</strong> match on host, path, headers, method, query string or source IP, and the matching action forwards to a <strong>target group</strong> of instances, IPs or a Lambda function, optionally <strong>weighted</strong> across several groups.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>Application Load Balancer</strong> works at layer 7. A <strong>listener</strong> is a process bound to a port, typically HTTP on 80 and HTTPS on 443. An HTTPS listener terminates TLS using a certificate from <strong>ACM</strong> (several certificates can be attached and chosen by SNI) and a security policy that fixes the allowed TLS versions and ciphers.</p>
+<p>Each listener has a <strong>default action</strong> plus <strong>rules</strong> evaluated in <strong>priority order</strong>, lowest number first. Conditions include <strong>host-header</strong>, <strong>path-pattern</strong>, <strong>http-header</strong>, <strong>http-request-method</strong>, <strong>query-string</strong> and <strong>source-ip</strong>, and one rule may combine several. Actions are <strong>forward</strong>, <strong>redirect</strong> (the classic HTTP to HTTPS redirect), <strong>fixed-response</strong> (for example a 503 maintenance page), and <strong>authenticate-oidc</strong> or <strong>authenticate-cognito</strong> before forwarding.</p>
+<p>A <strong>target group</strong> holds targets of exactly one <strong>target type</strong>: <strong>instance</strong> (EC2 instance IDs, traffic goes to the primary interface), <strong>ip</strong> (any private IP, which is what ECS awsvpc tasks and EKS pods use through the AWS Load Balancer Controller, and also on-premises servers over Direct Connect), or <strong>lambda</strong> (one function, the request turned into a JSON event). Each group has its own <strong>health check</strong> path, port, thresholds and success codes.</p>
+<p>A forward action can list several target groups with <strong>weights</strong>, which is the building block for <strong>canary</strong> and <strong>blue/green</strong> releases. Target group attributes add <strong>stickiness</strong> (load-balancer cookie or application cookie), <strong>slow start</strong> (ramping new targets up over a period), the <strong>deregistration delay</strong> (connection draining, 300 seconds by default) and the routing algorithm (round robin, least outstanding requests or weighted random).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A client connects to the ALB DNS name; the HTTPS listener on 443 terminates TLS.</li>
+  <li>Rules are checked in priority order until one matches; otherwise the default action runs.</li>
+  <li>The forward action picks a target group, by weight if several are listed.</li>
+  <li>Within the group, the algorithm chooses a <strong>healthy</strong> target, honouring stickiness if enabled.</li>
+  <li>Health checks continuously mark targets healthy or unhealthy.</li>
+  <li>On deregistration, in-flight requests get the deregistration delay to finish.</li>
+</ol>
+
+<h2>Example</h2>
+<p>Routing two hostnames through one ALB, with a 10 percent canary for the API:</p>
+<pre><code class="language-bash">aws elbv2 create-rule --listener-arn $LISTENER --priority 10 \
+  --conditions Field=host-header,Values=api.example.com \
+  --actions '[{&quot;Type&quot;:&quot;forward&quot;,&quot;ForwardConfig&quot;:{&quot;TargetGroups&quot;:[
+     {&quot;TargetGroupArn&quot;:&quot;'$API_BLUE'&quot;,&quot;Weight&quot;:90},
+     {&quot;TargetGroupArn&quot;:&quot;'$API_GREEN'&quot;,&quot;Weight&quot;:10}]}}]'
+
+aws elbv2 create-rule --listener-arn $LISTENER --priority 20 \
+  --conditions Field=host-header,Values=app.example.com \
+  --actions Type=forward,TargetGroupArn=$APP_TG</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving a broad path rule at a lower priority number so it shadows more specific rules.</li>
+  <li>Pointing the health check at a page that needs a database, so one slow dependency marks every target unhealthy.</li>
+  <li>Using the instance target type for Fargate tasks, which require the ip type.</li>
+  <li>Setting a long deregistration delay for short requests, which slows every deployment.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An ALB has listeners, say HTTPS on 443 with an ACM certificate, and each listener has prioritised rules. A rule matches on host, path, headers, method, query string or source IP and then forwards, redirects, returns a fixed response or authenticates. Forwarding goes to a target group, which has one target type: instances, IPs, which is what ECS and EKS use, or a Lambda function, each with its own health check. Because a forward action can weight several target groups, I use that for canaries and blue/green. On the target group I tune stickiness, slow start and the deregistration delay.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you route api.example.com and app.example.com through one ALB?</strong> Two host-header rules on the same HTTPS listener, a SAN or wildcard certificate, each forwarding to its own target group.</li>
+  <li><strong>What is the difference between ALB stickiness types?</strong> Duration-based uses an ALB-generated cookie; application-based follows a cookie your app sets.</li>
+  <li><strong>Why least outstanding requests?</strong> It helps when request costs vary a lot, avoiding piling work on a busy target.</li>
+</ul>
+</article>
+</body>
+</html>

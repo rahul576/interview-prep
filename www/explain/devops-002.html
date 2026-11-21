@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-002 · Design a CI/CD pipeline for a containerised microservice, from commit to production.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-002" data-topic="DevOps &amp; CI/CD">
+<h1>Design a CI/CD pipeline for a containerised microservice, from commit to production.</h1>
+<p class="ex-meta">DevOps &amp; CI/CD · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A good pipeline for a containerised microservice runs <strong>build, unit tests, static analysis and security scans</strong> on every PR, then <strong>builds, scans, tags (commit SHA) and pushes an immutable image</strong>, <strong>promotes the same image</strong> through <strong>dev, staging and production</strong> with <strong>smoke tests, approvals or canary analysis</strong>, ideally via <strong>GitOps</strong>, with a clear <strong>rollback</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pull request stage (fast feedback, under ~10 minutes):</strong> checkout, compile, <strong>unit tests</strong>, <strong>linting</strong>, <strong>static analysis</strong> (SonarQube or similar), <strong>SAST</strong> (for example CodeQL or Semgrep), <strong>dependency scanning</strong> (SCA), <strong>secret scanning</strong> and, if infrastructure is in the repo, IaC scanning. Branch protection requires all checks and a code review before merge.</p>
+<p><strong>Main branch build:</strong> build the <strong>Docker image</strong> with a multi-stage Dockerfile, <strong>scan</strong> it (Trivy or Grype) and fail on critical vulnerabilities, generate an <strong>SBOM</strong>, <strong>sign</strong> the image (Cosign/Sigstore) and <strong>tag</strong> it with the <strong>commit SHA</strong> (plus a semantic version if needed). Push to a registry such as ECR, ACR or GHCR. Never use <code>latest</code>.</p>
+<p><strong>Promotion:</strong> the <strong>same immutable image</strong> moves through environments; it is never rebuilt. In <strong>dev</strong> it deploys automatically. In <strong>staging</strong>, integration, contract, smoke and performance tests run against real dependencies. <strong>Production</strong> uses a manual approval (continuous delivery) or <strong>automated canary analysis</strong> (continuous deployment) with metrics such as error rate and latency.</p>
+<p><strong>Deployment mechanism:</strong> I prefer <strong>GitOps</strong>. The pipeline updates the image tag in a Helm values or Kustomize file in a <strong>config repository</strong> (often by pull request for production), and <strong>Argo CD</strong> or Flux syncs the cluster. Benefits: Git is the audit trail, the cluster pulls changes so CI needs no cluster credentials, and drift is corrected automatically. <strong>Argo Rollouts</strong> can perform canary steps with analysis.</p>
+<p><strong>Rollback:</strong> revert the config commit or use Argo CD rollback to the previous revision; database migrations must be <strong>backward compatible</strong> (expand and contract) so rollback is safe. <strong>Notifications</strong> go to the team chat; deployments are tracked with DORA metrics.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR: build, test, lint, SAST, SCA, secret scan; review.</li>
+  <li>Merge: build image, scan, SBOM, sign, push <code>:sha</code>.</li>
+  <li>Update dev config repo; Argo CD syncs.</li>
+  <li>Promote to staging; run integration and smoke tests.</li>
+  <li>Approval or canary to production via config repo PR.</li>
+  <li>Monitor; rollback by reverting the commit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">build-image:
+  needs: test
+  runs-on: ubuntu-latest
+  permissions: { id-token: write, contents: read }
+  steps:
+    - uses: actions/checkout@v4
+    - run: docker build -t $REGISTRY/orders:${{ github.sha }} .
+    - uses: aquasecurity/trivy-action@0.28.0   # pin to a SHA in real pipelines
+      with: { image-ref: &quot;${{ env.REGISTRY }}/orders:${{ github.sha }}&quot;, severity: CRITICAL, exit-code: &quot;1&quot; }
+    - run: docker push $REGISTRY/orders:${{ github.sha }}
+    - run: |
+        git clone https://github.com/acme/deploy-config &amp;&amp; cd deploy-config
+        yq -i '.image.tag = &quot;${{ github.sha }}&quot;' apps/orders/values-dev.yaml
+        git commit -am &quot;orders: ${{ github.sha }} to dev&quot; &amp;&amp; git push</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rebuilding the image per environment.</li>
+  <li>Using <code>latest</code> tags.</li>
+  <li>Security scans that only warn and never fail.</li>
+  <li>Rollback plans that ignore database migrations.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On every PR I run build, unit tests, linting, static analysis, SAST, dependency and secret scanning. After merge I build the image, scan it with Trivy, generate an SBOM, sign it, tag it with the commit SHA and push it to the registry. The same immutable image is promoted through dev, staging with integration and smoke tests, and production with an approval or automated canary analysis. I prefer GitOps: the pipeline updates the image tag in a config repo and Argo CD syncs it. Rollback is reverting that commit, with backward-compatible database migrations.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keep pipeline under ten minutes?</strong> Caching, parallel jobs, test splitting, incremental builds and moving slow tests later.</li>
+  <li><strong>Why GitOps?</strong> Audit trail in Git, no cluster credentials in CI, drift correction.</li>
+  <li><strong>How to handle secrets?</strong> OIDC to the cloud and external secret stores, never in the image.</li>
+</ul>
+</article>
+</body>
+</html>

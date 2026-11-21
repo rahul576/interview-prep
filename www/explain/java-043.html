@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-043 · How would you implement API rate limiting for a distributed Spring Boot service?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-043" data-topic="System Design">
+<h1>How would you implement API rate limiting for a distributed Spring Boot service?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Distributed rate limiting picks a <strong>key</strong> (user, API key, IP), an <strong>algorithm</strong> (token bucket, sliding window, leaky bucket), keeps counters in a <strong>shared atomic store like Redis</strong>, enforces at the <strong>gateway or a filter</strong>, and returns <strong>HTTP 429 with Retry-After</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Rate limiting protects services from abuse, noisy clients and overload, and enforces commercial tiers. With many Spring Boot instances, in-memory counters are wrong: each instance would allow the full limit, so the effective limit scales with replica count. Counters must live in a <strong>shared store</strong>, usually <strong>Redis</strong>, updated <strong>atomically</strong>.</p>
+<p><strong>Algorithms:</strong></p>
+<ul>
+  <li><strong>Fixed window:</strong> count per minute; simple, but allows 2x bursts at window boundaries.</li>
+  <li><strong>Sliding window log/counter:</strong> smoother; the counter variant weights the previous window.</li>
+  <li><strong>Token bucket:</strong> tokens refill at a rate up to a capacity; each request takes a token. Allows controlled bursts and is the most common choice.</li>
+  <li><strong>Leaky bucket:</strong> requests drain at a constant rate; smooths output, good for protecting downstreams.</li>
+</ul>
+<p><strong>Atomicity:</strong> the read-compute-write must be one step, via a <strong>Lua script</strong> in Redis or a library such as <strong>Bucket4j</strong> (with Lettuce/Redisson backends) or <strong>Resilience4j</strong> for local limits. <strong>Spring Cloud Gateway</strong> has a built-in <code>RequestRateLimiter</code> filter backed by Redis using a token bucket.</p>
+<p><strong>Placement:</strong> enforce at the edge (API gateway, Spring Cloud Gateway) so rejected traffic is cheap; add finer limits in a servlet filter or interceptor where business context exists. Responses use <strong>429 Too Many Requests</strong>, a <code>Retry-After</code> header, and informative headers such as <code>X-RateLimit-Remaining</code> (or the IETF <code>RateLimit</code> headers).</p>
+<p>Also decide <strong>failure behaviour</strong>: if Redis is down, <strong>fail open</strong> (allow, with a local fallback limit) for most APIs, or fail closed for sensitive ones like login.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Resolve key from the request: API key &gt; user ID &gt; client IP.</li>
+  <li>Look up tier limits (e.g. free 100/min, pro 1,000/min).</li>
+  <li>Run an atomic Lua script: refill tokens based on elapsed time, consume if available.</li>
+  <li>Allowed -&gt; continue and set remaining-quota headers.</li>
+  <li>Rejected -&gt; 429 with Retry-After; increment a metric.</li>
+  <li>Dashboards and alerts on rejection rates per key.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  cloud:
+    gateway:
+      routes:
+        - id: orders
+          uri: lb://orders-service
+          predicates: [ Path=/api/orders/** ]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50     # tokens per second
+                redis-rate-limiter.burstCapacity: 100    # bucket size
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: &quot;#{@apiKeyResolver}&quot;</code></pre>
+<pre><code class="language-java">@Bean
+KeyResolver apiKeyResolver() {
+    return exchange -&gt; Mono.justOrEmpty(
+        exchange.getRequest().getHeaders().getFirst(&quot;X-API-Key&quot;)).defaultIfEmpty(&quot;anonymous&quot;);
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Per-instance counters in a multi-instance deployment.</li>
+  <li>Non-atomic GET then SET in Redis, allowing races.</li>
+  <li>Limiting only by IP, punishing users behind corporate NAT.</li>
+  <li>Returning 503 or 400 instead of 429 without Retry-After.</li>
+  <li>No plan for Redis being unavailable.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd first choose the key, usually API key or user, and the limits per tier. I'd use a token bucket, which allows controlled bursts, or a sliding window for smoother limits. Because we have many instances, counters live in Redis and are updated atomically with a Lua script, or via Bucket4j or Spring Cloud Gateway's Redis rate limiter. I'd enforce at the gateway, return 429 with Retry-After and quota headers, decide to fail open with a local fallback if Redis is down, and monitor rejections per client.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Legitimately bursty batch client?</strong> Larger burst capacity, a separate batch endpoint or quota, or async job submission.</li>
+  <li><strong>Global limits across regions?</strong> Per-region budgets, or accept approximate limits with periodic sync.</li>
+  <li><strong>Token bucket vs leaky bucket?</strong> Token bucket allows bursts; leaky bucket enforces a steady outflow.</li>
+</ul>
+</article>
+</body>
+</html>

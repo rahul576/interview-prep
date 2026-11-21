@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-036 · How do you use VPC Flow Logs to troubleshoot connectivity?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-036" data-topic="Cloud (AWS)">
+<h1>How do you use VPC Flow Logs to troubleshoot connectivity?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>VPC Flow Logs</strong> capture <strong>metadata about IP traffic</strong> (addresses, ports, protocol, bytes, <strong>ACCEPT or REJECT</strong>) per <strong>VPC, subnet or ENI</strong> to CloudWatch Logs, S3 or Firehose; to troubleshoot, look for the flow: <strong>REJECT</strong> points to <strong>security groups or NACLs</strong>, <strong>no record</strong> suggests <strong>routing or DNS</strong>, and <strong>one-way ACCEPT</strong> often means a <strong>stateless NACL</strong> blocking return traffic.</p>
+
+<h2>Detailed explanation</h2>
+<p>Flow logs are created at three levels: a <strong>VPC</strong> (all ENIs), a <strong>subnet</strong>, or a single <strong>network interface</strong>, and can also cover Transit Gateway attachments. Records are aggregated over an interval (1 or 10 minutes) and delivered to <strong>CloudWatch Logs</strong>, <strong>S3</strong> (cheap, queryable with Athena) or <strong>Kinesis Data Firehose</strong>. The default format includes <code>srcaddr</code>, <code>dstaddr</code>, <code>srcport</code>, <code>dstport</code>, <code>protocol</code>, <code>packets</code>, <code>bytes</code>, <code>action</code> and <code>log-status</code>; <strong>custom formats</strong> add fields such as <code>vpc-id</code>, <code>subnet-id</code>, <code>instance-id</code>, <code>tcp-flags</code>, <code>pkt-srcaddr</code>, <code>flow-direction</code> and <code>traffic-path</code>. They contain <strong>no payloads</strong>, and some traffic is not logged, such as to the Amazon DNS resolver, IMDS or the DHCP service.</p>
+<p>The troubleshooting logic:</p>
+<ul>
+  <li><strong>REJECT</strong> on the request: a <strong>security group</strong> inbound rule or a <strong>NACL</strong> blocks it. Flow logs do not say which, so check both.</li>
+  <li><strong>ACCEPT inbound but REJECT on the response</strong>: almost always a <strong>NACL</strong>, because NACLs are <strong>stateless</strong> and need explicit rules for the <strong>ephemeral return ports</strong> (1024-65535). Security groups are stateful and allow return traffic automatically.</li>
+  <li><strong>No records at all</strong> between the two addresses: traffic never reached the interface, suggesting <strong>routing</strong> (missing route, wrong route table, missing peering or TGW route), <strong>DNS</strong> resolving to the wrong IP, or the client never sending.</li>
+  <li><strong>ACCEPT both ways</strong> but the app still fails: the network is fine; look at the application, TLS or the listening port.</li>
+</ul>
+<p>Complementary tools: <strong>Reachability Analyzer</strong> checks the path configuration between two resources without sending traffic and names the blocking component; <strong>Network Access Analyzer</strong> finds unintended access paths; <strong>Traffic Mirroring</strong> captures actual packets when payloads are needed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable flow logs on the VPC, subnet or ENI.</li>
+  <li>Reproduce the failing connection.</li>
+  <li>Query records for the source and destination IPs and port.</li>
+  <li>Interpret ACCEPT, REJECT or absence.</li>
+  <li>Fix the security group, NACL, route or DNS.</li>
+  <li>Confirm with Reachability Analyzer.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ec2 create-flow-logs --resource-type VPC --resource-ids vpc-0abc \
+  --traffic-type ALL --log-destination-type cloud-watch-logs \
+  --log-group-name /vpc/flow/prod --deliver-logs-permission-arn arn:aws:iam::123456789012:role/flowlogs</code></pre>
+<pre><code class="language-text"># Logs Insights: traffic between app and database
+fields @timestamp, srcAddr, srcPort, dstAddr, dstPort, action
+| filter (srcAddr = &quot;10.0.1.25&quot; and dstAddr = &quot;10.0.3.40&quot;)
+    or (srcAddr = &quot;10.0.3.40&quot; and dstAddr = &quot;10.0.1.25&quot;)
+| sort @timestamp desc
+| limit 50</code></pre>
+<p>Result: <code>10.0.1.25:51544 -&gt; 10.0.3.40:5432 ACCEPT</code>, then <code>10.0.3.40:5432 -&gt; 10.0.1.25:51544 REJECT</code>. The app subnet's NACL lacked an inbound rule for ephemeral ports; adding it fixed the issue.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting payloads or HTTP details in flow logs.</li>
+  <li>Blaming security groups for return-traffic rejects caused by NACLs.</li>
+  <li>Enabling flow logs only after the incident with no baseline.</li>
+  <li>Sending huge volumes to CloudWatch without retention.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Flow logs record metadata about IP traffic, source and destination, ports, protocol, bytes and ACCEPT or REJECT, for a VPC, subnet or network interface, delivered to CloudWatch Logs or S3. When an app can't connect, I query the flow between the two IPs. No record suggests routing or DNS; a REJECT points to a security group or NACL; and an accepted request with a rejected response usually means a stateless NACL missing the ephemeral port range. I query with Logs Insights or Athena. They have no payloads, so I also use Reachability Analyzer to check the path without sending traffic.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why ACCEPT for the request but REJECT for the response?</strong> A stateless NACL is missing the outbound or inbound ephemeral port rule.</li>
+  <li><strong>What does Reachability Analyzer add?</strong> It analyses configuration and names the blocking component.</li>
+  <li><strong>How do you keep flow log costs down?</strong> S3 destination with Athena, 10-minute aggregation, targeted ENIs, lifecycle rules.</li>
+</ul>
+</article>
+</body>
+</html>

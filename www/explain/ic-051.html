@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-051 · How do you speed up Ansible runs on many hosts?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-051" data-topic="Configuration Management">
+<h1>How do you speed up Ansible runs on many hosts?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Raise <strong>forks</strong> (default 5), enable <strong>SSH pipelining</strong> and <strong>ControlPersist</strong>, <strong>disable, subset or cache facts</strong>, use the <strong>free strategy</strong> and <strong>async</strong> for long tasks, pass <strong>lists to modules</strong> instead of loops, and <strong>profile</strong> with the <strong>profile_tasks</strong> callback.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Parallelism.</strong> Ansible processes hosts in batches of <strong>forks</strong>, default <strong>5</strong>. On a fleet of 500 servers, raising forks to 50 or 100 (<code>-f 50</code> or <code>forks = 50</code> in <code>ansible.cfg</code>) is usually the biggest single win, limited by control-node CPU and memory. <code>serial</code> still controls rolling batches where you need them.</p>
+<p><strong>Connection overhead.</strong> Each task normally involves several SSH operations: create a temp dir, copy the module, execute, clean up. <strong>Pipelining</strong> (<code>pipelining = True</code>) sends the module over the existing SSH session's stdin, cutting operations per task significantly; it requires that <code>requiretty</code> is not enforced in sudoers (the default on modern distros). <strong>ControlPersist</strong> (on by default in Ansible's SSH options, 60 s) keeps the master connection open for reuse; increasing it helps longer playbooks.</p>
+<p><strong>Facts.</strong> Gathering facts on every host each run is expensive. Use <code>gather_facts: false</code> when not needed, <code>gather_subset</code> for just what you use, and <strong>fact caching</strong> (jsonfile, Redis) with <code>gathering = smart</code>.</p>
+<p><strong>Execution strategy.</strong> The default <strong>linear</strong> strategy waits for all hosts in the batch to finish a task before the next. The <strong>free</strong> strategy lets each host run through the play as fast as it can. For long operations, <code>async</code> with <code>poll: 0</code> starts tasks in the background, and <code>async_status</code> collects results later.</p>
+<p><strong>Task design.</strong> Modules like <code>package</code>, <code>apt</code> and <code>dnf</code> accept a <strong>list</strong>: one transaction instead of one per package. Avoid unnecessary <code>shell</code> tasks; use <code>copy</code>/<code>template</code> efficiently; <code>synchronize</code> (rsync) for large file trees. Use <code>run_once</code> or <code>delegate_to</code> for tasks that only need one execution.</p>
+<p><strong>Measure.</strong> Enable <code>callbacks_enabled = ansible.posix.profile_tasks, ansible.posix.timer</code> to see the slowest tasks and total time, then optimise the real bottleneck.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Increase forks to parallelise hosts.</li>
+  <li>Reduce SSH round-trips with pipelining and persistent connections.</li>
+  <li>Avoid repeated fact gathering.</li>
+  <li>Let hosts progress independently where safe.</li>
+  <li>Profile and fix the slowest tasks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-ini"># ansible.cfg
+[defaults]
+forks = 50
+gathering = smart
+fact_caching = jsonfile
+fact_caching_connection = ~/.ansible/facts
+fact_caching_timeout = 86400
+callbacks_enabled = ansible.posix.profile_tasks, ansible.posix.timer
+
+[ssh_connection]
+pipelining = True
+ssh_args = -o ControlMaster=auto -o ControlPersist=300s</code></pre>
+<pre><code class="language-yaml">- hosts: web
+  strategy: free
+  gather_facts: true
+  gather_subset: [&quot;!all&quot;, &quot;min&quot;, &quot;network&quot;]
+  tasks:
+    - name: Install packages in one transaction
+      ansible.builtin.package:
+        name: [nginx, jq, curl, htop]
+        state: present
+
+    - name: Long backup in background
+      ansible.builtin.command: /usr/local/bin/backup.sh
+      async: 3600
+      poll: 0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving forks at 5 for hundreds of hosts.</li>
+  <li>Using the free strategy for ordered rolling deployments.</li>
+  <li>Gathering full facts for plays that never use them.</li>
+  <li>Optimising blindly without profiling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default Ansible handles five hosts at a time, so raising forks, say to 50, is often the biggest win. SSH settings come next: pipelining cuts the SSH operations per task and ControlPersist reuses connections. Fact gathering is slow, so I disable it when not needed, gather a subset or cache facts. The free strategy lets fast hosts carry on without waiting for slow ones, and async runs long tasks in the background. Inside tasks I pass lists to modules like package instead of looping. And the profile_tasks callback tells me which tasks actually take the time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is the free strategy a bad idea?</strong> When order across hosts matters: rolling deployments, cluster operations, tasks depending on other hosts.</li>
+  <li><strong>Why can pipelining fail?</strong> sudoers with <code>requiretty</code>.</li>
+  <li><strong>What limits forks?</strong> Control-node CPU, memory and file descriptors, and target-side SSH limits.</li>
+</ul>
+</article>
+</body>
+</html>

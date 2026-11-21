@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-171 · How do you design CloudWatch monitoring and alarms for an AWS workload?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-171" data-topic="Cloud (AWS)">
+<h1>How do you design CloudWatch monitoring and alarms for an AWS workload?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Combine <strong>metrics</strong> (AWS and <strong>custom/EMF</strong>), <strong>logs</strong> with retention and <strong>Logs Insights</strong>, <strong>alarms on user-facing symptoms</strong> routed via <strong>SNS</strong> to on-call, <strong>composite alarms and anomaly detection</strong> to cut noise, plus <strong>dashboards</strong> and <strong>X-Ray/OpenTelemetry tracing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Good monitoring answers &quot;are users hurting?&quot; first and &quot;why?&quot; second. So I alarm on <strong>symptoms</strong> and use everything else for diagnosis.</p>
+<p><strong>Metrics:</strong> AWS services publish metrics automatically (ALB <code>HTTPCode_Target_5XX_Count</code>, <code>TargetResponseTime</code>, SQS <code>ApproximateAgeOfOldestMessage</code>, RDS CPU and connections). Application and business signals (orders per minute, payment failures) are published as <strong>custom metrics</strong>, most efficiently via the <strong>embedded metric format</strong>, structured log lines that CloudWatch turns into metrics. I watch for high-cardinality dimensions, which get expensive.</p>
+<p><strong>Logs:</strong> structured JSON logs to log groups, with <strong>retention</strong> set (the default is never expire), searched with <strong>Logs Insights</strong>. Metric filters can turn log patterns into metrics.</p>
+<p><strong>Alarms:</strong> on SLO-style signals: 5xx error rate as a metric-math percentage, <strong>p99 latency</strong>, queue age, failed health checks. Alarms fire to <strong>SNS</strong> topics that fan out to PagerDuty/Opsgenie for paging or to chat for warnings. I set evaluation periods (&quot;3 of 5 datapoints&quot;) and missing-data handling deliberately. <strong>Composite alarms</strong> combine conditions, for example page only if error rate AND latency are high, or suppress child alarms during deployments. <strong>Anomaly detection</strong> builds a band from historical patterns, useful for traffic with daily cycles where a static threshold fails.</p>
+<p><strong>Dashboards</strong> per service show the golden signals, and <strong>tracing</strong> with <strong>X-Ray</strong> or the AWS Distro for OpenTelemetry shows where latency comes from across services. <strong>Application Signals</strong> and <strong>Synthetics canaries</strong> add service-level and outside-in views.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define SLIs per service: availability, latency, freshness.</li>
+  <li>Instrument: built-in metrics + EMF custom metrics + structured logs + traces.</li>
+  <li>Create alarms on SLIs; use percentiles and metric math.</li>
+  <li>Route via SNS: critical → pager, warning → chat.</li>
+  <li>Composite alarms and anomaly bands to reduce noise.</li>
+  <li>Review alerts after incidents; delete ones nobody acts on.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws cloudwatch put-metric-alarm --alarm-name api-p99-latency \
+  --namespace AWS/ApplicationELB --metric-name TargetResponseTime \
+  --dimensions Name=LoadBalancer,Value=app/prod-api/50dc6c495c0c9188 \
+  --extended-statistic p99 --period 60 --evaluation-periods 5 \
+  --datapoints-to-alarm 3 --threshold 1.5 \
+  --comparison-operator GreaterThanThreshold \
+  --treat-missing-data notBreaching \
+  --alarm-actions arn:aws:sns:ap-south-1:123456789012:oncall-critical</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Alarming on averages, which hide the slow tail.</li>
+  <li>Paging on causes like CPU at 80% instead of user impact.</li>
+  <li>Log groups with infinite retention and no cost review.</li>
+  <li>No runbook link in the alarm description.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start from SLIs: error rate, latency percentiles and things like queue age. AWS metrics cover the infrastructure, and I add custom application and business metrics through the embedded metric format. Logs are structured, have retention set and are queried with Logs Insights. Alarms on those SLIs go to SNS, which routes critical ones to PagerDuty and warnings to chat. Composite alarms reduce noise by combining conditions, anomaly detection handles daily traffic patterns, and dashboards plus X-Ray or OpenTelemetry tracing help diagnose. Every page should be actionable and have a runbook.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why p99 rather than average?</strong> Averages hide the slow minority; p99 shows what the unluckiest users experience.</li>
+  <li><strong>How do you reduce alert fatigue?</strong> Symptom-based alerts, composite alarms, regular pruning.</li>
+  <li><strong>CloudWatch or Prometheus/Grafana?</strong> CloudWatch for AWS-native; Amazon Managed Prometheus and Grafana for Kubernetes-heavy, multi-cloud setups.</li>
+</ul>
+</article>
+</body>
+</html>

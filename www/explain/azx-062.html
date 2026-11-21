@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-062 · How do you deploy to AKS from Azure Pipelines, and how does the KubernetesManifest task support canary deployments?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-062" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you deploy to AKS from Azure Pipelines, and how does the KubernetesManifest task support canary deployments?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Deploy to AKS from a <strong>deployment job</strong> that targets an <strong>environment with a Kubernetes resource</strong>, using the <strong>KubernetesManifest task</strong> to bake (Helm/Kustomize), substitute image tags and apply manifests; its <strong>canary strategy</strong> creates a <strong>canary and a same-sized baseline</strong> workload, which you later <strong>promote</strong> or <strong>reject</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The cleanest setup starts with an <strong>Azure DevOps environment</strong> that contains a <strong>Kubernetes resource</strong> pointing at the target cluster and namespace. The resource is backed by a <strong>service connection</strong>, ideally an Azure Resource Manager connection using <strong>workload identity federation</strong>, so no secrets are stored. Because the pipeline uses a <strong>deployment job</strong> that targets this environment, every run is recorded in the environment's deployment history, and approvals and checks configured on the environment apply automatically.</p>
+<p>The <strong>KubernetesManifest@1</strong> task has several actions. <strong>bake</strong> renders Helm charts, Kustomize overlays or Compose files into plain manifests; <strong>deploy</strong> applies them, replaces image references with the exact tag built earlier in the pipeline (the <code>containers</code> input) and waits for <strong>rollout status</strong>, failing the job if pods never become ready. <strong>createSecret</strong>, <strong>scale</strong>, <strong>patch</strong> and <strong>delete</strong> cover other operations.</p>
+<p>With <code>strategy: canary</code>, the task does not touch the stable workload. It creates a <code>&lt;name&gt;-canary</code> deployment running the new image and a <code>&lt;name&gt;-baseline</code> deployment running the <strong>current</strong> image, both with the same small replica count. Comparing canary against baseline is fair: both are new pods, with the same warm-up, age and traffic share, whereas long-running production pods may differ in cache state or memory. Traffic is split either by <strong>pod ratio</strong> (trafficSplitMethod <code>pod</code>) or via a <strong>Service Mesh Interface</strong> TrafficSplit (<code>smi</code>). After analysis, the <strong>promote</strong> action rolls the new version out to the stable workload and removes the extra ones; <strong>reject</strong> deletes canary and baseline.</p>
+<p>Many teams now prefer <strong>GitOps</strong> with Argo CD or Flux: the pipeline only updates an image tag in Git, and the in-cluster agent pulls the change. Progressive delivery then moves to tools such as <strong>Argo Rollouts</strong> or Flagger.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build and push the image to ACR, tagged with the build ID or commit SHA.</li>
+  <li>A deployment job targets <code>environment: aks-prod.shop</code>, so approvals and history apply.</li>
+  <li><code>bake</code> renders the Helm chart; <code>deploy</code> with <code>strategy: canary</code> and <code>percentage: 20</code> creates canary and baseline.</li>
+  <li>A manual validation or automated check compares error rate and latency of canary vs baseline.</li>
+  <li>On success <code>promote</code> updates the stable deployment; on failure <code>reject</code> removes the canary.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">jobs:
+- deployment: DeployCanary
+  environment: aks-prod.shop
+  strategy:
+    canary:
+      increments: [20]
+      deploy:
+        steps:
+        - task: KubernetesManifest@1
+          inputs:
+            action: deploy
+            strategy: canary
+            percentage: $(strategy.increment)
+            manifests: k8s/deployment.yaml
+            containers: myacr.azurecr.io/shop:$(Build.BuildId)
+      on:
+        success:
+          steps:
+          - task: KubernetesManifest@1
+            inputs: { action: promote, strategy: canary, manifests: k8s/deployment.yaml }
+        failure:
+          steps:
+          - task: KubernetesManifest@1
+            inputs: { action: reject, strategy: canary, manifests: k8s/deployment.yaml }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a plain job instead of a deployment job, losing environment history and approvals.</li>
+  <li>Comparing the canary with old production pods instead of the baseline.</li>
+  <li>Using <code>:latest</code> tags, so you cannot prove which image was deployed.</li>
+  <li>Promoting automatically without any real metric analysis in between.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I create an environment with a Kubernetes resource for the target namespace, backed by a workload identity service connection, and deploy from a deployment job so approvals and history apply. The KubernetesManifest task bakes the Helm chart, injects the image tag we just built and waits for rollout. For canaries it creates a canary and an equally sized baseline running the current version, so the comparison is fair. After checking metrics, I run promote or reject. For larger estates I'd often switch to GitOps with Argo CD and Argo Rollouts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why a baseline instead of existing production pods?</strong> Same age, size and warm-up, so differences come from the code, not the pods.</li>
+  <li><strong>How is traffic split?</strong> By replica ratio behind the same Service, or by an SMI TrafficSplit with a service mesh.</li>
+  <li><strong>What replaces this in GitOps?</strong> Argo Rollouts or Flagger performing analysis inside the cluster.</li>
+</ul>
+</article>
+</body>
+</html>

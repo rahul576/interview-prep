@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-079 · How do you speed up container startup at scale, for example during autoscaling?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-079" data-topic="Docker">
+<h1>How do you speed up container startup at scale, for example during autoscaling?</h1>
+<p class="ex-meta">Docker · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Container startup at scale is dominated by <strong>image pull time</strong> and <strong>application start time</strong>: shrink images and <strong>share base layers</strong>, <strong>pre-pull or bake images into node images</strong>, keep the <strong>registry in-region</strong>, use <strong>lazy pulling</strong> (eStargz, <strong>AWS SOCI</strong>, <strong>GKE image streaming</strong>) for large images, and speed up the app itself (<strong>CDS/AppCDS, CRaC, GraalVM native image</strong>).</p>
+
+<h2>Detailed explanation</h2>
+<p>When the autoscaler adds a node or pod, the critical path is: node provisioning, image pull and unpack, container creation, application startup, and readiness. For many workloads, <strong>pull plus unpack</strong> takes most of the time: a 1.5 GB image on a fresh node can take a minute. Then a heavy JVM application may need another 30 seconds to warm up.</p>
+<p><strong>Pull side:</strong></p>
+<ul>
+  <li><strong>Small images</strong> with multi-stage builds and slim bases.</li>
+  <li><strong>Shared base layers</strong> across services so nodes already hold most data.</li>
+  <li><strong>Pre-pulling:</strong> bake common images into the node image (AMI) or use a DaemonSet that pulls them, so new nodes start &quot;warm&quot;.</li>
+  <li><strong>Registry in the same region</strong>, with replication, and enough parallel layer downloads (kubelet <code>serializeImagePulls: false</code> with <code>maxParallelImagePulls</code>).</li>
+  <li><strong>Lazy pulling:</strong> normally a container cannot start until the whole image is downloaded and unpacked. <strong>eStargz</strong> with the stargz snapshotter, <strong>AWS SOCI</strong> (Seekable OCI) and <strong>GKE image streaming</strong> let it start immediately, fetching files on demand. Research shows containers often read only a small fraction of their image at startup.</li>
+</ul>
+<p><strong>Application side:</strong> for the JVM, <strong>Class Data Sharing (AppCDS)</strong>, <strong>CRaC</strong> checkpoint/restore, Spring AOT or <strong>GraalVM native images</strong> reduce startup from tens of seconds to well under one second in the native case. Tune <strong>readiness probes</strong> so pods receive traffic as soon as they are really ready, and avoid slow init containers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: node ready time, pull time (kubelet events &quot;Pulling&quot;/&quot;Pulled&quot;), container start, readiness.</li>
+  <li>Reduce image size; standardise bases.</li>
+  <li>Pre-pull hot images or bake them into node images.</li>
+  <li>Enable lazy pulling for large images.</li>
+  <li>Optimise application startup and probes; keep spare capacity (overprovisioning pods) for spikes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get events --field-selector reason=Pulled -o custom-columns=MSG:.message
+# Successfully pulled image &quot;...orders:1.9&quot; in 41.2s (41.2s including waiting). Image size: 1.3 GB
+
+java -XX:ArchiveClassesAtExit=app.jsa -jar app.jar   # training run creates CDS archive
+java -XX:SharedArchiveFile=app.jsa -jar app.jar      # later starts load classes faster</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising code while the real delay is a 2 GB image pull.</li>
+  <li>Every service on a different base image, so nothing is cached on nodes.</li>
+  <li>Readiness probes with long initial delays &quot;to be safe&quot;.</li>
+  <li>Relying only on autoscaling with no spare buffer for sudden spikes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd measure where the time goes, because during scale-out it's usually image pulls and application start. On the image side, I keep images small and built on shared base layers, pre-pull common images through the node image or a DaemonSet, and keep the registry in the same region. For big images, lazy-pulling formats like eStargz, AWS SOCI or GKE image streaming let containers start before the full image is downloaded. On the application side, JVM class data sharing, CRaC or GraalVM native images cut startup dramatically. I'd also tune readiness probes and keep a little overprovisioned capacity for sudden spikes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you measure startup time?</strong> Kubelet events for pull duration, pod condition timestamps, and app startup logs or metrics.</li>
+  <li><strong>Trade-off of native images?</strong> Very fast start and low memory, but longer builds, reflection configuration and sometimes lower peak throughput.</li>
+  <li><strong>What is overprovisioning?</strong> Low-priority placeholder pods that get evicted so real pods schedule instantly while a new node boots.</li>
+</ul>
+</article>
+</body>
+</html>

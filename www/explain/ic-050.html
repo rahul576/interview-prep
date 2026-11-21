@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-050 · How do you write idempotent Ansible tasks when you must use command or shell?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-050" data-topic="Configuration Management">
+<h1>How do you write idempotent Ansible tasks when you must use command or shell?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Prefer a <strong>dedicated module</strong>; when <code>command</code>/<code>shell</code> is unavoidable, use <strong>creates/removes</strong> to skip completed work, <strong>changed_when/failed_when</strong> to report accurately, or a <strong>read-only check with register</strong> followed by a <strong>when</strong>-guarded change.</p>
+
+<h2>Detailed explanation</h2>
+<p>Modules are idempotent because they inspect state before acting. <code>command</code> and <code>shell</code> cannot: Ansible has no idea what an arbitrary command does, so by default it <strong>runs every time</strong> and reports <strong>changed</strong> every time. That causes repeated side effects (running an installer twice, re-initialising a database) and false &quot;changed&quot; reports that trigger handlers and hide real changes. So the first question is always: is there a module? Examples: <code>ansible.builtin.lineinfile</code> instead of <code>echo &gt;&gt;</code>, <code>ansible.builtin.unarchive</code> instead of <code>tar xf</code>, <code>community.postgresql.postgresql_db</code> instead of <code>psql -c &quot;CREATE DATABASE&quot;</code>, <code>ansible.builtin.get_url</code> instead of <code>curl</code>.</p>
+<p>When a command is truly necessary, make it idempotent:</p>
+<ul>
+  <li><strong>creates</strong>: skip the task if a path exists. Works well when the command produces a file or a marker, such as an installer creating <code>/opt/tool/bin/tool</code>.</li>
+  <li><strong>removes</strong>: run only if a path exists, for cleanup commands.</li>
+  <li><strong>changed_when</strong>: define when the command really changed something, for example <code>changed_when: &quot;'created' in result.stdout&quot;</code> or based on <code>rc</code>. For read-only commands use <code>changed_when: false</code>.</li>
+  <li><strong>failed_when</strong>: define failure beyond the exit code, for example tolerate <code>rc == 1</code> when it means &quot;already exists&quot;, or fail when stderr contains a pattern.</li>
+  <li><strong>Check then act</strong>: a read-only task with <code>register</code> and <code>changed_when: false</code> inspects state, and the change task runs with <code>when</code> only if needed.</li>
+</ul>
+<p>These also make <strong>check mode</strong> work better: commands with <code>creates</code>/<code>removes</code> can predict whether they would run, and read-only checks can be forced with <code>check_mode: false</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Search for a module that does the job.</li>
+  <li>If none, decide how to detect &quot;already done&quot;.</li>
+  <li>Use creates/removes or a registered check.</li>
+  <li>Report accurately with changed_when/failed_when.</li>
+  <li>Run the playbook twice; the second run must show changed=0.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- name: Install tool (skip if already installed)
+  ansible.builtin.command: /tmp/install-tool.sh --prefix /opt/tool
+  args:
+    creates: /opt/tool/bin/tool
+
+- name: Check whether the database exists
+  ansible.builtin.command: psql -tAc &quot;SELECT 1 FROM pg_database WHERE datname='orders'&quot;
+  register: db_exists
+  changed_when: false
+  check_mode: false
+  become: true
+  become_user: postgres
+
+- name: Create database
+  ansible.builtin.command: createdb orders
+  when: db_exists.stdout != &quot;1&quot;
+  become: true
+  become_user: postgres
+
+- name: Apply migrations
+  ansible.builtin.command: /opt/app/bin/migrate up
+  register: migrate
+  changed_when: &quot;'applied' in migrate.stdout&quot;
+  failed_when: migrate.rc != 0 and 'no change' not in migrate.stderr</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using shell for things modules handle.</li>
+  <li>Read-only commands reporting changed and triggering handlers.</li>
+  <li><code>ignore_errors: true</code> instead of a precise <code>failed_when</code>.</li>
+  <li>Marker files that don't reflect the real state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First choice is always a dedicated module, because it knows how to check state. When I must use shell or command, I make it idempotent: creates skips the task if a file already exists, like a binary the installer creates, and removes skips it if a file is absent. changed_when tells Ansible when the command really changed something, for example when the output contains 'created', or false for read-only commands, and failed_when defines failure beyond the exit code. Another pattern is a read-only check with register, then the change task with a when condition. That way repeated runs report ok and don't repeat side effects.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is changed_when: false important for read-only commands?</strong> Otherwise they always report changed, trigger handlers and make &quot;changed&quot; meaningless.</li>
+  <li><strong>command or shell?</strong> command unless you need pipes, redirects or shell features.</li>
+  <li><strong>How do you verify idempotency?</strong> Run twice, or Molecule's idempotence test.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-060 · How do you set the timezone, locale and CA certificates correctly in a container image?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-060" data-topic="Docker">
+<h1>How do you set the timezone, locale and CA certificates correctly in a container image?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Containers usually default to <strong>UTC</strong>, which is right for servers; when needed set <strong><code>TZ</code></strong> and install <strong>tzdata</strong>, install <strong>ca-certificates</strong> (adding any <strong>corporate root CA</strong> to the OS store and the <strong>JVM truststore</strong>), and set <strong><code>LANG</code>/<code>LC_ALL</code> to a UTF-8 locale</strong> such as <strong>C.UTF-8</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Minimal images remove a lot of &quot;system&quot; data that full operating systems include, and three gaps cause classic production bugs.</p>
+<p><strong>Timezone</strong>: most images have no <code>/etc/localtime</code> configured and run in <strong>UTC</strong>. For servers that is the best practice: store timestamps in UTC, log in UTC (ideally ISO 8601 with offset), and convert to the user's timezone in the application or UI. If a process really needs a local zone, such as a legacy batch job scheduled at local midnight, set <strong><code>TZ=Asia/Kolkata</code></strong> (or similar) and make sure the <strong><code>tzdata</code></strong> package exists, because slim and Alpine images often lack it and silently fall back to UTC. Java and Go can carry their own tz data, but keeping tzdata in the image is safest. Do not bind-mount the host's <code>/etc/localtime</code> as a habit; it couples the container to the host.</p>
+<p><strong>CA certificates</strong>: any outgoing <strong>HTTPS</strong> connection needs trusted root certificates. Slim images may lack <strong><code>ca-certificates</code></strong>, giving errors like &quot;unable to get local issuer certificate&quot;. In companies with a <strong>TLS-inspecting proxy</strong>, the proxy re-signs traffic with a corporate root CA, so calls work on laptops (where IT installed the CA) but fail inside containers. Add the CA with <code>update-ca-certificates</code> (Debian/Alpine) or <code>update-ca-trust</code> (RHEL), and for Java import it into the <strong>JVM truststore</strong> with <code>keytool</code>, since Java may use its own <code>cacerts</code>. Python's <code>requests</code> uses <code>certifi</code> unless pointed to the system store via <code>REQUESTS_CA_BUNDLE</code>.</p>
+<p><strong>Locale</strong>: without a locale, tools may default to <code>POSIX</code>/ASCII, breaking non-ASCII filenames and text processing. Set <strong><code>LANG=C.UTF-8</code></strong> and <code>LC_ALL=C.UTF-8</code>, available in most Debian-based images without extra packages.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Base image provides minimal or no tz, CA and locale data.</li>
+  <li>Dockerfile installs <code>tzdata</code> and <code>ca-certificates</code> as needed.</li>
+  <li>Corporate CA is copied in and the trust store regenerated.</li>
+  <li>Environment sets <code>TZ</code> and <code>LANG</code>/<code>LC_ALL</code>.</li>
+  <li>Runtimes read these at start-up.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jre-jammy
+ENV TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends tzdata ca-certificates \
+ &amp;&amp; rm -rf /var/lib/apt/lists/*
+COPY corp-root-ca.crt /usr/local/share/ca-certificates/corp-root-ca.crt
+RUN update-ca-certificates &amp;&amp; \
+    keytool -importcert -noprompt -cacerts -storepass changeit \
+            -alias corp-root -file /usr/local/share/ca-certificates/corp-root-ca.crt</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running servers in local time and getting DST bugs.</li>
+  <li>Setting <code>TZ</code> without tzdata installed.</li>
+  <li>Disabling TLS verification instead of adding the corporate CA.</li>
+  <li>Adding the CA to the OS store but not to the JVM truststore.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Most images default to UTC, and for servers that's what I want: store and log times in UTC and convert in the application or UI. If a timezone is really needed I set TZ, for example Asia/Kolkata, and make sure tzdata is installed, because slim images often lack it. For HTTPS the image needs ca-certificates; behind a TLS-inspecting corporate proxy I add the corporate root CA to the system store and, for Java, to the JVM truststore. For text handling I set LANG and LC_ALL to a UTF-8 locale like C.UTF-8 to avoid encoding bugs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might HTTPS fail only in the container?</strong> Missing CA bundle or the corporate proxy CA is not trusted inside the image.</li>
+  <li><strong>Why prefer UTC?</strong> No DST jumps, consistent logs and easy correlation across regions.</li>
+  <li><strong>How do you verify the timezone?</strong> <code>docker exec app date</code> and check the app's reported zone.</li>
+</ul>
+</article>
+</body>
+</html>

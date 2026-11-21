@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-047 · Explain SQS standard vs FIFO queues, visibility timeout and dead-letter queues.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-047" data-topic="Cloud (AWS)">
+<h1>Explain SQS standard vs FIFO queues, visibility timeout and dead-letter queues.</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Standard</strong> SQS queues give near-unlimited throughput with <strong>at-least-once</strong> delivery and best-effort order, <strong>FIFO</strong> queues give <strong>ordering per message group</strong> and <strong>exactly-once processing</strong> via deduplication; the <strong>visibility timeout</strong> hides a message while it is processed, and a <strong>dead-letter queue</strong> catches messages that fail <strong>maxReceiveCount</strong> times.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>standard queue</strong> scales to virtually any rate. Because messages are stored redundantly across servers, a message can occasionally be delivered <strong>more than once</strong> or <strong>out of order</strong>, so consumers must be <strong>idempotent</strong>, for example by recording processed message or business IDs.</p>
+<p>A <strong>FIFO queue</strong> (name ends in <code>.fifo</code>) delivers messages in order within a <strong>MessageGroupId</strong> and removes duplicates within a <strong>five-minute deduplication window</strong>, using a MessageDeduplicationId or content-based hashing. Different groups are processed in parallel, so the group ID is your unit of ordering, such as one per customer or order. Throughput is lower: 300 API calls per second per action, 3,000 messages per second with batching, and much more in <strong>high-throughput mode</strong>.</p>
+<p>SQS never pushes; consumers call <strong>ReceiveMessage</strong>. A received message becomes invisible for the <strong>visibility timeout</strong> (default 30 seconds, maximum 12 hours). If the consumer calls <strong>DeleteMessage</strong> it is gone; if it crashes or the timeout passes, the message reappears and its <strong>receive count</strong> increases. Long tasks can extend the timeout with <strong>ChangeMessageVisibility</strong>. For Lambda event sources, set the queue's timeout to about six times the function timeout.</p>
+<p>A <strong>redrive policy</strong> moves a message to a <strong>dead-letter queue</strong> after maxReceiveCount receives, so poison messages do not loop forever. Alarm on DLQ depth and use <strong>DLQ redrive</strong> to move messages back after a fix. <strong>Long polling</strong> (WaitTimeSeconds up to 20) cuts empty responses and cost. Other limits: 256 KB message size (larger payloads go to S3) and retention up to 14 days.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer sends a message (with group ID for FIFO).</li>
+  <li>Consumer long-polls and receives up to 10 messages.</li>
+  <li>Messages become invisible for the visibility timeout.</li>
+  <li>Success: consumer deletes them.</li>
+  <li>Failure or timeout: messages reappear; receive count grows.</li>
+  <li>After maxReceiveCount, the redrive policy moves them to the DLQ.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws sqs create-queue --queue-name orders-dlq
+aws sqs create-queue --queue-name orders --attributes '{
+  &quot;VisibilityTimeout&quot;:&quot;180&quot;,
+  &quot;ReceiveMessageWaitTimeSeconds&quot;:&quot;20&quot;,
+  &quot;RedrivePolicy&quot;:&quot;{\&quot;deadLetterTargetArn\&quot;:\&quot;arn:aws:sqs:eu-west-1:111122223333:orders-dlq\&quot;,\&quot;maxReceiveCount\&quot;:\&quot;5\&quot;}&quot;
+}'</code></pre>
+<pre><code class="language-python">for msg in sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10,
+                               WaitTimeSeconds=20).get(&quot;Messages&quot;, []):
+    order = json.loads(msg[&quot;Body&quot;])
+    if not already_processed(order[&quot;id&quot;]):   # idempotency
+        process(order)
+    sqs.delete_message(QueueUrl=url, ReceiptHandle=msg[&quot;ReceiptHandle&quot;])</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>Standard</th><th>FIFO</th></tr></thead>
+<tbody>
+<tr><td>Throughput</td><td>Nearly unlimited</td><td>Limited per API action, higher with high-throughput mode</td></tr>
+<tr><td>Delivery</td><td>At least once</td><td>Exactly-once processing (5-minute dedup)</td></tr>
+<tr><td>Ordering</td><td>Best effort</td><td>Strict per message group</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Visibility timeout shorter than processing time, causing duplicate work.</li>
+  <li>No DLQ, so a poison message retries until retention expires.</li>
+  <li>Assuming FIFO removes the need for idempotency in downstream side effects.</li>
+  <li>Using one FIFO message group for everything, serialising all processing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Standard queues have nearly unlimited throughput with at-least-once delivery and best-effort order, so duplicates and reordering can happen. FIFO queues guarantee order within a message group and exactly-once processing through deduplication, at lower throughput. When a consumer receives a message, it is hidden for the visibility timeout; if the consumer deletes it, it is gone, otherwise it comes back, so the timeout must exceed processing time. After maxReceiveCount failures, the redrive policy sends it to a dead-letter queue. I always make consumers idempotent and use long polling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if processing takes longer than the visibility timeout?</strong> The message reappears and another consumer processes it too; extend visibility or raise the timeout.</li>
+  <li><strong>How do you replay DLQ messages?</strong> Fix the bug, then use DLQ redrive to move them back to the source queue.</li>
+  <li><strong>How do you send messages larger than 256 KB?</strong> Store the payload in S3 and send a pointer (extended client pattern).</li>
+</ul>
+</article>
+</body>
+</html>

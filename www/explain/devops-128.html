@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-128 · How does HashiCorp Vault work, and what are dynamic secrets?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-128" data-topic="DevSecOps">
+<h1>How does HashiCorp Vault work, and what are dynamic secrets?</h1>
+<p class="ex-meta">DevSecOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>HashiCorp Vault</strong> centralises secrets: clients log in via <strong>auth methods</strong> (Kubernetes, OIDC, AWS IAM), <strong>policies</strong> grant path access, and <strong>secrets engines</strong> store static secrets or generate <strong>dynamic secrets</strong>, short-lived credentials created on demand with a <strong>lease</strong> that is <strong>revoked automatically</strong>; it starts <strong>sealed</strong>, is ideally <strong>auto-unsealed</strong> with a KMS, and <strong>audit-logs</strong> every request.</p>
+
+<h2>Detailed explanation</h2>
+<p>Vault replaces secrets scattered across config files and CI variables with one API. Every client first <strong>authenticates</strong> using a method that fits its identity: a Kubernetes service account token, an AWS IAM role, OIDC for humans, AppRole for legacy apps. Vault returns a <strong>token</strong> with attached <strong>policies</strong>, written in HCL, that allow specific capabilities (<code>read</code>, <code>create</code>, <code>update</code>) on specific paths.</p>
+<p><strong>Secrets engines</strong> handle the data: <strong>KV v2</strong> for versioned static secrets, <strong>database</strong> for dynamic DB credentials, <strong>AWS/Azure/GCP</strong> for dynamic cloud credentials, <strong>PKI</strong> for issuing short-lived certificates.</p>
+<p><strong>Dynamic secrets</strong> are the key idea. Instead of one shared database password living for years, Vault connects to the database with an admin account and, when an app asks, <strong>creates a unique user</strong> with a defined role and a <strong>lease</strong> of, say, one hour. The app renews the lease while running; when it expires or is revoked, Vault drops the user. Leaks become short-lived and each credential is traceable to one client.</p>
+<p><strong>Kubernetes delivery:</strong> the <strong>Vault Agent Injector</strong> adds a sidecar that logs in and renders secrets to a shared volume; the <strong>Secrets Store CSI provider</strong> mounts them as files; the <strong>Vault Secrets Operator</strong> syncs them into Kubernetes Secrets.</p>
+<p><strong>Operations:</strong> Vault encrypts storage with a key that is itself protected; on start it is <strong>sealed</strong> and must be unsealed with Shamir key shares or, better, <strong>auto-unseal</strong> via AWS KMS, Azure Key Vault or an HSM. Run it highly available with <strong>integrated Raft storage</strong>, and enable <strong>audit devices</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod starts → agent authenticates with its service account JWT.</li>
+  <li>Vault verifies it with the Kubernetes API and maps it to a role and policies.</li>
+  <li>Agent requests <code>database/creds/orders-app</code>.</li>
+  <li>Vault creates a DB user with a lease and returns credentials.</li>
+  <li>Agent renders them to a file, renews the lease, and re-renders on rotation.</li>
+  <li>Pod deleted → lease expires → user dropped.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vault secrets enable database
+vault write database/config/orders plugin_name=postgresql-database-plugin \
+  connection_url=&quot;postgresql://{{username}}:{{password}}@db:5432/orders&quot; \
+  allowed_roles=orders-app username=vault password=...
+vault write database/roles/orders-app db_name=orders default_ttl=1h max_ttl=24h \
+  creation_statements=&quot;CREATE ROLE \&quot;{{name}}\&quot; LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO \&quot;{{name}}\&quot;;&quot;
+vault read database/creds/orders-app</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a root token in applications.</li>
+  <li>Apps that read a dynamic secret once and never handle renewal or rotation.</li>
+  <li>A single Vault node with manual unseal and no backups of Raft snapshots.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Vault centralises secrets. Clients authenticate through auth methods such as Kubernetes service accounts, OIDC or cloud IAM, and policies decide which paths they can use. Besides static KV secrets, it generates dynamic secrets: for example a unique database user per app instance with a one-hour lease, revoked automatically when the lease ends, so leaked credentials quickly become useless and are traceable. In Kubernetes I deliver secrets with the agent injector, CSI provider or Vault Secrets Operator. Vault starts sealed, so I use KMS auto-unseal and a Raft HA cluster, and audit logging records every access.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if Vault is unavailable?</strong> HA cluster across AZs, cached secrets in agents, leases long enough to ride out short outages.</li>
+  <li><strong>Static vs dynamic secrets?</strong> Static are stored and rotated; dynamic are generated per request and expire.</li>
+  <li><strong>How does Kubernetes auth work?</strong> Vault validates the pod's service account token via TokenReview and maps it to a role.</li>
+</ul>
+</article>
+</body>
+</html>

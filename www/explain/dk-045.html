@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-045 · How do you run Java applications well in containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-045" data-topic="Docker">
+<h1>How do you run Java applications well in containers?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Modern JVMs are <strong>container-aware</strong>, so size the heap with <strong><code>-XX:MaxRAMPercentage</code></strong> (about <strong>70-75%</strong>) to leave room for native memory, use a <strong>JRE or jlink runtime</strong> and <strong>layered jars</strong>, handle <strong>SIGTERM</strong> for graceful shutdown, and improve start-up with <strong>CDS/AppCDS, CRaC or GraalVM native image</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Older JVMs read the host's memory and CPU count, so a container with a 1 GB limit on a 64 GB host might default to a 16 GB heap and get <strong>OOM-killed</strong>. Since <strong>Java 10</strong> (backported to <strong>8u191</strong>) the JVM reads <strong>cgroup limits</strong> (cgroup v2 support arrived in later updates such as JDK 15 and 11.0.16), so defaults now follow the container. The default heap is only 25% of the limit, though, which wastes memory; instead set <strong><code>-XX:MaxRAMPercentage=70</code> to <code>75</code></strong>. Avoid making the heap equal to the limit: the JVM also uses <strong>metaspace</strong>, <strong>thread stacks</strong>, <strong>code cache</strong>, <strong>GC structures</strong> and <strong>direct buffers</strong>, and the container is killed when the whole process exceeds the limit. CPU limits also affect GC thread counts and <code>availableProcessors()</code>; very low CPU limits slow GC and start-up.</p>
+<p>For the image, use a <strong>JRE</strong> base (<code>eclipse-temurin:21-jre</code>) or build a minimal runtime with <strong>jlink</strong> containing only the modules you need. <strong>Spring Boot layered jars</strong> (<code>java -Djarmode=tools ... extract --layers</code>) split dependencies, Spring Boot loader, snapshot dependencies and application classes into separate Docker layers, so a code change only rebuilds a few hundred kilobytes. Run as non-root.</p>
+<p>The JVM must be <strong>PID 1</strong> (exec form) so it receives SIGTERM, and the framework must drain gracefully, for example <code>server.shutdown=graceful</code> in Spring Boot. For faster start-up, important for autoscaling and serverless, use <strong>Class Data Sharing / AppCDS</strong> archives, <strong>CRaC</strong> checkpoint and restore where supported, or <strong>GraalVM native images</strong>, which start in milliseconds but need build-time configuration for reflection.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Container starts with a memory limit (e.g. 1 GiB).</li>
+  <li>The JVM reads the cgroup limit and applies MaxRAMPercentage to the heap.</li>
+  <li>Remaining memory covers metaspace, threads and native buffers.</li>
+  <li>On SIGTERM, shutdown hooks drain requests and close resources.</li>
+  <li>Metrics show heap and native memory against the limit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jdk AS build
+WORKDIR /src
+COPY . .
+RUN ./mvnw -q package -DskipTests &amp;&amp; \
+    java -Djarmode=tools -jar target/app.jar extract --layers --launcher --destination /layers
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /layers/dependencies/ ./
+COPY --from=build /layers/spring-boot-loader/ ./
+COPY --from=build /layers/snapshot-dependencies/ ./
+COPY --from=build /layers/application/ ./
+USER 10001
+ENV JAVA_TOOL_OPTIONS=&quot;-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError&quot;
+ENTRYPOINT [&quot;java&quot;, &quot;org.springframework.boot.loader.launch.JarLauncher&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>-Xmx</code> equal to the container limit.</li>
+  <li>Old JDK 8 builds that ignore cgroups.</li>
+  <li>Fat jars as a single layer, so every build re-pushes all dependencies.</li>
+  <li>Shell-form start commands that block SIGTERM.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Modern JVMs since Java 10 and recent Java 8 updates read the cgroup limits instead of host values. I size the heap relative to the limit with MaxRAMPercentage, around 70 to 75 percent, leaving headroom for metaspace, threads and native memory so the container isn't OOM killed. The image uses a JRE or a jlink runtime, and Spring Boot layered jars put dependencies in a separate layer that rarely changes. The JVM runs as PID 1 and handles SIGTERM with graceful shutdown. For faster startup I'd look at CDS, CRaC or GraalVM native images, especially for autoscaling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why OOM-killed with heap below Xmx?</strong> Native memory (threads, metaspace, direct buffers) pushes the process over the limit.</li>
+  <li><strong>How do you inspect native memory?</strong> <code>-XX:NativeMemoryTracking=summary</code> and <code>jcmd VM.native_memory</code>.</li>
+  <li><strong>Native image trade-offs?</strong> Fast start, lower memory, but longer builds and reflection configuration.</li>
+</ul>
+</article>
+</body>
+</html>

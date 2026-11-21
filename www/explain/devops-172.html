@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-172 · A container works on your laptop but fails in production. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-172" data-topic="Docker">
+<h1>A container works on your laptop but fails in production. How do you investigate?</h1>
+<p class="ex-meta">Docker · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Systematically <strong>compare the two environments</strong>: start with <strong>logs and exit codes</strong>, then check <strong>configuration and secrets</strong>, the <strong>exact image (tag, digest, architecture)</strong>, <strong>user and filesystem permissions</strong> (non-root, read-only), <strong>network/DNS and dependencies</strong>, and <strong>resource limits and probes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;It works on my machine&quot; with containers usually means the <strong>image is the same but the environment is not</strong>, or the image is not actually the same. The fastest way through is to stop guessing and list the differences.</p>
+<p><strong>1. Evidence first.</strong> <code>docker logs</code> / <code>kubectl logs --previous</code>, the <strong>exit code</strong> (1 = app error, 137 = SIGKILL, often <strong>OOMKilled</strong>, 139 = segfault, <code>exec format error</code> = wrong architecture), and events (<code>kubectl describe pod</code>: image pull errors, failed probes, scheduling).</p>
+<p><strong>2. Configuration.</strong> Environment variables, mounted config files, secrets and feature flags that exist locally (<code>.env</code>, a bind-mounted config) but not in production, or have different values. A missing variable often produces a confusing stack trace.</p>
+<p><strong>3. The image itself.</strong> Is production running the same <strong>digest</strong>? A floating tag like <code>latest</code> may point elsewhere. Was it built on an <strong>Apple silicon Mac as arm64</strong> and scheduled onto <strong>amd64</strong> nodes? Local builds can also include files that <code>.dockerignore</code> or the CI build context excludes.</p>
+<p><strong>4. Security context.</strong> Production often enforces <code>runAsNonRoot</code>, a <strong>read-only root filesystem</strong>, dropped capabilities and seccomp profiles. An app writing to <code>/app/logs</code> or <code>/tmp</code> without a writable volume, binding to port 80 as non-root, or relying on root-owned files fails with permission errors.</p>
+<p><strong>5. Network and dependencies.</strong> DNS names, service discovery, TLS certificates and CAs, proxies, network policies and firewall rules differ. <code>localhost</code> in production means the container itself, not your laptop's database.</p>
+<p><strong>6. Resources and timing.</strong> Memory limits kill JVMs or Node apps that use more than locally; CPU limits slow startup so <strong>liveness probes fail</strong> before the app is ready, causing restart loops.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Collect logs, exit code, events.</li>
+  <li>Confirm image digest and architecture.</li>
+  <li>Diff environment, config and secrets.</li>
+  <li>Check user, filesystem and capabilities.</li>
+  <li>Test connectivity from inside the container.</li>
+  <li>Check limits, probes and recent changes; reproduce locally with production settings.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get pod api-7d9 -o jsonpath='{.status.containerStatuses[0].lastState}'
+kubectl logs api-7d9 --previous
+kubectl get pod api-7d9 -o jsonpath='{.status.containerStatuses[0].imageID}'
+docker buildx imagetools inspect ghcr.io/acme/api:1.4.0   # which platforms exist?
+kubectl exec api-7d9 -- env | sort
+kubectl debug -it api-7d9 --image=nicolaka/netshoot --target=api -- nslookup db.prod.svc
+# reproduce locally with production-like constraints
+docker run --rm --read-only --user 10001 --memory 512m --platform linux/amd64 \
+  --env-file prod-like.env ghcr.io/acme/api:1.4.0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Redeploying repeatedly hoping it works, without reading logs.</li>
+  <li>Ignoring exit code 137 and debugging application code.</li>
+  <li>Building images locally and pushing them instead of using CI.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I compare what actually differs. First the evidence: logs, the exit code, and events, because 137 points to an OOM kill and exec format error to the wrong architecture. Then configuration: environment variables, config files and secrets that exist locally but not in production. Then the image: is it the same digest, and was it built as arm64 on a Mac but run on amd64 nodes? Production often runs as non-root with a read-only filesystem, so writes fail. I check DNS and connectivity from inside the pod, and finally resource limits and probes. To prevent it, images come only from CI and local runs use production-like settings.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Make local closer to production?</strong> CI-built images, Compose with the same user and read-only settings, same env var names, limits.</li>
+  <li><strong>Image has no shell?</strong> <code>kubectl debug</code> with an ephemeral container.</li>
+  <li><strong>Exit code 137?</strong> SIGKILL, usually OOM; check <code>OOMKilled</code> in status.</li>
+</ul>
+</article>
+</body>
+</html>

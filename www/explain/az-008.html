@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-008 · How do App Service deployment slots work, and how do you do zero-downtime releases with them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-008" data-topic="Azure">
+<h1>How do App Service deployment slots work, and how do you do zero-downtime releases with them?</h1>
+<p class="ex-meta">Azure · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Deployment slots</strong> are <strong>live copies of an App Service app with their own hostname</strong> on the same plan; you <strong>deploy to staging, warm it up, then swap</strong> with production for <strong>zero downtime</strong>, keep <strong>sticky slot settings</strong> per slot, and <strong>roll back by swapping again</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Slots are available on <strong>Standard, Premium and Isolated</strong> App Service tiers (and Functions on suitable plans). Each slot is a full app with its own hostname, such as <code>orders-api-staging.azurewebsites.net</code>, configuration and deployment, but it shares the <strong>App Service plan's compute</strong>, so a busy staging slot affects production capacity.</p>
+<p>The <strong>swap</strong> is what makes releases zero-downtime. When you swap staging into production, Azure first applies production's <strong>slot-specific settings</strong> to the staging instances, restarts them, and <strong>warms them up</strong> by sending requests to the root path or a custom path (configurable with <code>applicationInitialization</code> or <code>WEBSITE_SWAP_WARMUP_PING_PATH</code>). Only when all instances respond does it switch routing, so production users never hit cold instances. Requests in flight are not dropped.</p>
+<p><strong>Sticky (slot) settings</strong> stay with the slot instead of moving with the code. Typical sticky settings are connection strings to environment-specific resources, feature flags for testing in staging, and monitoring keys if you separate telemetry. Non-sticky settings travel with the app version.</p>
+<p><strong>Swap with preview</strong> (multi-phase swap) pauses after applying production settings so you can validate staging with production configuration before completing. <strong>Auto swap</strong> can swap automatically after each deployment to a slot. <strong>Traffic routing</strong> can send a percentage of production traffic to a slot for testing in production. <strong>Rollback</strong> is simply swapping again, because the previous version is now in the staging slot.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deploy the new build to the staging slot.</li>
+  <li>Run smoke tests against the staging hostname.</li>
+  <li>Start the swap; production settings are applied to staging instances.</li>
+  <li>Instances restart and are warmed up via the warm-up path.</li>
+  <li>Routing switches; old version now sits in staging.</li>
+  <li>If problems appear, swap back immediately.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az webapp deployment slot create -g rg-orders -n orders-api --slot staging
+az webapp deploy -g rg-orders -n orders-api --slot staging --src-path app.zip
+curl -f https://orders-api-staging.azurewebsites.net/health
+az webapp deployment slot swap -g rg-orders -n orders-api \
+  --slot staging --target-slot production
+# Rollback: run the same swap command again
+az webapp config appsettings set -g rg-orders -n orders-api --slot staging \
+  --slot-settings FEATURE_TEST_MODE=true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making database connection strings non-sticky so staging writes to production.</li>
+  <li>Not configuring a warm-up path, so apps with slow startup still cause latency.</li>
+  <li>Forgetting that slots share plan capacity.</li>
+  <li>Database schema changes that are not backward compatible, so swap-back breaks.</li>
+  <li>Using slots as long-lived test environments with heavy load.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Deployment slots are live apps with their own hostname that share the App Service plan. I deploy the new version to a staging slot, run smoke tests, then swap it with production. During the swap Azure applies production settings to the staging instances and warms them up, and switches routing only when they respond, so there is no downtime and no cold start. Settings marked as slot settings stay with the slot, so staging can keep pointing at staging resources. Rollback is just swapping back. I can also use swap with preview to validate with production config, or route a percentage of traffic to a slot for testing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which settings should be sticky, and why?</strong> Environment-specific connection strings and test flags, so they do not follow the code into production.</li>
+  <li><strong>How do you handle database migrations with slots?</strong> Use backward-compatible, expand-and-contract migrations.</li>
+  <li><strong>What happens to sessions during a swap?</strong> In-memory sessions are lost on restart; use a distributed session store.</li>
+</ul>
+</article>
+</body>
+</html>

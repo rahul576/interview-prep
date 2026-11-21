@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-072 · How does the Azure Key Vault provider for the Secrets Store CSI driver work on AKS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-072" data-topic="Azure Kubernetes (AKS)">
+<h1>How does the Azure Key Vault provider for the Secrets Store CSI driver work on AKS?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>Key Vault secrets provider add-on</strong> installs the <strong>Secrets Store CSI driver</strong> and <strong>Azure provider</strong>; a <strong>SecretProviderClass</strong> says which secrets to fetch with which <strong>workload identity</strong>, pods mount them <strong>as files</strong> at start, and optionally they are <strong>synced to Kubernetes Secrets</strong> and <strong>rotated</strong> by polling.</p>
+
+<h2>Detailed explanation</h2>
+<p>Storing secrets in Git or creating Kubernetes Secrets by hand spreads sensitive values and makes rotation hard. With the CSI driver, <strong>Key Vault stays the source of truth</strong>.</p>
+<p>Enabling the add-on deploys two <strong>DaemonSets</strong> on every node: the generic <strong>Secrets Store CSI driver</strong> and the <strong>Azure Key Vault provider</strong>. In each namespace you create a <strong>SecretProviderClass</strong> with <code>provider: azure</code>, the vault name, tenant ID, the <strong>client ID of a workload identity</strong> and a list of <strong>objects</strong> (secrets, keys or certificates, optionally with versions).</p>
+<p>A pod references the class in a <strong>CSI volume</strong>. When the kubelet mounts the volume, the driver calls the provider, which authenticates to Entra ID using the pod's <strong>federated service account token</strong> and fetches the values. They are written to a <strong>tmpfs</strong> mount inside the container, for example <code>/mnt/secrets/db-password</code>. If fetching fails, the pod does not start, which surfaces misconfiguration immediately.</p>
+<p><strong>Sync to Kubernetes Secrets</strong> via <code>secretObjects</code> is optional and useful for environment variables or ingress TLS certificates, but the synced Secret only exists while at least one pod mounts the volume, and it lives in etcd (encrypted at rest, but readable to anyone with Secret read access).</p>
+<p><strong>Rotation:</strong> with <code>--enable-secret-rotation</code>, the driver polls Key Vault (default every two minutes) and updates mounted files and synced Secrets. Applications must <strong>re-read files</strong> or be restarted (for example with Reloader); environment variables never change in a running process.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable the add-on with rotation.</li>
+  <li>Create a user-assigned identity, federate it with the service account, grant <strong>Key Vault Secrets User</strong>.</li>
+  <li>Create the SecretProviderClass in the namespace.</li>
+  <li>Mount the CSI volume in the pod spec.</li>
+  <li>The driver fetches and mounts secrets at pod start and refreshes them when rotation is enabled.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata: { name: orders-kv, namespace: orders }
+spec:
+  provider: azure
+  parameters:
+    clientID: &quot;&lt;workload-identity-client-id&gt;&quot;
+    keyvaultName: kv-orders-prod
+    tenantId: &quot;&lt;tenant-id&gt;&quot;
+    objects: |
+      array:
+        - |
+          objectName: db-password
+          objectType: secret
+---
+# in the pod spec (serviceAccountName must be the federated account)
+volumes:
+- name: secrets
+  csi:
+    driver: secrets-store.csi.k8s.io
+    readOnly: true
+    volumeAttributes: { secretProviderClass: orders-kv }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting environment variables from synced Secrets to update on rotation.</li>
+  <li>Granting the kubelet identity Key Vault access instead of a per-app workload identity.</li>
+  <li>Forgetting that a synced Secret disappears when no pod mounts the volume.</li>
+  <li>Using Key Vault access policies inconsistently instead of Azure RBAC.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The add-on installs the Secrets Store CSI driver and Azure provider as DaemonSets. In each namespace I define a SecretProviderClass naming the vault, the secrets and the workload identity to use. Pods mount it as a CSI volume, so at start the driver fetches values from Key Vault and writes them as files, and nothing is stored in Git. Optionally it syncs into Kubernetes Secrets for env vars or TLS. With rotation enabled it polls Key Vault and updates files, but the app has to reload them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Compared with External Secrets Operator?</strong> ESO syncs into Kubernetes Secrets from many backends without mounting; CSI avoids etcd copies.</li>
+  <li><strong>How do apps pick up rotated secrets?</strong> Watch files, reload periodically, or restart via Reloader.</li>
+  <li><strong>Which identity is used?</strong> A per-application workload identity, not the node identity.</li>
+</ul>
+</article>
+</body>
+</html>

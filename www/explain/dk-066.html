@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-066 · How do you make containers immutable and read-only at runtime?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-066" data-topic="Docker">
+<h1>How do you make containers immutable and read-only at runtime?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>immutable container</strong> is never changed after it starts: you run it with a <strong>read-only root filesystem</strong> (<code>docker run --read-only</code> or Kubernetes <code>readOnlyRootFilesystem: true</code>), mount <strong>tmpfs or volumes</strong> only for the paths that must be writable, and ship every change as a <strong>new image</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default every container gets a thin <strong>writable layer</strong> on top of its image. Anything the process writes there, including whatever an attacker drops after exploiting the app, survives until the container is removed. If people &quot;hotfix&quot; a running container with <code>docker exec</code>, replicas drift apart and the image in the registry no longer describes what is actually running.</p>
+<p>Immutability fixes both problems. With a <strong>read-only root filesystem</strong> the kernel refuses writes to the image filesystem, so an attacker cannot install tools, change binaries or plant a cron job, and the app behaves the same in every replica. The rule becomes <strong>rebuild and redeploy, never patch in place</strong>, which also makes rollbacks trivial: redeploy the previous digest.</p>
+<p>Real applications still need a few writable paths: <code>/tmp</code>, a cache, a PID file, or a staging folder for uploads. These are mounted explicitly as <strong>tmpfs</strong> (in memory, gone on restart, can be sized and marked <code>noexec</code>) or as <strong>volumes</strong> when the data must persist. Logs go to <strong>stdout/stderr</strong>, not files. Turning read-only on also works as a test: anything that breaks shows you where the app writes unexpectedly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find where the app writes: run it normally, then <code>docker diff &lt;container&gt;</code> lists added (A) and changed (C) files in the writable layer.</li>
+  <li>Change the app or image so logs go to stdout and config is read from env or mounted files.</li>
+  <li>Run with <code>--read-only</code> and add <code>--tmpfs</code> or volume mounts for each legitimate writable path.</li>
+  <li>Harden further: non-root user, dropped capabilities, <code>no-new-privileges</code>.</li>
+  <li>In Kubernetes, set <code>readOnlyRootFilesystem: true</code> and use <code>emptyDir</code> (optionally <code>medium: Memory</code>) for scratch space; enforce it with Pod Security or Kyverno policies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name api --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  -v api-uploads:/app/uploads \
+  --user 10001 --cap-drop ALL --security-opt no-new-privileges \
+  myregistry/api:1.8.3</code></pre>
+<pre><code class="language-yaml">securityContext:
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+volumeMounts:
+  - { name: tmp, mountPath: /tmp }
+volumes:
+  - name: tmp
+    emptyDir: { medium: Memory, sizeLimit: 64Mi }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Enabling read-only without checking writable paths, then watching the app crash on startup (Nginx cache dirs and Java temp files are classics).</li>
+  <li>Mounting a big writable volume over <code>/</code> or <code>/app</code>, which defeats the purpose.</li>
+  <li>Writing log files inside the container instead of to stdout.</li>
+  <li>Treating <code>docker exec</code> fixes as acceptable in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An immutable container is one we never modify after start; any change is a new image and a redeploy. I enforce that with a read-only root filesystem, <code>--read-only</code> in Docker or <code>readOnlyRootFilesystem: true</code> in Kubernetes. Before turning it on I run the app and use <code>docker diff</code> to see where it writes, then I give it tmpfs or emptyDir for <code>/tmp</code> and caches, and volumes only for data that must persist. Logs go to stdout. The benefits are security, because an attacker can't persist tools or modify binaries, and consistency, because every replica runs exactly what's in the image, so rollbacks are just redeploying the old digest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find which paths the app writes to?</strong> Run it and use <code>docker diff</code>, check errors after enabling read-only, or trace with <code>strace</code>/<code>inotifywait</code> in a test environment.</li>
+  <li><strong>Is tmpfs data safe from attackers?</strong> No, it is writable while running; mount it <code>noexec</code> and keep it small, but it is lost on restart, so nothing persists.</li>
+  <li><strong>Does read-only stop all attacks?</strong> No; it is one layer alongside non-root, dropped capabilities, seccomp and network policies.</li>
+</ul>
+</article>
+</body>
+</html>

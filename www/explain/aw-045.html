@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-045 · How does IAM evaluate permissions when several policies apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-045" data-topic="Cloud (AWS)">
+<h1>How does IAM evaluate permissions when several policies apply?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>IAM starts with an <strong>implicit deny</strong>, an <strong>explicit Deny</strong> in any applicable policy always wins, and otherwise the request needs an <strong>Allow</strong> from an identity or resource policy that also falls within every limiting layer: <strong>SCPs, RCPs, permission boundaries and session policies</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>For each request, AWS gathers every policy that applies: <strong>identity-based policies</strong> on the user, group or role; <strong>resource-based policies</strong> such as a bucket or key policy; <strong>permission boundaries</strong> on the identity; <strong>session policies</strong> passed when assuming a role; <strong>service control policies</strong> (SCPs) and <strong>resource control policies</strong> (RCPs) from AWS Organizations; and <strong>VPC endpoint policies</strong> where traffic passes through an endpoint.</p>
+<p>The logic is: if any policy has a matching <strong>explicit Deny</strong>, the answer is deny. If not, the guardrails must permit it: the SCPs at every level from root to account, the RCPs on the resource, the permission boundary and session policy all have to allow the action. These layers only <strong>set maximum permissions; they never grant</strong>. Finally, there must be an actual <strong>Allow</strong> in an identity policy or a resource policy. If nothing allows it, the implicit deny stands.</p>
+<p>There are nuances. Within the <strong>same account</strong>, an allow in either the identity policy or the resource policy is enough (with special cases such as KMS key policies, and role sessions where boundaries apply). For <strong>cross-account</strong> access, both the caller's identity policy and the resource policy must allow it. SCPs do not apply to the <strong>management account</strong> or service-linked roles. <strong>Conditions</strong> such as aws:SourceIp, aws:PrincipalOrgID or aws:SecureTransport are part of matching.</p>
+<p>To debug, use the <strong>IAM policy simulator</strong>, read the <strong>CloudTrail</strong> event (AccessDenied messages now often state which policy type denied and whether it was explicit or implicit), and use <strong>IAM Access Analyzer</strong> for policy validation and unused access.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives: principal, action, resource, context keys.</li>
+  <li>Collect all applicable policies.</li>
+  <li>Any explicit Deny matches: deny.</li>
+  <li>Check SCPs, RCPs, permission boundary, session policy: any missing allow means deny.</li>
+  <li>Check identity and resource policies for an Allow (both needed cross-account).</li>
+  <li>Allow found: permit; otherwise implicit deny.</li>
+</ol>
+
+<h2>Example</h2>
+<p>A role has <code>s3:*</code> on its identity policy, but the bucket policy denies non-TLS traffic and an SCP limits regions:</p>
+<pre><code class="language-json">{
+  &quot;Effect&quot;: &quot;Deny&quot;,
+  &quot;Principal&quot;: &quot;*&quot;,
+  &quot;Action&quot;: &quot;s3:*&quot;,
+  &quot;Resource&quot;: [&quot;arn:aws:s3:::reports&quot;, &quot;arn:aws:s3:::reports/*&quot;],
+  &quot;Condition&quot;: {&quot;Bool&quot;: {&quot;aws:SecureTransport&quot;: &quot;false&quot;}}
+}</code></pre>
+<p>An HTTP request is denied by the explicit Deny despite the Allow; an HTTPS request is allowed unless the SCP blocks the region.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing an Allow can override a Deny.</li>
+  <li>Expecting an SCP or permission boundary to grant access.</li>
+  <li>Forgetting the resource policy is required for cross-account access.</li>
+  <li>Debugging the wrong principal instead of checking get-caller-identity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every request starts as an implicit deny. AWS collects all applicable policies: identity policies, resource policies like bucket policies, permission boundaries, session policies, SCPs and RCPs. If any has a matching explicit Deny, the request is denied. Otherwise it needs an Allow from an identity or resource policy, and that Allow must also sit inside every limiting layer, because SCPs, boundaries and session policies only cap permissions. Cross-account, both sides must allow. To debug I use the policy simulator, CloudTrail error details and Access Analyzer.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can an SCP grant permissions to a user?</strong> No, it only defines the maximum; an identity or resource policy must still allow.</li>
+  <li><strong>Do SCPs affect the management account?</strong> No, which is why workloads should not run there.</li>
+  <li><strong>What is an RCP?</strong> An Organizations policy that caps what can be done to resources in member accounts, regardless of the caller.</li>
+</ul>
+</article>
+</body>
+</html>

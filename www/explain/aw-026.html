@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-026 · What is a golden AMI, and why use one?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-026" data-topic="Cloud (AWS)">
+<h1>What is a golden AMI, and why use one?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>golden AMI</strong> is a <strong>pre-baked machine image</strong> with the <strong>OS, latest patches, hardening, agents and runtime</strong> already installed, giving <strong>fast, consistent launches</strong>; it is <strong>built automatically</strong> with <strong>Packer</strong> or <strong>EC2 Image Builder</strong>, <strong>tested, versioned and rebuilt regularly</strong>, and rolled out by <strong>replacing instances</strong> (immutable infrastructure).</p>
+
+<h2>Detailed explanation</h2>
+<p>If every instance installs software at boot through user data, launches are slow (minutes of package downloads), depend on external repositories being up, and can produce <strong>different results</strong> if a package version changes between launches. During an Auto Scaling event that is exactly when you cannot afford delay or surprises.</p>
+<p>A golden AMI moves that work to <strong>build time</strong>. A pipeline starts from a trusted base image (for example the latest Amazon Linux 2023 AMI), applies <strong>OS updates</strong>, <strong>CIS-style hardening</strong>, installs the <strong>SSM agent, CloudWatch agent, security and EDR agents</strong>, the <strong>language runtime</strong>, and sometimes the application itself. It runs <strong>tests</strong> (services start, ports closed, compliance checks with Inspector), then creates the AMI, <strong>versions</strong> it and <strong>shares</strong> it with the accounts that need it, often through AWS Organizations. Launch templates reference the new AMI ID, frequently via an <strong>SSM parameter</strong> like <code>/golden/amazon-linux/latest</code>.</p>
+<p>Tools: <strong>HashiCorp Packer</strong> defines builds as code and works across clouds; <strong>EC2 Image Builder</strong> is the managed AWS service with recipes, components, test stages, schedules and distribution settings. Rebuild on a <strong>schedule</strong> (weekly or monthly) and when critical CVEs appear.</p>
+<p>This enables <strong>immutable infrastructure</strong>: instead of patching running servers with SSH or configuration tools, you roll out new instances from the new AMI and terminate old ones, so every server matches a known, tested image and drift disappears. Containers apply the same idea at the image level.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start from a trusted base AMI.</li>
+  <li>Patch, harden and install agents and runtime.</li>
+  <li>Run validation tests and vulnerability scans.</li>
+  <li>Create, tag and version the AMI; share to accounts.</li>
+  <li>Update the launch template or SSM parameter.</li>
+  <li>Roll instances with an Auto Scaling instance refresh; deprecate old AMIs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Packer template (HCL2), simplified
+source &quot;amazon-ebs&quot; &quot;base&quot; {
+  region        = &quot;eu-west-1&quot;
+  instance_type = &quot;t3.small&quot;
+  source_ami_filter {
+    filters     = { name = &quot;al2023-ami-*-x86_64&quot; }
+    owners      = [&quot;amazon&quot;]
+    most_recent = true
+  }
+  ssh_username = &quot;ec2-user&quot;
+  ami_name     = &quot;golden-al2023-{{timestamp}}&quot;
+}
+
+build {
+  sources = [&quot;source.amazon-ebs.base&quot;]
+  provisioner &quot;shell&quot; {
+    inline = [
+      &quot;sudo dnf -y update&quot;,
+      &quot;sudo dnf -y install amazon-cloudwatch-agent java-21-amazon-corretto&quot;,
+      &quot;sudo systemctl enable amazon-ssm-agent&quot;
+    ]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Building AMIs manually from a hand-configured instance.</li>
+  <li>Never rebuilding, so &quot;golden&quot; images are months out of date.</li>
+  <li>Baking secrets or environment-specific config into the image.</li>
+  <li>No tests before distribution.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A golden AMI is a pre-baked image with the patched OS, security hardening, monitoring and logging agents and often the runtime already installed. Instances from it start fast and identically, which matters for Auto Scaling. I'd build them automatically with Packer or EC2 Image Builder, run tests and scans, version them and share them to the accounts that use them, and rebuild regularly, say weekly, and for critical CVEs. Deployment is then immutable: rather than patching running servers, we roll new instances from the new AMI, for example with an Auto Scaling instance refresh.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you roll a new AMI to an ASG without downtime?</strong> Update the launch template and run an instance refresh with a minimum healthy percentage.</li>
+  <li><strong>Packer vs Image Builder?</strong> Packer is multi-cloud and code-first; Image Builder is managed with built-in scheduling, testing and distribution.</li>
+  <li><strong>What goes in user data then?</strong> Only small, instance-specific settings.</li>
+</ul>
+</article>
+</body>
+</html>

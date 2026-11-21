@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-149 · Design a notification service that sends email, SMS and push notifications at scale.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-149" data-topic="System Design">
+<h1>Design a notification service that sends email, SMS and push notifications at scale.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A notification service exposes an <strong>API that validates, applies preferences and enqueues</strong>, uses <strong>channel-specific workers and providers</strong> (email, SMS, push) with <strong>failover</strong>, guarantees <strong>idempotency, retries and DLQs</strong>, and uses <strong>priorities and rate limits</strong> so OTPs are never stuck behind marketing.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many services need to notify users, so a central service avoids duplicating provider integrations, templates and preference logic. The core challenge is reliability at scale while respecting user preferences and provider limits.</p>
+<p><strong>Intake:</strong> producers call <code>POST /notifications</code> (or publish an event) with user ID, template ID, data, channels and priority. The service checks <strong>user preferences</strong> (opt-outs, channel choices, <strong>quiet hours</strong>, regulatory consent such as DND registries for SMS in India), resolves contact details, renders <strong>templates</strong> with localisation, and stores a notification record with a unique ID.</p>
+<p><strong>Queueing:</strong> messages go to <strong>Kafka topics or queues per channel and priority</strong> (e.g. <code>sms.critical</code>, <code>email.bulk</code>). Separating priorities is what guarantees an OTP is not delayed behind a 5-million-email campaign; critical queues get dedicated consumers.</p>
+<p><strong>Delivery workers</strong> call providers: SES/SendGrid for email, Twilio or local SMS gateways for SMS, <strong>FCM/APNs</strong> for push. They apply <strong>per-provider rate limits</strong>, use <strong>circuit breakers</strong> and <strong>failover</strong> to a secondary provider. Sends are <strong>idempotent</strong> on notification ID; transient failures retry with <strong>exponential backoff</strong>, and exhausted messages go to a <strong>dead-letter queue</strong> for inspection.</p>
+<p><strong>Tracking:</strong> provider callbacks (delivered, bounced, opened) update status; invalid tokens and hard bounces are cleaned up. Users are protected from spam with frequency caps.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>API receives request with an idempotency key; dedupe.</li>
+  <li>Apply preferences, quiet hours and frequency caps; render template.</li>
+  <li>Persist record (status QUEUED) and publish to channel/priority topic.</li>
+  <li>Worker consumes, calls provider with timeout, records attempt.</li>
+  <li>Retry with backoff on 5xx/timeouts; DLQ after N attempts.</li>
+  <li>Webhooks from providers update status to DELIVERED/BOUNCED.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@KafkaListener(topics = &quot;sms.critical&quot;, concurrency = &quot;8&quot;)
+public void sendSms(NotificationMessage msg) {
+    if (!deliveryLog.markInProgress(msg.id())) return;      // idempotent
+    try {
+        smsRouter.primaryOrFailover().send(msg.to(), msg.body());
+        deliveryLog.markSent(msg.id());
+    } catch (TransientProviderException e) {
+        retryScheduler.schedule(msg, backoff(msg.attempt()));  // or DLQ after max attempts
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One shared queue for OTPs and marketing.</li>
+  <li>Sending synchronously from the calling service.</li>
+  <li>No idempotency, causing duplicate SMS on retries.</li>
+  <li>Ignoring opt-outs, quiet hours and regulatory rules.</li>
+  <li>Never cleaning up dead push tokens or bounced emails.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Clients call an API that validates the request, checks user preferences, quiet hours and consent, renders the template and publishes to Kafka topics per channel and priority, so callers aren't blocked. Channel-specific workers call providers like SES, an SMS gateway and FCM or APNs, with rate limits, circuit breakers and failover to a second provider. Every send is idempotent on a notification ID, retries use exponential backoff, and failures end in a dead-letter queue. Critical messages like OTPs have their own high-priority queue and consumers, and delivery status is tracked through provider callbacks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>OTP never delayed by a campaign?</strong> Separate topics, dedicated consumers and provider quota reserved for critical traffic.</li>
+  <li><strong>How do you schedule notifications?</strong> Store send time; a scheduler enqueues due messages.</li>
+  <li><strong>Batching digests?</strong> Aggregate low-priority events per user over a window, then send one message.</li>
+</ul>
+</article>
+</body>
+</html>

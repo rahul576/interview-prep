@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-002 · What is a data source in Terraform, and how is it different from a resource?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-002" data-topic="Infrastructure as Code">
+<h1>What is a data source in Terraform, and how is it different from a resource?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>resource</strong> is something Terraform <strong>creates, updates and destroys</strong> and tracks in state; a <strong>data source</strong> only <strong>reads information about something that already exists</strong> (created elsewhere or by another configuration) <strong>without managing it</strong>, declared with a <strong><code>data</code> block</strong> and referenced as <strong><code>data.&lt;type&gt;.&lt;name&gt;.&lt;attribute&gt;</code></strong>, and usually read during <strong>plan</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Your configuration often needs IDs of things it must not own: the network team's VPC, a KMS key, AWS's latest AMI. That is what <strong>data sources</strong> are for.</p>
+<p>A <strong>resource</strong> (<code>resource &quot;aws_vpc&quot; &quot;main&quot;</code>) has a full lifecycle: Terraform creates it, detects changes, updates or replaces it, and destroys it when removed from code. A <strong>data source</strong> (<code>data &quot;aws_vpc&quot; &quot;main&quot;</code>) is <strong>read-only</strong>: Terraform queries the provider API, for example &quot;find the VPC tagged <code>Name=shared-prod</code>&quot;, and exposes the result as attributes. Removing the data block never deletes anything. Data sources are recorded in state only as cached read results.</p>
+<p>Typical examples:</p>
+<ul>
+  <li><strong><code>aws_ami</code></strong> with <code>most_recent = true</code> and filters to find the latest Amazon Linux image.</li>
+  <li><strong><code>aws_vpc</code></strong> / <strong><code>aws_subnets</code></strong> by tags, to deploy into a shared network.</li>
+  <li><strong><code>aws_caller_identity</code></strong> for the current account ID, <strong><code>aws_region</code></strong> for the region.</li>
+  <li><strong><code>aws_route53_zone</code></strong>, <strong><code>aws_secretsmanager_secret_version</code></strong>, <strong><code>azurerm_key_vault_secret</code></strong>.</li>
+  <li><strong><code>terraform_remote_state</code></strong> to read outputs from another state.</li>
+</ul>
+<p><strong>Timing:</strong> data sources are normally read <strong>during plan</strong>, so their results feed into the diff. If a data source depends on a resource that is not yet created, it is <strong>deferred to apply</strong> and shows as &quot;known after apply&quot;. The important consequence: if the <strong>external object changes</strong>, the next plan may show changes in resources that depend on it, for example a new &quot;latest AMI&quot; ID causing an EC2 instance <strong>replacement</strong>. To avoid surprises, pin specific values for critical resources, or use <code>lifecycle { ignore_changes = [ami] }</code> and roll out new images deliberately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare a <code>data</code> block with filter arguments.</li>
+  <li>On plan, Terraform asks the provider to look it up (fails if not found, or if multiple match when one is expected).</li>
+  <li>Attributes become available as <code>data.type.name.attr</code>.</li>
+  <li>Resources referencing them depend on the data source.</li>
+  <li>Each plan re-reads; changes in external objects propagate into diffs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;aws_caller_identity&quot; &quot;current&quot; {}
+
+data &quot;aws_vpc&quot; &quot;shared&quot; {
+  tags = { Name = &quot;shared-prod&quot; }
+}
+
+data &quot;aws_subnets&quot; &quot;private&quot; {
+  filter {
+    name   = &quot;vpc-id&quot;
+    values = [data.aws_vpc.shared.id]
+  }
+  tags = { Tier = &quot;private&quot; }
+}
+
+data &quot;aws_ami&quot; &quot;al2023&quot; {
+  most_recent = true
+  owners      = [&quot;amazon&quot;]
+  filter {
+    name   = &quot;name&quot;
+    values = [&quot;al2023-ami-*-x86_64&quot;]
+  }
+}
+
+resource &quot;aws_instance&quot; &quot;app&quot; {
+  ami           = data.aws_ami.al2023.id
+  instance_type = &quot;t3.small&quot;
+  subnet_id     = data.aws_subnets.private.ids[0]
+  tags          = { account = data.aws_caller_identity.current.account_id }
+  lifecycle { ignore_changes = [ami] }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Resource</th><th>Data source</th></tr></thead>
+<tbody>
+<tr><td>Block</td><td><code>resource</code></td><td><code>data</code></td></tr>
+<tr><td>Lifecycle</td><td>Create/update/destroy</td><td>Read only</td></tr>
+<tr><td>Reference</td><td><code>type.name.attr</code></td><td><code>data.type.name.attr</code></td></tr>
+<tr><td>Removing it</td><td>Destroys the object</td><td>Nothing happens</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a &quot;latest&quot; data source for production instances without <code>ignore_changes</code>, causing surprise replacements.</li>
+  <li>Filters that match several objects, making the plan fail.</li>
+  <li>Using a resource block to &quot;reference&quot; shared infrastructure, accidentally taking ownership (and destroying it later).</li>
+  <li>Reading secrets via data sources without realising the values land in state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A resource is something Terraform creates, updates and destroys, and it's tracked in state. A data source only reads information about something that already exists, created elsewhere or by another configuration, without managing it. Typical examples are looking up the latest Amazon Linux AMI, an existing VPC by tag, the current account ID with aws_caller_identity, a secret, or a DNS zone. I declare it with a data block, like <code>data \&quot;aws_vpc\&quot; \&quot;main\&quot;</code>, and reference attributes as <code>data.aws_vpc.main.id</code>. Data sources are read during plan, so if the external object changes, the next plan can show changes in dependent resources, which is why I'm careful with 'latest AMI' lookups on production instances.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can &quot;latest AMI&quot; cause unexpected replacements?</strong> A new AMI ID changes the instance's <code>ami</code> argument, which forces replacement.</li>
+  <li><strong>When is a data source read at apply time?</strong> When it depends on values not yet known, such as a resource being created in the same run.</li>
+  <li><strong>Do data sources store secrets in state?</strong> Yes, read values are saved in state, so protect it.</li>
+</ul>
+</article>
+</body>
+</html>
