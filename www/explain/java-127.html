@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-127 · How does Spring AOP work, and what are its limitations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-127" data-topic="Spring Boot">
+<h1>How does Spring AOP work, and what are its limitations?</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Spring AOP modularises <strong>cross-cutting concerns</strong> with <strong>aspects</strong> made of <strong>advice</strong> (before, after, around) and <strong>pointcuts</strong>, implemented through <strong>runtime proxies</strong> (<strong>JDK dynamic proxies</strong> or <strong>CGLIB subclasses</strong>); so <strong>self-invocation</strong>, <strong>private</strong> and <strong>final</strong> methods and non-Spring objects are <strong>not intercepted</strong>, which needs <strong>AspectJ weaving</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some concerns cut across many classes: transactions, security checks, logging, metrics, retries, caching. Copying that code into every method is error-prone. <strong>Aspect-oriented programming</strong> puts it in one <strong>aspect</strong>.</p>
+<p>Vocabulary: a <strong>join point</strong> is a point in execution; in Spring AOP always a <strong>method execution</strong> on a bean. A <strong>pointcut</strong> is an expression selecting join points, for example <code>execution(* com.shop.service..*(..))</code> or <code>@annotation(com.shop.Timed)</code>. <strong>Advice</strong> is the code to run: <code>@Before</code>, <code>@AfterReturning</code>, <code>@AfterThrowing</code>, <code>@After</code> (finally) and <code>@Around</code>, which wraps the call and decides whether and how to proceed. Spring uses AspectJ's annotation style and pointcut language but not its weaver.</p>
+<p>Spring creates a <strong>proxy</strong> for each bean matched by an aspect during the <code>postProcessAfterInitialization</code> phase. Spring Boot defaults to <strong>CGLIB</strong> class-based proxies (<code>spring.aop.proxy-target-class=true</code>), which subclass the bean; plain Spring uses a <strong>JDK dynamic proxy</strong> when the bean implements an interface. Callers get the proxy, which runs the advice chain and then calls the target. <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code>, <code>@PreAuthorize</code> and <code>@Retryable</code> all work this way.</p>
+<p>Limitations follow from proxies:</p>
+<ul>
+  <li><strong>Self-invocation</strong>: <code>this.otherMethod()</code> inside the bean bypasses the proxy, so its advice does not run.</li>
+  <li><strong>private methods</strong> are never advised, and <strong>final methods or classes</strong> cannot be overridden by CGLIB.</li>
+  <li>Only <strong>Spring beans</strong> are advised, not objects created with <code>new</code>.</li>
+  <li>Only method execution join points, no field access or constructor advice.</li>
+  <li>A small per-call overhead.</li>
+</ul>
+<p>For these cases use <strong>AspectJ</strong> compile-time or load-time weaving, or restructure: move the method to another bean.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare an <code>@Aspect</code> bean with pointcuts and advice.</li>
+  <li>At startup the auto-proxy creator checks every bean against the pointcuts.</li>
+  <li>Matching beans are wrapped in a proxy.</li>
+  <li>A call on the proxy runs the interceptor chain, then the target method.</li>
+  <li>Calls the target makes internally go directly to itself.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Target(ElementType.METHOD) @Retention(RetentionPolicy.RUNTIME)
+public @interface Timed {}
+
+@Aspect
+@Component
+class TimingAspect {
+    private final MeterRegistry registry;
+    TimingAspect(MeterRegistry registry) { this.registry = registry; }
+
+    @Around(&quot;@annotation(com.shop.Timed)&quot;)
+    Object time(ProceedingJoinPoint pjp) throws Throwable {
+        long start = System.nanoTime();
+        try {
+            return pjp.proceed();
+        } finally {
+            registry.timer(&quot;method.time&quot;, &quot;method&quot;, pjp.getSignature().toShortString())
+                    .record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+        }
+    }
+}
+
+@Service
+class ReportService {
+    @Timed public Report build() { return load(); }   // timed when called from outside
+    @Timed public Report load()  { ... }               // NOT timed when called via this.load()
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting <code>@Transactional</code> to work on a method called from the same class.</li>
+  <li>Annotating private methods.</li>
+  <li>Forgetting to call <code>proceed()</code> in around advice, or swallowing exceptions.</li>
+  <li>Overly broad pointcuts that proxy half the application.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring AOP lets me put cross-cutting concerns like transactions, security, logging and metrics in one place. An aspect has advice, the code to run before, after or around a method, and a pointcut that selects which methods it applies to. Spring implements it with runtime proxies: CGLIB subclasses by default in Boot, or JDK dynamic proxies for interfaces. That's why @Transactional and @Cacheable work. The limitations come from the proxy: calls within the same class bypass it, private and final methods can't be advised, and only Spring beans are covered. For those cases you move the method to another bean or use full AspectJ weaving.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you write an around advice that measures execution time?</strong> As above: record time around <code>pjp.proceed()</code> in a <code>finally</code> block.</li>
+  <li><strong>How do you fix self-invocation?</strong> Move the method to another bean, or inject the bean's own proxy (less clean).</li>
+  <li><strong>Order of multiple aspects?</strong> Use <code>@Order</code> or implement <code>Ordered</code>.</li>
+</ul>
+</article>
+</body>
+</html>

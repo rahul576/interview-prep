@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-305 · How can you check application logs in a containerized environment?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-305" data-topic="Docker">
+<h1>How can you check application logs in a containerized environment?</h1>
+<p class="ex-meta">Docker · scenario · levels entry</p>
+
+<h2>In one line</h2>
+<p>Containers should log to <strong>stdout/stderr</strong>. Read them with <strong><code>docker logs</code></strong> or <strong><code>kubectl logs</code></strong> (<code>-f</code>, <code>--previous</code>, <code>-c</code>, <code>-l</code>), use <strong><code>kubectl describe</code> and events</strong> to understand crashes, and in production rely on <strong>centralised logging</strong> (Fluent Bit to ELK/OpenSearch, Loki, CloudWatch, Azure Monitor) with <strong>structured JSON logs</strong> and <strong>correlation ids</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The container convention (also a Twelve-Factor App rule) is that applications write logs to <strong>standard output and standard error</strong>, not to files inside the container. The container runtime captures those streams, and on Kubernetes nodes they are stored under <code>/var/log/containers</code>, which is what <code>kubectl logs</code> reads.</p>
+<p>For a quick look:</p>
+<ul>
+  <li><strong>Docker:</strong> <code>docker logs -f --tail 200 orders</code>, or <code>docker compose logs -f orders</code>.</li>
+  <li><strong>Kubernetes:</strong> <code>kubectl logs &lt;pod&gt;</code>. Add <code>-f</code> to follow, <code>-c &lt;container&gt;</code> for multi-container pods (sidecars, init containers), <code>--previous</code> to see the crashed previous instance, <code>-l app=orders</code> for all pods with a label, and <code>--since=15m</code> to limit the time range.</li>
+</ul>
+<p>When a pod keeps restarting, logs may be empty or cut off, so check <strong><code>kubectl describe pod</code></strong> for the last state and reason: <code>OOMKilled</code>, exit code 137, failed liveness probes, or image pull errors. Also check <code>kubectl get events --sort-by=.lastTimestamp</code>.</p>
+<p>Pods are ephemeral. When a pod is deleted or a node is replaced, its local logs are gone, and searching 30 replicas one by one is impractical. So production uses <strong>centralised logging</strong>. A node-level agent (a <strong>DaemonSet</strong> such as <strong>Fluent Bit</strong>, Fluentd, Vector or the OpenTelemetry Collector) tails container logs, adds Kubernetes metadata (namespace, pod, labels) and ships them to <strong>Elasticsearch/OpenSearch with Kibana</strong>, <strong>Loki with Grafana</strong>, <strong>CloudWatch Logs</strong> or <strong>Azure Monitor/Log Analytics</strong>. There you can search across all pods and set alerts.</p>
+<p>To make search useful, emit <strong>structured JSON</strong> logs with level, service, and <strong>trace id/correlation id</strong>, so one request can be followed across services.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The app logs JSON to stdout.</li>
+  <li>The runtime writes it to node log files, rotated by the kubelet.</li>
+  <li>The Fluent Bit DaemonSet tails the files and enriches them with pod metadata.</li>
+  <li>Logs are shipped to the backend and indexed by time, service and labels.</li>
+  <li>Engineers query by service, trace id or error, and alerts trigger on error spikes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl logs -f deploy/orders --since=10m
+kubectl logs orders-7d9c-abcde -c app --previous      # crashed instance
+kubectl logs -l app=orders --all-containers --prefix --tail=100
+kubectl describe pod orders-7d9c-abcde | grep -A5 &quot;Last State&quot;
+kubectl get events -n shop --sort-by=.lastTimestamp</code></pre>
+<pre><code class="language-logql">{namespace=&quot;shop&quot;, app=&quot;orders&quot;} | json | level=&quot;ERROR&quot; | traceId=&quot;4bf92f35&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing logs to files inside the container, where they are invisible to <code>kubectl logs</code> and lost on restart.</li>
+  <li>Forgetting <code>--previous</code> when debugging CrashLoopBackOff.</li>
+  <li>Unstructured multi-line logs (stack traces) that the shipper splits into separate entries.</li>
+  <li>Logging secrets or personal data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Containers should log to stdout and stderr. For one container I'd use docker logs -f. On Kubernetes I'd use kubectl logs with -f to follow, -c for a specific container, --previous for a crashed instance, and -l to select all pods of an app. If a pod keeps restarting, kubectl describe and the events tell me whether it's OOMKilled or a probe failure. Pods are ephemeral, so in production we rely on centralised logging: Fluent Bit ships logs to Elasticsearch, Loki or CloudWatch, and we search there. Structured JSON logs with trace ids make that search effective.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Logs of a container that keeps crashing?</strong> <code>kubectl logs --previous</code>, plus <code>describe</code> for the exit reason.</li>
+  <li><strong>Sidecar or DaemonSet for log shipping?</strong> A DaemonSet is the default. Sidecars are for apps that can only write files.</li>
+  <li><strong>Logs versus traces versus metrics?</strong> Logs record events, metrics give aggregated numbers, traces follow a request across services.</li>
+</ul>
+</article>
+</body>
+</html>

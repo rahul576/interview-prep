@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-210 · How do you ensure that an API returns the correct HTTP response?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-210" data-topic="REST &amp; API Design">
+<h1>How do you ensure that an API returns the correct HTTP response?</h1>
+<p class="ex-meta">REST &amp; API Design · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Choose status codes deliberately with <strong>ResponseEntity</strong> or <strong>@ResponseStatus</strong>, map exceptions centrally in a <strong>@RestControllerAdvice</strong> (400, 401, 403, 404, 409, 422, 500), return a consistent <strong>ProblemDetail (RFC 9457)</strong> body, and prove it with <strong>MockMvc</strong> and contract tests.</p>
+
+<h2>Detailed explanation</h2>
+<p>A correct HTTP response means the right <strong>status code</strong>, the right <strong>headers</strong> and a predictable <strong>body</strong>. Clients, gateways, retries and monitoring all make decisions on the status code, so a 200 with <code>{&quot;error&quot;: ...}</code> breaks caching, alerting and retry logic.</p>
+<p>On the success path, controllers return <strong>ResponseEntity</strong> to be explicit: <code>ok</code> for reads, <code>created(location)</code> for a POST that creates a resource, <code>accepted</code> for asynchronous work, <code>noContent</code> for deletes. <code>@ResponseStatus</code> on a method is a lighter option when the code never changes.</p>
+<p>On the error path, I never handle exceptions in each controller. A <strong>@RestControllerAdvice</strong> with <strong>@ExceptionHandler</strong> methods translates domain and framework exceptions into codes: <code>MethodArgumentNotValidException</code> to <strong>400</strong> with field errors, missing authentication to <strong>401</strong>, insufficient rights to <strong>403</strong>, not found to <strong>404</strong>, duplicates or optimistic-lock version conflicts to <strong>409</strong>, semantically invalid business rules often to <strong>422</strong>, and anything unexpected to <strong>500</strong> with a generic message and a correlation id, never a stack trace. Spring Framework 6 has <strong>ProblemDetail</strong> and <code>ErrorResponse</code>, implementing <strong>RFC 9457</strong> (which replaced RFC 7807), so every error has <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code> and <code>instance</code>. Setting <code>spring.mvc.problemdetails.enabled=true</code> makes the built-in exceptions use it too.</p>
+<p>Finally I <strong>verify</strong>: <code>@WebMvcTest</code> with MockMvc asserts status, headers and JSON for success and failure cases, and contract tests check the responses against the <strong>OpenAPI</strong> specification.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the status codes per endpoint in the OpenAPI contract.</li>
+  <li>Return <code>ResponseEntity</code> with the matching code and headers (<code>Location</code>, <code>ETag</code>, <code>Retry-After</code>).</li>
+  <li>Throw meaningful domain exceptions from services.</li>
+  <li>Map them in one <code>@RestControllerAdvice</code> to <code>ProblemDetail</code>.</li>
+  <li>Test each path with MockMvc and run contract tests in CI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestControllerAdvice
+class ApiErrors {
+    @ExceptionHandler(OrderNotFoundException.class)
+    ProblemDetail notFound(OrderNotFoundException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        pd.setTitle(&quot;Order not found&quot;);
+        return pd;
+    }
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ProblemDetail conflict() {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, &quot;Order was modified, reload and retry&quot;);
+    }
+}
+
+@WebMvcTest(OrderController.class)
+class OrderControllerTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;
+
+    @Test void missingOrderReturns404() throws Exception {
+        when(service.find(9L)).thenThrow(new OrderNotFoundException(9L));
+        mvc.perform(get(&quot;/api/v1/orders/9&quot;))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath(&quot;$.title&quot;).value(&quot;Order not found&quot;));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Returning 200 for errors with an error flag in the body.</li>
+  <li>Returning 500 for client mistakes such as invalid input.</li>
+  <li>Mixing up 401 (not authenticated) and 403 (authenticated but not allowed).</li>
+  <li>Leaking stack traces or SQL messages in error responses.</li>
+  <li>Only testing the happy path.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I treat status codes as part of the contract. Controllers return ResponseEntity explicitly, so a create returns 201 with a Location header, a delete 204. Errors are mapped in one place, a RestControllerAdvice, which turns validation failures into 400 with field errors, missing resources into 404, version conflicts and duplicates into 409, and unknown errors into 500 without leaking internals. The body is always a ProblemDetail, the RFC 9457 format, so clients parse one shape. Then I prove it with WebMvcTest and MockMvc for success and error cases, plus contract tests against the OpenAPI spec.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What status should a business rule violation return?</strong> Usually 422 Unprocessable Content, or 409 if it conflicts with current resource state; be consistent.</li>
+  <li><strong>401 or 403 for an expired token?</strong> 401, with a <code>WWW-Authenticate</code> header.</li>
+  <li><strong>How do you add a correlation id to errors?</strong> Put the trace id into the ProblemDetail as a property and into logs.</li>
+</ul>
+</article>
+</body>
+</html>

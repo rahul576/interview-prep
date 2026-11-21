@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-310 · How do you make a Spring Boot application start faster and use less memory?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-310" data-topic="Spring Boot">
+<h1>How do you make a Spring Boot application start faster and use less memory?</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Measure first</strong> (actuator <strong>startup</strong> endpoint), then trim <strong>starters and auto-configuration</strong>, use <strong>lazy initialisation</strong> selectively, avoid heavy startup work, use <strong>AppCDS / AOT cache</strong> or <strong>CRaC</strong>, and for the biggest gains compile to a <strong>GraalVM native image</strong>; reduce memory with <strong>heap and thread tuning</strong> and <strong>virtual threads</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Startup time matters for autoscaling, serverless, fast deployments and developer feedback; memory determines how many pods fit on a node and therefore cost.</p>
+<p><strong>Measure:</strong> register a <code>BufferingApplicationStartup</code> and read <code>/actuator/startup</code>, which lists startup steps with durations, or use JFR and the startup log. Often a few beans dominate: Hibernate scanning many entities, Flyway migrations, connecting to slow external systems, or cache warm-up.</p>
+<p><strong>Reduce work:</strong> remove unused starters, since each brings auto-configurations and classpath scanning; exclude auto-configurations you do not need; narrow component scanning; move heavy work like cache warming to <code>ApplicationReadyEvent</code> or a background task; consider <code>spring.main.lazy-initialization=true</code> for rarely used beans, but note that errors then appear on first request and the first call is slower. Running database migrations as a separate job also helps.</p>
+<p><strong>JVM-level startup acceleration:</strong></p>
+<ul>
+  <li><strong>Class Data Sharing (AppCDS)</strong>: archive parsed and verified classes. Spring Boot 3.3+ supports extracting the jar and creating a CDS archive with a training run (<code>-XX:ArchiveClassesAtExit</code>, then <code>-XX:SharedArchiveFile</code>), often cutting startup by a third or more. JDK 24+ adds the <strong>AOT cache</strong> from Project Leyden (<code>-XX:AOTCache</code>), which goes further, and combining it with Spring AOT helps more.</li>
+  <li><strong>CRaC (Coordinated Restore at Checkpoint)</strong>: snapshot a warmed-up JVM and restore in milliseconds; needs a CRaC-enabled JDK and Linux, and care with open connections and secrets.</li>
+  <li><strong>GraalVM native image</strong>: Spring AOT plus native compilation gives startup in tens of milliseconds and much lower RSS, at the cost of long builds, no JIT peak optimisations for long runs (PGO helps), and limits on reflection and dynamic proxies that need hints.</li>
+</ul>
+<p><strong>Memory:</strong> set heap explicitly or with <code>-XX:MaxRAMPercentage</code>, size thread pools sensibly or use <strong>virtual threads</strong> instead of hundreds of platform threads with their stacks, lower Tomcat max threads, choose a suitable GC (Serial for tiny containers, G1 by default), and check metaspace and direct memory with NMT.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable startup tracking and record a baseline.</li>
+  <li>Remove or defer the slowest beans and unused auto-configuration.</li>
+  <li>Add a CDS or AOT cache archive in the Docker build.</li>
+  <li>Evaluate native image or CRaC if startup is critical.</li>
+  <li>Tune heap, threads and GC; load-test to confirm.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public static void main(String[] args) {
+    SpringApplication app = new SpringApplication(App.class);
+    app.setApplicationStartup(new BufferingApplicationStartup(2048));   // for /actuator/startup
+    app.run(args);
+}</code></pre>
+<pre><code class="language-bash"># AppCDS with Spring Boot 3.3+
+java -Djarmode=tools -jar app.jar extract --destination app
+java -XX:ArchiveClassesAtExit=app.jsa -Dspring.context.exit=onRefresh -jar app/app.jar
+java -XX:SharedArchiveFile=app.jsa -XX:MaxRAMPercentage=75 -jar app/app.jar
+
+# Native image with Maven
+./mvnw -Pnative native:compile</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising without measuring.</li>
+  <li>Global lazy initialisation hiding configuration errors until production traffic.</li>
+  <li>Assuming native images are always faster at peak throughput.</li>
+  <li>Container memory limits without matching heap settings, causing OOM kills.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure with the actuator startup endpoint or startup logs to see which beans are slow. Then I remove unused starters and auto-configuration, consider lazy initialisation for rarely used beans, and move heavy work like cache warming out of startup. Class Data Sharing, which Boot 3.3 supports directly, or the newer JDK AOT cache noticeably cut startup, and CRaC can restore from a checkpoint. For the biggest gains, GraalVM native image starts in milliseconds with much less memory, at the cost of build time and reflection limits. For memory I set heap relative to the container, right-size thread pools and use virtual threads instead of large pools.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What features become harder when you compile to a native image?</strong> Reflection, dynamic proxies, runtime classpath scanning and some libraries; they need hints and testing.</li>
+  <li><strong>Does lazy init reduce memory?</strong> Somewhat, for beans never used, but its main effect is startup time.</li>
+  <li><strong>When is CRaC risky?</strong> When checkpoints contain secrets or open connections that must be re-established.</li>
+</ul>
+</article>
+</body>
+</html>

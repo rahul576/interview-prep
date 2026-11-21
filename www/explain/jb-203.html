@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-203 · How would you implement pagination and sorting in a REST API?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-203" data-topic="REST &amp; API Design">
+<h1>How would you implement pagination and sorting in a REST API?</h1>
+<p class="ex-meta">REST &amp; API Design · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Expose <strong>query parameters</strong> like <code>?page=0&amp;size=20&amp;sort=createdAt,desc</code>, bind them to Spring Data <strong><code>Pageable</code></strong>, return <strong>items plus metadata</strong> (page, size, total or hasNext, links), <strong>cap page size</strong>, <strong>whitelist sort fields</strong> with a <strong>unique tie-breaker</strong>, index the sort columns, and use <strong>keyset/cursor pagination</strong> for large data.</p>
+
+<h2>Detailed explanation</h2>
+<p>Any endpoint returning a collection must be paginated; otherwise one request can load millions of rows and take down the service.</p>
+<p><strong>Request.</strong> Standard query parameters: <code>page</code> (zero-based in Spring), <code>size</code>, and <code>sort=field,direction</code>, repeatable for multiple fields. Filters are separate parameters: <code>?status=PAID&amp;from=2026-11-01</code>.</p>
+<p><strong>Spring implementation.</strong> A controller method parameter of type <strong><code>Pageable</code></strong> is resolved automatically by Spring Data Web support. <code>@PageableDefault</code> sets defaults, and <code>spring.data.web.pageable.max-page-size</code> caps the size (default max 2000; set it lower, such as 100). The repository method <code>Page&lt;Order&gt; findByStatus(Status s, Pageable p)</code> produces <code>ORDER BY ... LIMIT ... OFFSET ...</code> plus a <strong>count query</strong>. If you do not need totals, return <strong><code>Slice&lt;T&gt;</code></strong>, which fetches size+1 rows to know whether there is a next page and skips the count.</p>
+<p><strong>Response.</strong> Return the items with metadata: <code>page</code>, <code>size</code>, <code>totalElements</code>/<code>totalPages</code> (if cheap) or <code>hasNext</code>, and ideally <code>next</code>/<code>prev</code> links. Do not serialise Spring's <code>PageImpl</code> directly: its JSON structure is not a stable contract (Spring Data 3.3+ warns about it and offers <code>@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)</code> or <code>PagedModel</code>). Map to your own DTO.</p>
+<p><strong>Sorting safety.</strong> Clients should only sort on <strong>whitelisted, indexed</strong> fields. Arbitrary sort properties can cause slow full scans or errors; validate them and map API names to entity properties. Always append a <strong>unique tie-breaker</strong> (<code>id</code>) so the order is deterministic; otherwise rows with equal <code>createdAt</code> may appear on two pages or none.</p>
+<p><strong>Large or fast-changing data.</strong> Offset becomes slow on deep pages and unstable under inserts, so use <strong>keyset (cursor) pagination</strong>: <code>WHERE (created_at, id) &lt; (:c, :id)</code>, supported in Spring Data via <code>ScrollPosition</code> and <code>Window</code>. Index the sort columns, for example <code>(status, created_at DESC, id DESC)</code> to match filter plus sort.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends page, size, sort and filters.</li>
+  <li>Spring builds a <code>Pageable</code>; size is capped, sort validated.</li>
+  <li>Repository runs a limited, ordered query (and count if needed).</li>
+  <li>Response DTO includes items and metadata/links.</li>
+  <li>For big data, return a cursor instead of page numbers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private static final Set&lt;String&gt; SORTABLE = Set.of(&quot;createdAt&quot;, &quot;total&quot;, &quot;id&quot;);
+
+@GetMapping(&quot;/orders&quot;)
+PageResponse&lt;OrderDto&gt; list(@RequestParam(required = false) OrderStatus status,
+                            @PageableDefault(size = 20, sort = &quot;createdAt&quot;, direction = Sort.Direction.DESC) Pageable pageable) {
+    pageable.getSort().forEach(o -&gt; {
+        if (!SORTABLE.contains(o.getProperty())) throw new BadRequestException(&quot;Cannot sort by &quot; + o.getProperty());
+    });
+    Pageable stable = PageRequest.of(pageable.getPageNumber(), Math.min(pageable.getPageSize(), 100),
+                                     pageable.getSort().and(Sort.by(&quot;id&quot;).descending()));
+    Page&lt;OrderDto&gt; page = repo.findByStatus(status, stable).map(OrderDto::from);
+    return PageResponse.of(page);
+}
+
+record PageResponse&lt;T&gt;(List&lt;T&gt; items, int page, int size, long totalElements, boolean hasNext) {
+    static &lt;T&gt; PageResponse&lt;T&gt; of(Page&lt;T&gt; p) {
+        return new PageResponse&lt;&gt;(p.getContent(), p.getNumber(), p.getSize(), p.getTotalElements(), p.hasNext());
+    }
+}</code></pre>
+<pre><code class="language-properties">spring.data.web.pageable.max-page-size=100</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No maximum page size.</li>
+  <li>Sorting on any client-supplied field.</li>
+  <li>No tie-breaker, causing duplicates across pages.</li>
+  <li>Expensive COUNT on huge tables for every request.</li>
+  <li>Serialising <code>PageImpl</code> directly as the API contract.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I expose query parameters like page, size and sort, for example sort=createdAt,desc. In Spring the controller takes a Pageable, which Spring Data turns into LIMIT, OFFSET and ORDER BY. The response contains the items plus metadata, such as page, size and total or just a hasNext flag, and next and previous links, using my own DTO rather than Spring's Page JSON. I cap the page size, whitelist sortable fields so nobody sorts on unindexed columns, and always add id as a tie-breaker so ordering is stable. For large or fast-changing data I switch to keyset pagination with a cursor and make sure the sort columns are indexed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a total count be expensive, and how would you avoid it?</strong> COUNT(*) scans many rows; use Slice/hasNext, cached or approximate counts.</li>
+  <li><strong>Page vs Slice?</strong> Page runs a count query; Slice only checks for a next page.</li>
+  <li><strong>How do you index for filter plus sort?</strong> A composite index matching filter columns then sort columns.</li>
+</ul>
+</article>
+</body>
+</html>

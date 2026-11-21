@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-005 · How do you keep Elasticsearch in sync with your primary database?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-005" data-topic="Elasticsearch">
+<h1>How do you keep Elasticsearch in sync with your primary database?</h1>
+<p class="ex-meta">Elasticsearch · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep the <strong>database as the source of truth</strong> and treat Elasticsearch as a <strong>derived read model</strong>. Avoid <strong>dual writes</strong>, and stream changes with <strong>CDC (Debezium into Kafka)</strong> or a <strong>transactional outbox</strong>. Index them as <strong>idempotent upserts with external versions</strong>, and handle changes and recovery with a <strong>full reindex behind an alias</strong> swap.</p>
+
+<h2>Detailed explanation</h2>
+<p>The tempting approach, &quot;write to the database, then write to Elasticsearch in the same request&quot;, is a <strong>dual write</strong>. If the second write fails, times out, or the process crashes in between, the two stores <strong>silently diverge</strong>. Retrying in the request makes latency and failure handling worse, and concurrent updates can arrive at Elasticsearch out of order.</p>
+<p>Reliable patterns:</p>
+<ul>
+  <li><strong>Change data capture.</strong> <strong>Debezium</strong> reads the database's transaction log (PostgreSQL WAL, MySQL binlog), publishes row changes to <strong>Kafka</strong>, and a consumer or <strong>Kafka Connect Elasticsearch sink</strong> indexes them. Every committed change is captured, with no app changes, and in commit order per key.</li>
+  <li><strong>Transactional outbox.</strong> The application writes the business row <em>and</em> an outbox event in the same DB transaction. A relay (or CDC on the outbox table) publishes it. This gives you meaningful domain events and lets you build denormalised search documents (product + brand + stock).</li>
+  <li><strong>Periodic batch sync</strong> (<code>updated_at &gt; last_run</code>) is simple, but misses hard deletes and has lag.</li>
+</ul>
+<p><strong>Idempotency and ordering.</strong> Consumers get at-least-once delivery, so use the entity id as the document <code>_id</code> (upserts overwrite rather than duplicate). Use <strong>external versioning</strong> (<code>version_type=external</code> with the DB row version or the log sequence number), so Elasticsearch rejects an older event arriving after a newer one. Partition Kafka by entity id to preserve per-entity order.</p>
+<p><strong>Deletes.</strong> CDC emits delete events or tombstones, and the consumer issues a <code>DELETE</code>. Soft deletes in the DB become a filtered field or a delete in the index.</p>
+<p><strong>Reindexing</strong> (mapping change, new analyzer, corruption): build <code>products_v2</code> from a DB snapshot or by replaying the topic, catch up with live events, then atomically switch the <strong>alias</strong> <code>products</code> from v1 to v2. There is no downtime, and rollback means switching back.</p>
+<p>Monitor consumer lag and run periodic <strong>reconciliation</strong> (counts or checksums per partition).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The app writes PostgreSQL (plus the outbox row) in one transaction.</li>
+  <li>Debezium streams changes to the Kafka topic <code>db.products</code>, keyed by product id.</li>
+  <li>The indexer consumes, enriches, and runs a bulk upsert with an external version.</li>
+  <li>Delete events become document deletes.</li>
+  <li>Searches go through the alias <code>products</code>.</li>
+  <li>Reindex: create the new index, backfill, catch up, swap the alias, drop the old index.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">PUT /products_v2/_doc/42?version=1718&amp;version_type=external
+{ &quot;name&quot;: &quot;Trail Running Shoe&quot;, &quot;brand&quot;: &quot;Acme&quot;, &quot;price&quot;: 89.0, &quot;inStock&quot;: true }
+
+POST /_aliases
+{ &quot;actions&quot;: [
+    { &quot;remove&quot;: { &quot;index&quot;: &quot;products_v1&quot;, &quot;alias&quot;: &quot;products&quot; } },
+    { &quot;add&quot;:    { &quot;index&quot;: &quot;products_v2&quot;, &quot;alias&quot;: &quot;products&quot; } } ] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Dual writes from the application without any reconciliation.</li>
+  <li>Using Elasticsearch auto-generated ids, so retries create duplicates.</li>
+  <li>Ignoring event ordering, so an old update overwrites a new one.</li>
+  <li>Forgetting deletes.</li>
+  <li>Pointing clients at a concrete index name instead of an alias.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The database stays the source of truth, and Elasticsearch is a derived read model. Instead of dual writes from the application, which silently diverge on failures, I stream changes with change data capture, Debezium into Kafka, or publish domain events through a transactional outbox. A consumer or Kafka Connect sink indexes them. Writes are idempotent upserts keyed by the entity id with external versioning, so out-of-order events can't overwrite newer data, and deletes come through as delete events. For mapping changes or recovery I reindex into a new index and switch an alias atomically, with no downtime.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Handling deletes?</strong> CDC delete events or tombstones lead to <code>DELETE</code> by id. Soft deletes become a filter field.</li>
+  <li><strong>Joining data from several tables?</strong> Denormalise in the consumer (a Kafka Streams join) or build documents from outbox events.</li>
+  <li><strong>How stale can search be?</strong> Pipeline lag plus the refresh interval, typically seconds. Monitor consumer lag.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-191 · What are the different stages of the Spring bean lifecycle?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-191" data-topic="Spring Framework">
+<h1>What are the different stages of the Spring bean lifecycle?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A singleton bean goes through <strong>definition loading (BeanFactoryPostProcessors)</strong> → <strong>instantiation</strong> → <strong>dependency injection</strong> → <strong>Aware callbacks</strong> → <strong>BeanPostProcessor before-init</strong> → <strong>init callbacks (@PostConstruct, afterPropertiesSet, initMethod)</strong> → <strong>BeanPostProcessor after-init (proxies)</strong> → <strong>in use</strong> → <strong>destruction (@PreDestroy, destroy(), destroyMethod)</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Knowing the lifecycle explains a lot of Spring behaviour: why <code>@Transactional</code> doesn't apply inside <code>@PostConstruct</code>, why property placeholders are resolved before beans exist, and where to put startup or cleanup code.</p>
+<p>It begins before any bean exists. The container reads <strong>bean definitions</strong> from component scanning and configuration classes. <strong>BeanFactoryPostProcessors</strong> can then modify those definitions; <code>ConfigurationClassPostProcessor</code> parses <code>@Configuration</code> classes and <code>PropertySourcesPlaceholderConfigurer</code> resolves <code>${...}</code> placeholders.</p>
+<p>For each singleton, Spring <strong>instantiates</strong> the bean through its constructor (constructor injection happens here), then <strong>populates</strong> remaining dependencies via setters or fields. Next, <strong>Aware</strong> callbacks give the bean container objects: <code>BeanNameAware</code>, <code>BeanClassLoaderAware</code>, <code>BeanFactoryAware</code>, then <code>ApplicationContextAware</code> and <code>EnvironmentAware</code> (the latter invoked by a post-processor).</p>
+<p>Then <strong>BeanPostProcessor.postProcessBeforeInitialization</strong> runs for every bean; <code>CommonAnnotationBeanPostProcessor</code> uses this step to call <strong><code>@PostConstruct</code></strong>. After that come <strong><code>InitializingBean.afterPropertiesSet()</code></strong> and a custom <strong>init method</strong> (<code>@Bean(initMethod = ...)</code>). Finally <strong>postProcessAfterInitialization</strong> runs, and this is where auto-proxy creators wrap the bean in <strong>AOP proxies</strong> for <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code> and security. The proxy, not the raw object, is what other beans get.</p>
+<p>The bean is now <strong>ready and in use</strong>. After all singletons are created, <code>SmartInitializingSingleton</code> callbacks run, then <code>SmartLifecycle</code> beans start and <code>ContextRefreshedEvent</code>/<code>ApplicationReadyEvent</code> fire. On <strong>shutdown</strong>, beans are destroyed in reverse dependency order: <strong><code>@PreDestroy</code></strong>, <strong><code>DisposableBean.destroy()</code></strong>, then a custom <strong>destroy method</strong> (Boot infers <code>close</code>/<code>shutdown</code> methods for <code>@Bean</code>s).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Load bean definitions; run BeanFactoryPostProcessors.</li>
+  <li>Instantiate via constructor.</li>
+  <li>Populate properties and fields.</li>
+  <li>Call Aware interfaces.</li>
+  <li>Before-init post-processing, then @PostConstruct, afterPropertiesSet, init method.</li>
+  <li>After-init post-processing creates proxies; bean is in use.</li>
+  <li>On context close: @PreDestroy, destroy(), destroy method.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class CacheWarmer implements BeanNameAware, InitializingBean, DisposableBean {
+    CacheWarmer(ProductRepository repo) { log(&quot;1 constructor&quot;); }
+    public void setBeanName(String n)   { log(&quot;2 aware: &quot; + n); }
+    @PostConstruct void postConstruct() { log(&quot;3 @PostConstruct&quot;); }
+    public void afterPropertiesSet()    { log(&quot;4 afterPropertiesSet&quot;); }
+    @PreDestroy void preDestroy()       { log(&quot;5 @PreDestroy&quot;); }
+    public void destroy()               { log(&quot;6 destroy&quot;); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting <code>@Transactional</code> to work inside <code>@PostConstruct</code> (the proxy doesn't exist yet and the call is a self-invocation).</li>
+  <li>Doing long-running work in init callbacks, slowing or blocking startup.</li>
+  <li>Assuming prototypes get destroy callbacks.</li>
+  <li>Confusing BeanFactoryPostProcessor (definitions) with BeanPostProcessor (instances).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First the container loads bean definitions, which BeanFactoryPostProcessors can modify, for example resolving placeholders. Then for each singleton it instantiates the bean, injects dependencies, calls Aware interfaces like BeanNameAware and ApplicationContextAware, runs BeanPostProcessor before-initialisation, then @PostConstruct, afterPropertiesSet and any custom init method, and then after-initialisation, where AOP proxies for @Transactional are created. The bean is then in use. On shutdown it calls @PreDestroy, DisposableBean.destroy and the custom destroy method.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When are @Transactional proxies created?</strong> In postProcessAfterInitialization.</li>
+  <li><strong>Where to run code after the app is fully started?</strong> ApplicationReadyEvent listener or ApplicationRunner.</li>
+  <li><strong>Order of init callbacks?</strong> @PostConstruct, then afterPropertiesSet, then initMethod.</li>
+</ul>
+</article>
+</body>
+</html>

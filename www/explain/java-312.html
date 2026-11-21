@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-312 · Explain JPA relationship mapping: owning side, mappedBy, cascade and orphanRemoval.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-312" data-topic="Spring Data &amp; JPA">
+<h1>Explain JPA relationship mapping: owning side, mappedBy, cascade and orphanRemoval.</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In a bidirectional relationship the <strong>owning side</strong> holds the <strong>foreign key</strong> (usually <code>@ManyToOne</code>) and is the only side JPA writes; the inverse side uses <strong><code>mappedBy</code></strong>; <strong>cascade</strong> propagates operations like persist/remove from parent to children; <strong>orphanRemoval</strong> deletes children removed from the collection; keep both sides in sync with <strong>helper methods</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Owning side.</strong> Relational databases have one foreign key per relationship, but objects can reference each other in both directions. JPA resolves this by declaring one side the <strong>owner</strong>: the side whose table contains the foreign key column, normally the <code>@ManyToOne</code> (<code>order_line.order_id</code>). Only changes to the owning side's field are written to the database. If you add a line to <code>order.getLines()</code> but don't set <code>line.setOrder(order)</code>, <strong>nothing is persisted</strong> for the relationship.</p>
+<p><strong><code>mappedBy</code>.</strong> The inverse side (<code>@OneToMany(mappedBy = &quot;order&quot;)</code>) points to the owning field and is ignored for writes. Without <code>mappedBy</code>, a <code>@OneToMany</code> becomes a unidirectional association with a <strong>join table</strong>, or with <code>@JoinColumn</code> extra UPDATE statements, usually not what you want. For <code>@OneToOne</code> and <code>@ManyToMany</code> you also choose the owner explicitly.</p>
+<p><strong>Cascade.</strong> <code>cascade = CascadeType.PERSIST, MERGE, REMOVE, REFRESH, DETACH</code> or <code>ALL</code> propagates entity operations from parent to children, so persisting an order persists its lines. It suits <strong>composition</strong>, where children have no life of their own (order and order lines, invoice and items). It is wrong for <strong>shared</strong> or independent entities: cascading REMOVE from <code>OrderLine</code> to <code>Product</code>, or from <code>Order</code> to <code>Customer</code>, would delete data used elsewhere.</p>
+<p><strong>orphanRemoval.</strong> With <code>orphanRemoval = true</code>, a child removed from the parent's collection (or replaced in a one-to-one) is <strong>deleted</strong> at flush. Cascade REMOVE deletes children when the <strong>parent</strong> is removed; orphanRemoval also deletes them when they are <strong>detached from the parent</strong>.</p>
+<p><strong>Sync helpers.</strong> Because the in-memory object graph must stay consistent within the persistence context, write <code>addLine</code>/<code>removeLine</code> methods that update both sides, and don't expose the raw mutable collection.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Owning side <code>@ManyToOne @JoinColumn(name = &quot;order_id&quot;)</code> defines the FK.</li>
+  <li>Inverse side <code>@OneToMany(mappedBy = &quot;order&quot;)</code> mirrors it.</li>
+  <li>Helper methods set both sides.</li>
+  <li>On flush, Hibernate writes the FK from the owning side.</li>
+  <li>Cascade and orphanRemoval decide child INSERTs and DELETEs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class Order {
+    @Id @GeneratedValue Long id;
+
+    @OneToMany(mappedBy = &quot;order&quot;, cascade = CascadeType.ALL, orphanRemoval = true)
+    private List&lt;OrderLine&gt; lines = new ArrayList&lt;&gt;();
+
+    public void addLine(OrderLine line) { lines.add(line); line.setOrder(this); }
+    public void removeLine(OrderLine line) { lines.remove(line); line.setOrder(null); }
+}
+
+@Entity
+class OrderLine {
+    @Id @GeneratedValue Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = &quot;order_id&quot;)
+    private Order order;                     // owning side
+
+    @ManyToOne(fetch = FetchType.LAZY)       // no cascade: products are shared
+    private Product product;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting only the inverse side and wondering why the FK is null.</li>
+  <li><code>CascadeType.ALL</code> on <code>@ManyToOne</code>, deleting shared parents.</li>
+  <li>Forgetting <code>mappedBy</code>, creating an unintended join table.</li>
+  <li>Replacing the collection instance with orphanRemoval (Hibernate error); modify it instead.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In a bidirectional relationship, the owning side is the entity whose table holds the foreign key, usually the ManyToOne side, and only changes there are persisted. The inverse side declares mappedBy pointing to the owning field. Cascade propagates operations like persist and remove from parent to children, which suits true composition like an order and its lines, but not shared entities. orphanRemoval deletes a child when it's removed from the parent's collection. I keep both sides in sync with helper methods like addLine and removeLine.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is CascadeType.ALL on @ManyToOne a bug?</strong> Removing a child would delete the shared parent.</li>
+  <li><strong>orphanRemoval vs cascade REMOVE?</strong> orphanRemoval also deletes children removed from the collection.</li>
+  <li><strong>Unidirectional @OneToMany?</strong> Creates a join table or extra updates; prefer bidirectional or <code>@ManyToOne</code> only.</li>
+</ul>
+</article>
+</body>
+</html>

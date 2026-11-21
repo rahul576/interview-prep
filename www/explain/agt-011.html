@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-011 · How do you design human-in-the-loop controls for agents?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-011" data-topic="AI Agents &amp; AIOps">
+<h1>How do you design human-in-the-loop controls for agents?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Human-in-the-loop means <strong>designed checkpoints</strong>: <strong>approval before high-risk actions</strong>, <strong>interrupts</strong> that persist state and resume after input, a clear view of the <strong>proposed action, context and reasoning</strong>, options to <strong>approve, edit or reject</strong>, <strong>escalation</strong> when the agent is unsure or stuck, and <strong>risk-based thresholds</strong> to avoid approval fatigue.</p>
+
+<h2>Detailed explanation</h2>
+<p>The goal is not to have a human watch everything, but to put human judgment exactly where the risk is. The key category is <strong>high-risk actions</strong>: sending external messages, spending money, changing production systems, deleting data, granting access, or anything <strong>irreversible</strong>. These require approval before execution, enforced by the runtime, not by asking the model nicely.</p>
+<p>Technically this is an <strong>interrupt</strong>. When the agent proposes such an action, the runtime pauses, <strong>persists</strong> the state (LangGraph <code>interrupt</code>, a Temporal signal wait, or an approval record in a database), and sends a request to the right person or queue through Slack, Teams, email or an app. The request shows the <strong>proposed action</strong> with its exact parameters, the <strong>relevant context</strong> and a short <strong>justification</strong> from the agent. The reviewer can <strong>approve</strong>, <strong>edit</strong> (fix an email draft, change a parameter) or <strong>reject with feedback</strong>, and the agent resumes with that input. Requests have <strong>timeouts</strong> and fallbacks.</p>
+<p>Agents should also <strong>escalate on their own</strong> when they are uncertain, have failed several attempts, or face ambiguous or conflicting instructions, handing over with a summary rather than guessing.</p>
+<p>The biggest practical risk is <strong>approval fatigue</strong>: if people approve 200 trivial requests a day, they stop reading and approve everything, which gives false comfort. So approvals are <strong>risk-based</strong>: reads and reversible low-impact actions run automatically, thresholds (amount, number of records, environment) trigger review, and the UI makes the decision quick and clear, highlighting what is unusual. All decisions, including who approved what and when, are <strong>logged</strong> for audit, and approval data later informs which actions can safely become autonomous.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify each tool or action by risk and reversibility.</li>
+  <li>Configure policies: auto, notify, approve, or forbidden.</li>
+  <li>On a gated action, pause and persist state.</li>
+  <li>Send an approval request with action, context and reasoning.</li>
+  <li>Human approves, edits or rejects; agent resumes accordingly.</li>
+  <li>Log decisions; review approval rates to adjust thresholds.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from langgraph.types import interrupt
+
+def send_customer_email(state):
+    draft = state[&quot;email_draft&quot;]
+    decision = interrupt({
+        &quot;action&quot;: &quot;send_email&quot;,
+        &quot;to&quot;: draft[&quot;to&quot;],
+        &quot;subject&quot;: draft[&quot;subject&quot;],
+        &quot;body&quot;: draft[&quot;body&quot;],
+        &quot;reason&quot;: state[&quot;agent_reason&quot;],
+    })
+    if decision[&quot;type&quot;] == &quot;approve&quot;:
+        return {&quot;result&quot;: mailer.send(**draft)}
+    if decision[&quot;type&quot;] == &quot;edit&quot;:
+        return {&quot;result&quot;: mailer.send(**decision[&quot;edited_draft&quot;])}
+    return {&quot;result&quot;: &quot;rejected&quot;, &quot;feedback&quot;: decision.get(&quot;feedback&quot;)}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Action</th><th>Example</th><th>Policy</th></tr></thead>
+<tbody>
+<tr><td>Read-only</td><td>Query logs</td><td>Automatic</td></tr>
+<tr><td>Reversible, low impact</td><td>Add label</td><td>Act and notify</td></tr>
+<tr><td>External or costly</td><td>Email customer, refund under limit</td><td>Approve</td></tr>
+<tr><td>Irreversible or high impact</td><td>Delete database, large payment</td><td>Approve + second person or forbidden</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on the prompt (&quot;always ask before deleting&quot;) instead of runtime enforcement.</li>
+  <li>Approval requests without enough context to judge.</li>
+  <li>Gating everything, causing rubber-stamp approvals.</li>
+  <li>Holding a thread or session open while waiting for the human.</li>
+  <li>No audit log of approvals.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I design specific points where a person reviews or guides the agent. The main one is approval before high-risk actions: external messages, money, production changes, deletions, anything irreversible. Technically the agent hits an interrupt: its state is saved, a request goes to the right person showing the proposed action, context and reasoning, and they can approve, edit or reject with feedback, and then the agent resumes. Agents also escalate themselves when they're uncertain or stuck. To avoid approval fatigue, I make approvals risk-based: low-risk, reversible actions run automatically and thresholds trigger review. Everything is logged.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Agent running at night with nobody available?</strong> Queue the action, continue with safe work, escalate to on-call for urgent items, or time out safely.</li>
+  <li><strong>How do you choose thresholds?</strong> Start strict, then relax based on approval and error data per action type.</li>
+  <li><strong>Who should approve?</strong> The owner of the affected system or business process, not just any user.</li>
+</ul>
+</article>
+</body>
+</html>

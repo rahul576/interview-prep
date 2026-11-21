@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-133 · How do you handle database schema migrations in a Java application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-133" data-topic="Spring Data &amp; JPA">
+<h1>How do you handle database schema migrations in a Java application?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Manage schema changes with <strong>Flyway or Liquibase</strong>: <strong>versioned migration scripts in source control</strong>, applied automatically and recorded in a history table, <strong>never <code>ddl-auto=update</code> in production</strong>, and <strong>backward-compatible expand-and-contract</strong> steps for zero-downtime deployments.</p>
+
+<h2>Detailed explanation</h2>
+<p>The database schema is part of the application, so it must be <strong>versioned, reviewed and reproducible</strong> just like code. Flyway and Liquibase both keep a history table (<code>flyway_schema_history</code>, <code>DATABASECHANGELOG</code>) recording which migrations were applied, with checksums, so every environment, from a developer laptop to production, arrives at the same schema in the same order.</p>
+<p><strong>Flyway</strong> uses plain SQL files named <code>V1__create_orders.sql</code>, <code>V2__add_status.sql</code> (plus repeatable <code>R__</code> scripts and Java migrations). <strong>Liquibase</strong> uses changelogs (YAML, XML, JSON or SQL) with changesets, offering database-independent change types, preconditions and rollback definitions. Spring Boot runs either automatically at startup when it is on the classpath; many teams instead run migrations as a separate <strong>pipeline step</strong> or Kubernetes Job so multiple instances don't race and app permissions can be minimal.</p>
+<p><strong>Never use <code>spring.jpa.hibernate.ddl-auto=update</code> (or create) in production.</strong> It cannot rename or drop safely, produces unreviewed DDL and leaves no history. Use <code>validate</code> or <code>none</code> and let Hibernate only check the mapping.</p>
+<p><strong>Zero downtime</strong> means old and new application versions run at the same time during a rolling deploy, so every migration must be <strong>backward compatible</strong>. The <strong>expand and contract</strong> (parallel change) pattern:</p>
+<ol>
+  <li><strong>Expand</strong>: add the new column or table, nullable or with a default.</li>
+  <li>Deploy code that <strong>writes both</strong> old and new.</li>
+  <li><strong>Backfill</strong> existing rows in batches.</li>
+  <li>Switch <strong>reads</strong> to the new structure.</li>
+  <li><strong>Contract</strong>: in a later release, stop writing the old column and drop it.</li>
+</ol>
+<p><strong>Large tables</strong> need care: avoid long locks (in PostgreSQL use <code>CREATE INDEX CONCURRENTLY</code>, add columns without volatile defaults), batch backfills, and use online schema change tools such as gh-ost or pt-online-schema-change for MySQL.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer adds a new migration file next to the code change.</li>
+  <li>CI runs migrations on a fresh database (Testcontainers) and runs tests.</li>
+  <li>Deploy: migration step applies pending versions and records them.</li>
+  <li>New app version starts, compatible with the old schema state too.</li>
+  <li>Later release contracts the old structure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- V12__add_customer_email.sql  (expand)
+ALTER TABLE customer ADD COLUMN email_address VARCHAR(255);
+
+-- V13__backfill_email.sql
+UPDATE customer SET email_address = email WHERE email_address IS NULL;
+
+-- V20__drop_old_email.sql   (contract, a later release)
+ALTER TABLE customer DROP COLUMN email;</code></pre>
+<pre><code class="language-yaml">spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Editing an already-applied migration (checksum failures, divergent environments).</li>
+  <li>Renaming or dropping columns in the same release as the code change.</li>
+  <li>Huge single-transaction backfills locking tables.</li>
+  <li>Using <code>ddl-auto=update</code> outside local development.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use Flyway or Liquibase with versioned migration scripts in source control, applied automatically at startup or as a pipeline step, so every environment has the same schema history. I never use Hibernate ddl-auto update in production; I set it to validate. For zero-downtime deployments, changes must be backward compatible with expand and contract: add the new column, deploy code that writes both, backfill, switch reads, and only in a later release drop the old column. Large table changes run as batched or online migrations.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Rename a column without downtime?</strong> Add new column, dual-write, backfill, switch reads, drop old later.</li>
+  <li><strong>Rollback a migration?</strong> Prefer roll-forward fixes; Liquibase supports rollback definitions.</li>
+  <li><strong>Run at startup or in the pipeline?</strong> Pipeline or Job for control and permissions; startup is fine for small services.</li>
+</ul>
+</article>
+</body>
+</html>

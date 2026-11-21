@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-260 · What is Mockito, and how do you mock dependencies?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-260" data-topic="Testing">
+<h1>What is Mockito, and how do you mock dependencies?</h1>
+<p class="ex-meta">Testing · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Mockito</strong> is the standard Java mocking framework: create test doubles with <strong>mock()</strong> or <strong>@Mock</strong> (with <strong>MockitoExtension</strong>), <strong>stub</strong> with <strong>when().thenReturn()/thenThrow()</strong>, <strong>verify</strong> interactions with <strong>verify()</strong>, inspect arguments with <strong>ArgumentCaptor</strong>, and use <strong>spies</strong> sparingly.</p>
+
+<h2>Detailed explanation</h2>
+<p>A unit test for <code>OrderService</code> should not need a real database, payment provider or email server. Mockito generates objects implementing the dependency's type at runtime (using ByteBuddy; since Mockito 5 the <strong>inline mock maker</strong> is default, so final classes and methods can be mocked too). A mock does nothing by default and returns empty values: null, 0, false, empty collections or <code>Optional.empty()</code>.</p>
+<p><strong>Creating mocks:</strong> <code>Mockito.mock(OrderRepository.class)</code> or a field annotated <code>@Mock</code> in a class with <code>@ExtendWith(MockitoExtension.class)</code>. <code>@InjectMocks</code> builds the class under test and injects the mocks, though plain constructor calls are clearer.</p>
+<p><strong>Stubbing:</strong> <code>when(repo.findById(1L)).thenReturn(Optional.of(order))</code>, <code>thenThrow(new TimeoutException())</code> to simulate failures, <code>thenAnswer(inv -&gt; ...)</code> for computed responses, consecutive answers for retries. Argument matchers (<code>any()</code>, <code>eq()</code>, <code>argThat()</code>) generalise inputs; if you use one matcher, all arguments must be matchers. BDD style uses <code>given(...).willReturn(...)</code>. For void methods use <code>doThrow(...).when(mock).method()</code>.</p>
+<p><strong>Verification:</strong> <code>verify(emailService).send(any())</code>, <code>times(2)</code>, <code>never()</code>, <code>verifyNoMoreInteractions</code> (use sparingly). <code>ArgumentCaptor</code> captures the actual argument so you can assert its fields, for example the amount in a payment request.</p>
+<p><strong>Strictness:</strong> <code>MockitoExtension</code> uses strict stubs, failing tests that stub methods never called, which keeps tests clean.</p>
+<p><strong>Spies</strong> (<code>spy(realObject)</code> or <code>@Spy</code>) call real methods unless stubbed; stub them with <code>doReturn().when(spy)</code> to avoid invoking the real method.</p>
+<p>Good practice: mock <strong>types you own</strong> at architectural boundaries, not value objects, and prefer verifying outcomes over verifying every call.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>MockitoExtension initialises <code>@Mock</code>, <code>@Spy</code>, <code>@Captor</code> and <code>@InjectMocks</code> fields.</li>
+  <li>Stubs register answers for specific argument patterns.</li>
+  <li>The code under test calls the mocks; Mockito records invocations.</li>
+  <li><code>verify</code> checks recorded invocations against expectations.</li>
+  <li>Strict stubs report unused stubbings after the test.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@ExtendWith(MockitoExtension.class)
+class OrderServiceTest {
+    @Mock OrderRepository repo;
+    @Mock PaymentClient payments;
+    @Captor ArgumentCaptor&lt;ChargeRequest&gt; charge;
+
+    @Test
+    void chargesOrderTotal() {
+        var service = new OrderService(repo, payments);
+        when(repo.findById(1L)).thenReturn(Optional.of(new Order(1L, new BigDecimal(&quot;40.00&quot;))));
+        when(payments.charge(any())).thenReturn(ChargeResult.ok());
+
+        service.pay(1L);
+
+        verify(payments).charge(charge.capture());
+        assertThat(charge.getValue().amount()).isEqualByComparingTo(&quot;40.00&quot;);
+    }
+
+    @Test
+    void marksOrderFailedWhenPaymentTimesOut() {
+        var service = new OrderService(repo, payments);
+        when(repo.findById(1L)).thenReturn(Optional.of(new Order(1L, BigDecimal.TEN)));
+        when(payments.charge(any())).thenThrow(new PaymentTimeoutException());
+
+        assertThatThrownBy(() -&gt; service.pay(1L)).isInstanceOf(PaymentFailedException.class);
+        verify(repo).save(argThat(o -&gt; o.status() == Status.PAYMENT_FAILED));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Mixing raw values and matchers in one call (<code>when(m.f(any(), 5))</code>), causing an error.</li>
+  <li>Over-verifying every interaction, making tests brittle.</li>
+  <li>Mocking value objects, DTOs or third-party types instead of wrapping them.</li>
+  <li>Using <code>when(spy.method())</code> on a spy, which calls the real method during stubbing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Mockito creates test doubles for a class's dependencies, so I can unit test a service without a database or HTTP client. With JUnit 5 I use MockitoExtension and @Mock fields, then construct the class under test with those mocks. I stub behaviour with when-thenReturn, or thenThrow to simulate failures like timeouts, and after calling the code I verify the important interactions, using an ArgumentCaptor to check what was actually passed. Spies wrap real objects for the rare partial-mock case. I avoid mocking value objects or libraries I don't own, and I keep verification focused on outcomes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is over-mocking a smell?</strong> Tests mirror the implementation, break on refactoring and miss integration bugs.</li>
+  <li><strong>Can Mockito mock final or static methods?</strong> Final yes with the default inline mock maker; static via <code>mockStatic</code>, ideally only for legacy code.</li>
+  <li><strong>What are strict stubs?</strong> A mode that fails on unused or mismatched stubbings, catching sloppy tests.</li>
+</ul>
+</article>
+</body>
+</html>

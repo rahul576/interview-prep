@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-429 · An API endpoint is slow only for some users. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-429" data-topic="Troubleshooting">
+<h1>An API endpoint is slow only for some users. How do you investigate?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>When only some users are slow, find <strong>what they have in common</strong> (data volume, tenant, region, plan, client version, feature flag), pull <strong>traces for their slow requests</strong>, and look for <strong>data-dependent</strong> causes such as <strong>unbounded queries, N+1 that scales with data, missing indexes for skewed data</strong> or <strong>cold caches</strong>; then <strong>reproduce with similar test data</strong> and fix with <strong>pagination, indexes or query changes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>If the code path is the same for everyone, the difference must be in the <strong>inputs</strong> or the <strong>environment</strong> of those users. The first job is segmentation.</p>
+<p><strong>Find the common factor:</strong> break latency down by attributes available in traces and logs: customer or tenant id, account age, number of orders or items, region or data centre, mobile app version, feature flags or A/B experiment, user role or permissions, language. Often the slow users are the <strong>power users</strong>: a business customer with 40,000 orders while most have twenty. Make sure useful attributes are on spans (but not as metric labels, which would explode cardinality).</p>
+<p><strong>Trace the slow requests:</strong> search the tracing backend for requests from affected users above a latency threshold and compare their span breakdown with a fast request. Typical findings:</p>
+<ul>
+  <li><strong>Unbounded queries:</strong> <code>findAllByCustomerId</code> returns every order, then Java filters or maps them; memory and serialisation time grow with data.</li>
+  <li><strong>N+1 queries</strong> whose count grows with the size of the user's collections.</li>
+  <li><strong>Index and plan issues:</strong> a query fine for typical users scans many rows for a large tenant, or the planner picks a bad plan due to <strong>data skew</strong> or stale statistics; check <code>EXPLAIN ANALYZE</code> with that user's parameters.</li>
+  <li><strong>Caching:</strong> rarely active users always hit a cold cache; a cache key that includes something user-specific; a cache entry too large to store.</li>
+  <li><strong>Routing and region:</strong> users routed to a far region or a slow replica; replication lag; a different CDN edge.</li>
+  <li><strong>Features:</strong> a flag enabling a new, slower code path for a cohort; permissions logic evaluating many roles.</li>
+</ul>
+<p><strong>Reproduce</strong> with a test account seeded with a similar data profile (anonymised copies of a large tenant), then fix: <strong>pagination</strong> or keyset pagination, limits on result sizes, indexes matching the access path, fetch plans or DTO projections, pre-computed aggregates, and cache warming for large accounts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Segment latency by user attributes to find the common factor.</li>
+  <li>Retrieve traces of slow requests from affected users.</li>
+  <li>Compare span breakdowns with fast requests.</li>
+  <li>Run the slow query's plan with the affected user's parameters.</li>
+  <li>Reproduce with similar data in a test environment.</li>
+  <li>Fix, then monitor latency for that segment specifically.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Typical user: 0.3 ms. Big tenant: 1.8 s
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE customer_id = 9001 ORDER BY created_at DESC;
+--  Seq Scan on orders  (rows=41,250)  Sort Method: external merge  Disk: 52MB
+
+CREATE INDEX CONCURRENTLY idx_orders_customer_created
+    ON orders (customer_id, created_at DESC);</code></pre>
+<pre><code class="language-java">// Bounded, paginated access instead of loading everything
+@Query(&quot;select new com.shop.OrderRow(o.id, o.total, o.createdAt) from Order o &quot; +
+       &quot;where o.customer.id = :cid order by o.createdAt desc&quot;)
+Slice&lt;OrderRow&gt; recentOrders(@Param(&quot;cid&quot;) Long customerId, Pageable page);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Looking only at overall averages, where a slow minority disappears.</li>
+  <li>Testing with tiny datasets that never reveal data-dependent slowness.</li>
+  <li>Endpoints without any limit on result size.</li>
+  <li>Adding high-cardinality user ids as metric tags instead of span attributes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When only some users are affected, I look for what they have in common: lots of data, a specific tenant or plan, a region, a client version or a feature flag. Then I pull traces of slow requests from those users and compare them with fast ones to see which span is slow. Very often it's data-dependent: an unbounded query returning thousands of rows, N+1 queries that scale with the user's data, or a query whose plan is bad for that data distribution. Caching can differ too, like a cold cache for rare users. I reproduce with a test account with a similar data profile and fix it with pagination, indexes or query changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent unbounded result sets?</strong> Mandatory pagination with maximum page sizes, Slice or keyset pagination, and code review rules.</li>
+  <li><strong>Why can one tenant get a bad query plan?</strong> Data skew; generic plans or statistics fit typical values, not outliers.</li>
+  <li><strong>How do you test with realistic data?</strong> Anonymised production-shaped datasets or generators that create large tenants.</li>
+</ul>
+</article>
+</body>
+</html>

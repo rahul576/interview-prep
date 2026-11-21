@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-010 · Search latency in your Elasticsearch cluster has doubled. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-010" data-topic="Elasticsearch">
+<h1>Search latency in your Elasticsearch cluster has doubled. How do you troubleshoot it?</h1>
+<p class="ex-meta">Elasticsearch · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Work <strong>top-down</strong>: check <strong>node health</strong> (heap/GC, CPU, disk I/O, search <strong>thread pool queues and rejections</strong>, hot nodes), then find the <strong>slow queries</strong> with <strong>slow logs and the profile API</strong>. Look for <strong>expensive patterns</strong> (leading wildcards, regex, scripts, deep or high-cardinality aggregations, too many shards), and for <strong>indexing and merges competing with search</strong>. Then fix the queries, shards and capacity.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Latency doubled&quot; has three broad causes: <strong>the cluster got weaker</strong> (resources), <strong>the queries got heavier</strong>, or <strong>the load changed</strong>. Correlate the timeline with deployments, traffic, data growth and index changes first.</p>
+<p><strong>1. Resource level</strong> (<code>_nodes/stats</code>, <code>_cat/nodes</code>, <code>_cat/thread_pool/search?v</code>, monitoring):</p>
+<ul>
+  <li><strong>JVM heap and GC:</strong> heap above 75–85% and long old-GC pauses stall searches. Typical causes are fielddata, huge aggregations or too many shards.</li>
+  <li><strong>CPU and disk I/O:</strong> saturated disks (merges, or cold data on slow disks) and CPU throttling in containers.</li>
+  <li><strong>Search thread pool:</strong> a growing <code>queue</code> and <code>rejected</code> counts mean the node can't keep up.</li>
+  <li><strong>Hot spots:</strong> one node much busier than the others because of uneven shard distribution, custom routing to a hot tenant, or a node with fewer resources.</li>
+  <li><code>GET _nodes/hot_threads</code> shows what the CPU is actually doing.</li>
+</ul>
+<p><strong>2. Query level:</strong></p>
+<ul>
+  <li>Enable <strong>search slow logs</strong> (<code>index.search.slowlog.threshold.query.warn: 2s</code>) to capture the slow requests.</li>
+  <li>Run the <strong>profile API</strong> (<code>&quot;profile&quot;: true</code>) on a slow query to see time per shard, per query component and per aggregation.</li>
+  <li>Typical culprits: <strong>leading wildcards</strong> (<code>*phone</code>), <strong>regexp</strong>, <strong>scripts</strong> in queries or sorts, <strong>deep pagination</strong>, <code>terms</code> aggregations with huge <code>size</code> on <strong>high-cardinality</strong> fields, nested or <code>has_child</code> joins, and conditions in <code>must</code> that should be <code>filter</code>.</li>
+</ul>
+<p><strong>3. Data and indexing level:</strong></p>
+<ul>
+  <li><strong>Too many shards</strong> per query (searching <code>logs-*</code> across 2,000 shards), or shards grown far too large.</li>
+  <li>Heavy <strong>bulk indexing</strong>, frequent refreshes and <strong>segment merges</strong> compete for the same CPU and disk.</li>
+  <li>Lost cache efficiency (frequent refreshes invalidate caches, and <code>now</code> in filters prevents caching; use rounded <code>now/m</code>).</li>
+</ul>
+<p><strong>Fixes:</strong> move exact conditions into <code>filter</code>, replace leading wildcards with <code>wildcard</code>-type fields or n-grams, precompute fields at index time instead of using scripts, use <code>search_after</code>, raise <code>refresh_interval</code> (30 s) during bulk loads, right-size and rebalance shards, use dedicated hot nodes or replicas for read capacity, and isolate heavy tenants.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm the symptom: p50/p95/p99, which indices, since when, and what changed.</li>
+  <li>Check node stats: heap, GC, CPU, disk, thread pool rejections, hot threads.</li>
+  <li>Use slow logs to find the offending queries, then profile them.</li>
+  <li>Check the shard count and sizes per query, and the indexing and merge load.</li>
+  <li>Apply targeted fixes and verify with before and after metrics.</li>
+  <li>Add guardrails: query timeouts, <code>search.max_buckets</code>, tenant limits, and alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">GET _cat/thread_pool/search?v&amp;h=node_name,active,queue,rejected
+GET _nodes/stats/jvm,indices?filter_path=**.heap_used_percent,**.query_cache
+GET _nodes/hot_threads
+PUT /products/_settings
+{ &quot;index.search.slowlog.threshold.query.warn&quot;: &quot;2s&quot;,
+  &quot;index.search.slowlog.threshold.fetch.warn&quot;: &quot;1s&quot; }
+GET /products/_search
+{ &quot;profile&quot;: true, &quot;query&quot;: { &quot;wildcard&quot;: { &quot;name&quot;: &quot;*phone*&quot; } } }
+PUT /logs-bulk/_settings { &quot;index.refresh_interval&quot;: &quot;30s&quot; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding nodes before identifying the expensive query.</li>
+  <li>Ignoring thread pool rejections and GC logs.</li>
+  <li>Leaving bulk reindex jobs running at peak hours.</li>
+  <li>Fixing averages while p99 stays bad (always look at the percentiles).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd first check what changed: deployments, traffic, data growth. Then node metrics: heap usage and GC pauses, CPU, disk I/O, and the search thread pool queue and rejections, to see if one node is a hot spot. Next I'd enable search slow logs to find the slow queries and run the profile API on them. The usual culprits are leading wildcards, regex, scripts, deep pagination, big aggregations on high-cardinality fields, too many shards per query, or heavy indexing and merges competing with search. Fixes are rewriting queries with filters and keyword fields, right-sizing shards, increasing the refresh interval during bulk loads, and adding replicas or nodes where capacity is genuinely short.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Isolating a noisy tenant with huge aggregations?</strong> Dedicated index or nodes (allocation filtering), per-tenant rate limits, <code>search.max_buckets</code> and timeouts.</li>
+  <li><strong>Why does <code>now</code> hurt caching?</strong> It changes every millisecond. Round it (<code>now/m</code>) so filters are cacheable.</li>
+  <li><strong>Replicas or more shards for read throughput?</strong> Replicas add read capacity. More shards add per-query overhead.</li>
+</ul>
+</article>
+</body>
+</html>

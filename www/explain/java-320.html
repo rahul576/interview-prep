@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-320 · Session-based authentication or JWT: how do you choose?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-320" data-topic="Security">
+<h1>Session-based authentication or JWT: how do you choose?</h1>
+<p class="ex-meta">Security · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Sessions</strong> keep state on the server and are <strong>easy to revoke</strong>; <strong>JWTs</strong> are <strong>stateless and portable</strong> across services but <strong>hard to revoke</strong>. For browser apps I usually pick <strong>server sessions or a BFF</strong> with <strong>HttpOnly cookies</strong>, and <strong>JWT access tokens</strong> for APIs and service-to-service calls.</p>
+
+<h2>Detailed explanation</h2>
+<p>With <strong>session-based authentication</strong>, the server creates a session after login and the browser holds only a random <strong>session id</strong> in an <strong>HttpOnly, Secure, SameSite</strong> cookie. The state lives in memory or, when scaled out, in a shared store such as <strong>Redis via Spring Session</strong>. Logout or &quot;disable this account&quot; takes effect immediately by deleting the session. Costs: a lookup per request, shared storage to operate, and <strong>CSRF protection</strong> because browsers attach cookies automatically.</p>
+<p>With <strong>JWTs</strong>, the token itself carries identity and authorities, signed by the issuer. Any service with the public key can validate it without a call, which suits <strong>microservices, mobile clients and third-party APIs</strong>. The downside is <strong>revocation</strong>: a stolen or outdated token works until <code>exp</code>. Mitigations are <strong>short expiry (5-15 minutes)</strong>, <strong>refresh tokens with rotation and reuse detection</strong>, and, if needed, a deny-list, which partly brings state back. JWTs also get large with many claims.</p>
+<p><strong>Storage matters as much as format.</strong> A token in <code>localStorage</code> is readable by any injected script, so one XSS bug leaks it. An HttpOnly cookie is invisible to JavaScript but needs CSRF defences. That is why current guidance (the IETF &quot;OAuth for browser-based apps&quot; document) favours the <strong>Backend for Frontend (BFF)</strong> pattern: the browser has only a session cookie with the BFF, the BFF performs the OAuth flow and keeps access and refresh tokens server side, and it relays tokens to APIs. Spring Cloud Gateway with <code>TokenRelay</code> is a common BFF implementation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide who the clients are: browser only, mobile, other services, partners.</li>
+  <li>Browser app: session cookie (or BFF holding tokens), CSRF protection, Redis-backed sessions for scale.</li>
+  <li>APIs: validate short-lived JWT access tokens as a resource server.</li>
+  <li>Refresh tokens are rotated and revocable at the authorization server.</li>
+  <li>For &quot;log out everywhere&quot;, revoke refresh tokens and optionally deny-list active token ids.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># BFF with Spring Cloud Gateway: browser holds a session cookie, gateway relays tokens
+spring:
+  session:
+    redis:
+      namespace: bff
+  cloud:
+    gateway:
+      server:
+        webflux:
+          default-filters:
+            - TokenRelay=
+            - SaveSession
+          routes:
+            - id: orders
+              uri: http://orders-api
+              predicates:
+                - Path=/api/orders/**</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Server session</th><th>JWT access token</th></tr></thead>
+<tbody>
+<tr><td>State</td><td>Server store (Redis)</td><td>In the token</td></tr>
+<tr><td>Revocation</td><td>Immediate</td><td>Hard, wait for expiry</td></tr>
+<tr><td>Scaling</td><td>Needs shared store</td><td>Any instance validates</td></tr>
+<tr><td>Best for</td><td>Browser web apps, BFF</td><td>APIs, mobile, service-to-service</td></tr>
+<tr><td>Main risk</td><td>CSRF</td><td>Token theft via XSS, long expiry</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Choosing JWT just because it is &quot;modern&quot; for a single monolith web app.</li>
+  <li>Long-lived JWTs with no refresh or revocation story.</li>
+  <li>Keeping tokens in localStorage.</li>
+  <li>Disabling CSRF while still using cookies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Sessions keep state on the server, usually in Redis with Spring Session, and the browser only holds an HttpOnly cookie, so revoking is instant, at the cost of shared storage and CSRF protection. JWTs are self-contained and any service can validate them, which fits APIs and microservices, but you cannot easily revoke them, so I keep them short-lived with rotating refresh tokens. Storage is the other half of the decision: tokens in localStorage are exposed to XSS. For browser apps I prefer the BFF pattern, where the browser has a session cookie and the backend holds the tokens and relays them to the APIs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you log out a user everywhere immediately with JWTs?</strong> Revoke refresh tokens, deny-list <code>jti</code> or bump a per-user token version checked on each request, and keep access tokens short.</li>
+  <li><strong>What does SameSite do?</strong> Restricts when cookies are sent cross-site, reducing CSRF risk.</li>
+  <li><strong>Can sessions work across services?</strong> Yes with a shared store, but it couples services; tokens are cleaner between services.</li>
+</ul>
+</article>
+</body>
+</html>

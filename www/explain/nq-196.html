@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-196 · What are cross-cutting concerns, and how can AOP be used for logging?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-196" data-topic="Spring Framework">
+<h1>What are cross-cutting concerns, and how can AOP be used for logging?</h1>
+<p class="ex-meta">Spring Framework · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Cross-cutting concerns</strong> are requirements spread across many modules (logging, auditing, security, transactions, metrics); for logging, an <strong><code>@Aspect</code> with <code>@Around</code> advice</strong> on a pointcut or <strong>custom annotation</strong> uses <strong><code>ProceedingJoinPoint.proceed()</code></strong> to log method, arguments, result, exceptions and duration in one place, while <strong>avoiding sensitive data</strong> and keeping overhead low.</p>
+
+<h2>Detailed explanation</h2>
+<p>A cross-cutting concern is something many classes need but none of them is really about. If every service method starts with &quot;log entry, start timer&quot; and ends with &quot;log exit, log duration, catch and log exception&quot;, the business logic drowns in boilerplate, the format drifts between teams and changing it means editing hundreds of methods.</p>
+<p>With Spring AOP you write that behaviour once. Create a class annotated with <strong><code>@Aspect</code></strong> and <strong><code>@Component</code></strong> (with Boot, <code>spring-boot-starter-aop</code> or the AspectJ weaver dependency enables it). Define a <strong>pointcut</strong>: either all methods in a package, such as <code>execution(* com.acme.service..*(..))</code>, or, more precisely, methods carrying a custom annotation like <strong><code>@LogExecutionTime</code></strong>, so teams opt in explicitly.</p>
+<p>Use <strong><code>@Around</code></strong> advice, because it can wrap the whole call. It receives a <strong><code>ProceedingJoinPoint</code></strong>, from which you read the method signature and arguments. Record the start time, call <strong><code>proceed()</code></strong> to execute the real method, then log the result and duration. If the method throws, log the exception with the duration and <strong>rethrow it</strong>, so callers and transaction rollback are unaffected.</p>
+<p>Good practice: <strong>don't log passwords, tokens or personal data</strong> (log ids, mask or skip arguments, or use an opt-in attribute); log at DEBUG for argument detail and INFO or metrics for timings; keep the aspect cheap, as it runs on every matching call; put the correlation id in the <strong>MDC</strong> so logs can be traced. For timings, Micrometer's <code>@Timed</code> or <code>@Observed</code> may be a better fit than logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a marker annotation <code>@LogExecutionTime</code> with runtime retention.</li>
+  <li>Write an <code>@Aspect</code> with <code>@Around(&quot;@annotation(...)&quot;)</code>.</li>
+  <li>Spring proxies beans with annotated methods.</li>
+  <li>On each call: log start, <code>proceed()</code>, log result and duration.</li>
+  <li>On exception: log with duration, rethrow.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface LogExecutionTime { boolean logArgs() default false; }
+
+@Aspect
+@Component
+class LoggingAspect {
+    private static final Logger log = LoggerFactory.getLogger(LoggingAspect.class);
+
+    @Around(&quot;@annotation(cfg)&quot;)
+    public Object around(ProceedingJoinPoint pjp, LogExecutionTime cfg) throws Throwable {
+        String method = pjp.getSignature().toShortString();
+        long start = System.nanoTime();
+        try {
+            Object result = pjp.proceed();
+            log.info(&quot;{} ok in {} ms&quot;, method, (System.nanoTime() - start) / 1_000_000);
+            return result;
+        } catch (Throwable ex) {
+            log.warn(&quot;{} failed in {} ms: {}&quot;, method,
+                     (System.nanoTime() - start) / 1_000_000, ex.toString());
+            throw ex;
+        } finally {
+            if (cfg.logArgs() &amp;&amp; log.isDebugEnabled())
+                log.debug(&quot;{} args={}&quot;, method, Arrays.toString(pjp.getArgs()));
+        }
+    }
+}
+
+@Service
+class OrderService {
+    @LogExecutionTime
+    public Order place(PlaceOrder cmd) { /* business logic only */ }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Swallowing the exception in the advice, which breaks error handling and transaction rollback.</li>
+  <li>Logging full arguments, leaking personal data or secrets.</li>
+  <li>Very broad pointcuts that also advise controllers, repositories and framework beans.</li>
+  <li>Expecting the aspect to run for self-invoked or private methods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cross-cutting concerns are requirements that affect many classes but aren't their core job: logging, auditing, security, transactions, metrics. Writing them by hand duplicates code everywhere. With Spring AOP I create an Aspect component with Around advice on a custom annotation like LogExecutionTime, or a pointcut on service methods. The advice gets a ProceedingJoinPoint, logs the method, records the start time, calls proceed, logs the result and duration, or logs and rethrows the exception. Business methods stay clean, and I avoid logging sensitive data and keep the aspect lightweight.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't it run for a same-class call?</strong> Self-invocation bypasses the proxy.</li>
+  <li><strong>Around vs Before/After?</strong> Around can time, change arguments or results, and decide whether to proceed.</li>
+  <li><strong>Better tool for timings?</strong> Micrometer <code>@Timed</code>/<code>@Observed</code> for metrics and traces.</li>
+</ul>
+</article>
+</body>
+</html>

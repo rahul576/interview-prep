@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-194 · What happens during bean initialization and destruction?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-194" data-topic="Spring Framework">
+<h1>What happens during bean initialization and destruction?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Initialisation</strong> runs after construction and injection (<strong>@PostConstruct → afterPropertiesSet → init-method</strong>, then proxies are applied) to validate, open resources or warm caches; <strong>destruction</strong> runs on context close (<strong>@PreDestroy → destroy() → destroy-method</strong>) to release resources; <strong>prototypes are not destroyed</strong>, and Boot's <strong>graceful shutdown</strong> drains requests first.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Initialisation</strong> is the moment when a bean is fully constructed and all its dependencies are injected, so it can safely use them. Typical work: <strong>validating configuration</strong> (fail fast if a required URL is missing), opening a connection or channel, registering with a registry, compiling templates, or <strong>warming a cache</strong>. The order is fixed: <code>@PostConstruct</code>, then <code>InitializingBean.afterPropertiesSet()</code>, then a custom <code>initMethod</code>.</p>
+<p>Only <strong>after</strong> that do BeanPostProcessors' after-initialisation hooks run, which is when <strong>AOP proxies</strong> are created. Two consequences follow. First, code in <code>@PostConstruct</code> runs on the raw object, so calling a <code>@Transactional</code> or <code>@Cacheable</code> method of the same bean there gets no transaction or caching. Second, other beans may not be fully started yet. For work that needs transactions or the whole application, use an <code>ApplicationReadyEvent</code> listener, an <code>ApplicationRunner</code>, or <code>SmartInitializingSingleton</code>. Long-running work in init callbacks also <strong>blocks startup</strong>, delays readiness and can cause Kubernetes to kill the pod.</p>
+<p><strong>Destruction</strong> happens when the context closes, normally on application shutdown via the JVM shutdown hook Spring Boot registers. Callbacks run in reverse dependency order: <code>@PreDestroy</code>, <code>DisposableBean.destroy()</code>, then a custom destroy method (inferred <code>close()</code>/<code>shutdown()</code> for <code>@Bean</code>s). Use them to <strong>close pools, flush buffers, commit offsets, deregister</strong> from discovery, and stop threads.</p>
+<p><strong>Prototype</strong> beans are not tracked after creation, so the container never calls their destroy callbacks. And with <strong>graceful shutdown</strong> (<code>server.shutdown=graceful</code>), Spring Boot first stops accepting requests and lets in-flight ones finish before beans are destroyed, so resources are not closed under active requests.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Constructor and dependency injection complete.</li>
+  <li>@PostConstruct, afterPropertiesSet, init-method.</li>
+  <li>BeanPostProcessors wrap the bean in proxies.</li>
+  <li>Application runs.</li>
+  <li>SIGTERM: graceful shutdown drains web requests, SmartLifecycle beans stop.</li>
+  <li>@PreDestroy, destroy(), destroy-method; JVM exits.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class ExchangeRateCache {
+    private final RatesClient client;
+    private final Map&lt;String, BigDecimal&gt; rates = new ConcurrentHashMap&lt;&gt;();
+    private final ScheduledExecutorService refresher = Executors.newSingleThreadScheduledExecutor();
+
+    ExchangeRateCache(RatesClient client) { this.client = client; }
+
+    @PostConstruct
+    void init() {
+        rates.putAll(client.fetchAll());                       // warm cache, fast call
+        refresher.scheduleAtFixedRate(() -&gt; rates.putAll(client.fetchAll()), 5, 5, TimeUnit.MINUTES);
+    }
+
+    @PreDestroy
+    void shutdown() throws InterruptedException {
+        refresher.shutdown();
+        refresher.awaitTermination(5, TimeUnit.SECONDS);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling transactional methods of the same bean from @PostConstruct.</li>
+  <li>Slow remote calls or data migrations in init callbacks, breaking startup probes.</li>
+  <li>Starting threads without stopping them, preventing clean shutdown.</li>
+  <li>Expecting destroy callbacks for prototypes or after <code>kill -9</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Initialisation happens after the bean is constructed and its dependencies are injected, so it can validate configuration, open resources or warm caches. Callbacks run as @PostConstruct, then afterPropertiesSet, then a custom init method, and only afterwards are proxies applied, so @Transactional doesn't apply inside @PostConstruct. Destruction happens when the context closes: @PreDestroy, DisposableBean.destroy and the destroy method, where I close pools and stop threads. Prototype beans aren't destroyed by the container, and graceful shutdown lets in-flight requests finish first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid long work in @PostConstruct?</strong> It blocks startup and readiness; run it after ApplicationReadyEvent or asynchronously.</li>
+  <li><strong>When does destruction not happen?</strong> On SIGKILL or a JVM crash.</li>
+  <li><strong>Who triggers destruction in Boot?</strong> A JVM shutdown hook that closes the context.</li>
+</ul>
+</article>
+</body>
+</html>

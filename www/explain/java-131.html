@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-131 · Explain the JPA entity lifecycle states and the persistence context.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-131" data-topic="Spring Data &amp; JPA">
+<h1>Explain the JPA entity lifecycle states and the persistence context.</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>JPA entities move through <strong>transient (new)</strong>, <strong>managed</strong>, <strong>detached</strong> and <strong>removed</strong> states; the <strong>persistence context</strong> is a per-transaction <strong>first-level cache and unit of work</strong> that guarantees identity and uses <strong>dirty checking</strong> to flush changes, while <strong>persist</strong> makes a new entity managed and <strong>merge</strong> copies a detached entity's state into a managed one.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Transient / new</strong>: an object created with <code>new Order()</code> is plain Java. JPA doesn't know about it; it has no row in the database (and usually no id).</p>
+<p><strong>Managed</strong>: after <code>persist()</code>, or when loaded through <code>find()</code>, a query or a lazy association, the entity is <strong>managed</strong>, meaning it lives in the <strong>persistence context</strong>. The persistence context is a map from (entity type, id) to instance, scoped by default to the <strong>transaction</strong> in Spring. It guarantees <strong>identity</strong>: loading the same id twice in one transaction returns the <strong>same instance</strong> without a second query. It also acts as a <strong>unit of work</strong>: Hibernate keeps a snapshot of each managed entity's loaded state and, at <strong>flush</strong> (before commit, before queries that might be affected, or on explicit <code>flush()</code>), performs <strong>dirty checking</strong>, comparing current fields with the snapshot and issuing UPDATEs for changed ones. That is why you don't need to call <code>save()</code> for a managed entity you modified.</p>
+<p><strong>Detached</strong>: when the persistence context closes (transaction ends) or you call <code>detach()</code>/<code>clear()</code>, entities become detached. They still hold data and an id, but changes are no longer tracked and lazy associations can't be loaded.</p>
+<p><strong>Removed</strong>: <code>remove()</code> marks a managed entity for deletion; the DELETE executes at flush.</p>
+<p><strong>persist vs merge</strong>: <code>persist(entity)</code> makes a <strong>new</strong> instance managed (the same object). <code>merge(detached)</code> finds or loads the managed instance with that id, <strong>copies</strong> the detached state onto it and <strong>returns the managed copy</strong>; the argument stays detached. Spring Data's <code>save()</code> calls <code>persist</code> if the entity is new (null id or version) and <code>merge</code> otherwise, which is why assigning ids manually can trigger an extra SELECT.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>new Order()</code> → transient.</li>
+  <li><code>em.persist(order)</code> or <code>repo.save(order)</code> → managed; INSERT at flush (or immediately with IDENTITY ids).</li>
+  <li>Modify fields of managed entity → dirty checking → UPDATE at flush.</li>
+  <li>Transaction commits → context closes → detached.</li>
+  <li><code>em.merge(detached)</code> → managed copy; <code>em.remove(managed)</code> → removed → DELETE at flush.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public void renameCustomer(long id, String name) {
+    Customer c = em.find(Customer.class, id);   // managed, SELECT
+    Customer same = em.find(Customer.class, id);// same instance, no SELECT
+    c.setName(name);                            // no save() needed
+}                                               // flush: UPDATE customer set name=? ...
+
+@Transactional
+public Customer update(Customer detachedFromClient) {
+    Customer managed = em.merge(detachedFromClient);   // copies state
+    return managed;                                    // use the returned instance
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>save()</code> on already-managed entities, believing it is required.</li>
+  <li>Continuing to modify the argument passed to <code>merge()</code> instead of its return value.</li>
+  <li>Loading 100,000 entities into one persistence context, exhausting memory and slowing flushes.</li>
+  <li>Expecting changes to detached entities to be saved automatically.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A new entity created with new is transient. After persist, or when loaded, it is managed: it lives in the persistence context, a first-level cache keyed by id within the transaction, which guarantees one instance per row. Hibernate does dirty checking on managed entities and flushes changed fields as SQL at commit, so I don't need to call save. When the context closes the entity becomes detached; merge copies its state back into a managed instance and returns it. remove marks it removed, and it's deleted on flush.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does saving 100,000 entities in a loop cause memory problems?</strong> All stay managed with snapshots; flush and clear in batches.</li>
+  <li><strong>When does flush happen?</strong> Before commit, before conflicting queries (AUTO), or on <code>flush()</code>.</li>
+  <li><strong>persist on an entity with an id?</strong> Detached entity passed to persist throws an exception.</li>
+</ul>
+</article>
+</body>
+</html>

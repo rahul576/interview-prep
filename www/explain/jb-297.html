@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-297 · How would you implement distributed tracing using OpenTelemetry?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-297" data-topic="Observability">
+<h1>How would you implement distributed tracing using OpenTelemetry?</h1>
+<p class="ex-meta">Observability · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Instrument services with the <strong>OpenTelemetry Java agent</strong> or <strong>Micrometer Tracing with the OTel bridge</strong>, propagate context with <strong>W3C traceparent</strong> over HTTP and Kafka headers, export spans via <strong>OTLP</strong> to an <strong>OpenTelemetry Collector</strong>, store them in <strong>Jaeger, Tempo or an APM</strong>, choose a <strong>sampling strategy</strong>, and <strong>correlate traces with logs and metrics</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Model:</strong> a <strong>trace</strong> is one request's journey; it consists of <strong>spans</strong> (operations) with a trace id, span id, parent id, timings, status and attributes following OpenTelemetry <strong>semantic conventions</strong>. A <strong>resource</strong> describes the emitting service (<code>service.name</code>, version, environment).</p>
+<p><strong>Instrumentation options for Java:</strong></p>
+<ul>
+  <li><strong>OpenTelemetry Java agent:</strong> attach with <code>-javaagent</code>; it bytecode-instruments Spring MVC and WebFlux, servlet containers, RestTemplate, RestClient, WebClient, JDBC, Kafka, gRPC, Redis and more without code changes. Configured with <code>OTEL_*</code> environment variables. Fastest way to cover a fleet.</li>
+  <li><strong>Micrometer Tracing (Spring Boot 3):</strong> Spring's Observation API creates spans and metrics together; the <code>micrometer-tracing-bridge-otel</code> and an OTLP exporter send them out. More native to Spring configuration.</li>
+  <li><strong>Manual spans</strong> for business steps via <code>@WithSpan</code>, the OTel <code>Tracer</code> API or <code>@Observed</code>, adding attributes such as order id (low-cardinality guidance applies to metrics, not span attributes).</li>
+</ul>
+<p><strong>Propagation:</strong> W3C <code>traceparent</code>/<code>tracestate</code> headers between services, Kafka record headers for messaging, and <strong>context propagation across threads</strong> for executors and reactive code.</p>
+<p><strong>Pipeline:</strong> services export via OTLP (gRPC 4317 or HTTP 4318) to an <strong>OpenTelemetry Collector</strong>, deployed as an agent per node or a gateway. The Collector batches, adds Kubernetes metadata, scrubs sensitive attributes, applies <strong>tail sampling</strong> and fans out to backends: <strong>Jaeger</strong>, <strong>Grafana Tempo</strong>, <strong>Zipkin</strong>, or vendors like Datadog, Honeycomb or New Relic, avoiding lock-in at the code level.</p>
+<p><strong>Sampling:</strong> <strong>head-based</strong> (decide at the root, e.g. parent-based 10%) is cheap but random; <strong>tail-based</strong> decides after the trace completes so you keep all errors and slow traces, at the cost of Collector memory. <strong>Correlation:</strong> put trace ids into logs via the MDC and use <strong>exemplars</strong> on latency histograms to jump from a metric spike to a trace.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Add the agent or Micrometer Tracing dependencies to each service.</li>
+  <li>Set <code>service.name</code>, environment and exporter endpoint.</li>
+  <li>Context propagates via HTTP and Kafka headers automatically.</li>
+  <li>Spans go via OTLP to the Collector.</li>
+  <li>Collector samples, enriches and forwards to the backend.</li>
+  <li>Dashboards link metrics → traces → logs by trace id.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># OpenTelemetry Collector (excerpt)
+receivers:
+  otlp:
+    protocols: { grpc: {}, http: {} }
+processors:
+  batch: {}
+  tail_sampling:
+    policies:
+      - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+      - { name: slow,   type: latency,     latency: { threshold_ms: 1000 } }
+      - { name: sample, type: probabilistic, probabilistic: { sampling_percentage: 10 } }
+exporters:
+  otlp/tempo: { endpoint: tempo:4317, tls: { insecure: true } }
+service:
+  pipelines:
+    traces: { receivers: [otlp], processors: [tail_sampling, batch], exporters: [otlp/tempo] }</code></pre>
+<pre><code class="language-java">@WithSpan(&quot;reserve-stock&quot;)
+public void reserve(@SpanAttribute(&quot;order.id&quot;) String orderId) { ... }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Exporting directly from every service to a vendor, losing central control of sampling and scrubbing.</li>
+  <li>Sampling 100% everywhere and getting a huge bill.</li>
+  <li>Losing context in thread pools, async code or custom messaging.</li>
+  <li>Traces not linked to logs, so engineers still grep.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A trace is made of spans linked by a trace id, and context is propagated between services with the W3C traceparent header, including Kafka message headers. In Java I either attach the OpenTelemetry agent, which auto-instruments Spring, HTTP clients, JDBC and Kafka without code changes, or use Spring Boot's Micrometer Tracing with the OTel bridge, plus custom spans for key business steps. Services export over OTLP to an OpenTelemetry Collector, which batches, scrubs and samples, then forwards to Tempo, Jaeger or a vendor. I use tail sampling to keep all errors and slow traces, and put the trace id in every log line so logs, metrics and traces connect.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Head vs tail sampling?</strong> Head decides at the start and is cheap; tail decides after completion, keeping interesting traces but needing Collector state.</li>
+  <li><strong>Agent or Micrometer Tracing?</strong> Agent for zero-code broad coverage; Micrometer for Spring-native configuration and combined metrics.</li>
+  <li><strong>Why a Collector?</strong> Vendor-neutral routing, central sampling, enrichment and data scrubbing.</li>
+</ul>
+</article>
+</body>
+</html>

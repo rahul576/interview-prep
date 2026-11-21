@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-165 · What makes logging good in a Java backend?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-165" data-topic="Observability">
+<h1>What makes logging good in a Java backend?</h1>
+<p class="ex-meta">Observability · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Good logs are <strong>structured (JSON)</strong>, use <strong>correct levels</strong>, carry a <strong>correlation or trace id via the MDC</strong>, contain <strong>no sensitive data</strong>, are written with <strong>SLF4J parameterised messages</strong>, and are emitted <strong>once per error</strong> with enough context to act on.</p>
+
+<h2>Detailed explanation</h2>
+<p>Logs are for the person debugging an incident at 3 a.m. They should answer what happened, to which entity, in which request, and why.</p>
+<p><strong>Structure:</strong> emit one JSON object per event with stable fields: timestamp, level, service, version, logger, thread, message, trace id, span id and business keys such as <code>orderId</code> or <code>tenantId</code>. Searching <code>orderId:123 AND level:ERROR</code> in Kibana or Loki is then trivial. Spring Boot 3.4+ supports ECS, Logstash and GELF JSON formats natively; otherwise use the Logstash Logback encoder.</p>
+<p><strong>Levels:</strong> <code>ERROR</code> for failures that need attention, <code>WARN</code> for unexpected but handled situations (retry succeeded, fallback used), <code>INFO</code> for significant business and lifecycle events (order placed, service started), <code>DEBUG/TRACE</code> for diagnostics, off in production but switchable at runtime via the Actuator loggers endpoint.</p>
+<p><strong>Context:</strong> a filter or Micrometer Tracing puts the trace id into the <strong>MDC</strong> so every line of a request carries it across services. Remember the MDC is thread-local, so context must be propagated to async executors.</p>
+<p><strong>Safety:</strong> never log passwords, tokens, card numbers or unnecessary personal data; mask fields and avoid logging whole request bodies. This is a GDPR and security issue, not only hygiene.</p>
+<p><strong>Performance and code:</strong> SLF4J placeholders (<code>log.info(&quot;Order {} paid&quot;, id)</code>) avoid string building when the level is off; pass the exception as the last argument so the stack trace is kept; use <strong>async appenders</strong> so slow disks or networks do not block request threads. <strong>Log an exception once</strong>, where it is handled, not at every layer it passes through.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request enters → filter sets trace id and user/tenant in the MDC.</li>
+  <li>Code logs events with SLF4J and key-value context.</li>
+  <li>Logback encoder writes JSON to stdout via an async appender.</li>
+  <li>The platform (Fluent Bit, OTel Collector) ships logs to ELK or Loki.</li>
+  <li>Queries and alerts use fields, correlated with traces by trace id.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
+
+public void pay(Order order) {
+    log.atInfo().setMessage(&quot;Payment started&quot;)
+       .addKeyValue(&quot;orderId&quot;, order.id())
+       .addKeyValue(&quot;amount&quot;, order.total())
+       .log();
+    try {
+        gateway.charge(order);
+    } catch (GatewayException e) {
+        // logged once here, where it is handled; card number never logged
+        log.error(&quot;Payment failed for order {}&quot;, order.id(), e);
+        throw new PaymentFailedException(order.id(), e);
+    }
+}</code></pre>
+<pre><code class="language-properties">logging.structured.format.console=ecs</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>String concatenation in log calls, building strings that are never printed.</li>
+  <li>Logging and rethrowing at every layer, producing five copies of one stack trace.</li>
+  <li><code>log.error(e.getMessage())</code>, losing the stack trace.</li>
+  <li>Logging tokens or full request bodies containing personal data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Good logging means structured JSON logs with consistent fields, so they can be searched and aggregated. I use levels deliberately: error for things needing action, warn for handled surprises, info for key business events, debug off in production. Every line carries the trace id from the MDC, so I can follow a request across services. I never log secrets or personal data and mask anything sensitive. In code I use SLF4J placeholders, pass the exception as the last argument, use async appenders, and log each exception once at the place it's handled rather than at every layer.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid logging the same exception five times?</strong> Log only where the exception is handled or translated at the boundary; intermediate layers just rethrow or wrap.</li>
+  <li><strong>How do you keep the MDC in async code?</strong> Use a TaskDecorator or context propagation from Micrometer.</li>
+  <li><strong>How do you control log cost?</strong> Sensible levels, sampling of noisy logs, retention tiers and dropping debug in production.</li>
+</ul>
+</article>
+</body>
+</html>

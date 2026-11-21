@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-121 · What is the difference between map and flatMap in streams, and how does Collectors.groupingBy work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-121" data-topic="Java 8+ Features">
+<h1>What is the difference between map and flatMap in streams, and how does Collectors.groupingBy work?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>map</strong> transforms each element <strong>one-to-one</strong>, <strong>flatMap</strong> maps each element to a stream and <strong>flattens</strong> the results into one stream, and <strong>Collectors.groupingBy</strong> builds a <code>Map</code> keyed by a <strong>classifier</strong> function, optionally with a <strong>downstream collector</strong> such as <code>counting()</code> or <code>mapping()</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>map(Function&lt;T,R&gt;)</code> produces exactly one output per input. A <code>Stream&lt;Order&gt;</code> mapped with <code>Order::total</code> becomes a <code>Stream&lt;BigDecimal&gt;</code>. If the function itself returns a collection or stream, <code>map</code> gives you a <strong>nested</strong> structure, such as <code>Stream&lt;List&lt;Item&gt;&gt;</code>, which is rarely what you want.</p>
+<p><code>flatMap(Function&lt;T, Stream&lt;R&gt;&gt;)</code> solves this: each element becomes zero or more elements, and all the inner streams are concatenated into a single <code>Stream&lt;R&gt;</code>. <code>orders.stream().flatMap(o -&gt; o.items().stream())</code> yields every item across all orders. Java 16 added <strong><code>mapMulti</code></strong>, an imperative alternative that can avoid creating small inner streams. Primitive variants like <code>flatMapToInt</code> exist too.</p>
+<p><code>Collectors.groupingBy(classifier)</code> applies the classifier to each element and collects elements with the same key into a <code>Map&lt;K, List&lt;T&gt;&gt;</code> (a <code>HashMap</code> by default). The real power is the <strong>downstream collector</strong>: <code>groupingBy(Order::customerId, counting())</code> gives a count per customer; <code>summingInt</code>, <code>averagingDouble</code>, <code>mapping(f, toSet())</code>, <code>maxBy(comparator)</code> and <code>reducing</code> are common. A three-argument overload accepts a <strong>map factory</strong>, for example <code>TreeMap::new</code> for sorted keys. <strong><code>partitioningBy(predicate)</code></strong> is the special case with a boolean key and always contains both <code>true</code> and <code>false</code> entries. For parallel streams there is <code>groupingByConcurrent</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>map</code> calls the function per element and emits the result.</li>
+  <li><code>flatMap</code> calls the function, receives a stream, and pushes each of its elements downstream.</li>
+  <li><code>groupingBy</code> computes a key per element and looks up or creates that key's container.</li>
+  <li>The downstream collector accumulates each element into its group.</li>
+  <li>A finisher produces the final map values (e.g. counts as <code>Long</code>).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">record Item(String sku, int qty) {}
+record Order(String customer, BigDecimal total, List&lt;Item&gt; items) {}
+
+List&lt;BigDecimal&gt; totals = orders.stream().map(Order::total).toList();
+
+List&lt;Item&gt; allItems = orders.stream()
+    .flatMap(o -&gt; o.items().stream())
+    .toList();
+
+Map&lt;String, Long&gt; ordersPerCustomer = orders.stream()
+    .collect(Collectors.groupingBy(Order::customer, Collectors.counting()));
+
+Map&lt;String, Set&lt;String&gt;&gt; skusPerCustomer = orders.stream()
+    .collect(Collectors.groupingBy(Order::customer, TreeMap::new,
+        Collectors.flatMapping(o -&gt; o.items().stream().map(Item::sku), Collectors.toSet())));
+
+// Top three customers by total value
+List&lt;String&gt; top3 = orders.stream()
+    .collect(Collectors.groupingBy(Order::customer,
+        Collectors.reducing(BigDecimal.ZERO, Order::total, BigDecimal::add)))
+    .entrySet().stream()
+    .sorted(Map.Entry.&lt;String, BigDecimal&gt;comparingByValue().reversed())
+    .limit(3).map(Map.Entry::getKey).toList();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>map</code> and ending with <code>Stream&lt;List&lt;T&gt;&gt;</code> instead of <code>flatMap</code>.</li>
+  <li>Grouping into lists and then post-processing instead of using a downstream collector.</li>
+  <li>Assuming <code>groupingBy</code> returns a sorted or ordered map.</li>
+  <li>Forgetting the classifier must not return null (it throws NPE).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;map is a one-to-one transformation: orders become totals. flatMap maps each element to a stream and flattens them, so orders that each contain a list of items become a single stream of items. groupingBy takes a classifier and builds a map from key to a list by default, but I almost always pass a downstream collector, like counting to count orders per customer, or mapping or summing. I can also pass a map factory such as TreeMap. partitioningBy is the boolean-key special case.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you find the top three customers by total order value?</strong> Group with a summing/reducing downstream, then sort entries by value descending and limit 3.</li>
+  <li><strong>What does flatMapping do?</strong> Java 9 downstream collector that flattens inside a group.</li>
+  <li><strong>What does partitioningBy return if nothing matches?</strong> A map with both keys, one list empty.</li>
+</ul>
+</article>
+</body>
+</html>

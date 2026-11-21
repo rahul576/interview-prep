@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-173 · How do you configure different database connections for development and production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-173" data-topic="Spring Boot">
+<h1>How do you configure different database connections for development and production?</h1>
+<p class="ex-meta">Spring Boot · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>Spring profiles</strong>: shared settings in <strong>application.yml</strong>, environment-specific datasource settings in <strong>application-dev.yml</strong> and <strong>application-prod.yml</strong>, activate with <strong>SPRING_PROFILES_ACTIVE</strong>, inject <strong>credentials from environment variables or a secret manager</strong> via placeholders, tune the <strong>Hikari pool</strong> per environment, run <strong>Flyway/Liquibase</strong> everywhere, and use <strong>Docker Compose or Testcontainers</strong> locally.</p>
+
+<h2>Detailed explanation</h2>
+<p>The goal is one build artefact that runs unchanged in every environment, with only configuration differing (a twelve-factor principle).</p>
+<p><strong>Profiles:</strong> <code>application.yml</code> contains what is common: JPA settings, Flyway location, <code>open-in-view: false</code>. <code>application-dev.yml</code> points <code>spring.datasource.url</code> to a local PostgreSQL with a small pool and verbose SQL logging. <code>application-prod.yml</code> points to the production host (or better, a placeholder filled by the platform), with a larger, tuned <strong>HikariCP</strong> pool, connection and validation timeouts, and no SQL logging. The active profile is selected at deploy time with <code>spring.profiles.active</code>, usually the <strong>SPRING_PROFILES_ACTIVE</strong> environment variable in the Kubernetes Deployment or container definition, never hard-coded in the jar.</p>
+<p><strong>Credentials:</strong> production usernames and passwords are never committed. Use placeholders like <code>${DB_PASSWORD}</code>, filled from environment variables injected from <strong>Kubernetes Secrets</strong>, <strong>Vault</strong> (Spring Cloud Vault, possibly with dynamic credentials), <strong>Azure Key Vault</strong> or <strong>AWS Secrets Manager</strong>. Even better, use cloud IAM authentication so no static password exists.</p>
+<p><strong>Local development:</strong> Spring Boot 3.1+ can start a database from <code>compose.yaml</code> automatically with <code>spring-boot-docker-compose</code>, or use <strong>Testcontainers</strong> with <code>@ServiceConnection</code> for tests and <code>TestApplication</code> for local runs, so devs need no shared dev database. Using the same database engine as production avoids surprises from H2 differences.</p>
+<p><strong>Schema:</strong> <strong>Flyway</strong> or <strong>Liquibase</strong> apply the same versioned migrations in each environment; <code>ddl-auto</code> stays <code>validate</code> or <code>none</code> outside throwaway setups.</p>
+<p><strong>Safety:</strong> avoid defaults that point to production; make prod settings require explicit environment variables so startup fails if missing, and use separate credentials and network access per environment.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build one jar or image.</li>
+  <li>Deploy with <code>SPRING_PROFILES_ACTIVE=prod</code> and secret-backed env vars.</li>
+  <li>Boot loads <code>application.yml</code>, then the profile file, then env vars.</li>
+  <li>HikariCP connects using the resolved URL and credentials.</li>
+  <li>Flyway migrates the schema before the app accepts traffic.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># application.yml
+spring:
+  jpa:
+    open-in-view: false
+    hibernate.ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+---
+# application-dev.yml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/shop
+    username: shop
+    password: shop
+    hikari.maximum-pool-size: 5
+logging.level.org.hibernate.SQL: debug
+---
+# application-prod.yml
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 30
+      connection-timeout: 3000
+      max-lifetime: 1700000</code></pre>
+<pre><code class="language-yaml"># Kubernetes Deployment excerpt
+env:
+  - name: SPRING_PROFILES_ACTIVE
+    value: prod
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef: { name: shop-db, key: password }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Production passwords in <code>application-prod.yml</code> in Git.</li>
+  <li>A default profile that silently connects to production.</li>
+  <li>Using H2 locally while production is PostgreSQL, hiding SQL differences.</li>
+  <li><code>ddl-auto: update</code> in production.</li>
+  <li>Building a separate artefact per environment.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use Spring profiles. Common settings stay in application.yml, application-dev.yml points the datasource at a local PostgreSQL started with Docker Compose or Testcontainers, and application-prod.yml points at the production database with a larger Hikari pool and stricter timeouts. The active profile is chosen at deploy time with the SPRING_PROFILES_ACTIVE environment variable in Kubernetes, so the same image runs everywhere. Production credentials are never committed: they come from Kubernetes secrets, Vault or a cloud key vault via placeholders like DB_PASSWORD. Schema changes are applied by Flyway or Liquibase in every environment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid accidentally running the dev profile in production?</strong> No prod-capable defaults, required env vars that fail fast, network separation, and checking the active profile at startup.</li>
+  <li><strong>How to use two databases in one app?</strong> Define two DataSource beans with <code>@ConfigurationProperties</code> prefixes and mark one <code>@Primary</code>.</li>
+  <li><strong>How do you test against a real database?</strong> Testcontainers with <code>@ServiceConnection</code>.</li>
+</ul>
+</article>
+</body>
+</html>

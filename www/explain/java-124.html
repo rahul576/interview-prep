@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-124 · Explain the lifecycle of a Spring bean.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-124" data-topic="Spring Boot">
+<h1>Explain the lifecycle of a Spring bean.</h1>
+<p class="ex-meta">Spring Boot · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A bean is <strong>instantiated</strong>, gets its <strong>dependencies injected</strong>, has <strong>Aware callbacks</strong> called, passes through <strong>BeanPostProcessor before-init hooks</strong>, runs <strong>@PostConstruct / afterPropertiesSet / init-method</strong>, passes <strong>after-init hooks</strong> (where <strong>AOP proxies</strong> are created), is <strong>used</strong>, and on shutdown gets <strong>@PreDestroy / destroy</strong> callbacks (singletons only).</p>
+
+<h2>Detailed explanation</h2>
+<p>Understanding the lifecycle explains many &quot;why doesn't this work&quot; questions, for example why a dependency is null in a constructor-time call, or why <code>@Transactional</code> does nothing.</p>
+<p>Before any bean is created, <strong>BeanFactoryPostProcessors</strong> can modify bean definitions (for example resolving <code>${...}</code> placeholders). Then for each bean:</p>
+<ol>
+  <li><strong>Instantiation</strong>: the constructor runs, with constructor arguments already resolved.</li>
+  <li><strong>Population</strong>: field and setter injection, <code>@Value</code> values.</li>
+  <li><strong>Aware interfaces</strong>: <code>BeanNameAware</code>, <code>BeanFactoryAware</code>, <code>ApplicationContextAware</code> and others receive container references.</li>
+  <li><strong>postProcessBeforeInitialization</strong> of every <code>BeanPostProcessor</code>. <code>@PostConstruct</code> is actually invoked by one of these, <code>CommonAnnotationBeanPostProcessor</code>.</li>
+  <li><strong>Initialisation</strong>: <code>@PostConstruct</code>, then <code>InitializingBean.afterPropertiesSet()</code>, then a custom <code>initMethod</code>. This is where you validate configuration or open resources, because all dependencies are now set.</li>
+  <li><strong>postProcessAfterInitialization</strong>: here <strong>AOP auto-proxy creators wrap the bean</strong> in a proxy for <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code> or security. Other beans receive the proxy, not the raw object.</li>
+  <li>The bean is <strong>ready</strong>. Once all singletons are created, <code>SmartInitializingSingleton</code> and the <code>ContextRefreshedEvent</code> / <code>ApplicationReadyEvent</code> follow, which is a better place for work that needs the whole context.</li>
+  <li><strong>Destruction</strong> on context close: <code>@PreDestroy</code>, <code>DisposableBean.destroy()</code>, custom <code>destroyMethod</code>. Only for singletons (and scoped beans when their scope ends); <strong>prototype beans are not destroyed</strong> by the container.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Context refresh loads definitions and runs BeanFactoryPostProcessors.</li>
+  <li>Each singleton is created, injected and initialised in dependency order.</li>
+  <li>Post-processors may replace the bean with a proxy.</li>
+  <li>Lifecycle beans (<code>SmartLifecycle</code>) start, such as message listeners and the web server.</li>
+  <li>On shutdown, lifecycle beans stop and destruction callbacks run in reverse order.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class PriceFeed implements InitializingBean, DisposableBean {
+    private final FeedClient client;
+    private Connection conn;
+
+    PriceFeed(FeedClient client) { this.client = client; }          // 1. instantiate + inject
+
+    @PostConstruct void init()   { log.info(&quot;PostConstruct&quot;); }      // 5a
+    @Override public void afterPropertiesSet() { conn = client.connect(); } // 5b
+    @PreDestroy void close()     { log.info(&quot;PreDestroy&quot;); }         // 8a
+    @Override public void destroy() { conn.close(); }                // 8b
+}
+
+@Component
+class TimingPostProcessor implements BeanPostProcessor {
+    @Override
+    public Object postProcessAfterInitialization(Object bean, String name) {
+        return bean;   // could return a proxy wrapping the bean
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using injected fields inside the constructor with field injection (they are still null).</li>
+  <li>Expecting <code>@Transactional</code> on a <code>@PostConstruct</code> method to start a transaction: the proxy does not exist yet for self calls.</li>
+  <li>Heavy work like cache warming in <code>@PostConstruct</code>, slowing startup; use <code>ApplicationReadyEvent</code>.</li>
+  <li>Expecting <code>@PreDestroy</code> on prototypes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The container first instantiates the bean, then injects its dependencies. Aware interfaces like ApplicationContextAware are called, then the BeanPostProcessors' before-initialisation hooks, then initialisation callbacks: @PostConstruct, afterPropertiesSet, or a custom init method. Then the after-initialisation hooks run, and that's where AOP proxies are created for @Transactional, @Async or caching, so other beans get the proxy. The bean is then ready. On shutdown, @PreDestroy and destroy methods run for singletons; prototype beans aren't destroyed by the container.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might @Transactional not work on a bean created with new?</strong> It is not a Spring bean, so no post-processor wraps it in a proxy.</li>
+  <li><strong>BeanPostProcessor vs BeanFactoryPostProcessor?</strong> The first changes bean instances; the second changes bean definitions before creation.</li>
+  <li><strong>Where to run startup logic needing all beans?</strong> <code>ApplicationReadyEvent</code> listener or <code>ApplicationRunner</code>.</li>
+</ul>
+</article>
+</body>
+</html>

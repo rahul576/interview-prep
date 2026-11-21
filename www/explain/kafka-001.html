@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-001 · What is Apache Kafka and what are its core building blocks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-001" data-topic="Kafka">
+<h1>What is Apache Kafka and what are its core building blocks?</h1>
+<p class="ex-meta">Kafka · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Apache Kafka</strong> is a distributed <strong>event streaming platform</strong> built on a <strong>partitioned, replicated, append-only commit log</strong>. <strong>Producers</strong> write records to <strong>topics</strong>, which are split into <strong>partitions</strong> (ordered logs) stored on <strong>brokers</strong> and <strong>replicated</strong> for fault tolerance. <strong>Consumers</strong> (in <strong>consumer groups</strong>) read at their own pace using <strong>offsets</strong>, and data is <strong>retained by time or size</strong>, not deleted on consumption, so it can be <strong>replayed</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Core building blocks:</strong></p>
+<ul>
+  <li><strong>Topic:</strong> a named stream of records, such as <code>orders</code>.</li>
+  <li><strong>Partition:</strong> a topic is split into N partitions. Each is an <strong>ordered, immutable, append-only log</strong>, where every record gets a sequential <strong>offset</strong>. Partitions are the unit of <strong>parallelism</strong> and <strong>ordering</strong>. Order is guaranteed only <em>within</em> a partition. Records with the same <strong>key</strong> go to the same partition (by hash of the key), so all events for <code>order-42</code> stay ordered.</li>
+  <li><strong>Broker:</strong> a Kafka server storing partitions on disk. A cluster has many brokers.</li>
+  <li><strong>Replication:</strong> each partition has a <strong>leader</strong> and follower replicas on other brokers (replication factor 3 is common). Producers and consumers talk to the leader (consumers can fetch from followers when configured). Followers that are caught up form the <strong>ISR (in-sync replicas)</strong>. With <code>acks=all</code> and <code>min.insync.replicas=2</code>, an acknowledged write survives a broker failure.</li>
+  <li><strong>Producer:</strong> batches, compresses and sends records, and chooses the partition. Idempotent producers (the default in modern clients) prevent duplicates on retry.</li>
+  <li><strong>Consumer and consumer group:</strong> consumers in the same group <strong>share</strong> the partitions. Each partition is read by one consumer in the group, so parallelism is capped at the partition count. Different groups each get <strong>all</strong> the data independently. Consumers commit their <strong>offsets</strong> (stored in the internal <code>__consumer_offsets</code> topic).</li>
+  <li><strong>Metadata / controller:</strong> modern Kafka uses <strong>KRaft</strong> (Raft-based controllers built into Kafka). ZooKeeper mode was removed in <strong>Kafka 4.0</strong>.</li>
+</ul>
+<p><strong>Retention, not deletion on read.</strong> Unlike traditional queues, reading doesn't remove messages. Records stay until the <strong>retention time or size</strong> is exceeded (for example 7 days), or forever with <strong>log compaction</strong> (keeping the latest value per key). So new consumers can <strong>replay history</strong>, failed consumers can rewind offsets, and many independent systems (search indexing, analytics, notifications) can consume the same stream.</p>
+<p>Its performance comes from sequential disk I/O, the OS page cache, batching and zero-copy transfer. That gives very high throughput (millions of messages per second per cluster) with low latency.</p>
+<p>The ecosystem includes <strong>Kafka Connect</strong> (source and sink connectors, like Debezium for CDC), <strong>Kafka Streams</strong> (stream processing) and <strong>Schema Registry</strong> (Avro, Protobuf or JSON Schema contracts, provided by Confluent and others).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A producer sends <code>key=order-42</code> to topic <code>orders</code>. <code>hash(key) % partitions</code> gives partition 3.</li>
+  <li>The leader of partition 3 appends it at offset 1057 and followers replicate it. With <code>acks=all</code>, the producer is acknowledged once the ISR has it.</li>
+  <li>Consumer group <code>billing</code> reads partition 3 from its committed offset, processes, and commits 1058.</li>
+  <li>Group <code>analytics</code> reads the same records independently.</li>
+  <li>A broker fails, a follower in the ISR becomes leader, and clients reconnect.</li>
+  <li>Old segments are deleted after the retention period.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kafka-topics.sh --bootstrap-server localhost:9092 --create \
+  --topic orders --partitions 6 --replication-factor 3 \
+  --config retention.ms=604800000 --config min.insync.replicas=2
+
+kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders \
+  --property parse.key=true --property key.separator=:
+&gt; order-42:{&quot;status&quot;:&quot;CREATED&quot;}
+
+kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders \
+  --group billing --from-beginning
+kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group billing</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting global ordering across partitions.</li>
+  <li>More consumers in a group than partitions (the extra ones sit idle).</li>
+  <li><code>acks=1</code> or <code>min.insync.replicas=1</code> for critical data.</li>
+  <li>Treating Kafka as a queue that deletes messages after reading.</li>
+  <li>Too few partitions at the start, since adding partitions later changes key-to-partition mapping.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kafka is a distributed event streaming platform built around a partitioned, replicated, append-only commit log. Producers write records to topics, which are split into partitions. Each partition is an ordered log stored on brokers and replicated to other brokers, with a leader and in-sync replicas for fault tolerance. Records with the same key land in the same partition, which gives per-key ordering. Consumers in a consumer group share partitions and track their position with offsets. Unlike a traditional queue, messages aren't deleted when consumed. They're kept according to retention by time or size, so many consumer groups can read the same data and replay it. Modern Kafka uses KRaft instead of ZooKeeper.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Kafka versus RabbitMQ?</strong> Kafka is a durable, replayable log with partition-based scaling. RabbitMQ is a broker with flexible routing and per-message acks, where messages are removed once acknowledged.</li>
+  <li><strong>How is ordering guaranteed?</strong> Only within a partition. Use a consistent key and an idempotent producer.</li>
+  <li><strong>What is log compaction?</strong> Retaining the latest record per key, useful for changelogs and state topics.</li>
+</ul>
+</article>
+</body>
+</html>

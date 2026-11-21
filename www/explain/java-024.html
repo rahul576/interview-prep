@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-024 · Explain Spring bean scopes. What happens when you inject a prototype bean into a singleton?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-024" data-topic="Spring Framework">
+<h1>Explain Spring bean scopes. What happens when you inject a prototype bean into a singleton?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Singleton</strong> (default) means one instance per container, <strong>prototype</strong> a new instance per lookup, plus web scopes <strong>request, session, application and websocket</strong>. A prototype injected into a singleton is created <strong>only once</strong>, so use <strong>ObjectProvider, @Lookup or a scoped proxy</strong> to get fresh instances.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>bean scope</strong> controls how many instances the container creates and how long they live.</p>
+<ul>
+  <li><strong>singleton</strong>: one shared instance per <code>ApplicationContext</code>, created at startup by default. This is right for stateless services, repositories and controllers. Note it is per container, not a JVM-wide singleton like the GoF pattern.</li>
+  <li><strong>prototype</strong>: a new instance every time the bean is requested from the container (via injection or <code>getBean</code>). Spring creates and initialises it but <strong>does not manage destruction</strong>, so <code>@PreDestroy</code> is not called.</li>
+  <li><strong>request</strong>: one instance per HTTP request; <strong>session</strong>: per HTTP session; <strong>application</strong>: per <code>ServletContext</code>; <strong>websocket</strong>: per WebSocket session. These need a web-aware context.</li>
+</ul>
+<p>The classic trap: injection happens <strong>once</strong>, when the singleton is created. If a singleton <code>ReportService</code> has a prototype <code>ReportBuilder</code> injected into a field, that one builder is reused for every call, and if it holds state, concurrent requests interfere. The scope declaration does not help because the singleton never asks the container again.</p>
+<p>Fixes:</p>
+<ol>
+  <li>Inject <strong><code>ObjectProvider&lt;ReportBuilder&gt;</code></strong> (or <code>ObjectFactory</code>, or JSR-330 <code>Provider</code>) and call <code>getObject()</code> each time you need one. This is the most explicit option.</li>
+  <li>Use <strong><code>@Lookup</code></strong> on an abstract or stub method that Spring overrides with CGLIB to return a new bean.</li>
+  <li>Declare the bean with <strong><code>proxyMode = ScopedProxyMode.TARGET_CLASS</code></strong>, so the singleton holds a proxy that fetches the real target per call. This is how request- and session-scoped beans are injected into singletons; for prototypes it means a new instance per method call, which may surprise you.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>The container reads the scope on each bean definition.</li>
+  <li>Singletons are created at startup and cached.</li>
+  <li>Prototypes are created on every request to the container, never cached.</li>
+  <li>Web scopes are stored in request or session attributes.</li>
+  <li>Scoped proxies or providers defer the lookup to call time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+@Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+class ReportBuilder {
+    private final List&lt;String&gt; lines = new ArrayList&lt;&gt;();
+    void add(String l) { lines.add(l); }
+    String build() { return String.join(&quot;\n&quot;, lines); }
+}
+
+@Service
+class ReportService {
+    private final ObjectProvider&lt;ReportBuilder&gt; builders;
+    ReportService(ObjectProvider&lt;ReportBuilder&gt; builders) { this.builders = builders; }
+
+    String monthly() {
+        ReportBuilder b = builders.getObject();   // fresh instance each call
+        b.add(&quot;Revenue ...&quot;);
+        return b.build();
+    }
+}
+
+@Component
+@RequestScope   // request scope with a TARGET_CLASS proxy by default
+class RequestContext { String tenantId; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting a prototype field in a singleton to be new per call.</li>
+  <li>Holding mutable request data in singleton fields.</li>
+  <li>Expecting <code>@PreDestroy</code> on prototypes.</li>
+  <li>Using session scope in a horizontally scaled app without shared sessions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Singleton is the default: one instance per application context. Prototype gives a new instance every time the bean is requested from the container, and there are web scopes: request, session, application and websocket. If you inject a prototype into a singleton, injection only happens once when the singleton is created, so the singleton keeps the same prototype instance forever, which defeats the purpose and can cause thread-safety bugs if it's stateful. To get a fresh instance each time I inject an ObjectProvider and call getObject, or use a @Lookup method, or a scoped proxy, which is also how request-scoped beans are injected into singletons.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Are singleton beans thread safe by default?</strong> No; Spring does not synchronise them, so keep them stateless or use thread-safe structures.</li>
+  <li><strong>Who destroys prototype beans?</strong> Nobody; the caller must release resources.</li>
+  <li><strong>What does @RequestScope do?</strong> A shortcut for request scope with a class-based proxy.</li>
+</ul>
+</article>
+</body>
+</html>

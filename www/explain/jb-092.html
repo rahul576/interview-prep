@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-092 · How would you troubleshoot an application that frequently logs NullPointerException errors?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-092" data-topic="Troubleshooting">
+<h1>How would you troubleshoot an application that frequently logs NullPointerException errors?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Aggregate and group</strong> the NPEs by stack trace to find the <strong>top sources</strong>, use <strong>helpful NullPointerException messages</strong> (JDK 14+) to see exactly what was null, <strong>trace the null to its origin</strong> (input, external response, database, config, wiring), <strong>reproduce it in a test</strong> and fix the root cause, then <strong>prevent</strong> recurrence with <strong>boundary validation, Optional, non-null contracts and static analysis</strong> such as NullAway.</p>
+
+<h2>Detailed explanation</h2>
+<p>Frequent NPEs are usually a few bugs repeated thousands of times, not thousands of bugs. Fix them in order of impact.</p>
+<p><strong>Aggregate:</strong> in Kibana, Grafana Loki, Sentry or an APM, group errors by <strong>exception type plus top stack frame</strong> (error tracking tools fingerprint this automatically), count occurrences and affected users, and check when each started (often with a release). Pick the top two or three.</p>
+<p><strong>Read the message:</strong> since <strong>JEP 358</strong> (JDK 14, on by default from JDK 15), NPE messages say precisely what failed, for example <code>Cannot invoke &quot;Address.getCity()&quot; because the return value of &quot;Customer.getAddress()&quot; is null</code>. That removes the guesswork about which reference in a chained call was null. Make sure logging keeps the full stack trace and cause chain.</p>
+<p><strong>Trace to the origin:</strong> the line that throws is rarely where the bug is. Ask where the null came from:</p>
+<ul>
+  <li>a <strong>request</strong> with a missing optional field that the code treats as mandatory;</li>
+  <li>an <strong>external API</strong> that sometimes omits a field or returns 204;</li>
+  <li>a <strong>nullable database column</strong> or a legacy row with missing data;</li>
+  <li><code>Map.get</code> or a repository method returning null for a missing key;</li>
+  <li>a <strong>missing configuration property</strong> bound to null;</li>
+  <li>a dependency not injected (field injection in a class created with <code>new</code>, or a Mockito <code>@InjectMocks</code> gap in tests);</li>
+  <li>concurrency: a field read before initialisation.</li>
+</ul>
+<p><strong>Reproduce and fix:</strong> write a unit test with the problematic input that throws the NPE, then fix the <strong>root cause</strong>: validate and reject at the boundary (return 400), model optionality explicitly, supply defaults, or fix the data. Do not scatter <code>if (x != null)</code> checks or catch the NPE; that hides the bug and produces wrong results silently.</p>
+<p><strong>Prevent:</strong> Bean Validation (<code>@NotNull</code>, <code>@Valid</code>) on DTOs; <strong>Optional</strong> as a return type for &quot;may be absent&quot;; constructor injection with required dependencies; <code>Objects.requireNonNull</code> for fail-fast contracts; <strong>JSpecify</strong> <code>@Nullable</code>/<code>@NullMarked</code> annotations (adopted by Spring Framework 7) checked by <strong>NullAway</strong> or Error Prone at compile time; Kotlin or records with validation for new code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Group NPEs by fingerprint; rank by frequency and impact.</li>
+  <li>Read the helpful NPE message and stack trace.</li>
+  <li>Trace the null value back to its source.</li>
+  <li>Reproduce with a failing unit test.</li>
+  <li>Fix at the origin; return meaningful errors for bad input.</li>
+  <li>Add validation, nullness annotations and static analysis.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">java.lang.NullPointerException: Cannot invoke &quot;String.toUpperCase()&quot; because
+  the return value of &quot;com.shop.Address.getCountryCode()&quot; is null
+    at com.shop.tax.TaxService.rateFor(TaxService.java:42)
+    at com.shop.checkout.CheckoutService.total(CheckoutService.java:88)
+count last 24h: 18,412   first seen: release 5.3 (new partner checkout API)</code></pre>
+<pre><code class="language-java">// Root cause: partner requests may omit countryCode. Validate at the boundary.
+public record AddressDto(@NotBlank String street,
+                         @NotBlank @Size(min = 2, max = 2) String countryCode) { }
+
+@PostMapping(&quot;/checkout&quot;)
+public ResponseEntity&lt;?&gt; checkout(@Valid @RequestBody CheckoutRequest req) { ... }
+
+// Regression test
+@Test
+void rejectsAddressWithoutCountry() throws Exception {
+    mvc.perform(post(&quot;/checkout&quot;).contentType(APPLICATION_JSON).content(withoutCountry()))
+       .andExpect(status().isBadRequest());
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Catching <code>NullPointerException</code> or wrapping everything in null checks, hiding the real bug.</li>
+  <li>Fixing the line that throws rather than where the null originates.</li>
+  <li>Returning null from methods instead of Optional or empty collections.</li>
+  <li>Losing stack traces by logging only <code>e.getMessage()</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I aggregate the logs and group the NPEs by stack trace and frequency, so I fix the few top sources rather than chasing every occurrence, and check whether they started with a release. On modern JDKs helpful NPE messages tell me exactly which variable or method result was null. Then I trace that null to its origin: a missing request field, an unexpected external response, a nullable column, a missing config value or a dependency that wasn't injected. I reproduce it in a unit test and fix the root cause instead of adding null checks everywhere. To prevent it, I validate input at the boundary, use Optional for absent results, rely on constructor injection and run static analysis like NullAway.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is catching NPE the wrong fix?</strong> It hides a programming error and lets the system continue with invalid state.</li>
+  <li><strong>When should you use Optional?</strong> As a return type for possibly absent values, not for fields or parameters.</li>
+  <li><strong>What are helpful NPE messages?</strong> JEP 358 messages naming the null expression, default since JDK 15.</li>
+</ul>
+</article>
+</body>
+</html>

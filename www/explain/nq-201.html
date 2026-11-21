@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-201 · How does a transaction commit or roll back?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-201" data-topic="Spring Framework">
+<h1>How does a transaction commit or roll back?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The transactional proxy <strong>commits on normal return</strong> (JPA flushes first), <strong>rolls back when an unchecked exception or Error escapes</strong>, <strong>commits on checked exceptions</strong> unless <code>rollbackFor</code>, <strong>commits if you swallow the exception</strong> unless you call <strong>setRollbackOnly()</strong>, and throws <strong>UnexpectedRollbackException</strong> if an inner participant marked the transaction rollback-only.</p>
+
+<h2>Detailed explanation</h2>
+<p>The decision is made by the <strong>TransactionInterceptor</strong> when the method finishes, based only on <strong>what it can see</strong>: did the method return, or did an exception come out?</p>
+<p><strong>Commit path.</strong> If the method returns normally, the interceptor calls <code>commit()</code> on the transaction manager. With JPA, Hibernate first <strong>flushes</strong> the persistence context: it runs dirty checking and sends pending INSERT, UPDATE and DELETE statements to the database. Constraint violations can therefore appear <strong>at commit</strong>, after your method's last line. Then the database <code>COMMIT</code> makes the changes durable and visible to others, and after-commit callbacks run.</p>
+<p><strong>Rollback path.</strong> If a <code>RuntimeException</code> or <code>Error</code> escapes, the interceptor calls <code>rollback()</code>; the database discards all changes from this transaction and the persistence context is cleared. A <strong>checked exception</strong> escaping <strong>commits</strong> by default, unless it matches <code>rollbackFor</code>.</p>
+<p><strong>Swallowed exceptions.</strong> If you catch an exception inside the transactional method and don't rethrow, the proxy sees a normal return and <strong>commits</strong>, potentially saving half of the work. If you need to handle the error but still roll back, call <code>TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()</code> (or <code>status.setRollbackOnly()</code> inside a TransactionTemplate).</p>
+<p><strong>Rollback-only and UnexpectedRollbackException.</strong> With REQUIRED propagation, an inner transactional method in another bean <strong>participates</strong> in the outer transaction. If it throws a runtime exception, its interceptor cannot roll back the shared physical transaction alone, so it marks it <strong>rollback-only</strong>. If the outer method catches the exception and returns normally, the outer commit finds the flag, rolls back instead, and throws <strong>UnexpectedRollbackException</strong> to tell the caller the commit didn't happen.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Method completes or throws.</li>
+  <li>Normal return: flush, then commit; check for rollback-only flag first.</li>
+  <li>Exception: evaluate rollback rules.</li>
+  <li>Outermost transaction: physical rollback; participant: mark rollback-only.</li>
+  <li>Rethrow the original exception to the caller.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public void register(User u) {
+    userRepo.save(u);
+    try {
+        mailService.sendWelcome(u);           // @Transactional REQUIRED, throws
+    } catch (MailException e) {
+        log.warn(&quot;mail failed&quot;);              // outer commit -&gt; UnexpectedRollbackException
+    }
+}
+
+@Transactional
+public void importPrices(List&lt;Price&gt; prices) {
+    try {
+        prices.forEach(priceRepo::save);
+        validator.check(prices);
+    } catch (ValidationException e) {
+        TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+        report.add(e);                        // handled, but nothing is committed
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Swallowing exceptions and committing partial data.</li>
+  <li>Catching an inner REQUIRED failure and being surprised by UnexpectedRollbackException.</li>
+  <li>Assuming the database is updated as each <code>save()</code> runs (writes happen at flush).</li>
+  <li>Not expecting constraint errors at commit time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The proxy wraps the call. If the method returns normally it commits; with JPA, Hibernate flushes pending changes as SQL first, then the database commit makes them durable. If an unchecked exception or Error escapes, it rolls back; a checked exception commits unless rollbackFor includes it. If I catch and swallow an exception, the proxy never sees it and commits, unless I call setRollbackOnly. And if an inner REQUIRED method marked the transaction rollback-only, the outer commit fails with UnexpectedRollbackException.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What causes UnexpectedRollbackException?</strong> A participant marked the shared transaction rollback-only but the outer method tried to commit.</li>
+  <li><strong>Force a flush earlier?</strong> <code>saveAndFlush()</code> or <code>entityManager.flush()</code> to detect errors inside the method.</li>
+  <li><strong>Make the inner failure harmless?</strong> Use REQUIRES_NEW or <code>noRollbackFor</code> for that exception.</li>
+</ul>
+</article>
+</body>
+</html>

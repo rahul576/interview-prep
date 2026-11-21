@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-282 · How do you test API integrations across multiple services?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-282" data-topic="Testing">
+<h1>How do you test API integrations across multiple services?</h1>
+<p class="ex-meta">Testing · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Combine <strong>consumer-driven contract tests</strong> (Pact or Spring Cloud Contract) to catch breaking API changes before deployment, <strong>integration tests</strong> with <strong>WireMock stubs derived from contracts or OpenAPI</strong>, <strong>schema compatibility checks</strong> for events, and a <strong>small end-to-end suite</strong> for critical journeys with controlled <strong>test data, correlation ids and tracing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Multi-service testing must answer two questions: does each service work correctly with its dependencies' <strong>real interfaces</strong>, and does the <strong>whole journey</strong> work once deployed? Relying only on end-to-end tests answers both slowly and unreliably, so the work is split into layers.</p>
+<p><strong>Contract tests:</strong> the consumer (order service) writes tests against a <strong>Pact</strong> mock describing the requests it sends and the response fields it relies on. The resulting contract is published to a <strong>Pact Broker</strong>. The provider (inventory service) verifies all consumer contracts in its own CI against its real code, using <strong>provider states</strong> to set up data. <code>can-i-deploy</code> blocks a deployment that would break a consumer. <strong>Spring Cloud Contract</strong> works similarly but contracts are typically written on the provider side, producing generated tests and <strong>WireMock stubs</strong> consumers download.</p>
+<p><strong>Integration tests per service:</strong> each service tests its HTTP clients against <strong>WireMock</strong> stubs that come from those contracts or the provider's <strong>OpenAPI</strong> spec, so stubs stay realistic, and uses Testcontainers for its own data stores.</p>
+<p><strong>Events and schemas:</strong> for Kafka, contracts are message pacts or schemas in a <strong>schema registry</strong> (Avro, Protobuf, JSON Schema) with <strong>backward compatibility</strong> enforced, so producers cannot remove a field consumers need. <strong>OpenAPI diff</strong> tools can also flag breaking REST changes in pull requests.</p>
+<p><strong>End-to-end tests:</strong> a handful of critical journeys (register, place order, pay, ship) run across deployed services in a test environment. They need <strong>controlled test data</strong> (seeded accounts, synthetic customers, cleanup), <strong>correlation ids</strong> propagated through every call, and <strong>distributed tracing</strong> so a failure can be traced to the service and span that broke instead of debugging blind.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Consumer tests generate contracts; publish to the broker.</li>
+  <li>Provider CI verifies contracts; deployment gated by <code>can-i-deploy</code>.</li>
+  <li>Services use contract-derived stubs in integration tests.</li>
+  <li>Schema registry enforces event compatibility.</li>
+  <li>After deployment, E2E journeys run with seeded data.</li>
+  <li>Failures investigated via correlation ids and traces.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Spring Cloud Contract (provider side): contracts/shouldReturnStock.yml
+request:
+  method: GET
+  url: /stock/SKU-1
+response:
+  status: 200
+  headers:
+    Content-Type: application/json
+  body:
+    sku: SKU-1
+    available: 5</code></pre>
+<pre><code class="language-bash"># Pact: gate deployment on verified contracts
+pact-broker can-i-deploy --pacticipant order-service --version &quot;$GIT_SHA&quot; --to-environment production</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Layer</th><th>Catches</th><th>Speed</th><th>Environment</th></tr></thead>
+<tbody>
+<tr><td>Contract tests</td><td>Breaking API changes</td><td>Fast</td><td>None shared</td></tr>
+<tr><td>Integration with stubs</td><td>Client logic, errors, timeouts</td><td>Medium</td><td>Local containers</td></tr>
+<tr><td>Schema checks</td><td>Event incompatibility</td><td>Fast</td><td>Registry</td></tr>
+<tr><td>End-to-end</td><td>Config, network, journey bugs</td><td>Slow</td><td>Deployed</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only end-to-end tests, slow and flaky with unclear failures.</li>
+  <li>Hand-written stubs that drift from the provider.</li>
+  <li>Contracts published but not used to gate deployments.</li>
+  <li>E2E tests sharing mutable data and breaking each other.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use layers. Consumer-driven contract tests with Pact or Spring Cloud Contract let each consumer publish the requests and responses it relies on, and the provider build verifies them, so breaking changes are caught before deployment. Within each service, integration tests use WireMock stubs generated from contracts or the OpenAPI spec, so they match reality. Event schemas are checked for backward compatibility in a schema registry. Then a small suite of end-to-end tests covers critical journeys like placing and paying for an order across deployed services, with controlled test data and correlation ids so failures can be traced through logs and distributed tracing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why contract tests over E2E alone?</strong> Faster, isolated, pinpoint which interface broke and run on every commit.</li>
+  <li><strong>What are provider states?</strong> Named setups the provider prepares before verifying an interaction.</li>
+  <li><strong>How do you manage E2E test data?</strong> Seeded synthetic accounts, unique ids per run and automated cleanup.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-209 · How do you define request mappings in Spring Boot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-209" data-topic="REST &amp; API Design">
+<h1>How do you define request mappings in Spring Boot?</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Annotate a class with <strong>@RestController</strong> and a base <strong>@RequestMapping</strong> path, map handler methods with <strong>@GetMapping/@PostMapping/@PutMapping/@PatchMapping/@DeleteMapping</strong>, and bind input with <strong>@PathVariable, @RequestParam, @RequestBody</strong> (plus <strong>@Valid</strong>) and <strong>@RequestHeader</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In Spring MVC a <strong>request mapping</strong> connects an HTTP method plus URL pattern to a Java method. <strong>@RestController</strong> combines <strong>@Controller</strong> and <strong>@ResponseBody</strong>, so whatever a method returns is serialised by an <strong>HttpMessageConverter</strong> (normally Jackson) into the response body instead of being treated as a view name. A class-level <strong>@RequestMapping(&quot;/api/v1/orders&quot;)</strong> sets the common prefix, and the method-level composed annotations such as <strong>@GetMapping(&quot;/{id}&quot;)</strong> narrow it by HTTP verb and sub-path. They are shortcuts for <code>@RequestMapping(method = RequestMethod.GET)</code>.</p>
+<p>Inputs are bound declaratively. <strong>@PathVariable</strong> takes a URI template segment that identifies a resource; <strong>@RequestParam</strong> reads query-string or form parameters, with <code>required</code> and <code>defaultValue</code> for optional filters and paging; <strong>@RequestBody</strong> deserialises the JSON body into a DTO, and adding <strong>@Valid</strong> triggers Bean Validation before your code runs; <strong>@RequestHeader</strong> reads headers such as an idempotency key or correlation id.</p>
+<p>Mappings can also be narrowed with <strong>consumes</strong> (the request <code>Content-Type</code> must match, otherwise 415) and <strong>produces</strong> (the response media type must match <code>Accept</code>, otherwise 406). When you need control over the status code and headers, return <strong>ResponseEntity&lt;T&gt;</strong>. A typical case is answering a POST with <strong>201 Created</strong> and a <code>Location</code> header.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>At startup <code>RequestMappingHandlerMapping</code> scans controllers and registers every mapping (path, method, consumes, produces, params, headers).</li>
+  <li>A request reaches the <code>DispatcherServlet</code>, which asks the handler mapping for the best match.</li>
+  <li>Argument resolvers bind path variables, parameters, headers and the body, converting types and running validation.</li>
+  <li>The method runs and returns a DTO or a <code>ResponseEntity</code>.</li>
+  <li>A message converter serialises the result in the negotiated media type.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestController
+@RequestMapping(path = &quot;/api/v1/orders&quot;, produces = MediaType.APPLICATION_JSON_VALUE)
+class OrderController {
+    private final OrderService service;
+    OrderController(OrderService service) { this.service = service; }
+
+    @GetMapping(&quot;/{id}&quot;)
+    OrderDto get(@PathVariable long id) { return service.find(id); }
+
+    @GetMapping
+    Page&lt;OrderDto&gt; list(@RequestParam(defaultValue = &quot;0&quot;) int page,
+                        @RequestParam(required = false) String status) {
+        return service.search(status, page);
+    }
+
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
+    ResponseEntity&lt;OrderDto&gt; create(@Valid @RequestBody CreateOrder req,
+                                    @RequestHeader(&quot;Idempotency-Key&quot;) String key) {
+        OrderDto dto = service.create(req, key);
+        URI location = URI.create(&quot;/api/v1/orders/&quot; + dto.id());
+        return ResponseEntity.created(location).body(dto);
+    }
+
+    @DeleteMapping(&quot;/{id}&quot;)
+    ResponseEntity&lt;Void&gt; delete(@PathVariable long id) {
+        service.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>@Controller</code> without <code>@ResponseBody</code> and getting &quot;template not found&quot; errors.</li>
+  <li>Forgetting <code>@Valid</code>, so validation annotations on the DTO are silently ignored.</li>
+  <li>Putting verbs in paths (<code>/getOrder</code>) instead of using the HTTP method.</li>
+  <li>Returning entities directly instead of DTOs, which leaks internal fields.</li>
+  <li>Two mappings that overlap and cause an &quot;ambiguous handler methods&quot; error at startup.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I put @RestController on the class so return values go straight to JSON, and a base path such as /api/v1/orders with @RequestMapping. Each method then gets a composed annotation like @GetMapping(&quot;/{id}&quot;) or @PostMapping. For inputs I use @PathVariable for the resource id, @RequestParam with defaults for filters and paging, @RequestBody with @Valid for the JSON payload, and @RequestHeader for things like an idempotency key. I can restrict content types with consumes and produces. When the status matters, like 201 for a create or 204 for a delete, I return ResponseEntity.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you return 201 Created with a Location header?</strong> <code>ResponseEntity.created(uri).body(dto)</code>, building the URI with <code>ServletUriComponentsBuilder.fromCurrentRequest().path(&quot;/{id}&quot;)</code>.</li>
+  <li><strong>What happens if consumes does not match?</strong> Spring returns 415 Unsupported Media Type; a produces mismatch gives 406.</li>
+  <li><strong>How do you version the API?</strong> Usually a path prefix like <code>/v1</code>; header or media-type versioning are alternatives.</li>
+</ul>
+</article>
+</body>
+</html>

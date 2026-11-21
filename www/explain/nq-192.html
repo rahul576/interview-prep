@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-192 · What are BeanFactoryPostProcessor and BeanPostProcessor?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-192" data-topic="Spring Framework">
+<h1>What are BeanFactoryPostProcessor and BeanPostProcessor?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>BeanFactoryPostProcessor</strong> modifies <strong>bean definitions (metadata) before any bean is instantiated</strong>, for example <code>PropertySourcesPlaceholderConfigurer</code>; a <strong>BeanPostProcessor</strong> modifies or replaces <strong>bean instances around initialisation</strong>, for example AOP proxy creation and <code>@Autowired</code> processing.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both are extension points of the container, but they work at different moments and on different things.</p>
+<p>A <strong>BeanFactoryPostProcessor (BFPP)</strong> runs <strong>once</strong>, after all bean definitions are loaded and <strong>before</strong> any regular bean is created. It receives the <code>ConfigurableListableBeanFactory</code> and can read and change <strong>definitions</strong>: change a scope, set property values, mark beans lazy, or resolve placeholders. Examples: <strong><code>PropertySourcesPlaceholderConfigurer</code></strong> replaces <code>${...}</code> placeholders with values from the Environment; <strong><code>ConfigurationClassPostProcessor</code></strong> parses <code>@Configuration</code>, <code>@ComponentScan</code>, <code>@Import</code> and <code>@Bean</code>. Its sub-interface <strong><code>BeanDefinitionRegistryPostProcessor</code></strong> can even <strong>register new definitions</strong>, which is how configuration classes and Spring Data repositories add beans.</p>
+<p>A <strong>BeanPostProcessor (BPP)</strong> runs for <strong>every bean instance</strong> that is created, with two hooks: <code>postProcessBeforeInitialization</code> and <code>postProcessAfterInitialization</code>. It can modify the object or <strong>return a different object</strong>, typically a proxy. Examples: <strong><code>AutowiredAnnotationBeanPostProcessor</code></strong> processes <code>@Autowired</code> and <code>@Value</code> injection; <strong><code>CommonAnnotationBeanPostProcessor</code></strong> handles <code>@PostConstruct</code>, <code>@PreDestroy</code> and <code>@Resource</code>; <strong><code>AnnotationAwareAspectJAutoProxyCreator</code></strong> and related auto-proxy creators wrap beans for <code>@Transactional</code>, <code>@Async</code>, <code>@Cacheable</code> and aspects; <code>ConfigurationPropertiesBindingPostProcessor</code> binds <code>@ConfigurationProperties</code>.</p>
+<p>Because BFPPs must exist before other beans, a <code>@Bean</code> method returning one should be <strong><code>static</code></strong>. Otherwise Spring must instantiate the enclosing configuration class early, which then misses BeanPostProcessor processing (such as <code>@Autowired</code> and <code>@Value</code>), and Spring logs a warning. Similarly, beans that a BPP depends on are created early and are not eligible for all post-processing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Load bean definitions.</li>
+  <li>Instantiate and run BeanDefinitionRegistryPostProcessors, then BeanFactoryPostProcessors.</li>
+  <li>Register BeanPostProcessors (instantiated early, ordered by <code>PriorityOrdered</code>/<code>Ordered</code>).</li>
+  <li>Create regular beans; each passes through all BPP before/after hooks.</li>
+  <li>BPPs may return proxies, which become the published beans.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Configuration
+class InfraConfig {
+    @Bean
+    static BeanFactoryPostProcessor lazyReports() {      // static!
+        return bf -&gt; {
+            for (String name : bf.getBeanNamesForType(ReportJob.class)) {
+                bf.getBeanDefinition(name).setLazyInit(true);
+            }
+        };
+    }
+}
+
+@Component
+class TimingBeanPostProcessor implements BeanPostProcessor {
+    public Object postProcessAfterInitialization(Object bean, String name) {
+        if (bean.getClass().isAnnotationPresent(Timed.class)) {
+            ProxyFactory pf = new ProxyFactory(bean);
+            pf.addAdvice((MethodInterceptor) inv -&gt; {
+                long t = System.nanoTime();
+                try { return inv.proceed(); }
+                finally { log.info(&quot;{} took {} µs&quot;, name, (System.nanoTime() - t) / 1000); }
+            });
+            return pf.getProxy();
+        }
+        return bean;
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>BeanFactoryPostProcessor</th><th>BeanPostProcessor</th></tr></thead>
+<tbody>
+<tr><td>Works on</td><td>Definitions</td><td>Instances</td></tr>
+<tr><td>When</td><td>Before beans are created</td><td>Around each bean's init</td></tr>
+<tr><td>Runs</td><td>Once</td><td>Per bean</td></tr>
+<tr><td>Example</td><td>Placeholder resolution</td><td>Proxies, @Autowired</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Non-static <code>@Bean</code> methods for BFPPs.</li>
+  <li>Calling <code>getBean()</code> inside a BFPP, which instantiates beans too early.</li>
+  <li>Forgetting to return the bean from a BPP (returning null).</li>
+  <li>Heavy logic in BPPs that runs for every bean and slows startup.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both are container extension points but act at different times. A BeanFactoryPostProcessor runs after definitions are loaded and before any bean is created, so it changes metadata: scope, property values or new definitions. PropertySourcesPlaceholderConfigurer and ConfigurationClassPostProcessor are examples. A BeanPostProcessor runs for each bean instance around initialisation, and it can return a different object, which is how Spring wraps beans in proxies for AOP, transactions and async. AutowiredAnnotationBeanPostProcessor and CommonAnnotationBeanPostProcessor handle @Autowired and @PostConstruct.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why static @Bean for a BFPP?</strong> So the enclosing configuration isn't created too early and skips post-processing.</li>
+  <li><strong>What is BeanDefinitionRegistryPostProcessor?</strong> A BFPP that can register new bean definitions.</li>
+  <li><strong>How are BPPs ordered?</strong> PriorityOrdered, then Ordered, then the rest.</li>
+</ul>
+</article>
+</body>
+</html>

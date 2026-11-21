@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-009 · Why is deep pagination slow in Elasticsearch, and what should you use instead?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-009" data-topic="Elasticsearch">
+<h1>Why is deep pagination slow in Elasticsearch, and what should you use instead?</h1>
+<p class="ex-meta">Elasticsearch · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With <strong><code>from + size</code></strong>, <strong>every shard must collect <code>from + size</code> hits</strong>, and the coordinator sorts <strong>shards × (from + size)</strong> entries, so cost grows with depth. That's why <strong><code>index.max_result_window</code> defaults to 10,000</strong>. Use <strong><code>search_after</code></strong> with a <strong>sort plus a tie-breaker</strong> and a <strong>point in time (PIT)</strong> for deep or infinite pagination and exports. <strong>Scroll</strong> is legacy and no longer recommended for deep pagination.</p>
+
+<h2>Detailed explanation</h2>
+<p>Elasticsearch searches are distributed. For page 1,000 with size 20 (<code>from = 19,980</code>), each of, say, 10 shards must find its top <strong>20,000</strong> results, ship them (sort values and ids) to the coordinating node, and the coordinator sorts <strong>200,000</strong> entries to return just 20. Memory and CPU grow linearly with depth on every shard, and with the number of shards. Deep pages become slow and can destabilise the cluster, which is why requests beyond <code>from + size &gt; 10,000</code> are rejected by default (<code>index.max_result_window</code>). Raising the limit just moves the problem.</p>
+<p><strong><code>search_after</code> (the recommended approach).</strong></p>
+<ul>
+  <li>Sort by a field plus a <strong>unique tie-breaker</strong>, so the order is total: <code>[{&quot;price&quot;: &quot;asc&quot;}, {&quot;_shard_doc&quot;: &quot;asc&quot;}]</code> with PIT, or a unique id field.</li>
+  <li>Each response returns <code>sort</code> values for the last hit. The next request passes them as <code>search_after</code>, so each shard only needs the next <code>size</code> documents after that key. The <strong>cost is constant per page</strong>.</li>
+  <li>Combine it with a <strong>point in time</strong> (<code>POST /index/_pit?keep_alive=1m</code>). A PIT freezes a consistent view of the index, so documents inserted or deleted between pages don't cause duplicates or skipped results. Pass the PIT id (and refresh it) with each request.</li>
+  <li>The limitation: no random jumping to page 500. It is next-page only, which fits infinite scroll and exports.</li>
+</ul>
+<p><strong>Scroll API.</strong> Keeps a search context open and walks through all results. It is still usable for one-off bulk exports or reindex-style jobs, but Elastic now recommends <strong>PIT plus search_after</strong> instead, even for exports. Scroll contexts hold resources and aren't meant for user-facing pagination.</p>
+<p><strong>UX design:</strong> most users never go past a few pages. Cap page numbers (show &quot;first 50 pages&quot;), and encourage refining filters. Use a <code>search_after</code> cursor for infinite scroll and <code>composite</code> aggregations for paging through buckets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open a PIT: <code>POST /products/_pit?keep_alive=2m</code> returns its id.</li>
+  <li>First page: query plus sort with a tie-breaker, <code>size: 20</code>, and the PIT.</li>
+  <li>Read the <code>sort</code> array of the last hit.</li>
+  <li>Next page: the same query with <code>search_after: &lt;last sort&gt;</code> and the latest PIT id.</li>
+  <li>Repeat. When finished, <code>DELETE /_pit</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">POST /products/_pit?keep_alive=2m
+
+GET /_search
+{
+  &quot;size&quot;: 20,
+  &quot;query&quot;: { &quot;match&quot;: { &quot;name&quot;: &quot;running shoes&quot; } },
+  &quot;pit&quot;:   { &quot;id&quot;: &quot;46ToAwMDaWR…&quot;, &quot;keep_alive&quot;: &quot;2m&quot; },
+  &quot;sort&quot;:  [ { &quot;_score&quot;: &quot;desc&quot; }, { &quot;_shard_doc&quot;: &quot;asc&quot; } ],
+  &quot;search_after&quot;: [ 7.42, 18402 ]
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Deep pages</th><th>Consistency</th><th>Random page access</th><th>Use for</th></tr></thead>
+<tbody>
+<tr><td>from + size</td><td>Expensive, 10k cap</td><td>No</td><td>Yes</td><td>First few pages</td></tr>
+<tr><td>search_after + PIT</td><td>Constant cost</td><td>Yes</td><td>No</td><td>Infinite scroll, exports</td></tr>
+<tr><td>Scroll</td><td>OK</td><td>Snapshot</td><td>No</td><td>Legacy bulk export</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising <code>max_result_window</code> to 1,000,000.</li>
+  <li><code>search_after</code> without a unique tie-breaker, which skips or duplicates documents with equal sort values.</li>
+  <li>Using scroll for user-facing pagination and leaking contexts.</li>
+  <li>Not closing PITs or scrolls.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With from and size, every shard has to collect from plus size top documents and the coordinating node merges them all, so cost grows with the page depth and the shard count. That's why index.max_result_window defaults to 10,000. For deep pagination or infinite scroll I use search_after: sort by the relevant field plus a unique tie-breaker, and pass the last hit's sort values to get the next page, at constant cost. I pair it with a point in time so the view stays consistent between pages. For bulk exports PIT with search_after also works, and scroll is now legacy and not meant for users paging.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Infinite scroll on product search?</strong> A <code>search_after</code> cursor token returned to the client, plus a PIT, with page jumping disabled.</li>
+  <li><strong>Why a tie-breaker?</strong> Equal sort values make the order ambiguous, which skips or repeats documents.</li>
+  <li><strong>Showing &quot;page 37 of 120&quot;?</strong> Allow it only within the window, or show approximate counts (<code>track_total_hits</code> up to 10k).</li>
+</ul>
+</article>
+</body>
+</html>

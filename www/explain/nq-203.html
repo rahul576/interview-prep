@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-203 · Why are transactions needed when multiple database operations must succeed or fail together?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-203" data-topic="Spring Framework">
+<h1>Why are transactions needed when multiple database operations must succeed or fail together?</h1>
+<p class="ex-meta">Spring Framework · scenario · levels entry</p>
+
+<h2>In one line</h2>
+<p>Transactions give <strong>atomicity</strong>: several related operations either <strong>all succeed or all roll back</strong>, so a failure never leaves <strong>partial, inconsistent data</strong> (a debit without its credit); they also provide <strong>consistency, isolation and durability (ACID)</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many business operations are made of multiple database writes that only make sense <strong>together</strong>. In a <strong>money transfer</strong>, you debit account A and credit account B. If the application crashes, the network drops, or the second update hits a constraint after the first one succeeded, money has disappeared. In an <strong>order</strong>, you insert the order, insert its lines and reduce stock; half of that leaves orders without lines or stock reduced for orders that don't exist.</p>
+<p>A transaction groups these writes into one unit with <strong>ACID</strong> guarantees:</p>
+<ul>
+  <li><strong>Atomicity</strong>: all or nothing. If anything fails before commit, the database undoes every change in the transaction.</li>
+  <li><strong>Consistency</strong>: constraints (foreign keys, unique keys, checks) hold at commit, so the database moves from one valid state to another.</li>
+  <li><strong>Isolation</strong>: concurrent transactions don't see each other's intermediate states and don't interfere, to a degree set by the <strong>isolation level</strong> (read committed, repeatable read, serializable).</li>
+  <li><strong>Durability</strong>: once committed, the change survives crashes, thanks to the write-ahead log.</li>
+</ul>
+<p>In Spring you mark the <strong>service method</strong> that represents the business operation with <strong><code>@Transactional</code></strong>. All repository calls inside share one connection and commit together at the end; a runtime exception rolls everything back.</p>
+<p>Transactions have limits: they only cover <strong>one database</strong>. A call to an external API, an email or a Kafka message inside the method <strong>cannot be rolled back</strong> with it. For those, call the external system after commit, use the <strong>outbox pattern</strong>, idempotency keys, or a <strong>saga</strong> with compensating actions. Also keep transactions short, because they hold locks and connections.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Begin transaction.</li>
+  <li>Execute each write; the database records changes in its log and holds locks.</li>
+  <li>If all succeed, commit: changes become durable and visible.</li>
+  <li>If any fails, roll back: all changes are undone.</li>
+  <li>Locks are released; the connection returns to the pool.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+public class TransferService {
+    @Transactional
+    public void transfer(long fromId, long toId, BigDecimal amount) {
+        Account from = accounts.findByIdForUpdate(fromId);
+        Account to = accounts.findByIdForUpdate(toId);
+        from.debit(amount);          // throws InsufficientFunds (runtime) -&gt; rollback
+        to.credit(amount);
+    }                                // commit: both changes or neither
+}</code></pre>
+<pre><code class="language-sql">BEGIN;
+UPDATE account SET balance = balance - 100 WHERE id = 1;
+UPDATE account SET balance = balance + 100 WHERE id = 2;
+COMMIT;   -- or ROLLBACK on any error</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running related writes without a transaction (auto-commit per statement).</li>
+  <li>Calling external APIs inside the transaction and assuming they roll back too.</li>
+  <li>Long transactions that hold locks while waiting for users or networks.</li>
+  <li>Catching exceptions and committing partial work.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Because a business operation often consists of several writes that only make sense together. In a money transfer I debit one account and credit another; if the second update fails after the first succeeded, money disappears. A transaction gives atomicity, both commit or both roll back, so the database never shows a half-done operation. It also gives consistency, isolation from concurrent users and durability once committed. In Spring I put @Transactional on the service method, for example one that saves an order, its lines and reduces stock. External calls aren't covered, so I handle them after commit or with an outbox.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>External API call inside the transaction?</strong> It can't be rolled back; call it after commit, use an outbox or a saga.</li>
+  <li><strong>What is an isolation level?</strong> How much concurrent transactions can see of each other; trades consistency for concurrency.</li>
+  <li><strong>Multiple databases?</strong> XA/JTA or, more commonly, sagas with compensation.</li>
+</ul>
+</article>
+</body>
+</html>

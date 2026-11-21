@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-233 · How would you prevent inconsistent states during distributed transactions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-233" data-topic="Microservices">
+<h1>How would you prevent inconsistent states during distributed transactions?</h1>
+<p class="ex-meta">Microservices · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Avoid <strong>2PC</strong> and <strong>distributed locks</strong>; instead keep invariants inside one service where possible, and use <strong>sagas with compensations</strong>, <strong>outbox/CDC</strong> for reliable events, <strong>idempotency keys</strong>, <strong>explicit intermediate states with timeouts</strong>, and <strong>reconciliation and monitoring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The best distributed transaction is the one you do not need. Start with <strong>service boundaries</strong>: if an invariant must always hold (an order's lines and total), keep that data in one service and one local ACID transaction. Splitting tightly coupled data across services creates the problem in the first place.</p>
+<p>When a business process truly spans services, use a <strong>saga</strong>: a sequence of local transactions, each publishing an event or replying to an orchestrator, with a <strong>compensating action</strong> for each step (refund for charge, release for reservation). Model the saga as an explicit <strong>state machine</strong> with intermediate states such as PENDING_PAYMENT or AWAITING_STOCK. Users and support can see these states, and every step has a <strong>timeout</strong>, so a step that never answers leads to compensation instead of an order stuck forever. Order steps so that the hardest-to-undo action (shipping, sending money out) happens last; this is the idea of a <strong>pivot transaction</strong>.</p>
+<p>Messages must be <strong>reliable</strong> (transactional outbox or CDC) and handlers <strong>idempotent</strong>, because retries and redeliveries are guaranteed to happen. Use idempotency keys for external APIs and a processed-message table for consumers. Sagas lack isolation, so other transactions may see intermediate states; counter that with <strong>semantic locks</strong> (a PENDING flag that blocks conflicting actions), commutative updates or rereading values before committing.</p>
+<p>Finally, accept that something will still go wrong. Add <strong>correlation ids</strong>, dashboards of sagas per state and age, alerts on stuck ones, and <strong>reconciliation jobs</strong> that compare systems (for example, payments versus orders) and repair or escalate differences.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Design boundaries so most invariants are local.</li>
+  <li>For cross-service flows, define saga steps, compensations and the pivot step.</li>
+  <li>Persist saga state; publish commands/events via outbox.</li>
+  <li>Make every handler idempotent; dedupe by message id.</li>
+  <li>Add timeouts per step, triggering compensation.</li>
+  <li>Monitor states and run periodic reconciliation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Order saga (orchestrated)
+PENDING -&gt; reserve stock -&gt; STOCK_RESERVED
+        -&gt; charge payment -&gt; PAID          (pivot)
+        -&gt; create shipment -&gt; CONFIRMED
+Failure at charge -&gt; release stock -&gt; CANCELLED
+No reply in 30 s  -&gt; treat as failure -&gt; compensate</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using 2PC across microservices and coupling availability.</li>
+  <li>Compensations that are not idempotent.</li>
+  <li>No timeouts, so sagas hang in PENDING.</li>
+  <li>Ignoring lack of isolation between concurrent sagas.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I try not to need distributed transactions by drawing boundaries so each invariant lives in one service. Where a process spans services, I use a saga: local transactions with compensations, modelled as a state machine with explicit states like PENDING_PAYMENT and timeouts on every step. Events go out through an outbox, all handlers are idempotent with idempotency keys or a processed-messages table, and irreversible steps come last. Then I add observability: correlation ids, dashboards of stuck sagas and reconciliation jobs that detect and repair mismatches. I accept eventual consistency instead of 2PC or distributed locks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you design idempotency for a payment API?</strong> Client-supplied idempotency key stored with the result under a unique constraint; repeats return the stored response.</li>
+  <li><strong>What if a compensation fails?</strong> Retry it with backoff; after limits, park it and alert for manual handling.</li>
+  <li><strong>Orchestration or choreography?</strong> Orchestration for long, branching flows; choreography for short ones.</li>
+</ul>
+</article>
+</body>
+</html>

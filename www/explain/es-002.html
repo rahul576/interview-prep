@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-002 · What are mappings and analyzers? Explain the difference between text and keyword fields.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-002" data-topic="Elasticsearch">
+<h1>What are mappings and analyzers? Explain the difference between text and keyword fields.</h1>
+<p class="ex-meta">Elasticsearch · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>mapping</strong> is the index <strong>schema</strong> (field names and types). An <strong>analyzer</strong> (<strong>character filters + tokenizer + token filters</strong>) turns <code>text</code> into searchable terms. <strong><code>text</code></strong> fields are <strong>analysed for full-text search</strong>, while <strong><code>keyword</code></strong> fields keep the <strong>exact value</strong> for <strong>filters, sorting and aggregations</strong>. Map both with a <strong>multi-field</strong> when you need both, and prefer <strong>explicit mappings</strong> to dynamic ones.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Mappings.</strong> These declare each field's type: <code>text</code>, <code>keyword</code>, <code>long</code>, <code>date</code>, <code>boolean</code>, <code>nested</code>, <code>dense_vector</code>, and so on. Elasticsearch can <strong>dynamically map</strong> new fields by guessing (a JSON string becomes <code>text</code> plus a <code>.keyword</code> sub-field). That's handy in development, but risky in production. Guesses can be wrong (a zip code becomes a number), the first document &quot;wins&quot; the type, and arbitrary keys can cause a <strong>mapping explosion</strong> of thousands of fields, which bloats the cluster state (there is a default limit of 1000 fields per index). Use explicit mappings, <strong>index templates</strong>, and <code>dynamic: strict</code> or <code>false</code>. An existing field's type <strong>can't be changed</strong> in place. You reindex.</p>
+<p><strong>Analyzers</strong> run at index time (and usually at query time on the query string):</p>
+<ol>
+  <li><strong>Character filters</strong>, such as stripping HTML or mapping characters.</li>
+  <li>A <strong>tokenizer</strong> splits text into tokens (<code>standard</code>, <code>whitespace</code>, <code>ngram</code>).</li>
+  <li><strong>Token filters</strong> modify tokens: <code>lowercase</code>, <code>stop</code>, <code>stemmer</code> (running becomes run), <code>synonym</code>, <code>asciifolding</code>.</li>
+</ol>
+<p>The <code>standard</code> analyzer (lowercase plus Unicode word splitting) is the default. Language analyzers (<code>english</code>) add stemming and stop words.</p>
+<p><strong><code>text</code> vs <code>keyword</code>:</strong></p>
+<ul>
+  <li><code>&quot;Order Shipped To Pune&quot;</code> as <strong>text</strong> becomes <code>[order, shipped, to, pune]</code>. <code>match</code> queries find &quot;shipped&quot; and relevance is scored.</li>
+  <li>As <strong>keyword</strong> it stays the single exact term <code>&quot;Order Shipped To Pune&quot;</code>. It suits <code>term</code> filters, sorting and <code>terms</code> aggregations. It is case-sensitive unless you add a <strong>normalizer</strong>.</li>
+</ul>
+<p>Use keyword for ids, emails, status codes, tags and enums. Use text for names, titles, descriptions and messages. A <strong>multi-field</strong> gives both: <code>name</code> (text) and <code>name.raw</code> (keyword).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define an index template with the mappings and analyzers.</li>
+  <li>Indexing: text fields go through the analyzer into terms in the inverted index. Keyword fields go in as a single term plus doc values.</li>
+  <li><code>match</code> analyses the query text the same way and finds the terms.</li>
+  <li><code>term</code> does <strong>not</strong> analyse the input, so it is an exact lookup.</li>
+  <li>To change a mapping: create a new index and use <code>_reindex</code> plus an alias swap.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">PUT /customers
+{
+  &quot;settings&quot;: { &quot;analysis&quot;: { &quot;normalizer&quot;: { &quot;lc&quot;: { &quot;type&quot;: &quot;custom&quot;, &quot;filter&quot;: [&quot;lowercase&quot;] } } } },
+  &quot;mappings&quot;: {
+    &quot;dynamic&quot;: &quot;strict&quot;,
+    &quot;properties&quot;: {
+      &quot;name&quot;:   { &quot;type&quot;: &quot;text&quot;, &quot;analyzer&quot;: &quot;english&quot;,
+                  &quot;fields&quot;: { &quot;raw&quot;: { &quot;type&quot;: &quot;keyword&quot; } } },
+      &quot;email&quot;:  { &quot;type&quot;: &quot;keyword&quot;, &quot;normalizer&quot;: &quot;lc&quot; },
+      &quot;status&quot;: { &quot;type&quot;: &quot;keyword&quot; },
+      &quot;joined&quot;: { &quot;type&quot;: &quot;date&quot; }
+    }
+  }
+}
+
+GET /_analyze
+{ &quot;analyzer&quot;: &quot;english&quot;, &quot;text&quot;: &quot;Running Shoes&quot; }      // -&gt; [&quot;run&quot;, &quot;shoe&quot;]</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>text</th><th>keyword</th></tr></thead>
+<tbody>
+<tr><td>Analysed</td><td>Yes</td><td>No (optional normalizer)</td></tr>
+<tr><td>Query type</td><td>match, match_phrase</td><td>term, terms, range, prefix</td></tr>
+<tr><td>Sort/aggregate</td><td>No (by default)</td><td>Yes (doc values)</td></tr>
+<tr><td>Examples</td><td>Title, description</td><td>Status, email, SKU</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A <code>term</code> query on a text field: &quot;Shipped&quot; won't match the stored term &quot;shipped&quot;.</li>
+  <li>Aggregating on text fields (disabled by default, and fielddata is memory-hungry).</li>
+  <li>Leaving dynamic mapping on for user-generated keys.</li>
+  <li>Expecting a mapping type change without a reindex.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A mapping is the schema: it defines field types. A text field is analysed for full-text search. An analyzer, which is a tokenizer plus token filters, splits it into lowercase terms and may remove stop words or apply stemming, so 'Running Shoes' can match 'run'. A keyword field is stored as a single exact value and is used for exact filters, sorting and aggregations, such as status, email or SKU. Often I map a field as both with a multi-field. In production I use explicit mappings and templates rather than dynamic mapping, because guessed types and mapping explosions cause real problems, and changing a type means reindexing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a term query on a text field return nothing?</strong> The stored terms are analysed (lowercased or stemmed), and <code>term</code> doesn't analyse the input.</li>
+  <li><strong>Case-insensitive keyword?</strong> Use a <code>normalizer</code> with <code>lowercase</code>.</li>
+  <li><strong>Autocomplete field?</strong> <code>search_as_you_type</code>, edge n-grams, or the completion suggester.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-302 · How do @Qualifier and @Primary work when there are multiple beans of the same type?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-302" data-topic="Spring Framework">
+<h1>How do @Qualifier and @Primary work when there are multiple beans of the same type?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>With several beans of one type, injection by type fails with <strong>NoUniqueBeanDefinitionException</strong>; <strong>@Primary</strong> marks the <strong>default</strong> candidate, <strong>@Qualifier</strong> picks a <strong>specific bean</strong> at the injection point (and <strong>overrides @Primary</strong>), and you can inject a <strong>List or Map</strong> of all implementations for strategy patterns.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spring resolves dependencies <strong>by type</strong> first. If an interface <code>PaymentProvider</code> has implementations <code>StripeProvider</code> and <code>PaypalProvider</code>, a constructor parameter <code>PaymentProvider provider</code> is ambiguous and startup fails with <code>NoUniqueBeanDefinitionException: expected single matching bean but found 2</code>.</p>
+<p>Ways to resolve it:</p>
+<ul>
+  <li><strong>@Primary</strong> on one bean (or <code>@Bean</code> method) declares it the default whenever a single candidate is needed and nothing more specific is said. Typical use: one main <code>DataSource</code> or <code>ObjectMapper</code>, others for special cases.</li>
+  <li><strong>@Qualifier(&quot;paypalProvider&quot;)</strong> at the injection point chooses by bean name or qualifier value. A qualifier is more specific, so it <strong>wins over @Primary</strong>. You can create <strong>custom qualifier annotations</strong> (meta-annotated with <code>@Qualifier</code>) for type safety instead of strings.</li>
+  <li><strong>Parameter name fallback</strong>: if the parameter name matches a bean name, Spring uses it (this relies on the <code>-parameters</code> compiler flag, which Boot's build plugins enable). Explicit qualifiers are clearer.</li>
+  <li><strong>Collections</strong>: inject <code>List&lt;PaymentProvider&gt;</code> to get all of them, ordered by <code>@Order</code> or <code>Ordered</code>, or <code>Map&lt;String, PaymentProvider&gt;</code> keyed by bean name. This is the cleanest base for the <strong>strategy pattern</strong>: pick an implementation at runtime from a request field without <code>if/else</code> chains, and adding a new provider means just adding a new bean.</li>
+  <li><code>ObjectProvider&lt;T&gt;</code> offers <code>getIfUnique()</code>, <code>orderedStream()</code> and lazy access.</li>
+  <li>Spring 6.2 also added <code>@Fallback</code>, the inverse of <code>@Primary</code>, marking a bean to use only when no other candidate exists.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring collects all candidate beans of the required type.</li>
+  <li>If exactly one, inject it.</li>
+  <li>If several: apply qualifiers at the injection point, then <code>@Primary</code>, then <code>@Fallback</code> and parameter-name matching.</li>
+  <li>Still ambiguous: throw <code>NoUniqueBeanDefinitionException</code>.</li>
+  <li>For collection types, inject all candidates.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface PaymentProvider { String code(); Receipt charge(Order o); }
+
+@Component @Primary
+class StripeProvider implements PaymentProvider { public String code() { return &quot;STRIPE&quot;; } ... }
+
+@Component @Qualifier(&quot;paypal&quot;)
+class PaypalProvider implements PaymentProvider { public String code() { return &quot;PAYPAL&quot;; } ... }
+
+@Service
+class RefundService {
+    RefundService(PaymentProvider defaultProvider,                 // Stripe via @Primary
+                  @Qualifier(&quot;paypal&quot;) PaymentProvider paypal) { ... }
+}
+
+@Service
+class CheckoutService {
+    private final Map&lt;String, PaymentProvider&gt; byCode;
+    CheckoutService(List&lt;PaymentProvider&gt; providers) {
+        byCode = providers.stream().collect(Collectors.toMap(PaymentProvider::code, p -&gt; p));
+    }
+    Receipt pay(Order o, String method) {
+        PaymentProvider p = Optional.ofNullable(byCode.get(method))
+            .orElseThrow(() -&gt; new UnsupportedPaymentException(method));
+        return p.charge(o);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Marking more than one bean <code>@Primary</code> for the same type.</li>
+  <li>Typos in string qualifiers that only fail at startup; prefer custom qualifier annotations.</li>
+  <li>Long <code>if/else</code> or <code>switch</code> on types instead of a map of strategies.</li>
+  <li>Renaming a class and breaking name-based injection.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;If two beans implement the same interface and I inject by type, Spring throws NoUniqueBeanDefinitionException because the choice is ambiguous. @Primary marks one bean as the default. @Qualifier at the injection point picks a specific bean by name or by a custom qualifier annotation, and it takes precedence over @Primary. When I need all of them, I inject a List or a Map from bean name to bean, which is perfect for the strategy pattern, for example choosing a payment provider at runtime from a field in the request, and adding a provider is just adding a bean.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you choose a strategy at runtime based on a request field?</strong> Build a map from a key each implementation exposes, look it up, fail clearly if missing.</li>
+  <li><strong>How is the List ordered?</strong> By <code>@Order</code> or <code>Ordered</code>, otherwise registration order.</li>
+  <li><strong>Qualifier on @Bean methods?</strong> Yes, put <code>@Qualifier</code> next to <code>@Bean</code>.</li>
+</ul>
+</article>
+</body>
+</html>

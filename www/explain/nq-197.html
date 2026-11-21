@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-197 · How does Spring AOP work through proxy objects?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-197" data-topic="Spring Framework">
+<h1>How does Spring AOP work through proxy objects?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Spring AOP wraps a matching bean in a <strong>proxy</strong> during creation (an auto-proxy <strong>BeanPostProcessor</strong>); callers receive the proxy, which runs the <strong>advice chain</strong> and then <strong>delegates to the target</strong>, so only calls <strong>through the proxy</strong> are intercepted, and <strong>self-invocation, private and final methods</strong> bypass it.</p>
+
+<h2>Detailed explanation</h2>
+<p>When the container creates a bean, an auto-proxy creator such as <code>AnnotationAwareAspectJAutoProxyCreator</code> (a <strong>BeanPostProcessor</strong>) checks, in <code>postProcessAfterInitialization</code>, whether any <strong>advisor</strong> applies to it: your <code>@Aspect</code> pointcuts, <code>@Transactional</code>, <code>@Cacheable</code>, <code>@Async</code>, method security. If so, it does not publish the bean itself. It creates a <strong>proxy</strong> that either implements the same interfaces (<strong>JDK dynamic proxy</strong>) or <strong>subclasses</strong> the class (<strong>CGLIB</strong>, Spring Boot's default), holds a reference to the real <strong>target</strong>, and registers that proxy in the container. Every other bean that injects it receives the proxy.</p>
+<p>When a caller invokes a method, the proxy builds a <strong>chain of interceptors</strong> (MethodInterceptors) for that method: for example security check, then transaction interceptor, then your logging advice. Each interceptor does its &quot;before&quot; work and calls <code>proceed()</code>, the last one invokes the real method on the target, and control unwinds back through the chain for &quot;after&quot; work such as commit or logging the result.</p>
+<p>The consequences follow directly from the design:</p>
+<ul>
+  <li><strong>Self-invocation</strong>: inside the target, <code>this.otherMethod()</code> is a plain Java call on the target object, not the proxy, so advice on <code>otherMethod</code> does not run.</li>
+  <li><strong>Private methods</strong> cannot be overridden or delegated, so they are never intercepted. <strong>Final methods</strong>, and with CGLIB <strong>final classes</strong>, cannot be overridden either.</li>
+  <li><strong>Static methods</strong> and <strong>objects created with <code>new</code></strong> are not proxied.</li>
+  <li>Code in <code>@PostConstruct</code> runs before the proxy exists.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Bean is instantiated and initialised.</li>
+  <li>Auto-proxy creator finds applicable advisors.</li>
+  <li>It creates a JDK or CGLIB proxy around the target.</li>
+  <li>The proxy is registered and injected everywhere.</li>
+  <li>Method call: proxy runs interceptor chain, then calls the target, then unwinds.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+public class ReportService {
+    @Cacheable(&quot;reports&quot;)
+    public Report load(long id) { return expensiveQuery(id); }
+
+    public List&lt;Report&gt; loadAll(List&lt;Long&gt; ids) {
+        return ids.stream().map(this::load).toList();   // self-invocation: no caching!
+    }
+}
+
+// Fix: move load() to another bean, or call through the proxy
+@Service
+class ReportFacade {
+    private final ReportService reports;               // proxy
+    ReportFacade(ReportService reports) { this.reports = reports; }
+    List&lt;Report&gt; loadAll(List&lt;Long&gt; ids) { return ids.stream().map(reports::load).toList(); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting <code>this.method()</code> to trigger advice.</li>
+  <li>Annotating private or final methods.</li>
+  <li>Comparing <code>getClass()</code> of a bean with its declared class (CGLIB proxies are subclasses).</li>
+  <li>Thinking advice runs for objects created with <code>new</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When a bean matches a pointcut, an auto-proxy BeanPostProcessor wraps it in a proxy that implements the same interfaces or subclasses the class, and that proxy is what other beans receive. When a caller invokes a method, the proxy runs the chain of applicable advice, like opening a transaction or logging, then calls the real method on the target, and runs the after-advice on the way back. So only calls coming through the proxy are intercepted: self-invocation with this bypasses advice, and private and final methods can't be advised.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Work around self-invocation?</strong> Split into another bean, inject a self proxy with <code>@Lazy</code>, use <code>AopContext.currentProxy()</code> with <code>exposeProxy</code>, or AspectJ weaving.</li>
+  <li><strong>How to tell if a bean is proxied?</strong> <code>AopUtils.isAopProxy(bean)</code>.</li>
+  <li><strong>Order of multiple advisors?</strong> By <code>@Order</code>/<code>Ordered</code>; lower values run first (outermost).</li>
+</ul>
+</article>
+</body>
+</html>

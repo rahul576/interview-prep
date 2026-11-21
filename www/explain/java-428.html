@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-428 · After a release, memory usage of a Java service keeps growing until pods restart every few hours. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-428" data-topic="Troubleshooting">
+<h1>After a release, memory usage of a Java service keeps growing until pods restart every few hours. What do you do?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Mitigate first</strong> by rolling back (which also confirms the release is the cause), then <strong>separate heap growth from native growth</strong> with GC metrics and <strong>Native Memory Tracking</strong>, compare <strong>heap dumps over time</strong> in Eclipse MAT, <strong>diff the release</strong> for unbounded caches, listeners, ThreadLocals or library upgrades, and add <strong>memory alerts and soak tests</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pods restarting every few hours with steadily rising memory is a classic leak, and the timing points to the release. Restarts are themselves a symptom: each one drops in-flight requests and cold-starts caches.</p>
+<p><strong>Mitigation:</strong> roll back. If memory becomes flat again, the release is confirmed as the cause and you can investigate calmly on a canary or staging. If rollback is impossible, temporarily raise limits or schedule controlled restarts while investigating.</p>
+<p><strong>Heap or native?</strong> Look at <strong>old-generation heap used after GC</strong> (or &quot;live data set&quot;). If the floor after each GC keeps rising, objects are being retained: a <strong>heap leak</strong>, which eventually yields <code>OutOfMemoryError: Java heap space</code> or GC thrashing. If heap after GC is flat but <strong>container RSS</strong> keeps rising, the leak is <strong>outside the heap</strong>: enable NMT and compare <code>summary.diff</code> snapshots to see whether threads, Metaspace (class loader leak, dynamic proxy generation), direct buffers or &quot;Internal/Other&quot; grow. Growth invisible to NMT suggests malloc fragmentation or a native library leak.</p>
+<p><strong>Heap leak analysis:</strong> take two or three <strong>heap dumps</strong> some time apart (<code>jcmd &lt;pid&gt; GC.heap_dump</code>, preferably on a canary pod since dumps pause the JVM and contain sensitive data), and open them in <strong>Eclipse MAT</strong>. Use the <strong>leak suspects report</strong>, the <strong>dominator tree</strong> and <strong>path to GC roots</strong> to see which objects retain the most memory and who holds them. Comparing histograms between dumps shows which classes keep growing. <code>-XX:+HeapDumpOnOutOfMemoryError</code> captures one automatically.</p>
+<p><strong>Typical culprits in a release diff:</strong> a <code>HashMap</code> used as a cache without eviction (use Caffeine with size and TTL), listeners or callbacks registered per request and never removed, <code>ThreadLocal</code> values not cleared on pooled threads, high-cardinality <strong>metric tags</strong> (Micrometer creating a meter per user id), unclosed streams or result sets, and <strong>library upgrades</strong> that changed defaults (an HTTP client connection pool, a driver statement cache).</p>
+<p><strong>Prevent recurrence:</strong> alert on heap-after-GC trend and RSS approaching the limit, and run a <strong>soak test</strong> of several hours in the pipeline for releases.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Roll back; confirm memory stabilises.</li>
+  <li>Check heap after GC vs RSS to classify the leak.</li>
+  <li>Heap: dumps over time → MAT dominator tree and GC root paths.</li>
+  <li>Native: NMT baseline and diffs; check threads, Metaspace, direct memory.</li>
+  <li>Diff the release for caches, listeners, ThreadLocals, meters, upgrades.</li>
+  <li>Fix, verify with a soak test, add alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># On a canary pod: two heap dumps 30 minutes apart
+jcmd 1 GC.heap_dump /tmp/heap-1.hprof
+sleep 1800
+jcmd 1 GC.heap_dump /tmp/heap-2.hprof
+
+# Quick class histogram comparison without full dumps
+jcmd 1 GC.class_histogram | head -15</code></pre>
+<pre><code class="language-text">MAT dominator tree (heap-2):
+  com.shop.pricing.PriceService  1.4 GB retained
+    └─ java.util.HashMap &quot;priceCache&quot;   12,480,000 entries
+Cause: cache added in release 4.12 with no eviction; key includes request timestamp</code></pre>
+<pre><code class="language-java">// Fix: bounded cache
+Cache&lt;String, Price&gt; priceCache = Caffeine.newBuilder()
+    .maximumSize(50_000).expireAfterWrite(Duration.ofMinutes(10)).build();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Simply raising memory limits, which only delays the restarts.</li>
+  <li>Taking a single heap dump; growth needs comparison over time.</li>
+  <li>Assuming every leak is in the heap and ignoring RSS and NMT.</li>
+  <li>Dumping heaps on busy production pods without considering pauses and sensitive data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Because it started with a release, I first roll back, which stops the restarts and confirms the cause. Then I check whether it's heap or native: if old-gen usage after GC keeps rising, it's a heap leak; if RSS grows while the heap is flat, I use Native Memory Tracking diffs. For a heap leak I take two heap dumps some time apart on a canary and compare them in Eclipse MAT, using the dominator tree and paths to GC roots. Then I diff the release for unbounded caches, listeners, ThreadLocals, high-cardinality metrics or library upgrades. After the fix I add memory-trend alerts and a soak test in the pipeline.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you suspect a library upgrade?</strong> When the dominant objects are library classes, or the diff has no relevant code but dependency versions changed.</li>
+  <li><strong>Why heap after GC rather than heap used?</strong> Heap used is sawtooth; the floor after GC shows retained live data.</li>
+  <li><strong>What is a class loader leak?</strong> Old class loaders retained by references, so Metaspace grows on redeploys or dynamic class generation.</li>
+</ul>
+</article>
+</body>
+</html>

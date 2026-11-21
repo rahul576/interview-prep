@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-038 · Your agent needs write access to a production database. How do you design this safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-038" data-topic="AI Agents &amp; AIOps">
+<h1>Your agent needs write access to a production database. How do you design this safely?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Never give a generic <strong>execute-SQL write tool</strong>; expose <strong>specific operations as tools</strong> with <strong>parameterised queries</strong>, a <strong>least-privilege database role</strong>, <strong>validation and business rules in code</strong>, <strong>approval and row limits</strong> for bulk or destructive changes, <strong>transactions, audit columns and reversible changes</strong>, and <strong>staging tests with realistic data</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A free-form SQL tool with write access means a single hallucinated or injected statement, an <code>UPDATE</code> without <code>WHERE</code>, a <code>DELETE</code> on the wrong table, a <code>DROP</code>, could damage data at scale in milliseconds. And because agents read untrusted content, an attacker might steer the model toward exactly such a query. So the principle is: <strong>the model chooses intents; code performs writes</strong>.</p>
+<p><strong>Specific tools</strong>: write operations are exposed as narrow, task-shaped tools such as <code>update_customer_address(customer_id, address)</code> or <code>cancel_order(order_id, reason)</code>, implemented in application code with <strong>parameterised queries</strong> or the existing service layer. Better still, call the <strong>existing business API</strong> that humans use, so all domain rules, events and side effects are applied consistently.</p>
+<p><strong>Validation and business rules</strong>: each tool validates inputs (formats, ranges, existence) and enforces rules, such as only cancelling orders that are not yet shipped, or only changing addresses for the customer the agent is serving.</p>
+<p><strong>Least privilege</strong>: the database role used by the tools has only the required privileges, for example <code>UPDATE</code> on specific columns of specific tables, <strong>no DDL</strong>, no access to unrelated schemas. Row-level security can restrict tenants.</p>
+<p><strong>Limits and approvals</strong>: bulk or destructive operations require <strong>human approval</strong> and hard <strong>limits on rows affected</strong> per call; the tool checks the expected count before committing and aborts if it differs.</p>
+<p><strong>Safety nets</strong>: changes run in <strong>transactions</strong>; <strong>audit columns or tables</strong> record which agent run, on behalf of which user, changed what and when; deletes are <strong>soft deletes</strong>; old values are kept for reversal. Point-in-time recovery backups remain the last line of defence.</p>
+<p><strong>Testing</strong>: everything is tested in <strong>staging with realistic data</strong>, including adversarial and edge cases, before production.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List required write operations; design one tool per operation.</li>
+  <li>Implement with parameterised queries or existing service APIs.</li>
+  <li>Validate inputs and enforce business rules in the tool.</li>
+  <li>Use a least-privilege role; no DDL; row-level security if multi-tenant.</li>
+  <li>Enforce row limits and approvals for bulk or destructive actions.</li>
+  <li>Wrap in transactions; write audit records; prefer soft deletes; test in staging.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def cancel_order(order_id: int, reason: str, ctx) -&gt; dict:
+    with db.transaction() as tx:
+        order = tx.fetch_one(
+            &quot;SELECT id, status, customer_id FROM orders WHERE id = %s FOR UPDATE&quot;, (order_id,))
+        if order is None:
+            return {&quot;ok&quot;: False, &quot;error&quot;: f&quot;Order {order_id} not found&quot;}
+        if order.customer_id != ctx.customer_id:
+            return {&quot;ok&quot;: False, &quot;error&quot;: &quot;Order belongs to a different customer&quot;}
+        if order.status in (&quot;shipped&quot;, &quot;delivered&quot;):
+            return {&quot;ok&quot;: False, &quot;error&quot;: f&quot;Cannot cancel: order is {order.status}. Offer a return instead.&quot;}
+        rows = tx.execute(
+            &quot;UPDATE orders SET status = 'cancelled', cancelled_reason = %s, &quot;
+            &quot;updated_by = %s, updated_at = now() WHERE id = %s AND status = %s&quot;,
+            (reason, f&quot;agent:{ctx.run_id}:on_behalf_of:{ctx.user_id}&quot;, order_id, order.status))
+        if rows != 1:
+            raise RuntimeError(&quot;Unexpected row count; rolling back&quot;)
+    return {&quot;ok&quot;: True, &quot;order_id&quot;: order_id, &quot;status&quot;: &quot;cancelled&quot;}</code></pre>
+<pre><code class="language-sql">CREATE ROLE agent_orders_writer NOLOGIN;
+GRANT SELECT ON orders TO agent_orders_writer;
+GRANT UPDATE (status, cancelled_reason, updated_by, updated_at) ON orders TO agent_orders_writer;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A generic <code>run_sql</code> tool with a privileged account.</li>
+  <li>Bypassing the application layer and its business rules.</li>
+  <li>Hard deletes without audit or backup.</li>
+  <li>No row-count checks on updates.</li>
+  <li>Testing only on tiny, clean datasets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I avoid giving the agent a generic execute-SQL tool with write access, because one hallucinated or injected query, like an UPDATE without a WHERE, could damage data at scale. Instead, writes are specific tools like update_customer_address or cancel_order, implemented in code with parameterised queries or the existing service API. Each tool validates inputs and enforces business rules, like only cancelling unshipped orders. The database role is least privilege, only the needed tables and columns, no DDL. Bulk or destructive operations need approval and have row limits. Changes run in transactions with audit columns recording which agent run and user made them, and deletes are soft. Everything is tested in staging with realistic data.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Ad-hoc read queries for analysts?</strong> Read-only role on a replica or warehouse, row limits, query timeouts, curated views and masked sensitive columns.</li>
+  <li><strong>Why use existing service APIs?</strong> They apply domain rules, events and side effects consistently.</li>
+  <li><strong>How do you reverse an agent change?</strong> Use audit records of old values or soft-delete flags, plus point-in-time recovery as a fallback.</li>
+</ul>
+</article>
+</body>
+</html>

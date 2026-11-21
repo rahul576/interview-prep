@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-313 · What is AWS Lambda, and how does it process messages from a queue?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-313" data-topic="Cloud (AWS)">
+<h1>What is AWS Lambda, and how does it process messages from a queue?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>AWS Lambda</strong> runs code on events <strong>without managing servers</strong>, billed per request and duration, with a <strong>15-minute maximum</strong>; for SQS it uses an <strong>event source mapping</strong> where the Lambda service <strong>long-polls the queue</strong>, <strong>batches messages</strong> and invokes your function; success <strong>deletes the batch</strong>, an error makes messages <strong>reappear for retry</strong>, <strong>partial batch responses</strong> (<code>ReportBatchItemFailures</code>) retry only failed items, and the <strong>redrive policy</strong> sends repeat failures to a <strong>DLQ</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Lambda basics:</strong> you upload code (zip or container image), choose runtime and memory (CPU scales with memory), set a timeout up to 15 minutes, and grant permissions through an <strong>execution role</strong>. AWS runs instances as needed and reuses warm ones. Java functions benefit from <strong>SnapStart</strong> to reduce cold starts.</p>
+<p><strong>SQS integration:</strong> you do not write polling code. The <strong>event source mapping (ESM)</strong> is managed by the Lambda service:</p>
+<ul>
+  <li>It long-polls the queue and collects messages until the <strong>batch size</strong> (up to 10 for FIFO, up to 10,000 for standard with a batching window) or the <strong>maximum batching window</strong> is reached.</li>
+  <li>It invokes your function <strong>synchronously</strong> with the batch as an event.</li>
+  <li>If the function returns successfully, the ESM <strong>deletes</strong> the messages.</li>
+  <li>If it throws or times out, <strong>nothing is deleted</strong>; messages become visible again after the queue's <strong>visibility timeout</strong> and are retried.</li>
+</ul>
+<p><strong>Partial batch failures:</strong> enable <code>ReportBatchItemFailures</code> and return the IDs of the failed messages; only those are retried, avoiding reprocessing of successful ones.</p>
+<p><strong>DLQ:</strong> configure the redrive policy on the <strong>source queue</strong> with <code>maxReceiveCount</code>; messages exceeding it move to the DLQ. Set the queue visibility timeout to at least <strong>six times the function timeout</strong> so retries and throttling do not cause premature redelivery.</p>
+<p>The ESM also scales the number of concurrent invocations with the backlog.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create queue, DLQ and redrive policy.</li>
+  <li>Create the function with an execution role allowing SQS receive and delete.</li>
+  <li>Create the event source mapping with batch size and window.</li>
+  <li>Lambda polls, batches and invokes.</li>
+  <li>Return failed item IDs; successes are deleted.</li>
+  <li>Repeated failures go to the DLQ.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class OrderHandler implements RequestHandler&lt;SQSEvent, SQSBatchResponse&gt; {
+    public SQSBatchResponse handleRequest(SQSEvent event, Context ctx) {
+        List&lt;SQSBatchResponse.BatchItemFailure&gt; failures = new ArrayList&lt;&gt;();
+        for (SQSEvent.SQSMessage m : event.getRecords()) {
+            try { process(m.getBody()); }
+            catch (Exception e) { failures.add(new SQSBatchResponse.BatchItemFailure(m.getMessageId())); }
+        }
+        return new SQSBatchResponse(failures);
+    }
+}</code></pre>
+<pre><code class="language-bash">aws lambda create-event-source-mapping --function-name order-handler \
+  --event-source-arn arn:aws:sqs:eu-west-1:123456789012:orders \
+  --batch-size 10 --function-response-types ReportBatchItemFailures</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Visibility timeout shorter than the function timeout.</li>
+  <li>Throwing for the whole batch when one message fails.</li>
+  <li>Configuring the DLQ on the function instead of the source queue for SQS triggers.</li>
+  <li>Non-idempotent processing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Lambda runs code in response to events without managing servers; you pay per request and per millisecond, with a fifteen-minute maximum. For SQS, the Lambda service uses an event source mapping: it long-polls the queue, batches messages by size and window, and invokes the function. If the function succeeds, the messages are deleted; if it throws, the batch becomes visible again after the visibility timeout and is retried, unless I return partial batch failures with ReportBatchItemFailures so only failed messages retry. Messages that keep failing go to the dead-letter queue via the queue's redrive policy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why visibility timeout larger than Lambda timeout?</strong> Otherwise messages reappear while still being processed; AWS recommends at least six times.</li>
+  <li><strong>Cold starts in Java?</strong> SnapStart, provisioned concurrency, lean dependencies.</li>
+  <li><strong>FIFO with Lambda?</strong> Ordered per message group; a failing group blocks until resolved.</li>
+</ul>
+</article>
+</body>
+</html>

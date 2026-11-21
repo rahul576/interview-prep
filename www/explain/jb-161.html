@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-161 · What is the difference between BeanFactory and ApplicationContext?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-161" data-topic="Spring Framework">
+<h1>What is the difference between BeanFactory and ApplicationContext?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>BeanFactory</strong> is the <strong>basic IoC container</strong> interface that creates and wires beans <strong>lazily on request</strong>; <strong>ApplicationContext</strong> <strong>extends</strong> it and adds <strong>eager singleton creation (fail fast)</strong>, <strong>automatic registration of post-processors</strong>, <strong>events</strong>, <strong>i18n (MessageSource)</strong>, <strong>resource loading</strong> and the <strong>Environment</strong> with profiles and properties.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>BeanFactory</strong> is the root interface of Spring's container: <code>getBean</code>, <code>containsBean</code>, <code>isSingleton</code> and so on. The typical implementation, <code>DefaultListableBeanFactory</code>, holds bean definitions and creates a bean the first time someone asks for it. By itself it is minimal: you must register <code>BeanPostProcessor</code>s and <code>BeanFactoryPostProcessor</code>s manually, so <code>@Autowired</code>, <code>@PostConstruct</code>, <code>${...}</code> placeholders, <code>@Transactional</code> proxies and other annotation features do not work unless you wire those processors in.</p>
+<p><strong>ApplicationContext</strong> is a sub-interface that wraps a bean factory and adds application-level services:</p>
+<ul>
+  <li><strong>Eager pre-instantiation of singletons</strong> during <code>refresh()</code>. A missing dependency, a typo in a property or a failing constructor surfaces at <strong>startup</strong>, not on the first user request.</li>
+  <li><strong>Automatic detection</strong> of BeanPostProcessors and BeanFactoryPostProcessors, which makes annotation-driven configuration, AOP, <code>@Value</code> and <code>@ConfigurationProperties</code> work.</li>
+  <li><strong>ApplicationEventPublisher</strong>: publishing and listening to events, including lifecycle events like <code>ContextRefreshedEvent</code>.</li>
+  <li><strong>MessageSource</strong> for internationalised messages.</li>
+  <li><strong>ResourceLoader</strong> for <code>classpath:</code>, <code>file:</code> and URL resources.</li>
+  <li><strong>Environment</strong> with <strong>profiles</strong> and property sources.</li>
+  <li>Hierarchies (parent/child contexts) and lifecycle management (<code>SmartLifecycle</code>, graceful shutdown).</li>
+</ul>
+<p>Implementations include <code>AnnotationConfigApplicationContext</code>, and in Spring Boot <code>AnnotationConfigServletWebServerApplicationContext</code> (servlet web) or the reactive variant, created by <code>SpringApplication.run</code>.</p>
+<p>In practice you always use an ApplicationContext. Plain BeanFactory is relevant for framework internals or extremely constrained environments. You can still make individual beans lazy with <strong>@Lazy</strong>, or globally with <code>spring.main.lazy-initialization</code>, when startup time matters more than fail-fast.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>SpringApplication.run</code> creates the appropriate ApplicationContext.</li>
+  <li>Bean definitions are loaded into the internal BeanFactory.</li>
+  <li>BeanFactoryPostProcessors run (placeholders, configuration class parsing).</li>
+  <li>BeanPostProcessors are registered.</li>
+  <li>All non-lazy singletons are instantiated and initialised.</li>
+  <li>The context publishes refresh events and starts lifecycle beans.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Plain BeanFactory: lazy, no automatic post-processors
+DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+new XmlBeanDefinitionReader(factory).loadBeanDefinitions(&quot;beans.xml&quot;);
+OrderService s = factory.getBean(OrderService.class);   // created only now
+
+// ApplicationContext: eager singletons, annotations, events, environment
+try (var ctx = new AnnotationConfigApplicationContext(AppConfig.class)) {
+    ctx.getEnvironment().getActiveProfiles();
+    ctx.publishEvent(new CacheWarmupRequested());
+    String msg = ctx.getMessage(&quot;greeting&quot;, null, Locale.GERMAN);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>BeanFactory</th><th>ApplicationContext</th></tr></thead>
+<tbody>
+<tr><td>Singleton creation</td><td>Lazy, on request</td><td>Eager at startup</td></tr>
+<tr><td>Post-processor registration</td><td>Manual</td><td>Automatic</td></tr>
+<tr><td>Annotation support (@Autowired etc.)</td><td>Only with manual setup</td><td>Yes</td></tr>
+<tr><td>Events</td><td>No</td><td>Yes</td></tr>
+<tr><td>MessageSource / i18n</td><td>No</td><td>Yes</td></tr>
+<tr><td>Environment, profiles</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying ApplicationContext is a completely separate container rather than an extension.</li>
+  <li>Claiming BeanFactory is &quot;better for performance&quot; in normal applications.</li>
+  <li>Calling <code>ctx.getBean</code> throughout business code instead of using injection.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;BeanFactory is the basic Spring IoC container interface: it holds bean definitions, creates beans and injects dependencies, and it creates them lazily when first requested. ApplicationContext extends BeanFactory and is what applications actually use. It pre-instantiates singletons at startup, so configuration errors fail fast, and it automatically registers BeanPostProcessors and BeanFactoryPostProcessors, which @Autowired, AOP proxies and @Transactional rely on. It also adds application events, internationalisation through MessageSource, resource loading and the Environment with profiles and properties. Spring Boot creates an ApplicationContext for me.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When might you still mark a bean as @Lazy in an ApplicationContext?</strong> Rarely used, expensive beans, or to break startup ordering issues; it delays errors to first use.</li>
+  <li><strong>Can you have several contexts?</strong> Yes, parent-child hierarchies, e.g. in older Spring MVC setups or tests.</li>
+  <li><strong>How do you access the context in a bean?</strong> Inject <code>ApplicationContext</code> or implement <code>ApplicationContextAware</code>, sparingly.</li>
+</ul>
+</article>
+</body>
+</html>

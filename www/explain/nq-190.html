@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-190 · What is request scope?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-190" data-topic="Spring Framework">
+<h1>What is request scope?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>request-scoped</strong> bean has <strong>one instance per HTTP request</strong>, declared with <strong><code>@RequestScope</code></strong>; singletons receive a <strong>scoped proxy</strong> that routes each call to the instance bound to the <strong>current request thread</strong>, so it is ideal for per-request context but <strong>fails outside a web request</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some data belongs to exactly one request: the authenticated user details, tenant id, correlation id, locale or a small request-level cache to avoid repeated lookups. A <strong>request-scoped bean</strong> gives each HTTP request its own instance, created on first use and discarded when the request completes (with destroy callbacks run at request end).</p>
+<p>You declare it with <code>@RequestScope</code>, which is shorthand for <code>@Scope(value = WebApplicationContext.SCOPE_REQUEST, proxyMode = ScopedProxyMode.TARGET_CLASS)</code>. The proxy is essential. Controllers and services are singletons created at startup, when there is no request at all. So Spring injects a <strong>CGLIB proxy</strong> instead of the real object. Each time you call a method on the proxy, it looks up the current request through <code>RequestContextHolder</code>, which stores <strong>request attributes in a ThreadLocal</strong> bound by <code>DispatcherServlet</code> or <code>RequestContextFilter</code>, finds or creates the instance stored in that request, and delegates the call.</p>
+<p>Because the lookup is thread-bound, it works only on the thread handling the request. From an <strong><code>@Async</code></strong> method, a <code>CompletableFuture</code> task, a scheduled job, a Kafka listener or a parallel stream, there is no bound request and Spring throws <code>IllegalStateException: No thread-bound request found</code> (or &quot;Scope 'request' is not active&quot;). In those cases pass the data explicitly or propagate context with a <code>TaskDecorator</code>.</p>
+<p>For WebFlux, request scope does not exist; use the Reactor <code>Context</code> or exchange attributes instead.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Startup: singletons receive a scoped proxy for the request bean.</li>
+  <li>A request arrives; DispatcherServlet binds request attributes to the thread.</li>
+  <li>A method call on the proxy looks up the bean in the current request attributes.</li>
+  <li>If missing, Spring creates and stores a new instance for this request.</li>
+  <li>At request end, attributes are cleared and the instance's destroy callbacks run.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+@RequestScope
+public class RequestContext {
+    private String tenantId;
+    private String correlationId;
+    // getters and setters
+}
+
+@Component
+class TenantFilter extends OncePerRequestFilter {
+    private final RequestContext ctx;
+    TenantFilter(RequestContext ctx) { this.ctx = ctx; }
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+            throws ServletException, IOException {
+        ctx.setTenantId(req.getHeader(&quot;X-Tenant&quot;));
+        chain.doFilter(req, res);
+    }
+}
+
+@Service
+class InvoiceService {
+    private final RequestContext ctx;              // proxy
+    InvoiceService(RequestContext ctx) { this.ctx = ctx; }
+    List&lt;Invoice&gt; list() { return repo.findByTenant(ctx.getTenantId()); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accessing request beans from <code>@Async</code> or scheduled threads.</li>
+  <li>Declaring <code>@Scope(&quot;request&quot;)</code> without a proxy mode and injecting it into a singleton, failing at startup.</li>
+  <li>Putting heavy objects in request scope when a parameter would do.</li>
+  <li>Assuming it works in WebFlux.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A request-scoped bean lives for one HTTP request: each request gets its own instance, discarded when it completes. I declare it with @RequestScope, which includes proxyMode TARGET_CLASS. Because singletons are created once, Spring injects a proxy, and every method call is routed to the instance bound to the current request thread through RequestContextHolder. I use it for per-request data like the user context, tenant id or correlation id. It only works inside a web request; from an Async method or scheduled job it fails with no thread-bound request found.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does it fail in @Async?</strong> The async thread has no request attributes bound; copy the data or use a TaskDecorator.</li>
+  <li><strong>Request scope vs ThreadLocal?</strong> Request scope is managed and cleaned up by Spring; raw ThreadLocals leak in pools if not cleared.</li>
+  <li><strong>Alternative for logging context?</strong> MDC with correlation id, propagated by Micrometer context propagation.</li>
+</ul>
+</article>
+</body>
+</html>

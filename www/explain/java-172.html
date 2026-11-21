@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-172 · How do you run scheduled tasks and asynchronous work safely in a multi-instance Spring Boot service?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-172" data-topic="Spring Boot">
+<h1>How do you run scheduled tasks and asynchronous work safely in a multi-instance Spring Boot service?</h1>
+<p class="ex-meta">Spring Boot · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>@Scheduled</strong> runs methods on a schedule and <strong>@Async</strong> on another thread, but with several replicas <strong>every instance runs the schedule</strong>, so use a <strong>distributed lock (ShedLock)</strong>, <strong>Quartz clustering</strong>, a <strong>Kubernetes CronJob</strong> or a <strong>queue</strong>; give @Async a <strong>bounded executor</strong>, <strong>handle exceptions</strong>, and make jobs <strong>idempotent</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>@EnableScheduling</code> plus <code>@Scheduled(cron = &quot;0 0 2 * * *&quot;)</code> is easy in a single instance. Deployed as three pods, each pod has its own scheduler, so the nightly invoice job runs <strong>three times</strong>, sending triple emails or charging twice. Options:</p>
+<ul>
+  <li><strong>ShedLock</strong>: annotate the job with <code>@SchedulerLock</code>; before running, it inserts or updates a lock row in a shared store (JDBC, Redis, Mongo). Only one instance wins; <code>lockAtMostFor</code> releases the lock if the holder crashes, <code>lockAtLeastFor</code> prevents rapid re-runs caused by clock skew.</li>
+  <li><strong>Quartz in clustered mode</strong>: a JDBC job store coordinates instances, with misfire handling, persistent jobs and history. Heavier but more featureful.</li>
+  <li><strong>Kubernetes CronJob</strong>: run the job as a separate pod on a schedule with <code>concurrencyPolicy: Forbid</code>, decoupled from the web replicas.</li>
+  <li><strong>Queue-based</strong>: a scheduler publishes one message; workers compete for it. Good for fan-out of large work.</li>
+  <li><strong>Leader election</strong> (for example Spring Integration's leader support or Kubernetes Leases) if many tasks must run on one node.</li>
+</ul>
+<p><strong>@Async</strong> pitfalls: Spring Boot auto-configures a <code>ThreadPoolTaskExecutor</code> (or virtual threads when enabled), but its default queue is unbounded, so under load tasks pile up in memory. Define your own executor with a <strong>bounded queue</strong> and a rejection policy. Exceptions from <code>void</code> async methods are lost unless you register an <code>AsyncUncaughtExceptionHandler</code>; <code>CompletableFuture</code> results must be checked. <code>@Async</code> is proxy-based, so self-invocation runs synchronously. The <strong>SecurityContext and MDC</strong> are not propagated automatically; use a task decorator.</p>
+<p>Above all, jobs must be <strong>idempotent</strong> and <strong>restartable</strong>: process in batches, record progress, and tolerate a second run after a failure or a pod kill.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduler fires on every instance.</li>
+  <li>ShedLock tries to acquire the named lock in the shared store.</li>
+  <li>The winner runs the job; others skip.</li>
+  <li>The lock is released at the end or after <code>lockAtMostFor</code>.</li>
+  <li>Async work runs on a bounded pool; failures are logged and retried idempotently.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Configuration
+@EnableScheduling
+@EnableSchedulerLock(defaultLockAtMostFor = &quot;PT30M&quot;)
+class SchedulingConfig {
+    @Bean
+    LockProvider lockProvider(DataSource ds) {
+        return new JdbcTemplateLockProvider(JdbcTemplateLockProvider.Configuration.builder()
+            .withJdbcTemplate(new JdbcTemplate(ds)).usingDbTime().build());
+    }
+
+    @Bean(name = &quot;mailExecutor&quot;)
+    ThreadPoolTaskExecutor mailExecutor() {
+        ThreadPoolTaskExecutor ex = new ThreadPoolTaskExecutor();
+        ex.setCorePoolSize(4); ex.setMaxPoolSize(8); ex.setQueueCapacity(500);
+        ex.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        ex.setThreadNamePrefix(&quot;mail-&quot;);
+        return ex;
+    }
+}
+
+@Component
+class InvoiceJob {
+    @Scheduled(cron = &quot;0 0 2 * * *&quot;, zone = &quot;Europe/Berlin&quot;)
+    @SchedulerLock(name = &quot;invoiceJob&quot;, lockAtLeastFor = &quot;PT1M&quot;)
+    void run() { invoices.createMissingForYesterday(); }   // idempotent
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>@Scheduled</code> runs once in a cluster.</li>
+  <li>Unbounded async queues hiding overload until OOM.</li>
+  <li>Swallowed exceptions in <code>void @Async</code> methods.</li>
+  <li>Non-idempotent jobs that double-process after a retry.</li>
+  <li>Lock time shorter than the job duration.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;@Scheduled runs a method on a schedule and @Async runs it on another thread. The trap with several replicas is that every instance runs the schedule, so a nightly job executes three times. I use a distributed lock like ShedLock backed by the database or Redis, or move the job to Quartz in cluster mode, a Kubernetes CronJob, or a queue where workers compete. For @Async I configure a bounded thread pool with a rejection policy instead of relying on defaults, and handle exceptions, because they're otherwise lost. And jobs are idempotent and process in batches, so a retry after a failure is safe.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to an @Async task if the pod is terminated mid-way?</strong> It is lost unless you use graceful shutdown with await-termination, or persist work in a queue or outbox.</li>
+  <li><strong>ShedLock vs Quartz?</strong> ShedLock is a simple lock for existing <code>@Scheduled</code> methods; Quartz adds persistent jobs and misfire handling.</li>
+  <li><strong>How do you monitor jobs?</strong> Metrics for last success time and duration, alert if stale.</li>
+</ul>
+</article>
+</body>
+</html>

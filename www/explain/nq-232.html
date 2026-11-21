@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-232 · What happens if a database transaction succeeds but event publishing fails?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-232" data-topic="Microservices">
+<h1>What happens if a database transaction succeeds but event publishing fails?</h1>
+<p class="ex-meta">Microservices · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>That is the <strong>dual-write problem</strong>: the data is committed but other services are <strong>never notified</strong>, leaving the system <strong>inconsistent</strong>; the fix is the <strong>transactional outbox</strong> or <strong>CDC</strong>, backed by <strong>reconciliation jobs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Imagine the order service commits an order and then calls <code>kafkaTemplate.send(OrderCreated)</code>. The broker is unreachable, the send times out, or Kubernetes kills the pod a millisecond after commit. The order exists in the database, but payment never charges, inventory never reserves and the customer sees &quot;pending&quot; forever. Nothing throws an error that anybody sees, so the inconsistency is <strong>silent</strong> and is usually discovered by a customer complaint.</p>
+<p>In-memory retries help only while the process is alive; a crash or redeploy loses them. Rolling back is impossible because the transaction is already committed. So the event has to be stored <strong>durably together with the data</strong>:</p>
+<ul>
+  <li><strong>Transactional outbox:</strong> insert an outbox row in the same transaction; a relay publishes it later with retries.</li>
+  <li><strong>Change data capture:</strong> Debezium reads the database log and publishes changes, so anything committed is eventually published.</li>
+  <li><strong>Event sourcing:</strong> the event <em>is</em> the record; there is no separate state to get out of sync.</li>
+  <li><strong>Listen to yourself:</strong> publish the event first and have the service update its own database from the event, accepting that its own read is eventually consistent.</li>
+</ul>
+<p>On top of any of these, a <strong>reconciliation job</strong> is a safety net: find orders that have been PENDING longer than expected, republish their event or alert someone. Monitoring the age of unpublished outbox rows catches relay problems early.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Business change and event are written atomically (outbox) or captured from the log (CDC).</li>
+  <li>Relay publishes asynchronously, retrying until acknowledged.</li>
+  <li>Consumers process idempotently, since retries cause duplicates.</li>
+  <li>Explicit states (PENDING, CONFIRMED) plus timeouts show stuck flows.</li>
+  <li>Reconciliation job republishes or escalates stuck records.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Risky: dual write
+@Transactional
+public void place(Order o) {
+    repo.save(o);
+    kafka.send(&quot;orders&quot;, o.id(), new OrderCreated(o)); // may be lost
+}
+
+// Safe: outbox
+@Transactional
+public void placeSafely(Order o) {
+    repo.save(o);
+    outbox.save(OutboxEvent.of(&quot;OrderCreated&quot;, o));
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on in-memory retry loops.</li>
+  <li>Catching the send exception and only logging it.</li>
+  <li>Assuming <code>@Transactional</code> covers Kafka.</li>
+  <li>No monitoring for records stuck in intermediate states.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That's the classic dual-write problem. The order is committed but the event never reaches Kafka, perhaps because the broker was down or the pod crashed just after commit. Downstream services never react, so no payment and no stock reservation, and the order stays pending; the worst part is that it's silent. In-memory retries die with the process, so the real fix is a transactional outbox or CDC with Debezium, which stores the event atomically with the data and publishes it reliably later. I'd also add a reconciliation job that finds stuck orders and republishes or alerts, and make consumers idempotent because the retries will create duplicates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>And what if the event is published but the transaction rolls back?</strong> Consumers act on an order that doesn't exist; the outbox prevents this because the event only exists after commit.</li>
+  <li><strong>Why not 2PC?</strong> Poor support in brokers, blocking behaviour and coupling to coordinator availability.</li>
+  <li><strong>How would you detect the problem in production?</strong> Metrics on orders stuck in PENDING and outbox lag alerts.</li>
+</ul>
+</article>
+</body>
+</html>

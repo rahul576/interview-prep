@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-189 · What is the difference between singleton and prototype scopes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-189" data-topic="Spring Framework">
+<h1>What is the difference between singleton and prototype scopes?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>singleton</strong> has <strong>one shared instance</strong> whose <strong>full lifecycle</strong>, including destruction, Spring manages; a <strong>prototype</strong> gets a <strong>new instance per lookup or injection</strong>, and Spring <strong>does not call its destroy callbacks</strong>; a prototype injected into a singleton is created <strong>only once</strong>, so use <strong>ObjectProvider, @Lookup or a scoped proxy</strong> for fresh instances.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Singleton</strong> beans are created once per context (eagerly at startup by default), cached, shared by every consumer, and destroyed when the context closes, so <code>@PreDestroy</code> and <code>DisposableBean.destroy()</code> run. They suit stateless services, repositories, clients and configuration.</p>
+<p><strong>Prototype</strong> beans are created <strong>every time</strong> they are requested from the container: each <code>getBean()</code> call, each <code>ObjectProvider.getObject()</code>, and each injection point in a new consumer. Spring instantiates them, injects dependencies and runs initialisation callbacks such as <code>@PostConstruct</code>, then <strong>hands them over</strong> and forgets them. It does not track them, so <strong>destroy callbacks are never called</strong>; the client is responsible for releasing resources such as files or connections. Prototypes are created lazily, on demand.</p>
+<p>The common trap: when a singleton has a prototype dependency, injection happens <strong>once</strong>, when the singleton is created. The singleton keeps that single prototype instance for its whole life, which defeats the purpose and may introduce shared mutable state. Ways to obtain a fresh instance on each use:</p>
+<ul>
+  <li>inject <strong><code>ObjectProvider&lt;MyPrototype&gt;</code></strong> and call <code>getObject()</code> (the modern, recommended option);</li>
+  <li>declare an abstract or stub <strong><code>@Lookup</code></strong> method that Spring overrides with CGLIB;</li>
+  <li>use a <strong>scoped proxy</strong> (<code>proxyMode = TARGET_CLASS</code>), though for prototypes this creates a new target on every method call, which is rarely what you want;</li>
+  <li><code>jakarta.inject.Provider&lt;T&gt;</code>.</li>
+</ul>
+<p>Prototype use cases are objects with per-use state: builders, stateful parsers, command objects, or non-thread-safe third-party objects.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Singleton: created at refresh, cached, returned for every request.</li>
+  <li>Prototype: new object created and initialised for every request.</li>
+  <li>Singleton depending on prototype: one prototype created at singleton construction.</li>
+  <li>ObjectProvider/@Lookup: asks the container at call time, creating a new prototype each time.</li>
+  <li>Shutdown: singletons destroyed; prototypes left to the garbage collector.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+@Scope(&quot;prototype&quot;)
+class CsvParser {                     // not thread-safe, holds state
+    private final List&lt;String&gt; errors = new ArrayList&lt;&gt;();
+}
+
+@Service
+class ImportService {
+    private final ObjectProvider&lt;CsvParser&gt; parsers;
+    ImportService(ObjectProvider&lt;CsvParser&gt; parsers) { this.parsers = parsers; }
+
+    Result importFile(Path p) {
+        CsvParser parser = parsers.getObject();   // new instance per import
+        return parser.parse(p);
+    }
+}
+
+@Component
+abstract class LegacyImporter {
+    @Lookup
+    protected abstract CsvParser newParser();      // overridden by Spring
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Singleton</th><th>Prototype</th></tr></thead>
+<tbody>
+<tr><td>Instances</td><td>One per context</td><td>One per lookup</td></tr>
+<tr><td>Created</td><td>Eagerly at startup</td><td>On demand</td></tr>
+<tr><td>Destroy callbacks</td><td>Yes</td><td>No</td></tr>
+<tr><td>Typical use</td><td>Stateless services</td><td>Stateful, per-use objects</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting a prototype field in a singleton to change between calls.</li>
+  <li>Opening resources in a prototype and never closing them.</li>
+  <li>Using prototype scope as a cure for thread-safety issues in services.</li>
+  <li>Using a scoped proxy for prototypes, creating a new instance on every method call.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A singleton has one instance per context, created at startup and shared, and Spring manages its whole lifecycle including destruction. A prototype gets a new instance each time it's requested; Spring creates and initialises it, but then hands it over and never calls destroy methods, so the client cleans up. The common trap is injecting a prototype into a singleton: it's created only once at injection time. To get a fresh one each time I inject ObjectProvider and call getObject, or use a Lookup method.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>A use case for prototype?</strong> Stateful, non-thread-safe helpers like parsers or builders.</li>
+  <li><strong>Why no destroy callbacks?</strong> The container doesn't keep references to prototypes.</li>
+  <li><strong>ObjectProvider vs Provider?</strong> Same idea; ObjectProvider adds <code>getIfAvailable</code>, <code>orderedStream</code> and more.</li>
+</ul>
+</article>
+</body>
+</html>

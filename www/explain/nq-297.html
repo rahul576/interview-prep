@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-297 · How do you push an application image or artifact to a registry?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-297" data-topic="DevOps &amp; CI/CD">
+<h1>How do you push an application image or artifact to a registry?</h1>
+<p class="ex-meta">DevOps &amp; CI/CD · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Build the image with <strong><code>docker build</code>, Jib or Buildpacks</strong>, tag it <strong>uniquely (version and commit SHA)</strong> instead of relying on <code>latest</code>, <strong>authenticate</strong> with CI-stored or cloud credentials (<code>docker login</code>, <code>aws ecr get-login-password</code>, <code>az acr login</code>), <strong><code>docker push</code></strong> to the registry, publish jars with <strong><code>mvn deploy</code></strong>, and add <strong>scanning, signing and immutable tags</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Building:</strong> a multi-stage Dockerfile, or for Spring Boot without a Dockerfile, <strong>Jib</strong> (builds and pushes directly from Maven or Gradle, no Docker daemon) or <strong>Cloud Native Buildpacks</strong> via <code>spring-boot:build-image</code>.</p>
+<p><strong>Tagging:</strong> use tags like <code>orders-service:1.4.2</code> and <code>orders-service:3f9c2ab</code> (commit SHA). Unique tags make deployments <strong>reproducible</strong> and rollbacks precise. <code>latest</code> is mutable: two nodes can pull different images, and you cannot tell what is running. For full certainty, deploy by <strong>digest</strong> (<code>@sha256:...</code>).</p>
+<p><strong>Authentication:</strong> never hard-code passwords. Use CI secrets or, better, short-lived cloud credentials via <strong>OIDC federation</strong> (for example GitHub Actions assuming an AWS IAM role):</p>
+<ul>
+  <li>Amazon ECR: <code>aws ecr get-login-password | docker login --username AWS --password-stdin &lt;account&gt;.dkr.ecr.&lt;region&gt;.amazonaws.com</code></li>
+  <li>Azure ACR: <code>az acr login --name myregistry</code></li>
+  <li>Docker Hub, GHCR, Nexus or Artifactory: <code>docker login</code> with a token.</li>
+</ul>
+<p><strong>Jars:</strong> <code>mvn deploy</code> publishes to Nexus or Artifactory using <code>distributionManagement</code> in the POM and server credentials in <code>settings.xml</code>; release repositories should reject redeploying the same version.</p>
+<p><strong>Good practice:</strong> scan with Trivy before or after pushing (and use registry scanning such as ECR enhanced scanning), sign with <strong>cosign</strong>, attach an <strong>SBOM</strong>, enable <strong>tag immutability</strong> so a version can never be overwritten, and set lifecycle policies to clean up old images.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build the image from the verified artifact.</li>
+  <li>Tag with version and commit SHA.</li>
+  <li>Obtain short-lived registry credentials.</li>
+  <li>Scan the image; fail on critical issues.</li>
+  <li>Push and record the digest.</li>
+  <li>Sign and attach SBOM; deploy by tag or digest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">IMAGE=123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders-service
+TAG=1.4.2-$(git rev-parse --short HEAD)
+
+docker build -t $IMAGE:$TAG .
+aws ecr get-login-password --region eu-west-1 | \
+  docker login --username AWS --password-stdin ${IMAGE%%/*}
+trivy image --exit-code 1 --severity CRITICAL $IMAGE:$TAG
+docker push $IMAGE:$TAG
+cosign sign --yes $IMAGE:$TAG</code></pre>
+<p>Jib alternative: <code>./mvnw compile jib:build -Dimage=$IMAGE:$TAG</code>.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deploying <code>latest</code>.</li>
+  <li>Long-lived registry passwords in pipeline files.</li>
+  <li>Mutable tags allowing silent overwrites.</li>
+  <li>Scanning nothing, or scanning only once at build time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The pipeline builds the image with docker build, or Jib or Buildpacks for Spring Boot, and tags it uniquely, for example with the version and commit SHA, never relying on latest. It authenticates using credentials from the CI secret store or OIDC: aws ecr get-login-password for ECR or az acr login for Azure, then docker push. Jars go to Nexus or Artifactory with mvn deploy. I also scan the image with Trivy, sign it with cosign and enable immutable tags so a version can't be overwritten.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is deploying <code>latest</code> risky?</strong> It is mutable, not reproducible and makes rollback ambiguous.</li>
+  <li><strong>Tag vs digest?</strong> Tags are names that can move; digests identify exact content.</li>
+  <li><strong>What is OIDC for CI?</strong> The CI job exchanges an identity token for short-lived cloud credentials, no stored secrets.</li>
+</ul>
+</article>
+</body>
+</html>

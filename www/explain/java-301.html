@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-301 · What is the difference between @Bean and @Component?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-301" data-topic="Spring Framework">
+<h1>What is the difference between @Bean and @Component?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Both register <strong>beans</strong> in the container: <strong>@Component</strong> goes on <strong>your own class</strong> and is found by <strong>component scanning</strong>, while <strong>@Bean</strong> goes on a <strong>factory method in a @Configuration class</strong>, ideal for <strong>third-party classes</strong> or <strong>custom construction logic</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>@Component</strong> (and its stereotypes <code>@Service</code>, <code>@Repository</code>, <code>@Controller</code>) is <strong>declarative at class level</strong>. Spring scans the packages, finds the annotated class, and creates it, normally through its constructor with injected dependencies. You need to own the source code to annotate it, and there is one bean definition per class, unless you add more manually.</p>
+<p><strong>@Bean</strong> is <strong>programmatic</strong>: a method in a <code>@Configuration</code> class returns an object, and Spring registers the return value as a bean named after the method. This is the right tool when:</p>
+<ul>
+  <li>the class comes from a <strong>library</strong> you cannot annotate (an <code>ObjectMapper</code>, an S3 client, a Resilience4j registry);</li>
+  <li>construction needs <strong>logic</strong>: builder calls, values from properties, choosing an implementation;</li>
+  <li>you need <strong>several beans of the same type</strong> with different configuration (two <code>DataSource</code>s);</li>
+  <li>you want to keep framework annotations out of domain classes (clean or hexagonal architecture).</li>
+</ul>
+<p><code>@Bean</code> methods support <code>initMethod</code>/<code>destroyMethod</code> (and infer <code>close()</code> or <code>shutdown()</code> automatically), <code>@Scope</code>, <code>@Primary</code>, <code>@Conditional...</code> and <code>@Profile</code>.</p>
+<p>A subtle point: classes with <strong>@Configuration</strong> are, by default, <strong>CGLIB-proxied</strong> (<code>proxyBeanMethods = true</code>). If one <code>@Bean</code> method calls another, the proxy intercepts and returns the <strong>existing singleton</strong> instead of creating a new object. With <code>@Configuration(proxyBeanMethods = false)</code> (&quot;lite mode&quot;, used by Boot's own auto-configurations for faster startup and native images), such a call is a plain Java call that creates a new instance, so you should instead <strong>inject dependencies as method parameters</strong>. <code>@Bean</code> methods in a plain <code>@Component</code> class also run in lite mode.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Component scanning registers definitions for annotated classes.</li>
+  <li>Configuration classes are parsed; each <code>@Bean</code> method becomes a definition with a factory method.</li>
+  <li>The container calls constructors or factory methods, resolving parameters by type.</li>
+  <li>Both kinds of bean go through the same lifecycle and post-processing.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class PriceCalculator {               // our own class, found by scanning
+    BigDecimal gross(BigDecimal net) { return net.multiply(new BigDecimal(&quot;1.19&quot;)); }
+}
+
+@Configuration(proxyBeanMethods = false)
+class ClientsConfig {
+    @Bean
+    ObjectMapper objectMapper() {     // third-party class
+        return JsonMapper.builder().addModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).build();
+    }
+
+    @Bean
+    S3Client s3Client(@Value(&quot;${aws.region}&quot;) String region) {
+        return S3Client.builder().region(Region.of(region)).build();
+    }
+
+    @Bean
+    ReportExporter exporter(S3Client s3, ObjectMapper mapper) {   // dependencies as parameters
+        return new ReportExporter(s3, mapper);
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>@Component</th><th>@Bean</th></tr></thead>
+<tbody>
+<tr><td>Placed on</td><td>Class</td><td>Method in configuration</td></tr>
+<tr><td>Discovery</td><td>Component scan</td><td>Configuration class processing</td></tr>
+<tr><td>Third-party classes</td><td>No</td><td>Yes</td></tr>
+<tr><td>Custom construction logic</td><td>Limited</td><td>Full control</td></tr>
+<tr><td>Multiple beans of same class</td><td>Awkward</td><td>Easy</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting <code>@Component</code> on a class and also defining it with <code>@Bean</code>, creating two beans.</li>
+  <li>Calling <code>@Bean</code> methods directly in lite mode and getting duplicate instances.</li>
+  <li>Putting <code>@Bean</code> methods in classes outside the scanned packages.</li>
+  <li>Using <code>@Bean</code> for everything, losing the simplicity of scanning.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both end up as beans in the Spring container. @Component goes on my own class, and component scanning discovers it. @Bean goes on a factory method inside a @Configuration class, and whatever the method returns becomes the bean. I use @Bean for third-party classes I can't annotate, such as an ObjectMapper or a cloud SDK client, when construction needs custom logic or properties, or when I need several beans of the same type. One detail: full @Configuration classes are proxied, so calling one @Bean method from another returns the same singleton; with proxyBeanMethods false you pass dependencies as method parameters instead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does proxyBeanMethods = false change?</strong> No CGLIB proxy; inter-bean method calls create new objects, but startup is faster.</li>
+  <li><strong>How is a @Bean named?</strong> After the method, or via <code>@Bean(&quot;name&quot;)</code>.</li>
+  <li><strong>Can a @Bean be conditional?</strong> Yes, with <code>@ConditionalOn...</code> or <code>@Profile</code>.</li>
+</ul>
+</article>
+</body>
+</html>

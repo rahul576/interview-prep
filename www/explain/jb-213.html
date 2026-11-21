@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-213 · How would you secure a public REST API?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-213" data-topic="REST &amp; API Design">
+<h1>How would you secure a public REST API?</h1>
+<p class="ex-meta">REST &amp; API Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Secure a public API with <strong>HTTPS/TLS (plus HSTS)</strong>, <strong>OAuth 2.0/OIDC</strong> with properly validated <strong>JWTs</strong> (or <strong>API keys / mTLS</strong> for partners), <strong>authorization per endpoint and per object</strong> to stop <strong>BOLA</strong>, <strong>input validation</strong>, <strong>rate limiting</strong> at a <strong>gateway/WAF</strong>, narrow <strong>CORS</strong>, <strong>safe errors</strong>, and <strong>audit logging and monitoring</strong>, guided by the <strong>OWASP API Security Top 10</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Transport.</strong> TLS 1.2+ (prefer 1.3) everywhere, HTTP redirected or refused, <strong>HSTS</strong> for browser clients. Never put secrets or tokens in URLs, where they end up in logs.</p>
+<p><strong>Authentication.</strong> Delegate to an <strong>identity provider</strong> using <strong>OAuth 2.0 and OpenID Connect</strong>. Clients obtain <strong>access tokens</strong> (authorization code with <strong>PKCE</strong> for apps, <strong>client credentials</strong> for machine-to-machine). The API acts as a <strong>resource server</strong> and validates every <strong>JWT</strong>: signature against the IdP's <strong>JWKS</strong>, <strong>issuer</strong>, <strong>audience</strong>, expiry and not-before, and allowed algorithms (reject <code>none</code>). Keep access tokens short-lived. For partners, <strong>API keys</strong> (hashed in storage, rotatable) identify the caller, ideally combined with OAuth or <strong>mTLS</strong> for strong authentication.</p>
+<p><strong>Authorization.</strong> Check <strong>scopes or roles</strong> per endpoint (<code>orders:read</code>), and, crucially, <strong>object-level authorization</strong>: user A must not read <code>/orders/123</code> belonging to user B by changing the id. This <strong>Broken Object Level Authorization (BOLA)</strong> is the number one issue in the OWASP API Security Top 10. Also guard <strong>property-level</strong> access (no mass assignment of <code>role</code> or <code>price</code> from request bodies; use DTOs) and function-level access to admin endpoints.</p>
+<p><strong>Input and resource protection.</strong> Validate all inputs (Bean Validation, allow-lists), limit payload and page sizes, use parameterised queries, and protect against <strong>unrestricted resource consumption</strong> with <strong>rate limiting and quotas</strong> per client at an <strong>API gateway</strong> (Kong, Apigee, AWS API Gateway, Spring Cloud Gateway) and a <strong>WAF</strong> for common attacks and bot traffic.</p>
+<p><strong>Browser clients.</strong> Configure <strong>CORS</strong> narrowly (explicit origins, not <code>*</code> with credentials) and set security headers (<code>Content-Security-Policy</code> where relevant, <code>X-Content-Type-Options: nosniff</code>).</p>
+<p><strong>Errors, logging, operations.</strong> Return generic errors without stack traces; log security events (failed auth, authorization denials) with correlation ids, but never log tokens or personal data. Monitor for anomalies, keep an <strong>API inventory</strong> so old versions do not stay exposed, scan dependencies, and run security tests (DAST, penetration tests).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gateway terminates TLS, applies WAF rules and rate limits.</li>
+  <li>Service validates the JWT (signature, iss, aud, exp).</li>
+  <li>Endpoint checks scopes/roles.</li>
+  <li>Business layer checks ownership of the object.</li>
+  <li>Input validated; response filtered via DTOs.</li>
+  <li>Security events logged and monitored.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+SecurityFilterChain api(HttpSecurity http) throws Exception {
+    return http
+        .csrf(csrf -&gt; csrf.disable())                       // stateless bearer-token API
+        .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(a -&gt; a
+            .requestMatchers(HttpMethod.GET, &quot;/api/orders/**&quot;).hasAuthority(&quot;SCOPE_orders:read&quot;)
+            .requestMatchers(&quot;/api/admin/**&quot;).hasRole(&quot;ADMIN&quot;)
+            .anyRequest().authenticated())
+        .oauth2ResourceServer(o -&gt; o.jwt(Customizer.withDefaults()))
+        .build();
+}
+
+@GetMapping(&quot;/api/orders/{id}&quot;)
+OrderDto get(@PathVariable long id, @AuthenticationPrincipal Jwt jwt) {
+    return repo.findByIdAndCustomerId(id, jwt.getSubject())   // object-level check
+               .map(OrderDto::from)
+               .orElseThrow(NotFoundException::new);           // 404, don't reveal existence
+}</code></pre>
+<pre><code class="language-yaml">spring.security.oauth2.resourceserver.jwt:
+  issuer-uri: https://login.shop.com/realms/shop
+  audiences: orders-api</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking only that the token is valid, not that the user owns the object.</li>
+  <li>Not validating audience, so tokens for other APIs are accepted.</li>
+  <li>CORS <code>*</code> with credentials.</li>
+  <li>Exposing entities directly (mass assignment, data leaks).</li>
+  <li>No rate limiting on login or expensive endpoints.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with HTTPS everywhere and HSTS. For authentication I use OAuth 2.0 and OpenID Connect through an identity provider, and the API validates every JWT properly: signature via JWKS, issuer, audience and expiry; partners can use API keys or mTLS. Authorization is enforced per endpoint with scopes or roles and at object level, so a user can only access their own orders, which prevents BOLA, the top OWASP API risk. I validate all input, use DTOs to avoid mass assignment, limit payload sizes, and add rate limiting at the gateway and a WAF. CORS is narrow, errors never expose stack traces, and I keep audit logs and monitoring for abuse.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is broken object level authorization, and how would you test for it?</strong> Accessing another user's object by changing an id; test with two users' tokens swapping ids, automated in integration tests.</li>
+  <li><strong>JWT or opaque tokens?</strong> JWTs validate locally; opaque tokens need introspection but are easier to revoke.</li>
+  <li><strong>Why disable CSRF here?</strong> Stateless bearer tokens aren't sent automatically by browsers, unlike cookies.</li>
+</ul>
+</article>
+</body>
+</html>

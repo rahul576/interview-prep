@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-206 · What is the difference between GET, POST, PUT, PATCH, and DELETE?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-206" data-topic="REST &amp; API Design">
+<h1>What is the difference between GET, POST, PUT, PATCH, and DELETE?</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>GET</strong> reads (safe, idempotent, cacheable, no body); <strong>POST</strong> creates with a <strong>server-assigned id</strong> and <strong>201</strong> (not idempotent); <strong>PUT</strong> sends the <strong>complete representation</strong> and replaces it (idempotent, missing fields cleared); <strong>PATCH</strong> sends <strong>only changed fields</strong>; <strong>DELETE</strong> removes (idempotent, <strong>204</strong>, a repeat may give <strong>404</strong>).</p>
+
+<h2>Detailed explanation</h2>
+<p>Take an order resource to make the differences concrete.</p>
+<p><strong>GET /orders/42</strong> returns the order with <strong>200 OK</strong>, or <strong>404</strong> if it does not exist. It changes nothing (<strong>safe</strong>), repeating it is harmless (<strong>idempotent</strong>), and responses can be <strong>cached</strong>. It has no request body; filters go in the query string: <code>GET /orders?status=PAID</code>.</p>
+<p><strong>POST /orders</strong> with a body creates a new order. The <strong>server assigns the id</strong> and responds <strong>201 Created</strong> with <code>Location: /orders/43</code>. Sending the same POST twice creates <strong>two</strong> orders, so POST is <strong>not idempotent</strong>. To make retries safe, clients send an <strong>Idempotency-Key</strong> header.</p>
+<p><strong>PUT /orders/42</strong> sends the <strong>complete</strong> new representation, and the server <strong>replaces</strong> the stored order with it. If the body omits <code>deliveryNotes</code>, that field is cleared. Sending the same PUT again results in the same state, so PUT is <strong>idempotent</strong>. It returns <strong>200</strong> with the body or <strong>204</strong>; it can return <strong>201</strong> if the resource was created at that URI.</p>
+<p><strong>PATCH /orders/42</strong> sends <strong>only the fields to change</strong>, e.g. <code>{&quot;status&quot;:&quot;SHIPPED&quot;}</code> as JSON Merge Patch. Other fields are untouched. It saves bandwidth and avoids overwriting concurrent edits to other fields. It is not guaranteed idempotent (an &quot;append item&quot; operation would add twice).</p>
+<p><strong>DELETE /orders/42</strong> removes the order and typically returns <strong>204 No Content</strong>. Repeating it leaves the order deleted, so it is <strong>idempotent</strong>, even though the second call may return <strong>404</strong>: idempotency is about server state, not identical responses. Many systems implement <strong>soft delete</strong> (a <code>deleted</code> flag) for audit reasons; the API semantics stay the same.</p>
+<p>Use <strong>If-Match</strong> with an <strong>ETag</strong> on PUT/PATCH/DELETE to avoid lost updates, returning <strong>412</strong> if the version changed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pick the method by intent: read, create, replace, modify, remove.</li>
+  <li>Server applies the change and returns the fitting status.</li>
+  <li>Idempotent methods may be retried; POST needs a key.</li>
+  <li>Concurrency handled with ETag and If-Match.</li>
+</ol>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>GET</th><th>POST</th><th>PUT</th><th>PATCH</th><th>DELETE</th></tr></thead>
+<tbody>
+<tr><td>Body</td><td>No</td><td>Yes</td><td>Full</td><td>Partial</td><td>Usually no</td></tr>
+<tr><td>Idempotent</td><td>Yes</td><td>No</td><td>Yes</td><td>Not guaranteed</td><td>Yes</td></tr>
+<tr><td>Success</td><td>200</td><td>201</td><td>200/204</td><td>200/204</td><td>204</td></tr>
+</tbody>
+</table>
+
+<h2>Example</h2>
+<pre><code class="language-http">POST /orders                    -&gt; 201 Created, Location: /orders/43
+{&quot;customerId&quot;: 7, &quot;items&quot;: [{&quot;sku&quot;: &quot;A1&quot;, &quot;qty&quot;: 2}], &quot;deliveryNotes&quot;: &quot;Ring bell&quot;}
+
+PUT /orders/43                  -&gt; 200 OK  (deliveryNotes omitted, so cleared)
+{&quot;customerId&quot;: 7, &quot;items&quot;: [{&quot;sku&quot;: &quot;A1&quot;, &quot;qty&quot;: 3}], &quot;status&quot;: &quot;NEW&quot;}
+
+PATCH /orders/43                -&gt; 200 OK  (only status changes)
+Content-Type: application/merge-patch+json
+{&quot;status&quot;: &quot;SHIPPED&quot;}
+
+DELETE /orders/43               -&gt; 204 No Content
+DELETE /orders/43               -&gt; 404 Not Found (state unchanged)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using PUT for partial updates and wiping data.</li>
+  <li>Returning 200 instead of 201 for creation.</li>
+  <li>Treating a 404 on repeated DELETE as breaking idempotency.</li>
+  <li>Using GET with side effects.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;GET /orders/42 reads the order; it's safe, idempotent and cacheable, with no body. POST /orders creates a new order with a server-assigned id and returns 201 Created; repeating it creates another order, so it isn't idempotent. PUT /orders/42 sends the complete representation and replaces the resource; repeating it gives the same result, so it's idempotent, but missing fields get cleared. PATCH sends only the fields to change, like the status. DELETE removes the order, usually with 204; repeating it leaves it deleted, so it's idempotent even if the second call returns 404.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which status code should a successful DELETE return?</strong> 204 No Content, or 200 if you return a body.</li>
+  <li><strong>How do you prevent lost updates with PUT?</strong> ETag with If-Match, returning 412 on mismatch.</li>
+  <li><strong>Can POST be idempotent?</strong> With an idempotency key, the server can make it so.</li>
+</ul>
+</article>
+</body>
+</html>

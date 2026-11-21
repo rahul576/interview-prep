@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-200 · What is the purpose of the @Transactional annotation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-200" data-topic="Spring Framework">
+<h1>What is the purpose of the @Transactional annotation?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>@Transactional</code></strong> declares a <strong>transaction boundary</strong> on a method or class so all database work inside <strong>commits or rolls back together</strong>; attributes set <strong>propagation, isolation, readOnly, timeout and rollback rules</strong>, it rolls back on <strong>unchecked exceptions</strong> by default, and works only for calls <strong>through the Spring proxy</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A business operation such as &quot;place an order&quot; usually performs several writes: insert the order, insert order lines, reduce stock, record a payment. These must be <strong>atomic</strong>. <code>@Transactional</code> lets you declare that boundary instead of writing <code>begin</code>, <code>commit</code> and <code>rollback</code> code by hand.</p>
+<p>Place it on a method, or on a class to apply to all its public methods (a method-level annotation overrides the class-level one). Spring creates a proxy that starts a transaction before the method, shares the same connection with every repository called inside, and commits at the end.</p>
+<p>Key attributes:</p>
+<ul>
+  <li><strong>propagation</strong>: REQUIRED (default) joins an existing transaction or creates one; REQUIRES_NEW runs independently.</li>
+  <li><strong>isolation</strong>: e.g. READ_COMMITTED or SERIALIZABLE; default uses the database setting.</li>
+  <li><strong>readOnly</strong>: optimisation hint for queries.</li>
+  <li><strong>timeout</strong>: seconds before the transaction is rolled back.</li>
+  <li><strong>rollbackFor / noRollbackFor</strong>: change the default rules.</li>
+</ul>
+<p>By default it rolls back on <strong>RuntimeException and Error</strong> and <strong>commits on checked exceptions</strong>, so many teams add <code>rollbackFor = Exception.class</code> or use unchecked exceptions.</p>
+<p>It belongs on the <strong>service layer</strong>, where a method represents one business use case. Controllers should not hold transactions across HTTP concerns, and putting it only on repositories would give each call its own transaction, losing atomicity across them (Spring Data repository methods are already transactional individually).</p>
+<p>Because it is proxy-based, it applies only when the call comes <strong>from outside the bean</strong>: internal <code>this.method()</code> calls don't start a transaction, and private methods are never transactional. Use <code>jakarta.transaction.Transactional</code> or Spring's <code>org.springframework.transaction.annotation.Transactional</code>; Spring's version has more attributes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring finds <code>@Transactional</code> and proxies the bean.</li>
+  <li>A caller invokes the method through the proxy.</li>
+  <li>The proxy begins or joins a transaction per propagation.</li>
+  <li>Repository calls use the thread-bound connection.</li>
+  <li>Return: commit. Matching exception: rollback.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+public class OrderService {
+    @Transactional
+    public Order placeOrder(PlaceOrder cmd) {
+        Order order = orderRepo.save(new Order(cmd.customerId()));
+        cmd.lines().forEach(l -&gt; {
+            lineRepo.save(new OrderLine(order, l.sku(), l.qty()));
+            stockRepo.decrement(l.sku(), l.qty());   // throws if insufficient -&gt; all rolled back
+        });
+        return order;
+    }
+
+    @Transactional(readOnly = true)
+    public List&lt;OrderView&gt; history(long customerId) { return orderRepo.findViews(customerId); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting it on controllers or only on repositories.</li>
+  <li>Self-invocation and private methods.</li>
+  <li>Relying on rollback for checked exceptions.</li>
+  <li>Very long transactions spanning remote calls or user think-time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;@Transactional declares that a method, or all public methods of a class, should run in a transaction, so all database work either commits together or rolls back together. Attributes configure propagation, isolation, timeout, readOnly and rollback rules. By default it rolls back on RuntimeException and Error but commits on checked exceptions unless I add rollbackFor. I put it on service methods that represent a business operation, like placing an order. Because it works through a proxy, it only applies to external calls to the bean; internal calls with this don't start a transaction.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why service layer, not controller or repository?</strong> The service method is the unit of work; repositories alone lose atomicity, controllers mix in web concerns.</li>
+  <li><strong>Class-level vs method-level?</strong> Method level overrides class level.</li>
+  <li><strong>Does it work on interfaces?</strong> It's recommended on concrete classes; interface annotations work only in some proxy modes.</li>
+</ul>
+</article>
+</body>
+</html>

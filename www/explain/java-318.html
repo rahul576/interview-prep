@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-318 · How does Spring Security work internally, and how do you secure methods?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-318" data-topic="Security">
+<h1>How does Spring Security work internally, and how do you secure methods?</h1>
+<p class="ex-meta">Security · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Spring Security is a <strong>chain of servlet filters</strong> wired in through <strong>DelegatingFilterProxy</strong> and <strong>FilterChainProxy</strong>; authentication filters hand credentials to an <strong>AuthenticationManager/AuthenticationProvider</strong>, the result is stored in the <strong>SecurityContext</strong>, and <strong>AuthorizationFilter</strong> plus <strong>method security (@PreAuthorize)</strong> enforce access.</p>
+
+<h2>Detailed explanation</h2>
+<p>The servlet container knows nothing about Spring beans, so Spring registers a <strong>DelegatingFilterProxy</strong> that forwards to a bean called <strong>FilterChainProxy</strong>. That holds one or more <strong>SecurityFilterChain</strong> beans, each matching a set of requests, and each chain is an ordered list of filters: CSRF, CORS, logout, authentication filters (form login, HTTP Basic, <code>BearerTokenAuthenticationFilter</code>), exception translation and finally the <strong>AuthorizationFilter</strong>.</p>
+<p>An authentication filter extracts credentials and creates an unauthenticated <code>Authentication</code> object. It passes this to the <strong>AuthenticationManager</strong>, usually a <code>ProviderManager</code> that iterates over <strong>AuthenticationProviders</strong>: <code>DaoAuthenticationProvider</code> loads the user through a <strong>UserDetailsService</strong> and checks the password with a <code>PasswordEncoder</code>, while <code>JwtAuthenticationProvider</code> uses a <code>JwtDecoder</code>. On success the authenticated principal with its <strong>GrantedAuthorities</strong> goes into the <strong>SecurityContext</strong>, held per request by <code>SecurityContextHolder</code> (thread-local by default) and, for session apps, saved through a <code>SecurityContextRepository</code>.</p>
+<p><strong>ExceptionTranslationFilter</strong> turns <code>AuthenticationException</code> into a 401 or login redirect and <code>AccessDeniedException</code> into 403. The <strong>AuthorizationFilter</strong> applies URL rules from <code>authorizeHttpRequests</code> with request matchers. For finer control, <strong>@EnableMethodSecurity</strong> activates AOP-based checks: <strong>@PreAuthorize</strong> and <strong>@PostAuthorize</strong> with SpEL expressions on service methods, which can check roles and ownership. Because it is proxy-based, self-invocation is not checked.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request enters <code>DelegatingFilterProxy</code>, then <code>FilterChainProxy</code> selects the matching <code>SecurityFilterChain</code>.</li>
+  <li>An authentication filter builds an <code>Authentication</code> and calls the <code>AuthenticationManager</code>.</li>
+  <li>A provider verifies it; the result is stored in the <code>SecurityContext</code>.</li>
+  <li><code>AuthorizationFilter</code> checks URL rules; failures go to <code>ExceptionTranslationFilter</code>.</li>
+  <li>The controller calls a service; a method-security proxy evaluates <code>@PreAuthorize</code>.</li>
+  <li>The context is cleared at the end of the request.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Configuration
+@EnableMethodSecurity
+class SecurityConfig {
+    @Bean
+    SecurityFilterChain api(HttpSecurity http) throws Exception {
+        http.securityMatcher(&quot;/api/**&quot;)
+            .authorizeHttpRequests(a -&gt; a
+                .requestMatchers(&quot;/api/admin/**&quot;).hasRole(&quot;ADMIN&quot;)
+                .anyRequest().authenticated())
+            .oauth2ResourceServer(o -&gt; o.jwt(Customizer.withDefaults()));
+        return http.build();
+    }
+}
+
+@Service
+class OrderService {
+    @PreAuthorize(&quot;hasRole('ADMIN') or @orderSecurity.isOwner(#orderId, authentication.name)&quot;)
+    public OrderDto get(long orderId) { ... }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on URL rules and forgetting object-level checks.</li>
+  <li>Expecting <code>@PreAuthorize</code> to work on a private method or a call from the same class.</li>
+  <li>Assuming the SecurityContext is available in <code>@Async</code> threads without propagation.</li>
+  <li>Ordering request matchers so that a broad <code>permitAll</code> shadows a stricter rule.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring Security plugs into the servlet container as a filter, DelegatingFilterProxy, which delegates to FilterChainProxy and the SecurityFilterChain beans I configure. Authentication filters, say for JWT bearer tokens or form login, extract credentials and call the AuthenticationManager, whose providers check them, for example through a UserDetailsService and PasswordEncoder or a JwtDecoder. The authenticated principal goes into the SecurityContext. Then the AuthorizationFilter checks URL rules from authorizeHttpRequests, and ExceptionTranslationFilter turns failures into 401 or 403. For fine-grained rules I enable method security and put @PreAuthorize on service methods, including ownership checks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you check that a user can only access their own orders?</strong> <code>@PreAuthorize</code> calling a bean method, or filter queries by the current user's id.</li>
+  <li><strong>Can you have several filter chains?</strong> Yes, with <code>securityMatcher</code> and <code>@Order</code>, for example API versus web UI.</li>
+  <li><strong>How is the context passed to async threads?</strong> <code>DelegatingSecurityContextExecutor</code> or a context-propagating task decorator.</li>
+</ul>
+</article>
+</body>
+</html>

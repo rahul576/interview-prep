@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aiml-057 · What are embeddings-based semantic search and keyword search, and when does each fail?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aiml-057" data-topic="AI/ML &amp; GenAI">
+<h1>What are embeddings-based semantic search and keyword search, and when does each fail?</h1>
+<p class="ex-meta">AI/ML &amp; GenAI · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Keyword search</strong> matches the exact words of a query using an <strong>inverted index</strong> and ranking such as <strong>BM25</strong>; <strong>semantic search</strong> matches meaning by comparing <strong>embedding vectors</strong>. Keyword search fails on synonyms and paraphrases, semantic search fails on exact identifiers and rare terms, so production systems usually use <strong>hybrid search</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Keyword (lexical) search</strong>, as in Elasticsearch, OpenSearch, Solr or PostgreSQL full-text search, tokenises documents into terms and builds an <strong>inverted index</strong> mapping each term to the documents that contain it. <strong>BM25</strong> scores documents by term frequency (with saturation), inverse document frequency (rare words count more) and document length. It is fast, cheap, explainable (&quot;these words matched&quot;) and very precise for exact strings. Its weakness is the <strong>vocabulary mismatch problem</strong>: &quot;how do I get my money back&quot; does not match a page titled &quot;Refund policy&quot; unless you maintain synonym lists and stemming rules.</p>
+<p><strong>Semantic (dense) search</strong> uses an <strong>embedding model</strong> to turn queries and documents (usually chunks) into vectors, stores them in a vector index (pgvector, OpenSearch k-NN, Pinecone, Qdrant and others) and returns the nearest neighbours by <strong>cosine similarity</strong>, typically through approximate algorithms such as <strong>HNSW</strong>. It handles paraphrases, synonyms, conversational questions and even cross-language queries. Its weaknesses are the mirror image: error codes like <code>ORA-00942</code>, SKUs, invoice numbers, people's names, version numbers and new jargon the model never saw are blurred together, because embeddings capture general meaning rather than exact tokens. It is also harder to explain why a result ranked first, and quality depends on the embedding model and chunking.</p>
+<p><strong>Hybrid search</strong> runs both retrievers and merges the result lists, commonly with <strong>Reciprocal Rank Fusion (RRF)</strong> or a weighted score, and often adds a <strong>cross-encoder reranker</strong> on the top 50-100 candidates. This gets the recall of semantic search and the precision of keyword search.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Index each document twice: as terms in an inverted index and as embedding vectors.</li>
+  <li>At query time, run a BM25 query and a k-NN vector query in parallel.</li>
+  <li>Merge the two ranked lists with RRF or weighted scores.</li>
+  <li>Optionally rerank the top candidates with a cross-encoder model.</li>
+  <li>Measure with a labelled set of real queries (recall@k, nDCG, MRR) and tune.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">POST /docs/_search
+{
+  &quot;retriever&quot;: {
+    &quot;rrf&quot;: {
+      &quot;retrievers&quot;: [
+        { &quot;standard&quot;: { &quot;query&quot;: { &quot;match&quot;: { &quot;body&quot;: &quot;ORA-00942 table not found&quot; } } } },
+        { &quot;knn&quot;: { &quot;field&quot;: &quot;body_vector&quot;, &quot;query_vector_builder&quot;: {
+            &quot;text_embedding&quot;: { &quot;model_id&quot;: &quot;my-embedder&quot;, &quot;model_text&quot;: &quot;ORA-00942 table not found&quot; } },
+            &quot;k&quot;: 20, &quot;num_candidates&quot;: 100 } }
+      ]
+    }
+  }
+}</code></pre>
+<p>The keyword side nails the exact error code; the vector side finds a troubleshooting page that says &quot;relation does not exist&quot;.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Keyword (BM25)</th><th>Semantic (embeddings)</th></tr></thead>
+<tbody>
+<tr><td>Strength</td><td>Exact terms, IDs, codes</td><td>Meaning, paraphrase, synonyms</td></tr>
+<tr><td>Fails on</td><td>Synonyms, conversational queries</td><td>Rare terms, identifiers, names</td></tr>
+<tr><td>Explainability</td><td>High</td><td>Low</td></tr>
+<tr><td>Cost</td><td>Low</td><td>Embedding + vector index</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Replacing keyword search entirely with vectors and losing exact-match queries.</li>
+  <li>Judging quality on a handful of demo queries instead of real user logs.</li>
+  <li>Ignoring metadata filters (tenant, language, date) in the vector query.</li>
+  <li>Re-embedding with a new model without re-indexing everything.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Keyword search uses an inverted index with BM25, so it is fast, explainable and precise for exact words, but it misses synonyms and paraphrases, like 'get my money back' versus 'refund policy'. Semantic search embeds queries and documents as vectors and finds similar meaning, which fixes that, but it is weak on exact identifiers such as error codes, SKUs or names. So in production I'd use hybrid search: run both, merge with reciprocal rank fusion and rerank the top results. And I'd tune the balance using a labelled set of real queries and metrics like recall at k.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you tune the balance?</strong> Build an evaluation set from real queries and adjust fusion weights or RRF constants against recall@k and nDCG.</li>
+  <li><strong>What is a reranker?</strong> A cross-encoder that scores query and document together; slower but more accurate, so it is applied only to the top candidates.</li>
+  <li><strong>How do you detect queries that need exact match?</strong> Heuristics such as patterns for codes or IDs, or simply let hybrid fusion handle it.</li>
+</ul>
+</article>
+</body>
+</html>

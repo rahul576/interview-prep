@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-167 · Your Spring Boot service is OOMKilled in Kubernetes, but heap usage looks fine. What is going on?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-167" data-topic="Troubleshooting">
+<h1>Your Spring Boot service is OOMKilled in Kubernetes, but heap usage looks fine. What is going on?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The container limit covers <strong>the whole JVM process</strong>, not just the heap: <strong>Metaspace, thread stacks, direct buffers, code cache, GC structures and native libraries</strong> add up, so a heap sized too close to the limit (high <strong>MaxRAMPercentage</strong> or Xmx near the limit) gets the pod <strong>OOMKilled</strong>; diagnose with <strong>Native Memory Tracking</strong> and RSS, and leave headroom.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes enforces <code>resources.limits.memory</code> via cgroups. When the process's resident memory (RSS plus page cache it owns) exceeds the limit, the kernel's OOM killer terminates it: exit code <strong>137</strong>, reason <code>OOMKilled</code>. The JVM never throws <code>OutOfMemoryError</code>, there is no heap dump, and heap dashboards look fine because the heap is only part of the footprint.</p>
+<p><strong>JVM memory beyond the heap:</strong></p>
+<ul>
+  <li><strong>Metaspace:</strong> class metadata; large for Spring apps with many classes, proxies and dynamic generation.</li>
+  <li><strong>Thread stacks:</strong> default up to 1 MB reserved per platform thread (<code>-Xss</code>); 400 threads can commit hundreds of MB. Virtual threads keep stacks on the heap and are much cheaper.</li>
+  <li><strong>Direct (off-heap) buffers:</strong> NIO, Netty (WebFlux, gRPC, Lettuce, Kafka clients) use <code>ByteBuffer.allocateDirect</code>; default max is roughly the heap size unless <code>-XX:MaxDirectMemorySize</code> is set.</li>
+  <li><strong>Code cache</strong> for JIT-compiled code, <strong>GC data structures</strong> (G1 remembered sets, card tables), symbol tables, and <strong>native libraries</strong> (compression, crypto, JNI).</li>
+  <li><strong>glibc malloc arenas:</strong> multiple per-thread arenas fragment and retain memory; many threads can make RSS creep.</li>
+</ul>
+<p><strong>Sizing:</strong> the JVM is container-aware and sizes the heap from the limit. <code>-XX:MaxRAMPercentage=75</code> is a common start; 90% or <code>-Xmx</code> equal to the limit almost guarantees OOMKills. Set <code>requests</code> equal to <code>limits</code> for memory to avoid surprises, cap direct memory and thread pools, and measure the real non-heap footprint.</p>
+<p><strong>Diagnosis:</strong> enable <strong>Native Memory Tracking</strong> (<code>-XX:NativeMemoryTracking=summary</code>), take a baseline with <code>jcmd &lt;pid&gt; VM.native_memory baseline</code>, then <code>summary.diff</code> later to see which category grows. Compare with container RSS (<code>container_memory_working_set_bytes</code>). If NMT totals stay flat while RSS grows, suspect native allocation outside the JVM's tracking: malloc fragmentation (try <code>MALLOC_ARENA_MAX=2</code> or jemalloc) or a native library leak.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod limit = 1 GiB; heap max set to 90% = ~920 MiB.</li>
+  <li>Metaspace 150 MiB + threads 200 MiB + direct buffers 100 MiB + code cache 50 MiB.</li>
+  <li>Total exceeds 1 GiB while the heap itself is half full.</li>
+  <li>Kernel OOM killer terminates the process (exit 137).</li>
+  <li>Fix: reduce heap share, cap non-heap areas, or raise the limit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resources:
+  requests: { memory: &quot;1536Mi&quot;, cpu: &quot;1&quot; }
+  limits:   { memory: &quot;1536Mi&quot; }
+env:
+  - name: JAVA_TOOL_OPTIONS
+    value: &gt;-
+      -XX:MaxRAMPercentage=70
+      -XX:MaxDirectMemorySize=128m
+      -XX:ReservedCodeCacheSize=128m
+      -Xss512k
+      -XX:NativeMemoryTracking=summary
+  - name: MALLOC_ARENA_MAX
+    value: &quot;2&quot;</code></pre>
+<pre><code class="language-bash">jcmd 1 VM.native_memory baseline
+# ...a few hours later
+jcmd 1 VM.native_memory summary.diff
+#  Thread (reserved=412MB +180MB, committed=412MB +180MB)  &lt;- thread count growing</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting <code>-Xmx</code> equal to the container limit.</li>
+  <li>Watching only heap metrics and not container working set.</li>
+  <li>Unbounded thread pools creating hundreds of platform threads.</li>
+  <li>Assuming an OOMKill means a heap leak and analysing heap dumps that show nothing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The container limit applies to the whole process, not just the heap. Besides the heap, the JVM uses Metaspace, thread stacks, around a megabyte per platform thread, direct buffers for Netty and NIO, the code cache, GC structures and native libraries. If the heap is sized too close to the limit, say Xmx equal to it or MaxRAMPercentage at 90, the total exceeds it and the kernel kills the container with exit code 137, so there's no OutOfMemoryError. I diagnose with Native Memory Tracking diffs compared to RSS, set MaxRAMPercentage around 70 to 75, cap direct memory and threads, and check malloc fragmentation with MALLOC_ARENA_MAX or jemalloc.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to size requests and limits?</strong> Measure total RSS under peak load, add headroom, set memory request equal to limit.</li>
+  <li><strong>OOMKilled vs OutOfMemoryError?</strong> The kernel kills the process for exceeding the cgroup limit; OOME is the JVM failing to allocate within its heap or another pool.</li>
+  <li><strong>Do virtual threads help?</strong> Yes for stack memory, since their stacks live on the heap and grow as needed.</li>
+</ul>
+</article>
+</body>
+</html>

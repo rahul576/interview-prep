@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsa-012 · How would you design an LRU cache with O(1) get and put?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dsa-012" data-topic="DSA: Lists, Stacks &amp; Queues">
+<h1>How would you design an LRU cache with O(1) get and put?</h1>
+<p class="ex-meta">DSA: Lists, Stacks &amp; Queues · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Combine a <strong>hash map</strong> (key to node, for O(1) lookup) with a <strong>doubly linked list</strong> ordered by recency. <strong>Move a node to the front on every access</strong>, insert new keys at the front, and <strong>evict from the tail</strong> when over capacity. All operations are <strong>O(1)</strong>. In Java, <strong><code>LinkedHashMap</code> with access order and <code>removeEldestEntry</code></strong> does this out of the box.</p>
+
+<h2>Detailed explanation</h2>
+<p>An LRU (Least Recently Used) cache keeps at most <code>capacity</code> entries. When full, it evicts the entry that hasn't been accessed for the longest time. We need three operations in O(1):</p>
+<ul>
+  <li><strong>find a key</strong>, which a hash map gives us</li>
+  <li><strong>mark it most recently used</strong>, which means moving it to the front of an ordering</li>
+  <li><strong>find and remove the least recently used</strong>, the back of that ordering</li>
+</ul>
+<p>An array or singly linked list can't move or remove an arbitrary element in O(1). A <strong>doubly linked list</strong> can, <em>if</em> we already have a reference to the node, and that is exactly what the map stores. So <code>map: key -&gt; Node(key, value, prev, next)</code>.</p>
+<p><strong>Sentinel head and tail</strong> (dummy nodes) remove all null checks when inserting at the front or unlinking. The node stores its <strong>key</strong>, so that when we evict the tail we can also remove it from the map.</p>
+<ul>
+  <li><strong>get(key):</strong> look up the node. If absent, return -1. Otherwise unlink it, insert it after the head, and return the value.</li>
+  <li><strong>put(key, value):</strong> if present, update the value and move it to the front. Otherwise create a node, insert it at the front and add it to the map. If <code>size &gt; capacity</code>, remove <code>tail.prev</code> from both the list and the map.</li>
+</ul>
+<p>Java shortcut: <code>new LinkedHashMap&lt;&gt;(cap, 0.75f, true)</code> (the third argument is <strong>accessOrder</strong>), overriding <code>removeEldestEntry</code> to return <code>size() &gt; cap</code>. This is great in production code, but interviewers usually want the manual version too.</p>
+<p><strong>Thread safety:</strong> wrap the operations in a lock (simple, but contention-heavy), or use a proven library such as <strong>Caffeine</strong> (Window TinyLFU, concurrent, with better hit rates than pure LRU). Redis offers <code>allkeys-lru</code> eviction (approximated by sampling).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create <code>head &lt;-&gt; tail</code> sentinels and an empty map.</li>
+  <li><code>get</code>: map lookup, then <code>remove(node)</code>, then <code>addFirst(node)</code>.</li>
+  <li><code>put</code> an existing key: update and move to the front.</li>
+  <li><code>put</code> a new key: <code>addFirst</code> and <code>map.put</code>. If over capacity, <code>lru = tail.prev</code>, <code>remove(lru)</code>, <code>map.remove(lru.key)</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class LRUCache {
+    private static class Node { int key, val; Node prev, next; Node(int k, int v) { key = k; val = v; } }
+    private final Map&lt;Integer, Node&gt; map = new HashMap&lt;&gt;();
+    private final Node head = new Node(0, 0), tail = new Node(0, 0);
+    private final int cap;
+    LRUCache(int cap) { this.cap = cap; head.next = tail; tail.prev = head; }
+
+    public int get(int key) {
+        Node n = map.get(key);
+        if (n == null) return -1;
+        unlink(n); addFirst(n);
+        return n.val;
+    }
+    public void put(int key, int val) {
+        Node n = map.get(key);
+        if (n != null) { n.val = val; unlink(n); addFirst(n); return; }
+        n = new Node(key, val); map.put(key, n); addFirst(n);
+        if (map.size() &gt; cap) { Node lru = tail.prev; unlink(lru); map.remove(lru.key); }
+    }
+    private void unlink(Node n) { n.prev.next = n.next; n.next.prev = n.prev; }
+    private void addFirst(Node n) { n.next = head.next; n.prev = head; head.next.prev = n; head.next = n; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a singly linked list or a queue, which makes removal O(n).</li>
+  <li>Not storing the key in the node, so you can't remove the evicted entry from the map.</li>
+  <li>Forgetting to move the node to the front on <code>get</code>, or on <code>put</code> of an existing key.</li>
+  <li>Using <code>LinkedHashMap</code> without <code>accessOrder = true</code>, which gives insertion order (FIFO), not LRU.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd combine a hash map with a doubly linked list. The map gives O(1) lookup from key to node, and the list keeps nodes in recency order, with sentinel head and tail nodes to avoid edge cases. On get, I find the node, move it to the front and return the value. On put, I update or insert at the front, and if we exceed capacity I evict the node before the tail and remove its key from the map. Everything is O(1). In Java, LinkedHashMap with access order and removeEldestEntry gives the same behaviour, and for concurrent production use I'd reach for Caffeine.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Thread-safe without a global lock?</strong> Segment by key hash (striped locks), or use Caffeine's buffered, lock-amortised design.</li>
+  <li><strong>LFU instead?</strong> Use a map plus frequency buckets (frequency to a doubly linked list) with a tracked min frequency. O(1).</li>
+  <li><strong>TTL expiry?</strong> Store an expiry time per node. Evict lazily on access plus a periodic sweep or timer wheel.</li>
+</ul>
+</article>
+</body>
+</html>

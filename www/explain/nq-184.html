@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-184 · How can common utility libraries be shared across microservices while allowing service-specific functionality?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-184" data-topic="Spring Boot">
+<h1>How can common utility libraries be shared across microservices while allowing service-specific functionality?</h1>
+<p class="ex-meta">Spring Boot · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Share cross-cutting code as a <strong>small, versioned internal library or custom Spring Boot starter</strong> published to an artifact repository, built with <strong>conditional, overridable auto-configuration</strong> and clear <strong>extension points</strong> (interfaces, customizer beans, properties), keeping <strong>domain logic out</strong> and following <strong>semantic versioning</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every service needs the same plumbing: structured logging and correlation ids, a standard error response format, security filters and token validation, HTTP client configuration with timeouts and retries, metrics tags, tracing. Copying this into each service leads to drift; a shared library solves it, but done badly it couples services so tightly that they must deploy together, a <strong>distributed monolith</strong>.</p>
+<p>The best shape is a <strong>custom starter</strong>: an <code>acme-autoconfigure</code> module with <code>@AutoConfiguration</code> classes plus an <code>acme-spring-boot-starter</code> POM, published to <strong>Nexus, Artifactory or GitHub Packages</strong>. Features switch on and off with properties, and every bean is annotated with <strong><code>@ConditionalOnMissingBean</code></strong>, so a service can replace any default simply by defining its own bean.</p>
+<p>Service-specific behaviour comes through <strong>extension points</strong>: interfaces the service implements (for example a <code>TenantResolver</code>), <strong>customizer beans</strong> such as Boot's <code>RestClientCustomizer</code> or the library's own <code>ErrorResponseCustomizer</code>, and typed <strong><code>@ConfigurationProperties</code></strong> with sensible defaults and metadata for IDE completion.</p>
+<p>Governance matters as much as code. Keep the library <strong>small and cross-cutting only</strong>; no shared entities or business rules. Use <strong>semantic versioning</strong>, keep minor releases <strong>backward compatible</strong>, deprecate before removing, publish release notes, and let each service upgrade at its own pace. Minimise transitive dependencies and align them with the Spring Boot BOM to avoid version clashes. Tools like Renovate or Dependabot help services stay current.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify truly cross-cutting concerns shared by most services.</li>
+  <li>Implement them in an autoconfigure module with conditions and properties.</li>
+  <li>Expose extension interfaces and customizers.</li>
+  <li>Publish a versioned starter to the artifact repository via CI.</li>
+  <li>Services add the starter, override what they need, and upgrade independently.</li>
+  <li>Test the library with ApplicationContextRunner and a sample app.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@AutoConfiguration
+@EnableConfigurationProperties(AcmeWebProps.class)
+public class AcmeWebAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    CorrelationIdFilter correlationIdFilter(AcmeWebProps p) {
+        return new CorrelationIdFilter(p.getHeaderName());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ProblemDetailsExceptionHandler errorHandler(ObjectProvider&lt;ErrorResponseCustomizer&gt; customizers) {
+        return new ProblemDetailsExceptionHandler(customizers.orderedStream().toList());
+    }
+}</code></pre>
+<pre><code class="language-yaml">acme:
+  web:
+    header-name: X-Correlation-Id</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting domain models or business logic in the shared library.</li>
+  <li>Breaking changes in minor versions, forcing synchronised upgrades.</li>
+  <li>Heavy transitive dependencies that conflict with services.</li>
+  <li>Beans without <code>@ConditionalOnMissingBean</code>, so services cannot override them.</li>
+  <li>A &quot;common-utils&quot; dumping ground with no ownership.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd build a small, versioned internal library, ideally a custom Spring Boot starter published to Artifactory, only for cross-cutting concerns like logging and correlation ids, error format, security filters, HTTP client setup and metrics. It uses auto-configuration with conditions, so features switch on by property and OnMissingBean lets a service replace any default. For service-specific behaviour I expose interfaces, customizer beans and ConfigurationProperties. I keep domain logic out to avoid a distributed monolith, use semantic versioning with backward-compatible changes, and let each service upgrade on its own schedule.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risks of a shared library?</strong> Coupling, forced upgrades, dependency conflicts and a blast radius for bugs.</li>
+  <li><strong>Library vs sidecar/platform?</strong> Sidecars or a service mesh handle some concerns language-independently.</li>
+  <li><strong>How do you roll out a fix everywhere?</strong> Patch release plus automated dependency update PRs.</li>
+</ul>
+</article>
+</body>
+</html>

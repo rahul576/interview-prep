@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-313 · How should you implement equals and hashCode for JPA entities?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-313" data-topic="Spring Data &amp; JPA">
+<h1>How should you implement equals and hashCode for JPA entities?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Entity <code>equals</code>/<code>hashCode</code> must stay <strong>stable across entity states</strong>: a <strong>generated id is null before persist</strong>, so use an <strong>immutable business key</strong>, or <strong>compare by id with a constant hashCode</strong>, or <strong>assign a UUID at construction</strong>, and <strong>avoid Lombok <code>@Data</code></strong> which touches <strong>lazy associations</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Java collections such as <code>HashSet</code> and <code>HashMap</code> assume an object's <code>hashCode</code> does not change while it is inside them. Entities break that assumption easily.</p>
+<p><strong>Default <code>Object.equals</code></strong> (identity) works within one persistence context, because Hibernate guarantees one instance per row there. But comparing a detached entity from one transaction with a managed one from another gives <code>false</code>, and sets mixing them get duplicates.</p>
+<p><strong>Id-based with id in hashCode</strong> is the trap: a new entity has <code>id == null</code>; you add it to a <code>Set</code> (for example <code>order.getLines().add(line)</code> before saving), then <code>persist</code> assigns the id, the hashCode changes and the set can no longer find the element; <code>contains</code> and <code>remove</code> fail.</p>
+<p>Working options:</p>
+<ol>
+  <li><strong>Natural/business key</strong>: an immutable, unique attribute that exists before persist, such as ISBN, email, or SKU. Mark it <code>@NaturalId</code> in Hibernate. Clean, but many entities don't have one, and it must truly never change.</li>
+  <li><strong>Id-based equals with constant hashCode</strong>: <code>equals</code> returns true only if both ids are non-null and equal (with a class check that handles Hibernate proxies), and <code>hashCode</code> returns a constant such as <code>getClass().hashCode()</code>. All instances of a type share a bucket, which is acceptable for the small collections typical in entity graphs.</li>
+  <li><strong>Application-assigned UUID</strong> (ideally time-ordered UUIDv7 for index locality), set in the constructor or field initialiser, so the identifier exists from the start and both equals and hashCode can use it.</li>
+</ol>
+<p><strong>Avoid Lombok <code>@Data</code> and <code>@EqualsAndHashCode</code> on entities.</strong> Generated methods include <strong>all fields</strong>, including lazy collections and associations, so calling <code>equals</code>, <code>hashCode</code> or <code>toString</code> can trigger <strong>extra queries</strong>, <strong>LazyInitializationException</strong> on detached entities, or <strong>StackOverflowError</strong> with bidirectional relations. Mutable fields in hashCode also break sets. Use <code>@Getter</code>/<code>@Setter</code> and write equals/hashCode by hand, excluding associations from <code>toString</code>.</p>
+<p>Also use <code>instanceof</code> or <code>Hibernate.getClass()</code> rather than <code>getClass() ==</code>, because lazy proxies are subclasses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide the identity rule: natural key, generated id, or assigned UUID.</li>
+  <li>Ensure the hashCode never changes over the entity's lifetime.</li>
+  <li>Handle proxies in the type check.</li>
+  <li>Exclude associations from equals, hashCode and toString.</li>
+  <li>Test equality across transient, managed and detached states.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+public class OrderLine {
+    @Id @GeneratedValue(strategy = GenerationType.SEQUENCE)
+    private Long id;
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof OrderLine other)) return false;
+        return id != null &amp;&amp; id.equals(other.getId());   // getter works on proxies
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();                     // constant across states
+    }
+}
+
+@Entity
+public class Book {
+    @Id @GeneratedValue Long id;
+    @NaturalId @Column(nullable = false, unique = true, updatable = false)
+    private String isbn;
+
+    @Override public boolean equals(Object o) { return o instanceof Book b &amp;&amp; isbn.equals(b.isbn); }
+    @Override public int hashCode() { return isbn.hashCode(); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the generated id in hashCode.</li>
+  <li>Lombok <code>@Data</code> on entities.</li>
+  <li>Using mutable fields such as name or status in equals.</li>
+  <li><code>getClass() != o.getClass()</code> failing with Hibernate proxies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The difficulty is that a generated id is null before persist, so an id-based hashCode changes when the entity is saved and breaks any HashSet that already contains it. I either use an immutable business key such as an ISBN, or compare by id in equals while returning a constant hashCode, which stays stable across states, or assign a UUID in the constructor. I avoid Lombok @Data on entities because generated equals and toString touch lazy collections and relations, causing extra queries, LazyInitializationException or infinite recursion.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can all-fields equals cause LazyInitializationException?</strong> It touches lazy associations on detached entities.</li>
+  <li><strong>Is a constant hashCode slow?</strong> Only for huge hashed collections of one entity type, which are rare.</li>
+  <li><strong>Why handle proxies?</strong> Lazy proxies are subclasses with uninitialised fields; use getters and instanceof.</li>
+</ul>
+</article>
+</body>
+</html>

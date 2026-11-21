@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-270 · How would you securely manage passwords, API keys, and database credentials?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-270" data-topic="Security">
+<h1>How would you securely manage passwords, API keys, and database credentials?</h1>
+<p class="ex-meta">Security · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Keep secrets <strong>out of code, Git and images</strong>, store them in a <strong>secret manager</strong> (Vault, AWS Secrets Manager, Azure Key Vault), <strong>inject them at runtime</strong>, prefer <strong>managed or workload identity</strong> and <strong>short-lived dynamic credentials</strong>, <strong>rotate</strong> them, and <strong>hash user passwords</strong> rather than storing them.</p>
+
+<h2>Detailed explanation</h2>
+<p>Three different things are often mixed up. <strong>Application secrets</strong> (database passwords, API keys, signing keys) must be readable by the service. <strong>User passwords</strong> must never be readable and are hashed with bcrypt or Argon2id. <strong>Configuration</strong> (URLs, timeouts) is not secret at all and can live in Git.</p>
+<p>For application secrets the rule is: never in source code, never in <code>application.yml</code> committed to Git, never baked into Docker images or CI logs. Run <strong>secret scanning</strong> (gitleaks, GitHub secret scanning, trufflehog) on every push, because a leaked key stays in Git history. Store secrets in a <strong>secret manager</strong> with access policies, versioning and audit logs. Applications read them at runtime: via <strong>Spring Cloud Vault</strong> or <strong>Spring Cloud AWS/Azure</strong> config integration, mounted files from the <strong>Secrets Store CSI Driver</strong> or External Secrets Operator in Kubernetes, or environment variables as the simplest option (note that env vars can leak in crash dumps and <code>/actuator/env</code>).</p>
+<p>Better still is having <strong>no static secret</strong>: with <strong>managed identity</strong> (Azure), <strong>IAM roles for service accounts / EKS Pod Identity</strong> (AWS) or <strong>GKE Workload Identity</strong>, the pod authenticates to cloud services with short-lived tokens. For databases, <strong>Vault dynamic secrets</strong> create a unique user per service with a TTL, and AWS RDS or Azure SQL support IAM or Entra ID token authentication.</p>
+<p><strong>Rotation</strong> must be routine and automated. <strong>Least privilege</strong> applies per service. And secrets must never be logged; mask them and lock down Actuator's <code>env</code> and <code>configprops</code> endpoints.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify: secret, user credential, or plain configuration.</li>
+  <li>Store secrets in the manager with per-service access policies.</li>
+  <li>The workload authenticates with its identity and fetches secrets at startup or via a mounted file.</li>
+  <li>Rotate automatically; the app reloads or reconnects.</li>
+  <li>Scan repositories and images; audit access to secrets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># application.yml: no secret values, only references
+spring:
+  datasource:
+    url: jdbc:postgresql://orders-db:5432/orders
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  config:
+    import: optional:vault://
+  cloud:
+    vault:
+      uri: https://vault.internal:8200
+      authentication: KUBERNETES
+      kubernetes:
+        role: orders-service</code></pre>
+<pre><code class="language-bash">gitleaks detect --source . --redact</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Removing a committed secret in a new commit without rotating it.</li>
+  <li>One shared database admin password for all services.</li>
+  <li>Exposing <code>/actuator/env</code> publicly.</li>
+  <li>Encrypting user passwords instead of hashing them.</li>
+  <li>Secrets printed in CI logs or exception messages.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Secrets never go into source code, committed config or Docker images, and I run secret scanning like gitleaks in CI. They live in a secret manager such as Vault, AWS Secrets Manager or Azure Key Vault, and are injected at runtime through Spring Cloud Vault, mounted files or environment variables. Where possible there is no static credential at all: the service uses managed or workload identity, and Vault issues short-lived dynamic database credentials. Everything is rotated, least privilege per service, and never logged. User passwords are a separate case: they are hashed with bcrypt or Argon2, not stored or encrypted.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you rotate a database password without downtime?</strong> Dual credentials: create the new one, roll out, then revoke the old; or dynamic per-pod credentials with TTL.</li>
+  <li><strong>Are Kubernetes Secrets secure?</strong> Only base64-encoded by default; enable etcd encryption, RBAC, or sync from an external manager.</li>
+  <li><strong>What if a key leaks?</strong> Revoke and rotate immediately, investigate usage in audit logs, then clean history.</li>
+</ul>
+</article>
+</body>
+</html>

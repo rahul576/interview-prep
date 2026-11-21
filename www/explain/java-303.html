@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-303 · How does Spring handle circular dependencies, and how should you fix them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-303" data-topic="Spring Framework">
+<h1>How does Spring handle circular dependencies, and how should you fix them?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>constructor-injection cycle</strong> (A needs B, B needs A) cannot be resolved and <strong>fails at startup</strong>; field and setter cycles used to be patched with <strong>early references</strong>, but <strong>Spring Boot 2.6+ prohibits circular references by default</strong>. <strong>@Lazy</strong> or setter injection only hide it; the real fix is <strong>redesign</strong>: extract a third component, invert a dependency, or use <strong>events</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>To create A, Spring needs B; to create B, it needs A. With <strong>constructor injection</strong> neither can be constructed first, so Spring throws <code>BeanCurrentlyInCreationException</code> and Boot prints a diagram of the cycle (&quot;The dependencies of some of the beans in the application context form a cycle&quot;).</p>
+<p>With <strong>field or setter injection</strong>, Spring historically resolved singleton cycles using a <strong>three-level cache of early bean references</strong>: it instantiates A, exposes an early reference, injects that into B, then finishes A. This works but means B may see A before it is fully initialised, and with proxies it can produce subtle bugs (B holding the raw A, not the transactional proxy). Since <strong>Spring Boot 2.6</strong>, <code>spring.main.allow-circular-references</code> defaults to <strong>false</strong>, so such cycles fail too. You can switch it back on, but that is a temporary migration aid.</p>
+<p>Workarounds:</p>
+<ul>
+  <li><strong>@Lazy</strong> on one injection point injects a proxy that resolves the real bean on first use. It breaks the cycle at startup but keeps the coupling.</li>
+  <li><strong>Setter injection</strong> with the flag re-enabled.</li>
+  <li><code>ObjectProvider&lt;B&gt;</code> to resolve lazily.</li>
+</ul>
+<p>The proper fix is design, because a cycle means two classes depend on each other's details, so neither can be understood, tested or changed alone:</p>
+<ol>
+  <li><strong>Extract the shared logic</strong> into a third bean C that both depend on.</li>
+  <li><strong>Merge</strong> the classes if they are really one responsibility.</li>
+  <li><strong>Invert the dependency</strong> with an interface owned by the lower layer.</li>
+  <li><strong>Decouple with events</strong>: A publishes an <code>OrderPlaced</code> event; B listens instead of A calling B and B calling A.</li>
+  <li>Check <strong>layering</strong>: services should not call controllers, repositories should not call services.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring starts creating A and marks it &quot;in creation&quot;.</li>
+  <li>Resolving A's dependency triggers creation of B.</li>
+  <li>B requires A, which is still in creation.</li>
+  <li>Constructor injection: exception. Field injection with circular refs allowed: early reference injected.</li>
+  <li>Boot's failure analyser prints the cycle for you to fix.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Cycle: OrderService -&gt; CustomerService -&gt; OrderService
+@Service class OrderService {
+    OrderService(CustomerService customers) { ... }
+    void place(Order o) { ...; customers.updateLoyalty(o.customerId()); }
+}
+@Service class CustomerService {
+    CustomerService(OrderService orders) { ... }   // only needed for order count
+}
+
+// Fix: extract the shared query into a third bean and use an event for loyalty
+@Component class OrderStats {
+    OrderStats(OrderRepository repo) { ... }
+    long countFor(long customerId) { ... }
+}
+@Service class CustomerService {
+    CustomerService(OrderStats stats) { ... }
+    @EventListener void on(OrderPlaced e) { updateLoyalty(e.customerId()); }
+}
+@Service class OrderService {
+    OrderService(ApplicationEventPublisher events) { ... }
+    void place(Order o) { ...; events.publishEvent(new OrderPlaced(o.customerId())); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting <code>allow-circular-references=true</code> permanently.</li>
+  <li>Sprinkling <code>@Lazy</code> to silence startup errors.</li>
+  <li>Switching to field injection specifically so cycles &quot;work&quot;.</li>
+  <li>Ignoring cycles between packages or modules, which cause the same tangle at a larger scale.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With constructor injection, if A needs B and B needs A, Spring can't construct either, so startup fails with BeanCurrentlyInCreationException. Field and setter cycles used to be resolved with early references, but since Spring Boot 2.6 circular references are prohibited by default. Workarounds like @Lazy or setter injection hide the problem. A cycle usually means responsibilities are mixed, so I fix the design: extract the shared logic into a third component, invert one dependency behind an interface, or decouple with application events so one side just publishes and the other listens.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a circular dependency a design smell rather than just a Spring problem?</strong> The classes cannot be understood, tested or reused independently; it would be tangled without Spring too.</li>
+  <li><strong>How do you detect cycles early?</strong> Constructor injection, ArchUnit or Spring Modulith tests for package cycles.</li>
+  <li><strong>Can prototype beans have cycles?</strong> No, Spring cannot resolve prototype cycles at all.</li>
+</ul>
+</article>
+</body>
+</html>

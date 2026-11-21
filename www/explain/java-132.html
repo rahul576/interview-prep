@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-132 · What is the difference between optimistic and pessimistic locking in JPA?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-132" data-topic="Spring Data &amp; JPA">
+<h1>What is the difference between optimistic and pessimistic locking in JPA?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Optimistic locking</strong> assumes conflicts are rare and detects them at update time with a <strong><code>@Version</code></strong> column, throwing <strong>OptimisticLockException</strong> so you retry or report; <strong>pessimistic locking</strong> takes <strong>database row locks</strong> up front (<code>SELECT ... FOR UPDATE</code>) so others wait; choose by <strong>contention level</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both prevent <strong>lost updates</strong>, where two users read the same row, both change it and the second write silently overwrites the first.</p>
+<p><strong>Optimistic locking</strong> adds a version attribute (<code>@Version</code> on an integer or timestamp). Every UPDATE includes the old version in the WHERE clause and increments it: <code>update product set price=?, version=8 where id=? and version=7</code>. If another transaction already changed the row, the version no longer matches, <strong>zero rows</strong> are updated and Hibernate throws <code>OptimisticLockException</code> (Spring translates it to <code>ObjectOptimisticLockingFailureException</code>). No locks are held while users think, so it scales well. It also works across requests: send the version to the client (for example as an ETag) and check it on the next update. The cost is handling conflicts: <strong>retry</strong> automatically for idempotent operations, or return <strong>409 Conflict</strong> and let the user reload.</p>
+<p><strong>Pessimistic locking</strong> asks the database for a lock when reading: <code>@Lock(LockModeType.PESSIMISTIC_WRITE)</code> generates <code>SELECT ... FOR UPDATE</code>, so other transactions trying to lock or update that row <strong>wait</strong> until commit. <code>PESSIMISTIC_READ</code> takes a shared lock where supported. It guarantees no conflict at the cost of blocking, potential <strong>deadlocks</strong> and reduced throughput; always set a <strong>lock timeout</strong> (<code>jakarta.persistence.lock.timeout</code>) and keep transactions short. Lock rows in a consistent order to avoid deadlocks. <code>SKIP LOCKED</code> is useful for job-queue patterns.</p>
+<p><strong>Choosing</strong>: optimistic for typical web apps where conflicts are rare and transactions span user think-time; pessimistic for <strong>short, high-contention</strong> operations where retries would be frequent, such as decrementing inventory for a flash sale, seat booking or account balances. Atomic SQL (<code>update stock set qty = qty - 1 where id=? and qty &gt; 0</code>) is sometimes simpler than either.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Optimistic: read row with version 7.</li>
+  <li>Update with <code>where version = 7</code>, set version 8.</li>
+  <li>Zero rows affected → exception → retry or 409.</li>
+  <li>Pessimistic: <code>SELECT ... FOR UPDATE</code> locks the row.</li>
+  <li>Other lockers wait until commit or timeout.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class Product {
+    @Id Long id;
+    BigDecimal price;
+    @Version long version;
+}
+
+interface SeatRepository extends JpaRepository&lt;Seat, Long&gt; {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = &quot;jakarta.persistence.lock.timeout&quot;, value = &quot;3000&quot;))
+    @Query(&quot;select s from Seat s where s.id = :id&quot;)
+    Seat lockById(@Param(&quot;id&quot;) long id);
+}
+
+@Retryable(retryFor = ObjectOptimisticLockingFailureException.class, maxAttempts = 3)
+@Transactional
+public void changePrice(long id, BigDecimal p) { repo.findById(id).orElseThrow().setPrice(p); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Optimistic</th><th>Pessimistic</th></tr></thead>
+<tbody>
+<tr><td>Mechanism</td><td>Version check at update</td><td>Row lock at read</td></tr>
+<tr><td>Conflict handling</td><td>Exception, retry</td><td>Wait</td></tr>
+<tr><td>Best for</td><td>Low contention</td><td>Short, high contention</td></tr>
+<tr><td>Risks</td><td>Retries</td><td>Blocking, deadlocks</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting the version manually or not exposing it to clients for long edits.</li>
+  <li>Retrying the whole transaction in the same persistence context (retry must start a new transaction).</li>
+  <li>Pessimistic locks without timeouts, or held during remote calls.</li>
+  <li>Using pessimistic locking everywhere &quot;to be safe&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Optimistic locking assumes conflicts are rare. I add a Version column; every update includes where version equals the old value and increments it. If someone else changed the row first, zero rows update and an OptimisticLockException is thrown, so I retry or return a conflict. Pessimistic locking takes a row lock up front with select for update, so others wait. I use optimistic for typical web apps and pessimistic for short, high-contention operations like decrementing inventory, always with a lock timeout.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>OptimisticLockException in a REST API?</strong> Return 409 or 412 with ETag/If-Match, or retry idempotent operations.</li>
+  <li><strong>What does SKIP LOCKED do?</strong> Skips locked rows, useful for worker queues.</li>
+  <li><strong>Deadlock prevention?</strong> Lock in consistent order, keep transactions short, use timeouts.</li>
+</ul>
+</article>
+</body>
+</html>

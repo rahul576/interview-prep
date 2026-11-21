@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-016 · How are virtual threads created, scheduled, and managed by the JVM and operating system?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-016" data-topic="Modern Java (11-21)">
+<h1>How are virtual threads created, scheduled, and managed by the JVM and operating system?</h1>
+<p class="ex-meta">Modern Java (11-21) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Virtual threads are created with <strong><code>Thread.ofVirtual()</code></strong>, <strong><code>Thread.startVirtualThread()</code></strong> or <strong><code>Executors.newVirtualThreadPerTaskExecutor()</code></strong>; the <strong>JVM</strong> (not the OS) schedules them on a <strong>work-stealing ForkJoinPool</strong> of <strong>carrier threads</strong>, storing each one's stack as a <strong>continuation on the heap</strong> that is <strong>mounted and unmounted</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Creation.</strong> A virtual thread is a <code>java.lang.Thread</code>, created through the builder API: <code>Thread.ofVirtual().name(&quot;worker-&quot;, 0).start(task)</code>, <code>Thread.ofVirtual().unstarted(task)</code>, or a factory <code>Thread.ofVirtual().factory()</code> for frameworks. <code>Thread.startVirtualThread(task)</code> is a shortcut, and <code>Executors.newVirtualThreadPerTaskExecutor()</code> creates one per submitted task. Creating one allocates a small heap object; no system call is made.</p>
+<p><strong>Scheduling.</strong> The OS only knows about <strong>carrier threads</strong>, ordinary platform threads in a dedicated <strong>ForkJoinPool</strong> running in FIFO mode with <strong>work stealing</strong>. Its parallelism defaults to the number of available processors (tunable via <code>jdk.virtualThreadScheduler.parallelism</code> and <code>maxPoolSize</code>). The JVM decides which virtual thread runs on which carrier. Scheduling is <strong>cooperative at blocking points</strong>, not time-sliced: a virtual thread runs until it blocks or finishes.</p>
+<p><strong>Mount/unmount.</strong> Internally a virtual thread is a <strong>continuation</strong>: a piece of code plus its stack that can be suspended and resumed. When it runs, it is <strong>mounted</strong>: its frames are copied onto the carrier's stack. When it reaches a blocking operation the JDK has adapted (socket reads/writes via NIO, <code>Thread.sleep</code>, <code>LockSupport.park</code> used by <code>java.util.concurrent</code> locks and queues, and, since Java 24, <code>synchronized</code>/<code>Object.wait</code>), the JDK registers interest (e.g. with the OS poller for sockets), <strong>yields</strong> the continuation, and its frames are moved to heap <strong>stack chunks</strong>. The carrier is free immediately. When the socket becomes readable, the poller unparks the virtual thread, which is submitted back to the scheduler and <strong>remounted</strong>, possibly on a different carrier.</p>
+<p>Some operations cannot unmount: blocking <strong>file I/O</strong> on most platforms and <strong>native/JNI</strong> calls. For file I/O the JDK compensates by temporarily adding a carrier to the pool. These are cases of <strong>pinning</strong> or <strong>capture</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>Thread.ofVirtual().start(task)</code> creates the continuation and submits it.</li>
+  <li>A carrier picks it up and mounts it.</li>
+  <li>At a blocking call the continuation yields; frames go to heap.</li>
+  <li>Event completion unparks it; it is resubmitted.</li>
+  <li>Another carrier mounts and resumes it.</li>
+  <li>On completion, it becomes garbage.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Thread t1 = Thread.ofVirtual().name(&quot;vt-&quot;, 0).start(() -&gt; fetch(&quot;a&quot;));
+Thread t2 = Thread.startVirtualThread(() -&gt; fetch(&quot;b&quot;));
+ThreadFactory f = Thread.ofVirtual().name(&quot;job-&quot;, 0).factory();
+
+try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+    ex.submit(() -&gt; System.out.println(Thread.currentThread()));
+}
+// prints e.g. VirtualThread[#31]/runnable@ForkJoinPool-1-worker-1</code></pre>
+<pre><code class="language-bash">java -Djdk.virtualThreadScheduler.parallelism=8 -jar app.jar</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing the OS schedules virtual threads.</li>
+  <li>Assuming time slicing; a CPU loop can monopolise a carrier.</li>
+  <li>Expecting file I/O or JNI calls to unmount.</li>
+  <li>Setting priority or daemon status (virtual threads are always daemon; priority is ignored).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I create them with Thread.ofVirtual().start, Thread.startVirtualThread, or more commonly Executors.newVirtualThreadPerTaskExecutor. The OS knows nothing about them; it only schedules the carrier platform threads. The JVM has its own scheduler, a work-stealing ForkJoinPool with by default one carrier per core. Each virtual thread is a continuation: when it runs it's mounted on a carrier; when it blocks on something like socket I/O, sleep or a j.u.c. lock, its frames are saved to the heap and it's unmounted, freeing the carrier. When the I/O is ready it's rescheduled, possibly on another carrier. File I/O and native calls can't unmount, so the JDK compensates or the carrier is pinned.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to a virtual thread blocked in a file read?</strong> It pins its carrier; the JDK may temporarily add a carrier to keep parallelism.</li>
+  <li><strong>Is scheduling preemptive?</strong> No, it switches at blocking points only.</li>
+  <li><strong>Can you supply a custom scheduler?</strong> Not via a public API in current releases.</li>
+</ul>
+</article>
+</body>
+</html>

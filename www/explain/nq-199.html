@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-199 · How does transaction management work in Spring?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-199" data-topic="Spring Framework">
+<h1>How does transaction management work in Spring?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Spring provides a uniform <strong>PlatformTransactionManager</strong> abstraction (JDBC, JPA, JTA, Kafka, reactive) used <strong>declaratively</strong> with <strong><code>@Transactional</code></strong> through an <strong>AOP proxy</strong> or <strong>programmatically</strong> with <strong>TransactionTemplate</strong>; the transaction's connection is <strong>bound to the thread</strong>, and attributes control <strong>propagation, isolation, timeout, readOnly and rollback rules</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every data access technology has its own transaction API: JDBC <code>Connection.commit()</code>, JPA <code>EntityTransaction</code>, JTA <code>UserTransaction</code>. Spring hides them behind <strong><code>PlatformTransactionManager</code></strong> (and <code>ReactiveTransactionManager</code> for R2DBC and reactive Mongo). Implementations include <code>DataSourceTransactionManager</code>/<code>JdbcTransactionManager</code>, <strong><code>JpaTransactionManager</code></strong> (the Spring Boot default with JPA), <code>JtaTransactionManager</code> for distributed XA transactions, and <code>KafkaTransactionManager</code>. Your code stays the same whichever one is configured.</p>
+<p><strong>Declarative</strong> transactions are the usual approach. Annotate a service method (or class) with <code>@Transactional</code>. The bean's <strong>AOP proxy</strong> intercepts the call and asks the transaction manager to begin a transaction according to the attributes. The manager obtains a connection or <code>EntityManager</code> and binds it to the current thread via <strong><code>TransactionSynchronizationManager</code></strong>, so every repository, <code>JdbcTemplate</code> and <code>EntityManager</code> used in that call shares it. On normal return the proxy <strong>commits</strong>; if a <code>RuntimeException</code> or <code>Error</code> escapes it <strong>rolls back</strong> (checked exceptions commit unless <code>rollbackFor</code> says otherwise).</p>
+<p>Attributes: <strong>propagation</strong> (REQUIRED joins or creates, REQUIRES_NEW suspends and starts a new one, plus SUPPORTS, MANDATORY, NESTED and others), <strong>isolation</strong> (READ_COMMITTED, REPEATABLE_READ, SERIALIZABLE, or database default), <strong>timeout</strong>, <strong>readOnly</strong> (a hint: with Hibernate it sets flush mode to manual and skips dirty checking snapshots, and the JDBC connection may be marked read-only, which some drivers and routing data sources use), and <strong>rollbackFor/noRollbackFor</strong>.</p>
+<p><strong>Programmatic</strong> transactions with <code>TransactionTemplate</code> (or the transaction manager directly) suit cases where you need a transaction around just part of a method, or dynamic decisions. <code>TransactionalEventListener</code> and <code>TransactionSynchronization</code> let you run code after commit, such as sending a message only when data is safely stored.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring Boot auto-configures the appropriate transaction manager.</li>
+  <li><code>@EnableTransactionManagement</code> (automatic in Boot) registers the interceptor.</li>
+  <li>The proxy reads attributes and calls <code>getTransaction()</code>.</li>
+  <li>Resources are bound to the thread; repositories participate.</li>
+  <li>Commit or rollback, after-commit callbacks, resources unbound.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class TransferService {
+    private final TransactionTemplate tx;
+    TransferService(PlatformTransactionManager tm) {
+        this.tx = new TransactionTemplate(tm);
+        this.tx.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+    }
+
+    @Transactional(timeout = 5, rollbackFor = InsufficientFundsException.class)
+    public void transfer(long from, long to, BigDecimal amount) throws InsufficientFundsException {
+        accounts.debit(from, amount);
+        accounts.credit(to, amount);
+    }
+
+    public void importBatch(List&lt;Row&gt; rows) {
+        rows.forEach(r -&gt; tx.executeWithoutResult(status -&gt; repo.save(map(r)))); // one tx per row
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Self-invocation, so no transaction starts.</li>
+  <li>Assuming checked exceptions roll back.</li>
+  <li>Holding a transaction open during remote HTTP calls.</li>
+  <li>Believing <code>readOnly</code> prevents writes in every database.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring offers a consistent abstraction, PlatformTransactionManager, with implementations for JDBC, JPA, JTA and Kafka. Usually I use declarative transactions: @Transactional on a service method. The AOP proxy asks the manager to begin a transaction, binding the connection or EntityManager to the thread so all repositories share it. On normal return it commits; on a runtime exception it rolls back. Attributes control propagation, isolation, timeout, readOnly and rollback rules. When I need finer control, I use TransactionTemplate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does readOnly do with JPA?</strong> Hibernate uses manual flush and skips dirty checking; it's an optimisation hint.</li>
+  <li><strong>Send a message only after commit?</strong> <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> or an outbox.</li>
+  <li><strong>Distributed transactions?</strong> JTA/XA is possible but heavy; prefer sagas and the outbox pattern.</li>
+</ul>
+</article>
+</body>
+</html>

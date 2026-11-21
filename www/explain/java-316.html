@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-316 · What is open-session-in-view, and why is it often disabled?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-316" data-topic="Spring Data &amp; JPA">
+<h1>What is open-session-in-view, and why is it often disabled?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Open-session-in-view (OSIV)</strong> keeps the <strong>persistence context open for the whole web request</strong>, so lazy loading in controllers and JSON serialisation &quot;just works&quot;; it's <strong>enabled by default in Spring Boot (with a warning)</strong> but often disabled because it <strong>holds database connections longer</strong> and <strong>hides N+1 lazy loads</strong> outside the service layer.</p>
+
+<h2>Detailed explanation</h2>
+<p>With OSIV, Spring registers <code>OpenEntityManagerInViewInterceptor</code> for Spring MVC. When a request starts, it opens an <code>EntityManager</code> and binds it to the thread; the service's <code>@Transactional</code> method uses that same EntityManager, and after the transaction commits the persistence context <strong>stays open</strong> until the view is rendered or the response is serialised. So accessing <code>order.getCustomer().getName()</code> in a controller, a Thymeleaf template or Jackson doesn't throw LazyInitializationException; Hibernate silently runs another query.</p>
+<p>Spring Boot sets <code>spring.jpa.open-in-view=true</code> by default for backwards compatibility and logs a warning at startup (&quot;spring.jpa.open-in-view is enabled by default...&quot;) precisely because it is controversial.</p>
+<p>The problems:</p>
+<ul>
+  <li><strong>Connection holding.</strong> Once lazy loading has used a connection, it can stay associated with the request until it completes, including slow serialisation, template rendering or calls to other services. Under load, the <strong>connection pool</strong> is exhausted much sooner.</li>
+  <li><strong>Hidden queries.</strong> Lazy loads happen in the <strong>web layer</strong>, outside transactions (in auto-commit mode), often in loops, producing <strong>N+1</strong> queries that nobody sees in the service code and that tests of the service miss.</li>
+  <li><strong>Blurred boundaries.</strong> The service layer no longer defines what data a use case needs, and entities leak into the API, coupling JSON to the entity model.</li>
+</ul>
+<p><strong>Disabling it</strong> with <code>spring.jpa.open-in-view=false</code> makes the transaction the boundary of data access. After disabling, LazyInitializationExceptions will reveal every place that relied on it. Fix each by fetching what the use case needs <strong>inside the service</strong>: <code>JOIN FETCH</code>, <code>@EntityGraph</code>, batch fetching, or better, returning <strong>DTO projections</strong> instead of entities.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives; OSIV interceptor opens and binds an EntityManager.</li>
+  <li>Service transaction uses it and commits.</li>
+  <li>Controller/serialiser touches lazy associations; extra queries run.</li>
+  <li>Response written; interceptor closes the EntityManager.</li>
+  <li>With OSIV off, step 1 doesn't happen and step 3 throws instead.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  jpa:
+    open-in-view: false</code></pre>
+<pre><code class="language-java">// Before: controller relies on OSIV
+@GetMapping(&quot;/orders/{id}&quot;)
+Order get(@PathVariable long id) { return service.find(id); }   // Jackson lazy-loads lines, customer
+
+// After: service returns a fully prepared DTO
+@Transactional(readOnly = true)
+public OrderDto find(long id) {
+    Order o = repo.findDetailedById(id).orElseThrow();   // @EntityGraph({&quot;customer&quot;, &quot;lines&quot;})
+    return OrderDto.from(o);
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving OSIV on and serialising entities directly.</li>
+  <li>Replacing OSIV with <code>enable_lazy_load_no_trans</code>, which is worse.</li>
+  <li>Switching associations to EAGER to silence exceptions.</li>
+  <li>Disabling OSIV without integration tests that exercise the endpoints.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Open session in view keeps the persistence context open for the whole web request, until the response is rendered, so lazy loading in controllers or during JSON serialisation works silently. Spring Boot enables it by default and logs a warning. The problems are that database connections are held longer than needed, and lazy loads happen outside the service layer, creating hidden N+1 queries. I disable it with spring.jpa.open-in-view=false and fetch what each use case needs explicitly with fetch joins, entity graphs or DTO projections.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Errors after disabling it?</strong> LazyInitializationException where the web layer touched lazy data; fix with explicit fetching or DTOs.</li>
+  <li><strong>Is OSIV ever acceptable?</strong> Small, low-traffic apps with server-side templates, accepting the trade-off.</li>
+  <li><strong>Does it apply to WebFlux?</strong> No, it's a Spring MVC interceptor.</li>
+</ul>
+</article>
+</body>
+</html>

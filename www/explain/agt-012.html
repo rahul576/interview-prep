@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-012 · How do you stop agents from running forever, looping or overspending?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-012" data-topic="AI Agents &amp; AIOps">
+<h1>How do you stop agents from running forever, looping or overspending?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Enforce <strong>hard limits outside the model</strong>: <strong>maximum steps</strong>, <strong>token and cost budgets</strong>, <strong>wall-clock timeouts</strong>, <strong>loop detection</strong> for repeated calls, plus <strong>clear completion criteria</strong> in the instructions and a <strong>graceful stop</strong> that saves state, summarises and escalates.</p>
+
+<h2>Detailed explanation</h2>
+<p>Models do not reliably know when to stop. They may keep exploring, retry a failing call indefinitely, or oscillate between two approaches. Because each step resends a growing context, a runaway agent burns money quickly. The rule is: <strong>the runtime enforces limits, not the model</strong>.</p>
+<p>Every run has a <strong>maximum number of steps or tool calls</strong>, a <strong>token and cost budget</strong> tracked from the provider's usage data, and a <strong>wall-clock timeout</strong>. Limits can be per run, per user per day and per tenant, with alerts when spend spikes. Separate limits apply to sub-agents so fan-out cannot explode.</p>
+<p><strong>Loop detection</strong> catches the classic failure: the same tool with the same arguments several times in a row, the same error repeated, or A-B-A-B oscillation. The runtime can inject a hint (&quot;you already called search_logs with these arguments; the result was empty, try a different approach or stop&quot;) or stop the run.</p>
+<p>Prevention starts in the design. <strong>Clear completion criteria</strong> in the instructions tell the model what &quot;done&quot; means: all tests pass, a ticket exists and is linked, the report has all sections. Tool results that clearly say &quot;no results&quot; or &quot;already done&quot; remove the ambiguity that causes retries.</p>
+<p>When a limit triggers, the agent <strong>stops gracefully</strong>: it reports what it did, what remains and why it stopped, <strong>persists its state</strong> so the run can be resumed, and escalates to a human. Silent failure or a vague &quot;something went wrong&quot; is not acceptable. Finally, monitor <strong>steps and cost per run</strong>: frequent limit hits usually point to poor tools or instructions rather than to limits being too strict.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Configure limits per agent: steps, tokens, cost, time.</li>
+  <li>Track usage on every model and tool call.</li>
+  <li>Hash tool name and arguments to detect repeats.</li>
+  <li>On repeat, inject a hint; on threshold, stop.</li>
+  <li>On limit, summarise, save state, escalate.</li>
+  <li>Dashboard limit hits and cost per task; fix root causes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">class RunGuard:
+    def __init__(self, max_steps=25, max_cost_usd=2.0, max_seconds=600, max_repeats=3):
+        self.max_steps, self.max_cost, self.max_seconds, self.max_repeats = max_steps, max_cost_usd, max_seconds, max_repeats
+        self.steps, self.cost, self.start, self.seen = 0, 0.0, time.monotonic(), Counter()
+
+    def check(self, usage, tool_call=None):
+        self.steps += 1
+        self.cost += usage.cost_usd
+        if tool_call:
+            key = (tool_call.name, json.dumps(tool_call.args, sort_keys=True))
+            self.seen[key] += 1
+            if self.seen[key] &gt;= self.max_repeats:
+                raise StopRun(&quot;loop&quot;, f&quot;Repeated {tool_call.name} {self.seen[key]} times&quot;)
+        if self.steps &gt; self.max_steps:
+            raise StopRun(&quot;steps&quot;, &quot;Step limit reached&quot;)
+        if self.cost &gt; self.max_cost:
+            raise StopRun(&quot;budget&quot;, f&quot;Cost ${self.cost:.2f} over budget&quot;)
+        if time.monotonic() - self.start &gt; self.max_seconds:
+            raise StopRun(&quot;timeout&quot;, &quot;Time limit reached&quot;)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trusting the model to stop or to track its own budget.</li>
+  <li>Limits only per run, with no per-user or per-tenant cap.</li>
+  <li>Hard crash on limit with no summary or saved state.</li>
+  <li>Setting limits once and never reviewing hit rates.</li>
+  <li>Ambiguous tool results that invite retries.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I put hard limits outside the model, because the model can't be trusted to stop itself. Each run has a maximum number of steps, a token and cost budget and a timeout, enforced by the runtime. Loop detection catches repeated identical tool calls or oscillation and either injects a hint or stops. Clear completion criteria in the instructions help the model know when it's done, like all tests passing. When a limit is reached, the agent stops gracefully: it reports what it did and what is left, saves its state and escalates. And I monitor steps and cost per run, because frequent limit hits usually mean the tools or instructions need fixing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you choose the step limit for a new agent?</strong> Run evals, look at the step distribution of successful runs, and set the limit around p95 to p99 plus margin.</li>
+  <li><strong>Per-user limits?</strong> Yes, daily budgets per user and tenant prevent abuse and runaway costs.</li>
+  <li><strong>What about sub-agents?</strong> Each gets its own budget, counted toward the parent's total.</li>
+</ul>
+</article>
+</body>
+</html>

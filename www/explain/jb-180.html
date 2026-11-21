@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-180 · What happens when an exception occurs inside a transactional method?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-180" data-topic="Spring Boot">
+<h1>What happens when an exception occurs inside a transactional method?</h1>
+<p class="ex-meta">Spring Boot · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>By default Spring <strong>rolls back on unchecked exceptions and Errors</strong> and <strong>commits on checked exceptions</strong>; change it with <strong>rollbackFor/noRollbackFor</strong>, remember the exception must <strong>escape through the proxy</strong>, and watch for <strong>rollback-only</strong> marking in nested REQUIRED calls.</p>
+
+<h2>Detailed explanation</h2>
+<p>The transactional proxy decides commit or rollback by looking at how the method ended. If a <code>RuntimeException</code> or <code>Error</code> escapes, the default rule says <strong>rollback</strong>. If a <strong>checked exception</strong> escapes, the default rule says <strong>commit</strong>, which surprises many developers. The reasoning, inherited from EJB, is that checked exceptions often represent expected business outcomes that the caller can handle, while unchecked exceptions represent unexpected failures.</p>
+<p>You override the rules with <code>rollbackFor = Exception.class</code> (or specific exception types) and <code>noRollbackFor</code> for exceptions that should not undo the work. Many teams standardise on <code>rollbackFor = Exception.class</code> or use only unchecked business exceptions.</p>
+<p>The proxy only sees exceptions that <strong>propagate out of the method</strong>. If you catch and swallow an exception inside the method, Spring sees a normal return and commits whatever was already written, which can leave <strong>partial data</strong>. If you must catch it, either rethrow or call <code>TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()</code>.</p>
+<p>The subtle case is <strong>nested REQUIRED calls</strong>. When an inner transactional method (a different bean, through its proxy) throws a runtime exception, its interceptor marks the <strong>shared</strong> transaction as <strong>rollback-only</strong>. Even if the outer method catches the exception and continues, the final commit attempt fails with <strong>UnexpectedRollbackException</strong>, because the transaction can no longer be committed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The method throws; the exception reaches the TransactionInterceptor.</li>
+  <li>The interceptor checks rollback rules (<code>rollbackFor</code>, <code>noRollbackFor</code>, defaults).</li>
+  <li>Matching rule: rollback (or mark rollback-only if this is a participating, not the outermost, transaction).</li>
+  <li>Non-matching rule: commit and rethrow the exception to the caller.</li>
+  <li>On the outermost commit, a rollback-only flag turns the commit into a rollback plus UnexpectedRollbackException.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional(rollbackFor = Exception.class)
+public void importFile(Path file) throws IOException {
+    batchRepo.save(new Batch(file));
+    parser.parse(file);          // IOException now rolls back too
+}
+
+@Transactional
+public void placeOrder(Order o) {
+    orderRepo.save(o);
+    try {
+        loyaltyService.addPoints(o);   // REQUIRED, throws RuntimeException
+    } catch (RuntimeException e) {
+        log.warn(&quot;points failed&quot;, e);  // still rollback-only -&gt; UnexpectedRollbackException
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming checked exceptions roll back.</li>
+  <li>Catching and logging exceptions inside the transactional method, causing partial commits.</li>
+  <li>Catching an inner REQUIRED exception and being surprised by UnexpectedRollbackException.</li>
+  <li>Throwing from a self-invoked method and expecting its own rollback rules to apply.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default Spring rolls back on RuntimeException and Error, but commits on checked exceptions, which I change with rollbackFor when needed. The exception has to escape the method through the proxy; if I catch and swallow it, Spring sees a normal return and commits. A tricky case is nested REQUIRED calls: if an inner transactional method throws, the shared transaction is marked rollback-only, so even if the outer method catches the exception, the commit fails with UnexpectedRollbackException. If the inner work should be independent, I make it REQUIRES_NEW.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why no rollback on checked exceptions?</strong> EJB convention: checked exceptions are treated as recoverable business outcomes.</li>
+  <li><strong>How to roll back without throwing?</strong> Call <code>setRollbackOnly()</code> on the current TransactionStatus.</li>
+  <li><strong>How do you avoid UnexpectedRollbackException?</strong> Don't swallow inner failures, or use REQUIRES_NEW/noRollbackFor for optional steps.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-028 · What is the N+1 query problem in Hibernate/JPA, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-028" data-topic="Spring Data &amp; JPA">
+<h1>What is the N+1 query problem in Hibernate/JPA, and how do you fix it?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>N+1 problem</strong> is one query to load N parents plus <strong>one extra query per parent</strong> when a <strong>lazy association</strong> is accessed; fix it with <strong>JOIN FETCH</strong>, <strong>@EntityGraph</strong>, <strong>batch fetching</strong> (<code>@BatchSize</code>, <code>default_batch_fetch_size</code>) or <strong>DTO projections</strong>, and detect it with <strong>SQL logging, Hibernate statistics or query-count tests</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Suppose you load 100 orders with <code>findAll()</code> and then, in a loop or during JSON serialisation, call <code>order.getCustomer().getName()</code> or <code>order.getLines()</code>. Each association is <strong>lazy</strong>, so Hibernate fires a separate SELECT for each order: 1 query for the orders plus 100 for the associations. With nested associations it becomes N×M. Each query is fast, but network round trips add up, turning a 20 ms page into seconds and loading the database.</p>
+<p>It is caused by <strong>lazy loading accessed per entity</strong>, often hidden: in a mapper, a <code>toString()</code>, Jackson serialising entities, or with <strong>open-session-in-view</strong> letting lazy loads happen in the controller. Eager mapping does <strong>not</strong> fix it; <code>FetchType.EAGER</code> on <code>@ManyToOne</code> still causes N+1 when you query with JPQL, because Hibernate runs the main query and then loads each eager association separately.</p>
+<p>Fixes, per use case:</p>
+<ul>
+  <li><strong>JOIN FETCH</strong> in JPQL: <code>select o from Order o join fetch o.customer where ...</code> loads both in one SQL join.</li>
+  <li><strong><code>@EntityGraph(attributePaths = {&quot;customer&quot;, &quot;lines&quot;})</code></strong> on a Spring Data method does the same declaratively.</li>
+  <li><strong>Batch fetching</strong>: <code>@BatchSize(size = 50)</code> or <code>hibernate.default_batch_fetch_size=50</code> makes Hibernate load lazy associations for many parents with one <code>IN (...)</code> query, turning N+1 into 1 + N/50. A good global default.</li>
+  <li><strong>DTO or interface projections</strong> selecting only the columns needed, which avoids entities altogether for read views.</li>
+  <li><strong>Subselect fetching</strong> (<code>@Fetch(FetchMode.SUBSELECT)</code>) for collections.</li>
+</ul>
+<p>Watch out when fetching <strong>collections</strong>: join fetching one collection multiplies rows (use <code>distinct</code>, which Hibernate 6 applies automatically to entity results), and join fetching <strong>two bag collections</strong> throws <code>MultipleBagFetchException</code>; with sets it creates a Cartesian product. Fetch one collection per query or rely on batch fetching. Pagination with collection fetch joins happens in memory (Hibernate warns), so paginate IDs first.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Detect: enable SQL logging or statistics and look for repeated identical SELECTs.</li>
+  <li>Identify the access path that triggers lazy loads.</li>
+  <li>Choose a fetch plan for that use case: join fetch, entity graph, batch or projection.</li>
+  <li>Verify the query count in a test.</li>
+  <li>Keep associations lazy by default.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface OrderRepository extends JpaRepository&lt;Order, Long&gt; {
+
+    @Query(&quot;select o from Order o join fetch o.customer where o.status = :status&quot;)
+    List&lt;Order&gt; findWithCustomer(@Param(&quot;status&quot;) Status status);
+
+    @EntityGraph(attributePaths = &quot;lines&quot;)
+    List&lt;Order&gt; findByCustomerId(long customerId);
+
+    @Query(&quot;select new com.acme.OrderSummary(o.id, c.name, o.total) from Order o join o.customer c&quot;)
+    List&lt;OrderSummary&gt; summaries();
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  jpa:
+    properties:
+      hibernate:
+        default_batch_fetch_size: 50
+        generate_statistics: true   # dev only
+logging:
+  level:
+    org.hibernate.SQL: debug</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Switching to EAGER, which spreads the problem everywhere.</li>
+  <li>Join fetching two List collections (MultipleBagFetchException) or causing Cartesian products.</li>
+  <li>Paginating with a collection join fetch.</li>
+  <li>Serialising entities directly in REST responses.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;N+1 is when I load N parents with one query and then accessing a lazy association on each fires one more query per parent. It usually comes from lazy loading in a loop or from serialising entities. I fix it per use case with JOIN FETCH or an EntityGraph, set Hibernate batch fetching so lazy loads are grouped into IN queries, or use DTO projections for read views. I detect it with SQL logging, Hibernate statistics or tests that assert the number of queries.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>JOIN FETCH two collections?</strong> MultipleBagFetchException for lists, Cartesian product for sets; fetch separately.</li>
+  <li><strong>Pagination with fetch join?</strong> Page the IDs, then fetch entities by IDs.</li>
+  <li><strong>Does EAGER solve it?</strong> No, it still issues extra queries and can't be turned off per query.</li>
+</ul>
+</article>
+</body>
+</html>

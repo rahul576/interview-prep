@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-192 · What is the difference between persist(), merge(), save(), and update()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-192" data-topic="Spring Data &amp; JPA">
+<h1>What is the difference between persist(), merge(), save(), and update()?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>persist()</strong> makes a new transient entity managed; <strong>merge()</strong> copies the state of a detached or new object onto a managed instance and <strong>returns that instance</strong>; <strong>save()</strong> and <strong>update()</strong> are legacy Hibernate Session methods (deprecated in Hibernate 6); Spring Data's <strong>repository.save()</strong> calls persist or merge depending on <strong>isNew</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An entity can be <strong>transient</strong> (new, unknown to Hibernate), <strong>managed</strong> (in the persistence context, changes tracked), <strong>detached</strong> (was managed, context closed) or <strong>removed</strong>.</p>
+<p><strong>persist(entity)</strong> is the JPA method for new objects. The same instance becomes managed, the id is generated (immediately for IDENTITY, from the pool for SEQUENCE) and the INSERT happens at flush. It returns void. Passing a detached entity throws an exception because JPA treats it as an attempt to insert an existing row.</p>
+<p><strong>merge(entity)</strong> is for detached objects, for example a DTO-like entity rebuilt from a request. Hibernate loads the managed instance with the same id (a SELECT if it is not already in the context), copies all state from your object onto it and returns the managed copy. The object you passed <strong>stays detached</strong>, so further changes to it are ignored. If no row exists, merge inserts a new one.</p>
+<p><strong>save()</strong> and <strong>update()</strong> come from the native Hibernate <code>Session</code>. <code>save</code> inserted a transient entity and returned the generated id; <code>update</code> reattached a detached instance so it became managed again; <code>saveOrUpdate</code> chose between them. They were deprecated in Hibernate 6 in favour of <code>persist</code>, <code>merge</code> and <code>remove</code>, so new code should not use them.</p>
+<p><strong>Spring Data <code>save()</code></strong> in <code>SimpleJpaRepository</code> checks <code>entityInformation.isNew(entity)</code>: by default an entity is new if its id is null (or a version field is null). New entities go to <code>persist</code>, others to <code>merge</code>. With manually assigned ids the entity never looks new, so save calls merge, which first issues a SELECT to find the existing row.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Transient object + <code>persist</code> → becomes managed, INSERT at flush.</li>
+  <li>Detached object + <code>merge</code> → SELECT managed copy, copy state, UPDATE at flush, return copy.</li>
+  <li>Managed entity → just change fields; dirty checking writes the UPDATE, no save call needed.</li>
+  <li>Spring Data <code>save</code> → <code>isNew</code> ? <code>persist</code> : <code>merge</code>, returning the managed entity.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public Order rename(OrderDto dto) {
+    Order detached = new Order(dto.id(), dto.name());   // not managed
+    Order managed = entityManager.merge(detached);      // SELECT + copy
+    managed.setNote(&quot;renamed&quot;);                          // tracked
+    detached.setNote(&quot;ignored&quot;);                         // NOT tracked
+    return managed;
+}
+
+// Assigned ids: avoid the extra SELECT by implementing Persistable
+@Entity
+public class Country implements Persistable&lt;String&gt; {
+    @Id private String code;
+    @Transient private boolean isNew = true;
+    public boolean isNew() { return isNew; }
+    @PostLoad @PostPersist void markNotNew() { isNew = false; }
+    public String getId() { return code; }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Input</th><th>Returns</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>persist</td><td>Transient</td><td>void</td><td>Same instance managed</td></tr>
+<tr><td>merge</td><td>Detached or new</td><td>Managed copy</td><td>State copied</td></tr>
+<tr><td>save (Hibernate)</td><td>Transient</td><td>Id</td><td>Deprecated</td></tr>
+<tr><td>update (Hibernate)</td><td>Detached</td><td>void</td><td>Deprecated</td></tr>
+<tr><td>Spring Data save</td><td>Any</td><td>Managed entity</td><td>persist or merge</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ignoring merge's return value and continuing to modify the detached object.</li>
+  <li>Calling <code>save()</code> on an already managed entity inside a transaction, which is unnecessary.</li>
+  <li>Using assigned ids with Spring Data and paying an extra SELECT per insert.</li>
+  <li>Calling persist on a detached entity and getting a &quot;detached entity passed to persist&quot; error.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;persist takes a new transient entity and makes that same instance managed; the insert happens at flush. merge is for detached state: Hibernate loads the managed instance, copies my object's state onto it and returns the managed copy, so I must use the returned value. save and update are the old Hibernate Session methods, now deprecated, which inserted and reattached respectively. Spring Data's save is a wrapper: if the entity is new, meaning a null id or version, it calls persist, otherwise merge. That's why assigned ids cause an extra SELECT, which I avoid by implementing Persistable or using a version field.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why the extra SELECT with assigned ids?</strong> The entity is not considered new, so merge must check whether the row exists.</li>
+  <li><strong>Do you need save() for managed entities?</strong> No, dirty checking flushes changes automatically at commit.</li>
+  <li><strong>What does saveAndFlush add?</strong> It forces an immediate flush, useful to surface constraint violations early.</li>
+</ul>
+</article>
+</body>
+</html>

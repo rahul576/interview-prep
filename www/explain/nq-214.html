@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-214 · How does API Gateway-based authentication and authorization work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-214" data-topic="Security">
+<h1>How does API Gateway-based authentication and authorization work?</h1>
+<p class="ex-meta">Security · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>API gateway</strong> is the <strong>single entry point</strong> that <strong>validates tokens centrally</strong> against the identity provider, rejects bad ones with <strong>401</strong>, applies <strong>coarse-grained authorization</strong> per route (403), and <strong>forwards the token</strong> downstream, while each <strong>service still enforces fine-grained rules</strong> in a <strong>zero-trust</strong> model.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without a gateway every service exposed to the internet would need its own TLS, token validation, rate limiting and CORS. A gateway such as <strong>Spring Cloud Gateway, Kong, Envoy-based gateways, AWS API Gateway or Azure API Management</strong> centralises these <strong>cross-cutting concerns</strong> at the edge.</p>
+<p>For authentication the gateway acts as an OAuth 2 <strong>resource server</strong> (or, in a BFF setup, as an OAuth client that holds tokens for a browser session). It knows the identity provider's issuer and <strong>JWKS</strong> keys and, on each request, verifies the token signature, <code>iss</code>, <code>aud</code>, <code>exp</code> and <code>nbf</code>. Invalid, missing or expired tokens get <strong>401</strong> immediately, so junk traffic never reaches the services. For opaque tokens it calls the introspection endpoint, usually with caching.</p>
+<p>Then it applies <strong>coarse-grained authorization</strong> by route: <code>/admin/<strong></code> needs role ADMIN, <code>POST /orders/</strong></code> needs scope <code>orders.write</code>; otherwise <strong>403</strong>. Valid requests are forwarded with the <strong>original token</strong> (token relay), sometimes exchanged for a narrower internal token, or with trusted identity headers that the gateway sets after stripping any client-supplied copies.</p>
+<p>Services must not trust the gateway blindly. Internal traffic can bypass it, misconfigured routes happen, and the gateway does not know business data. So services <strong>validate the token again</strong> (cheap with cached keys) and enforce <strong>fine-grained rules</strong> such as &quot;this customer owns order 123&quot;. The gateway also adds <strong>rate limiting</strong>, request size limits, correlation ids and <strong>audit logging</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client gets an access token from the identity provider.</li>
+  <li>Gateway receives the request, validates token signature and claims; 401 on failure.</li>
+  <li>Gateway checks route policy (scopes, roles); 403 on failure.</li>
+  <li>Rate limiting and logging apply; the token is relayed downstream.</li>
+  <li>Service revalidates the token and enforces object-level rules.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+SecurityWebFilterChain gateway(ServerHttpSecurity http) {
+    return http
+        .authorizeExchange(e -&gt; e
+            .pathMatchers(&quot;/actuator/health&quot;).permitAll()
+            .pathMatchers(&quot;/api/admin/**&quot;).hasRole(&quot;ADMIN&quot;)
+            .pathMatchers(HttpMethod.POST, &quot;/api/orders/**&quot;).hasAuthority(&quot;SCOPE_orders.write&quot;)
+            .anyExchange().authenticated())
+        .oauth2ResourceServer(o -&gt; o.jwt(Customizer.withDefaults()))
+        .build();
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.example.com/realms/shop</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Services accepting unauthenticated internal calls because &quot;the gateway checked&quot;.</li>
+  <li>Forwarding identity headers without removing ones the client sent.</li>
+  <li>Putting business authorization logic in gateway configuration.</li>
+  <li>Not caching JWKS or introspection results, adding latency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;All external traffic goes through the gateway, for example Spring Cloud Gateway or Azure API Management. It's integrated with the identity provider, so for every request it validates the access token's signature with the JWKS keys plus issuer, audience and expiry, and returns 401 for anything invalid. Then it applies coarse route rules, such as orders.write scope for POST on orders, returning 403 otherwise. Valid requests are forwarded with the token relayed. But I don't trust the gateway blindly: each service validates the token again and enforces fine-grained, data-level checks like ownership. The gateway also handles rate limiting and audit logging.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should services not trust the gateway blindly?</strong> Internal bypass, misconfiguration and zero trust; the gateway lacks data-level context.</li>
+  <li><strong>Token relay vs identity headers?</strong> Relay keeps a verifiable token; headers are simpler but must be protected by mTLS and stripping.</li>
+  <li><strong>What is token exchange?</strong> RFC 8693: swap a user token for one scoped to a downstream service.</li>
+</ul>
+</article>
+</body>
+</html>

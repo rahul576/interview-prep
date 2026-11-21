@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-279 · How would you test a service that interacts with multiple downstream systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-279" data-topic="Testing">
+<h1>How would you test a service that interacts with multiple downstream systems?</h1>
+<p class="ex-meta">Testing · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Test the <strong>orchestration logic</strong> with <strong>each downstream client mocked</strong> across <strong>success and failure combinations</strong>, run <strong>integration tests</strong> with <strong>WireMock and Testcontainers</strong> to exercise real protocols, <strong>timeouts, retries and circuit breakers</strong>, use <strong>contract tests</strong> to keep assumptions aligned with providers, and keep only <strong>a few end-to-end tests</strong> in staging.</p>
+
+<h2>Detailed explanation</h2>
+<p>A service that calls, say, inventory, payment and shipping has two kinds of risk: its own <strong>logic</strong> (ordering, compensations, mapping, fallbacks) and the <strong>integration</strong> (HTTP details, serialisation, timeouts, real error formats). Each needs a different test level.</p>
+<p><strong>Unit level:</strong> each downstream system sits behind an interface (<code>InventoryClient</code>, <code>PaymentClient</code>, <code>ShippingClient</code>). Mock them and test combinations: all succeed; inventory says out of stock; payment declined; payment times out after stock was reserved (is the reservation released?); shipping fails after payment (is a refund or retry scheduled?); unexpected empty responses. Verify call <strong>order</strong> with <code>InOrder</code> where it matters and that <strong>compensating actions</strong> happen. These tests are fast and cover the combinatorial explosion cheaply.</p>
+<p><strong>Integration level:</strong> start the service with <strong>WireMock</strong> servers for each HTTP dependency and <strong>Testcontainers</strong> for its own database and Kafka. Stub realistic responses, then failures: 500, 503 with <code>Retry-After</code>, malformed JSON, and <strong>delays longer than the configured timeout</strong> (<code>withFixedDelay</code>, <code>withChunkedDribbleDelay</code>). Assert that the real <strong>Resilience4j</strong> retries, timeouts and circuit breakers behave as configured, using WireMock's <code>verify(exactly(3), ...)</code> for retry counts. Also assert persisted state and published events, especially <strong>no partial writes</strong>.</p>
+<p><strong>Contract level:</strong> <strong>Pact</strong> or <strong>Spring Cloud Contract</strong> ensures the stubs you wrote match each provider's real API, so the WireMock tests are not testing a fantasy. Ideally stubs are generated from the contracts or OpenAPI specs.</p>
+<p><strong>End-to-end:</strong> a few critical journeys in staging verify configuration, networking and authentication across real services.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define one client interface per downstream system.</li>
+  <li>Unit test orchestration with mocks for all outcome combinations.</li>
+  <li>Integration test with WireMock (HTTP) and Testcontainers (DB, Kafka).</li>
+  <li>Inject faults: errors, delays, malformed payloads.</li>
+  <li>Verify contracts with providers.</li>
+  <li>Run a handful of E2E smoke tests post-deployment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@SpringBootTest
+@EnableWireMock(@ConfigureWireMock(name = &quot;payment&quot;, baseUrlProperties = &quot;clients.payment.url&quot;))
+class CheckoutIT {
+
+    @InjectWireMock(&quot;payment&quot;) WireMockServer payment;
+    @Autowired CheckoutService checkout;
+    @Autowired ReservationRepository reservations;
+
+    @Test
+    void releasesStockWhenPaymentTimesOut() {
+        payment.stubFor(post(&quot;/charges&quot;)
+            .willReturn(okJson(&quot;{\&quot;status\&quot;:\&quot;OK\&quot;}&quot;).withFixedDelay(3_000))); // &gt; 2s timeout
+
+        assertThatThrownBy(() -&gt; checkout.placeOrder(sampleCart()))
+            .isInstanceOf(PaymentUnavailableException.class);
+
+        payment.verify(3, postRequestedFor(urlEqualTo(&quot;/charges&quot;)));  // retries
+        assertThat(reservations.findActive()).isEmpty();               // compensated
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing only the happy path where all dependencies succeed.</li>
+  <li>Hand-written stubs that drift from the real provider API.</li>
+  <li>Relying on a shared staging environment for all scenarios.</li>
+  <li>Not testing timeouts, so a slow dependency blocks threads in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;At unit level I mock each downstream client interface and test the orchestration: everything succeeds, each one fails, timeouts, empty responses, and I verify compensations and fallbacks happen and calls are made in the right order. At integration level I run the service with WireMock stubbing each HTTP dependency, including 500s and delays longer than the timeout, to prove retries, timeouts and circuit breakers work, with Testcontainers for our database and Kafka, asserting persisted state and events. Contract tests with Pact or Spring Cloud Contract keep my stubs honest, and a few end-to-end tests run in staging.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you simulate a slow service?</strong> WireMock <code>withFixedDelay</code> or fault injection; Toxiproxy for network-level latency.</li>
+  <li><strong>How do you test a circuit breaker opens?</strong> Stub repeated failures, then assert calls stop reaching WireMock and the fallback is used.</li>
+  <li><strong>How do you avoid stub drift?</strong> Generate stubs from contracts or OpenAPI and verify them on the provider side.</li>
+</ul>
+</article>
+</body>
+</html>

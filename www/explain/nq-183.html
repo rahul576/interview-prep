@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-183 · How would you create beans conditionally for different microservices?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-183" data-topic="Spring Boot">
+<h1>How would you create beans conditionally for different microservices?</h1>
+<p class="ex-meta">Spring Boot · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Make behaviour <strong>configuration-driven</strong>: guard optional beans with <strong><code>@ConditionalOnProperty</code></strong>, handle environments with <strong>profiles</strong>, activate technology-specific beans with <strong><code>@ConditionalOnClass</code></strong>, package shared ones as <strong>auto-configuration with <code>@ConditionalOnMissingBean</code> defaults</strong>, supply properties via <strong>externalised config</strong>, and test with <strong>ApplicationContextRunner</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a microservice estate, many services share code but need different beans: the order service publishes audit events, the catalogue service doesn't; one service uses Kafka, another RabbitMQ; production uses a real payment client, staging a sandbox. The goal is <strong>one codebase or library, many configurations</strong>, without <code>if (serviceName.equals(...))</code> branches.</p>
+<p><strong>Per-service switches</strong> use <code>@ConditionalOnProperty</code>, for example <code>audit.publisher.enabled=true</code> only in the order service. <strong>Environment differences</strong> (dev, staging, prod) use <strong>profiles</strong> or profile-specific property files. <strong>Technology choices</strong> use <code>@ConditionalOnClass</code>, so the Kafka-based publisher activates only in services that have the Kafka client on their classpath, and a RabbitMQ variant activates elsewhere.</p>
+<p>If these beans live in a <strong>shared library</strong>, I package them as <strong>auto-configuration</strong> listed in <code>AutoConfiguration.imports</code>, with <code>@ConditionalOnMissingBean</code> defaults so any service can override a bean by defining its own. Configuration is bound with <code>@ConfigurationProperties</code> so each option is documented and validated.</p>
+<p>The property values themselves come from each service's <code>application.yml</code>, a <strong>config server</strong>, Kubernetes <strong>ConfigMaps</strong> and environment variables, or a secrets manager. Finally, I test each combination with <strong>ApplicationContextRunner</strong>, which starts a lightweight context with chosen properties and classpath, asserting which beans exist.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify beans that vary by service, environment or technology.</li>
+  <li>Choose the condition type: property, profile, class or missing bean.</li>
+  <li>Bind settings to a <code>@ConfigurationProperties</code> class with defaults.</li>
+  <li>Package shared beans as auto-configuration in a starter.</li>
+  <li>Set properties per service via YAML, config server or env vars.</li>
+  <li>Write context-runner tests for enabled and disabled cases.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@AutoConfiguration
+@EnableConfigurationProperties(AuditProps.class)
+public class AuditAutoConfiguration {
+
+    @Bean
+    @ConditionalOnClass(name = &quot;org.springframework.kafka.core.KafkaTemplate&quot;)
+    @ConditionalOnProperty(prefix = &quot;audit.publisher&quot;, name = &quot;enabled&quot;, havingValue = &quot;true&quot;)
+    @ConditionalOnMissingBean(AuditPublisher.class)
+    AuditPublisher kafkaAuditPublisher(KafkaTemplate&lt;String, AuditEvent&gt; t, AuditProps p) {
+        return new KafkaAuditPublisher(t, p.getTopic());
+    }
+}
+
+class AuditAutoConfigurationTest {
+    ApplicationContextRunner runner = new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(AuditAutoConfiguration.class))
+        .withBean(KafkaTemplate.class, () -&gt; mock(KafkaTemplate.class));
+
+    @Test void disabledByDefault() {
+        runner.run(ctx -&gt; assertThat(ctx).doesNotHaveBean(AuditPublisher.class));
+    }
+    @Test void enabledByProperty() {
+        runner.withPropertyValues(&quot;audit.publisher.enabled=true&quot;)
+              .run(ctx -&gt; assertThat(ctx).hasSingleBean(AuditPublisher.class));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Branching on service names in code instead of configuration.</li>
+  <li>Overusing profiles for feature flags, leading to profile explosion.</li>
+  <li>Shared libraries that create beans unconditionally, forcing every service to exclude them.</li>
+  <li>Testing only the default configuration.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I keep the behaviour switchable through configuration rather than code branches. Beans only some services need are guarded by OnProperty, for example audit.publisher.enabled in the order service only. Environment differences use profiles, and technology-specific beans use OnClass, so the Kafka publisher activates only where Kafka is on the classpath. In a shared library I package them as auto-configuration with OnMissingBean defaults so a service can override them. Properties come from application.yml, a config server or Kubernetes env vars, and I test both enabled and disabled cases with ApplicationContextRunner.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test conditional configuration?</strong> ApplicationContextRunner with properties, beans and <code>FilteredClassLoader</code>.</li>
+  <li><strong>Profiles or properties?</strong> Profiles for environments, properties for individual features.</li>
+  <li><strong>Runtime toggles?</strong> Use a feature-flag service; conditions are evaluated only at startup.</li>
+</ul>
+</article>
+</body>
+</html>

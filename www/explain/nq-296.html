@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-296 · How do you define build stages and deployment steps in a pipeline?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-296" data-topic="DevOps &amp; CI/CD">
+<h1>How do you define build stages and deployment steps in a pipeline?</h1>
+<p class="ex-meta">DevOps &amp; CI/CD · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Define <strong>ordered stages</strong> (build, test, analyse, package, publish, deploy), each with <strong>steps</strong> running commands (<code>mvn</code>, <code>docker build/push</code>, <code>helm</code>), add <strong>conditions</strong> (<code>when</code> on branch), <strong>parallel</strong> stages and <strong>approvals</strong> (<code>input</code> or environment protection), keep <strong>environment-specific config and credentials</strong> outside the code, and use <strong>post actions</strong> for reports, notifications and rollback.</p>
+
+<h2>Detailed explanation</h2>
+<p>A good pipeline reads like the team's release process. Typical stages for a Spring Boot service:</p>
+<ul>
+  <li><strong>Build:</strong> <code>./mvnw -B clean package -DskipTests</code> to fail fast on compile errors.</li>
+  <li><strong>Test:</strong> unit and integration tests, possibly in <strong>parallel</strong> stages.</li>
+  <li><strong>Quality:</strong> SonarQube scan and <code>waitForQualityGate</code>.</li>
+  <li><strong>Package:</strong> <code>docker build</code> tagged with version and commit SHA.</li>
+  <li><strong>Publish:</strong> <code>docker push</code> using credentials from the CI store.</li>
+  <li><strong>Deploy:</strong> per environment, <code>helm upgrade --install</code> with that environment's values file, or a commit to a <strong>GitOps repository</strong> that Argo CD syncs.</li>
+</ul>
+<p><strong>Conditions:</strong> <code>when { branch 'main' }</code> limits deployment to main; PR builds stop after publish or even after tests.</p>
+<p><strong>Approvals:</strong> <code>input</code> steps in Jenkins, or <strong>environment protection rules</strong> with required reviewers in GitHub Actions and GitLab, gate staging or production.</p>
+<p><strong>Configuration and secrets:</strong> environment differences live in values files, Spring profiles or a config server; credentials are bound per stage from Jenkins credentials, GitHub secrets, Vault or cloud secret managers, never in the repo.</p>
+<p><strong>Post actions:</strong> publish JUnit and coverage reports, notify Slack or Teams, and on deployment failure run <code>helm rollback</code> or rely on the rollout tool's automatic rollback.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Map the release process to stages.</li>
+  <li>Implement each stage with tool commands.</li>
+  <li>Add parallelism for independent work.</li>
+  <li>Add conditions and approvals per environment.</li>
+  <li>Bind credentials and environment config per stage.</li>
+  <li>Add post actions for reporting and recovery.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-groovy">pipeline {
+  agent any
+  environment { IMAGE = &quot;registry.example.com/orders:${env.GIT_COMMIT.take(8)}&quot; }
+  stages {
+    stage('Build')   { steps { sh './mvnw -B clean package -DskipTests' } }
+    stage('Test')    { parallel {
+        stage('Unit') { steps { sh './mvnw -B test' } }
+        stage('IT')   { steps { sh './mvnw -B verify -Pit' } } } }
+    stage('Image')   { steps { sh 'docker build -t $IMAGE .' } }
+    stage('Push')    { steps { withCredentials([usernamePassword(credentialsId: 'reg', usernameVariable: 'U', passwordVariable: 'P')]) {
+        sh 'echo $P | docker login registry.example.com -u $U --password-stdin &amp;&amp; docker push $IMAGE' } } }
+    stage('Deploy dev')  { when { branch 'main' } steps { sh 'helm upgrade --install orders chart -f values-dev.yaml --set image.tag=${IMAGE##*:}' } }
+    stage('Approve prod'){ when { branch 'main' } steps { input message: 'Deploy to production?' } }
+    stage('Deploy prod') { when { branch 'main' } steps { sh 'helm upgrade --install orders chart -f values-prod.yaml --set image.tag=${IMAGE##*:} --atomic' } }
+  }
+  post { always { junit '**/target/*-reports/*.xml' } }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deploying from feature branches by accident.</li>
+  <li>Holding an executor while waiting on <code>input</code> for hours.</li>
+  <li>Environment config baked into the image.</li>
+  <li>No rollback path.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I define ordered stages, each with steps. Build runs Maven, Test runs unit and integration tests in parallel, Quality runs Sonar and waits for the gate, Package builds the Docker image tagged with the commit SHA, Publish pushes it with stored credentials, and Deploy stages per environment run helm upgrade with that environment's values, or update a GitOps repo. When conditions restrict deployments to main, an input step or environment protection adds approval for production, and post sections publish reports, notify the team and trigger rollback on failure.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Minimal Jenkinsfile for Spring Boot?</strong> Checkout, <code>./mvnw verify</code>, junit in post; add image and deploy later.</li>
+  <li><strong>Why <code>--atomic</code> in Helm?</strong> Rolls back automatically if the upgrade fails.</li>
+  <li><strong>Avoid holding an agent during approval?</strong> Use <code>agent none</code> at the top level and run input outside agent blocks.</li>
+</ul>
+</article>
+</body>
+</html>

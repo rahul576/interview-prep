@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-068 · How should AI agents make infrastructure changes so that existing controls still apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-068" data-topic="AI Agents &amp; AIOps">
+<h1>How should AI agents make infrastructure changes so that existing controls still apply?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Agents should <strong>change code, not live infrastructure</strong>: they open <strong>pull requests to IaC or GitOps repositories</strong>, where <strong>plans, policy checks, scans and reviews</strong> apply; agents get <strong>read access to environments and write access to branches only</strong>, <strong>humans approve production merges</strong>, and every change <strong>links to the agent run</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Organisations have built controls around infrastructure change: code review, terraform plan output, policy as code, security scanning, change approvals and audit trails. If an agent gets cloud admin credentials and calls APIs directly, it bypasses all of them, and a single mistaken or manipulated decision can cause a large outage or security hole.</p>
+<p>The safe pattern routes agent changes through the same path as human changes. When an agent concludes that a node pool needs more capacity, a firewall rule is missing or a deployment should be rolled back, it <strong>edits the Terraform, Helm values or Kubernetes manifests</strong> and opens a <strong>pull request</strong> to the infrastructure or <strong>GitOps</strong> repository, with an explanation and evidence. CI then runs <strong>terraform plan</strong>, <strong>policy checks</strong> (OPA/Conftest, Sentinel), security scanners such as Checkov or tfsec, and cost estimates. Reviewers see exactly what will change. <strong>Humans approve merges</strong>, at least for production, and the existing pipeline or a GitOps controller (Argo CD, Flux) applies the change.</p>
+<p>The agent's identity needs only <strong>read access</strong> to environments for diagnosis and <strong>write access to branches</strong>, never apply rights or cloud admin roles. Every PR links to the <strong>agent run</strong> (trace ID, prompt, evidence), giving a complete audit trail. For urgent incidents, <strong>pre-approved runbook actions</strong> such as scaling within limits are the exception, still logged.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent diagnoses with read-only access.</li>
+  <li>Edits IaC in a branch; runs local validation (fmt, validate).</li>
+  <li>Opens PR with rationale, evidence and run link.</li>
+  <li>CI: plan, policy checks, security scans, cost estimate.</li>
+  <li>Code owners review and approve; merge.</li>
+  <li>Pipeline or GitOps controller applies; agent monitors outcome.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># PR opened by infra-agent (run 7c21…): &quot;Increase checkout node pool max size&quot;
+# Evidence: pending pods 45 min/day for 7 days, cluster autoscaler at max (links)
+resource &quot;azurerm_kubernetes_cluster_node_pool&quot; &quot;checkout&quot; {
+  name       = &quot;checkout&quot;
+  min_count  = 3
+-  max_count  = 10
++  max_count  = 16
+}</code></pre>
+<pre><code class="language-rego">deny[msg] {
+  input.resource_changes[_].change.actions[_] == &quot;delete&quot;
+  input.metadata.author_type == &quot;agent&quot;
+  msg := &quot;Agents may not delete infrastructure resources&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Giving the agent <code>terraform apply</code> rights in production.</li>
+  <li>Separate &quot;agent path&quot; without the normal checks.</li>
+  <li>Auto-merge for agent PRs because &quot;the agent tested it&quot;.</li>
+  <li>PRs without evidence, making review a guessing game.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Agents should never change live infrastructure directly; they change code. If an agent decides a node pool needs more capacity or a deployment should roll back, it edits the Terraform or manifests and opens a pull request with its reasoning and evidence. Then the normal controls apply: plan, policy checks, security scans and human review, and the pipeline or GitOps controller applies it after merge. The agent only has read access to environments and write access to branches, and every PR links to the agent run for audit. Pre-approved runbook actions are the exception for urgent incidents.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Urgent incident changes?</strong> Pre-approved, bounded actions with immediate audit, then reconciled in Git.</li>
+  <li><strong>Drift?</strong> GitOps reconciliation reverts manual or agent changes made outside Git.</li>
+  <li><strong>Policy for agent PRs?</strong> Stricter rules, such as no deletes and mandatory code owners.</li>
+</ul>
+</article>
+</body>
+</html>

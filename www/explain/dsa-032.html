@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsa-032 · How would you count unique visitors per day across billions of events with limited memory?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dsa-032" data-topic="DSA: Algorithms &amp; DP">
+<h1>How would you count unique visitors per day across billions of events with limited memory?</h1>
+<p class="ex-meta">DSA: Algorithms &amp; DP · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>An exact set of billions of ids won't fit in memory, so use <strong>HyperLogLog (HLL)</strong>. It estimates <strong>cardinality</strong> with roughly <strong>1% error in kilobytes</strong>, and sketches are <strong>mergeable</strong> across shards, hours and days. Use a <strong>Bloom filter</strong> for membership (&quot;seen before?&quot;), and <strong>partitioned batch counting</strong> when exact numbers are mandatory.</p>
+
+<h2>Detailed explanation</h2>
+<p>With 2 billion events per day and maybe 300 million distinct visitors, an exact <code>HashSet&lt;String&gt;</code> needs tens of GB per day, more again for weekly or monthly windows, and can't be merged cheaply across servers. Most product metrics tolerate ±1–2%, which opens the door to <strong>probabilistic sketches</strong>.</p>
+<p><strong>How HyperLogLog works (intuition).</strong> Hash each visitor id to a uniform 64-bit value. In random bits, a run of k leading zeros appears roughly once per 2^k distinct values, so the longest run seen hints at the cardinality. One estimate is very noisy, so HLL splits the hash. The first p bits choose one of m = 2^p <strong>registers</strong>, and each register stores the <strong>maximum leading-zero count</strong> of the hashes routed to it. A <strong>harmonic mean</strong> across registers, plus bias corrections for small and large ranges, gives the estimate. The standard error is about <strong>1.04/√m</strong>. With m = 16,384 that is about 0.81%, in roughly 12 KB. <strong>Duplicates don't change the result</strong>, because the same id always hashes to the same register and value.</p>
+<p><strong>Mergeability</strong> is the killer feature. The union of two HLLs is the register-wise max. So each shard or hour builds its own sketch, and daily, weekly and monthly uniques are just merges. There is no reprocessing of raw events. (Intersections are only approximate, through inclusion–exclusion, and the error grows.)</p>
+<p>Off-the-shelf tools:</p>
+<ul>
+  <li><strong>Redis</strong> <code>PFADD</code>/<code>PFCOUNT</code>/<code>PFMERGE</code>: about 12 KB per key, 0.81% standard error.</li>
+  <li><strong>Elasticsearch</strong> <code>cardinality</code> aggregation (HLL++).</li>
+  <li><strong>BigQuery</strong> <code>APPROX_COUNT_DISTINCT</code> and HLL functions, <strong>Spark</strong> <code>approx_count_distinct</code>, <strong>Druid</strong>, and the <strong>Apache DataSketches</strong> library.</li>
+</ul>
+<p><strong>Bloom filter</strong> answers a different question: &quot;is this id possibly in the set?&quot;. It can give false positives but never false negatives, using about 10 bits per element for 1% FPR. It is good for &quot;is this a new visitor?&quot; checks, not for counting.</p>
+<p><strong>Exact counts</strong> (billing, legal reporting): partition events by <code>hash(visitorId)</code> so each worker counts distinct ids for its partition independently, then sum. Or run <code>COUNT(DISTINCT)</code> in a batch warehouse job.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The event stream (Kafka) is consumed by stream processors.</li>
+  <li>Each processor runs <code>PFADD uv:{day}:{shard} visitorId</code> (or keeps an in-memory sketch).</li>
+  <li>Periodically merge the shard sketches: <code>PFMERGE uv:{day} uv:{day}:*</code>.</li>
+  <li>The dashboard calls <code>PFCOUNT uv:{day}</code>. A week is <code>PFCOUNT</code> over 7 keys, which merges internally.</li>
+  <li>Raw events stay in cheap storage for occasional exact recounts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">PFADD uv:2026-11-21 user:81 user:93 user:81      # duplicate ignored
+PFADD uv:2026-11-22 user:93 user:17
+PFCOUNT uv:2026-11-21                            # -&gt; 2
+PFCOUNT uv:2026-11-21 uv:2026-11-22              # union -&gt; 3
+PFMERGE uv:week47 uv:2026-11-21 uv:2026-11-22</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Structure</th><th>Answers</th><th>Memory</th><th>Error</th></tr></thead>
+<tbody>
+<tr><td>Hash set</td><td>Exact count, membership</td><td>O(n), GBs</td><td>None</td></tr>
+<tr><td>HyperLogLog</td><td>Approximate count</td><td>~12 KB</td><td>~1%</td></tr>
+<tr><td>Bloom filter</td><td>Possible membership</td><td>~1.2 bytes/item at 1%</td><td>False positives</td></tr>
+<tr><td>Partitioned exact</td><td>Exact count</td><td>Distributed</td><td>None, but slower</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Summing daily unique counts to get weekly uniques (it double-counts). Merge sketches instead.</li>
+  <li>Using HLL for small sets where an exact set is cheap.</li>
+  <li>Expecting accurate intersections from HLLs.</li>
+  <li>Using a Bloom filter to count.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An exact set of billions of ids won't fit in memory, so I'd use HyperLogLog. It hashes each id, routes it to one of thousands of registers, and tracks the maximum number of leading zeros per register. That gives a cardinality estimate with about one percent error in roughly 12 kilobytes, and duplicates don't affect it. Sketches are mergeable, so each shard or hour builds its own and I union them for daily or weekly counts, with Redis PFADD and PFCOUNT or Elasticsearch's cardinality aggregation. For 'have we seen this visitor' I'd use a Bloom filter, and if exact counts were mandatory I'd partition by visitor id and count in batch.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Trade-off of a Bloom filter?</strong> Compact and fast, but false positives, no deletes (use counting or cuckoo filters), and no enumeration.</li>
+  <li><strong>Why not sum daily uniques?</strong> The same visitor appears on several days. Union the sketches.</li>
+  <li><strong>Error versus memory?</strong> Error scales with 1/√m. Four times the registers halves the error.</li>
+</ul>
+</article>
+</body>
+</html>

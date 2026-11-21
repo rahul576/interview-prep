@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-265 · How do you test asynchronous Kafka consumers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-265" data-topic="Testing">
+<h1>How do you test asynchronous Kafka consumers?</h1>
+<p class="ex-meta">Testing · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Test the <strong>handler logic as a plain unit</strong>, then run <strong>integration tests</strong> against <strong>Testcontainers Kafka</strong> (or <code>@EmbeddedKafka</code>): produce a message, <strong>wait with Awaitility</strong> rather than <code>Thread.sleep</code>, and assert <strong>side effects</strong> (database rows, outbound events, dead-letter records), including <strong>retries, poison messages and duplicates</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Kafka consumer is asynchronous: the test thread publishes a message and the listener runs later on another thread. Tests must therefore separate <strong>logic</strong> from <strong>infrastructure</strong> and wait for outcomes properly.</p>
+<p><strong>Unit level:</strong> keep the <code>@KafkaListener</code> method thin and delegate to a handler such as <code>OrderEventHandler.handle(OrderCreated event)</code>. Unit test that method directly with constructed events and mocked repositories. This covers business rules, validation and idempotency checks in milliseconds.</p>
+<p><strong>Integration level:</strong> start a real broker with <strong>Testcontainers Kafka</strong> (closest to production) or Spring Kafka's <code>@EmbeddedKafka</code> (in-JVM, faster but less realistic). Start the Spring context so the real listener container, deserialisers, error handler and transaction settings are used. Publish with <code>KafkaTemplate</code>, then wait with <strong>Awaitility</strong>: <code>await().atMost(Duration.ofSeconds(10)).untilAsserted(...)</code> polls until the assertion passes or times out. <code>Thread.sleep</code> either waits too long (slow suite) or too little (flaky tests).</p>
+<p><strong>What to assert:</strong> effects, not internals. Rows saved in the database (Testcontainers PostgreSQL), events published to an output topic (read with a test consumer), records on the <strong>dead-letter topic</strong> (DLT), metrics or calls to WireMock-stubbed services.</p>
+<p><strong>Failure paths:</strong> a downstream timeout triggers retries (<code>DefaultErrorHandler</code> with backoff or <code>@RetryableTopic</code>), then the DLT; a <strong>poison message</strong> that cannot be deserialised goes straight to the DLT via <code>ErrorHandlingDeserializer</code> without blocking the partition; a <strong>duplicate</strong> delivery (at-least-once semantics) must not create a second row. Also test ordering if keys guarantee it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Unit test the handler with plain objects.</li>
+  <li>Start Kafka (and DB) containers; configure Spring via <code>@ServiceConnection</code>.</li>
+  <li>Send a message with a unique key to the input topic.</li>
+  <li>Await the side effect with a timeout.</li>
+  <li>Repeat for error cases: bad payload, downstream failure, duplicate.</li>
+  <li>Use unique ids or topics per test to avoid interference.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@SpringBootTest
+@Testcontainers
+class OrderCreatedListenerIT {
+    @Container @ServiceConnection
+    static KafkaContainer kafka = new KafkaContainer(&quot;apache/kafka-native:3.8.0&quot;);
+    @Container @ServiceConnection
+    static PostgreSQLContainer&lt;?&gt; pg = new PostgreSQLContainer&lt;&gt;(&quot;postgres:16&quot;);
+
+    @Autowired KafkaTemplate&lt;String, String&gt; template;
+    @Autowired ShipmentRepository shipments;
+
+    @Test
+    void createsShipmentOnceEvenIfDeliveredTwice() {
+        String event = &quot;&quot;&quot;
+            {&quot;orderId&quot;:&quot;o-42&quot;,&quot;customerId&quot;:7}&quot;&quot;&quot;;
+        template.send(&quot;order-created&quot;, &quot;o-42&quot;, event);
+        template.send(&quot;order-created&quot;, &quot;o-42&quot;, event);        // duplicate
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -&gt;
+            assertThat(shipments.findByOrderId(&quot;o-42&quot;)).hasSize(1));
+    }
+
+    @Test
+    void poisonMessageGoesToDlt() {
+        template.send(&quot;order-created&quot;, &quot;bad&quot;, &quot;not-json&quot;);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -&gt;
+            assertThat(readRecords(&quot;order-created-dlt&quot;)).anyMatch(r -&gt; r.key().equals(&quot;bad&quot;)));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>Thread.sleep</code> to wait for the consumer.</li>
+  <li>Putting all logic in the listener method so it cannot be unit tested.</li>
+  <li>Asserting on &quot;message was received&quot; instead of the business effect.</li>
+  <li>Shared topics and ids across tests, causing interference and order dependence.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I test at two levels. The listener just delegates to a handler, so the business logic is unit tested directly with event objects and no Kafka. For integration I run Kafka in Testcontainers, start the Spring context so the real deserialisers and error handlers are used, publish with KafkaTemplate and wait for the effect with Awaitility, never Thread.sleep, which is slow and flaky. I assert side effects: rows in the database, events on output topics, records on the dead-letter topic. And I test failure paths explicitly: retries when a downstream call fails, poison messages going to the DLT and duplicates being ignored.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is Thread.sleep bad?</strong> It is a fixed guess: too long slows the suite, too short makes it flaky.</li>
+  <li><strong>EmbeddedKafka or Testcontainers?</strong> Embedded is faster; Testcontainers matches the real broker version and configuration.</li>
+  <li><strong>How to test idempotency?</strong> Send the same message twice and assert one effect.</li>
+</ul>
+</article>
+</body>
+</html>

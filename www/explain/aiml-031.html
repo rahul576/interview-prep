@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aiml-031 · What is a mixture-of-experts model, and why do many frontier models use it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aiml-031" data-topic="AI/ML &amp; GenAI">
+<h1>What is a mixture-of-experts model, and why do many frontier models use it?</h1>
+<p class="ex-meta">AI/ML &amp; GenAI · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>mixture-of-experts (MoE)</strong> model replaces some layers (usually feed-forward) with many <strong>expert sub-networks</strong> and a <strong>router</strong> that sends each token to only a few, so <strong>total capacity is huge but compute per token stays small</strong>, at the price of <strong>high memory</strong>, <strong>load balancing</strong> and <strong>serving complexity</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a dense transformer every parameter is used for every token. In an MoE layer, there are, say, 64 or 128 parallel <strong>experts</strong> (feed-forward networks), and a small <strong>gating network (router)</strong> scores them for each token and selects the <strong>top-k</strong>, often one or two, sometimes more fine-grained experts plus a shared one. The token is processed only by those experts and their outputs are combined using the router weights. Attention layers usually stay dense.</p>
+<p>The result is <strong>sparse activation</strong>: a model may have hundreds of billions of <strong>total parameters</strong> but only a fraction, for example tens of billions, <strong>active per token</strong>. Because the compute (FLOPs) per token is like a much smaller dense model, MoE gives better quality for the same training and inference compute, which is why many frontier and open models use it; published examples include <strong>Mixtral</strong>, <strong>DeepSeek-V3</strong> and <strong>Qwen MoE</strong> variants, and several closed models are widely reported to use it too.</p>
+<p>The trade-offs are significant. <strong>Memory</strong>: every expert must be loaded because any token might route to any expert, so serving needs as much GPU memory as a dense model of the total size. <strong>Load balancing</strong>: routers can collapse onto a few favourite experts, so training adds <strong>auxiliary balancing losses</strong> or bias-based balancing and <strong>capacity limits</strong>, and dropped or overflowing tokens hurt quality. <strong>Distributed serving</strong>: experts are spread over GPUs (<strong>expert parallelism</strong>), requiring <strong>all-to-all communication</strong> every MoE layer, which demands fast interconnects and makes small-batch latency harder. Fine-tuning can be less stable, and quantisation and batching strategies differ from dense models.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each token's hidden vector enters the MoE layer.</li>
+  <li>The router computes a score per expert and picks the top-k.</li>
+  <li>The token is dispatched to those experts (possibly on other GPUs).</li>
+  <li>Experts process it; outputs are weighted by router probabilities and summed.</li>
+  <li>Results return to the token's position; balancing losses keep usage even across experts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import torch, torch.nn.functional as F
+
+def moe_layer(x, router, experts, k=2):
+    logits = router(x)                        # [tokens, n_experts]
+    weights, idx = logits.topk(k, dim=-1)
+    weights = F.softmax(weights, dim=-1)
+    out = torch.zeros_like(x)
+    for slot in range(k):
+        for e in idx[:, slot].unique():
+            mask = idx[:, slot] == e
+            out[mask] += weights[mask, slot, None] * experts[e](x[mask])
+    return out</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Dense model</th><th>MoE model</th></tr></thead>
+<tbody>
+<tr><td>Parameters used per token</td><td>All</td><td>Small fraction</td></tr>
+<tr><td>Compute per token</td><td>Proportional to total size</td><td>Proportional to active size</td></tr>
+<tr><td>Memory for serving</td><td>Total size</td><td>Total size (all experts)</td></tr>
+<tr><td>Complexity</td><td>Lower</td><td>Routing, balancing, all-to-all</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming MoE needs less GPU memory because it uses less compute.</li>
+  <li>Thinking each expert is a human-interpretable topic specialist; specialisation is mostly at token or pattern level.</li>
+  <li>Comparing an MoE's total parameters directly with a dense model's.</li>
+  <li>Ignoring interconnect bandwidth when planning MoE serving.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;MoE swaps the feed-forward layers for many expert networks plus a router that picks a few experts per token. So a model can have hundreds of billions of parameters but only use a small slice for each token, giving much more capacity at roughly the compute of a smaller dense model; Mixtral, DeepSeek and Qwen MoE models use this. The catch is that all experts must sit in memory, the router needs balancing so experts aren't overloaded or idle, and distributing experts across GPUs adds all-to-all communication and serving complexity.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why lots of memory despite little compute per token?</strong> Any token may route to any expert, so all weights must be resident.</li>
+  <li><strong>What is expert parallelism?</strong> Placing different experts on different GPUs and routing tokens between them.</li>
+  <li><strong>What happens with poor load balancing?</strong> Overloaded experts drop or delay tokens and idle experts waste capacity.</li>
+</ul>
+</article>
+</body>
+</html>

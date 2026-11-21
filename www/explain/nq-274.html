@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-274 · How do you mock external dependencies during unit testing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-274" data-topic="Testing">
+<h1>How do you mock external dependencies during unit testing?</h1>
+<p class="ex-meta">Testing · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Design classes to receive external dependencies <strong>through the constructor as interfaces</strong>, replace them in unit tests with <strong>Mockito mocks</strong> stubbed for <strong>success, empty and failure</strong> cases, <strong>verify</strong> important calls with <strong>captors</strong>, inject a fixed <strong>Clock</strong> for time, use <strong>@MockitoBean</strong> only inside Spring tests, and test the real HTTP or database layer with <strong>WireMock or Testcontainers</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Mocking is easy when the design allows it. If a service creates its own <code>RestTemplate</code>, calls <code>LocalDateTime.now()</code> or uses static helpers, a test cannot replace them. So the first step is <strong>dependency injection</strong>: the service receives <code>PaymentClient</code>, <code>OrderRepository</code>, <code>Clock</code> and perhaps an <code>IdGenerator</code> through its constructor. Ideally these are <strong>your own interfaces</strong> (ports), with adapters that wrap third-party SDKs.</p>
+<p>In the unit test:</p>
+<ul>
+  <li>Create mocks with <code>@Mock</code> and the service with <code>new</code> or <code>@InjectMocks</code>.</li>
+  <li><strong>Stub every relevant outcome</strong>: a successful response, an empty result, a business error (card declined), a technical failure (timeout, <code>IOException</code>). Each branch of your code deserves a test.</li>
+  <li><strong>Assert the result</strong> first: return value, thrown exception, changed state.</li>
+  <li><strong>Verify</strong> only interactions that are part of the behaviour, such as &quot;the payment was charged once with 40.00&quot;, using <code>ArgumentCaptor</code> to check the request. Use <code>never()</code> to prove something did not happen after an error.</li>
+  <li><strong>Time and randomness:</strong> inject <code>Clock.fixed(...)</code> and a controllable id or random source so tests are deterministic.</li>
+</ul>
+<p>In <strong>Spring slice tests</strong> such as <code>@WebMvcTest</code>, collaborators are beans; replace them with <strong>@MockitoBean</strong> (Spring Framework 6.2, the successor of <code>@MockBean</code>).</p>
+<p>Mocks are for unit tests. To test the <strong>adapter</strong> itself (the HTTP client's serialisation, headers, timeouts, retries, or a repository's SQL), use <strong>WireMock</strong> to stand in for the remote API at the HTTP level, and <strong>Testcontainers</strong> for databases and brokers. Mocking an HTTP library or JDBC directly gives false confidence.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Extract external calls behind interfaces; inject via constructor.</li>
+  <li>In tests, mock those interfaces.</li>
+  <li>Stub success, edge and failure responses per test.</li>
+  <li>Act, assert outcome, verify key calls and arguments.</li>
+  <li>Cover adapters separately with WireMock or Testcontainers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class RefundServiceTest {
+    PaymentClient payments = mock(PaymentClient.class);
+    RefundRepository refunds = mock(RefundRepository.class);
+    Clock clock = Clock.fixed(Instant.parse(&quot;2026-03-01T09:00:00Z&quot;), ZoneOffset.UTC);
+    RefundService service = new RefundService(payments, refunds, clock);
+
+    @Test
+    void refundsWithinThirtyDays() {
+        when(payments.refund(any())).thenReturn(new RefundResult(&quot;r-1&quot;, OK));
+
+        service.refund(order(&quot;2026-02-10T10:00:00Z&quot;, &quot;40.00&quot;));
+
+        ArgumentCaptor&lt;RefundRequest&gt; req = ArgumentCaptor.forClass(RefundRequest.class);
+        verify(payments).refund(req.capture());
+        assertThat(req.getValue().amount()).isEqualByComparingTo(&quot;40.00&quot;);
+    }
+
+    @Test
+    void recordsFailureWhenProviderTimesOut() {
+        when(payments.refund(any())).thenThrow(new PaymentTimeoutException());
+
+        assertThatThrownBy(() -&gt; service.refund(order(&quot;2026-02-10T10:00:00Z&quot;, &quot;40.00&quot;)))
+            .isInstanceOf(RefundFailedException.class);
+        verify(refunds).save(argThat(r -&gt; r.status() == Status.FAILED));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hard-coded <code>new</code> or static calls that cannot be replaced.</li>
+  <li>Only stubbing the happy path.</li>
+  <li>Mocking the HTTP library itself instead of using WireMock.</li>
+  <li>Calling <code>LocalDateTime.now()</code> directly, making date logic untestable.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I design classes so external dependencies come in through the constructor as interfaces: the payment client, the repository, even the Clock. In a unit test I create Mockito mocks and stub what each should return for that scenario: success, empty results, exceptions like a timeout, so every branch runs. Then I assert the result and verify the important interactions, for example that the payment client was called once with the right amount, using an ArgumentCaptor. Time is a fixed Clock. In Spring slice tests I use MockitoBean. For the HTTP or database layer itself I use WireMock or Testcontainers instead of mocks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of over-mocking?</strong> Tests mirror implementation, break on refactoring and miss real integration bugs.</li>
+  <li><strong>How do you mock static methods?</strong> <code>Mockito.mockStatic</code> in a try-with-resources, but prefer refactoring to injection.</li>
+  <li><strong>WireMock vs Mockito for HTTP clients?</strong> WireMock tests the real HTTP behaviour; Mockito only the caller's logic.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-308 · How does the Spring Cache abstraction work, and what are its pitfalls?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-308" data-topic="Spring Boot">
+<h1>How does the Spring Cache abstraction work, and what are its pitfalls?</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Enable caching with <strong>@EnableCaching</strong> and annotate methods: <strong>@Cacheable</strong> returns a cached result or calls and stores it, <strong>@CachePut</strong> always calls and updates, <strong>@CacheEvict</strong> removes entries; the provider is pluggable (<strong>Caffeine</strong>, <strong>Redis</strong>). Pitfalls: <strong>proxy-based (no self-invocation)</strong>, <strong>key design</strong>, <strong>TTL configured on the provider</strong>, <strong>mutable objects and nulls</strong>, and <strong>stale data</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>cache abstraction</strong> separates caching logic from business code. Spring creates a proxy around beans with cache annotations; on a call, the interceptor computes a <strong>key</strong>, consults the <code>CacheManager</code> and either returns the cached value or invokes the method.</p>
+<ul>
+  <li><strong>@Cacheable(&quot;products&quot;)</strong>: look up the key; on a hit skip the method; on a miss call it and store the result. <code>condition</code> and <code>unless</code> (for example <code>unless = &quot;#result == null&quot;</code>) control what is cached. <code>sync = true</code> lets only one thread compute a missing value per key, reducing stampedes.</li>
+  <li><strong>@CachePut</strong>: always run the method and put the result, used after updates.</li>
+  <li><strong>@CacheEvict</strong>: remove one key or <code>allEntries = true</code>; <code>beforeInvocation</code> controls timing.</li>
+  <li><strong>@Caching</strong> combines several; <strong>@CacheConfig</strong> sets class-level defaults.</li>
+</ul>
+<p><strong>Providers:</strong> Spring Boot auto-configures one based on the classpath: <strong>Caffeine</strong> for fast local in-JVM caching with size and time limits; <strong>Redis</strong> for a distributed cache shared by all instances, which survives restarts and keeps instances consistent; others via JCache. A simple <code>ConcurrentHashMap</code> cache is the fallback and has no eviction.</p>
+<p><strong>Pitfalls:</strong></p>
+<ul>
+  <li><strong>Self-invocation</strong> bypasses the proxy, just like <code>@Transactional</code>.</li>
+  <li><strong>Default key</strong>: built from all parameters with <code>SimpleKeyGenerator</code>; no-arg methods share one key, and two different methods using the same cache name with the same arguments collide. Define keys explicitly with SpEL, such as <code>key = &quot;#id&quot;</code>.</li>
+  <li><strong>TTL and size</strong> are not part of the annotations; configure them per cache on the provider (<code>spring.cache.redis.time-to-live</code>, Caffeine spec, or <code>RedisCacheManagerBuilderCustomizer</code>).</li>
+  <li><strong>Mutable objects</strong>: with a local cache, callers receive the same instance and can modify the cached value. Cache immutable DTOs or records.</li>
+  <li><strong>Nulls</strong> may or may not be cached depending on the provider.</li>
+  <li><strong>Serialisation</strong> for Redis: configure JSON serialisation and versioning.</li>
+  <li><strong>Staleness and multi-instance</strong>: local caches on different pods diverge after an eviction on one pod.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>@EnableCaching</code> registers the cache interceptor and proxies.</li>
+  <li>A call computes the key from SpEL or parameters.</li>
+  <li>The cache manager returns the named cache from the provider.</li>
+  <li>Hit: return cached value. Miss: invoke, store, return.</li>
+  <li>Put and evict operations update entries after writes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+@CacheConfig(cacheNames = &quot;products&quot;)
+class ProductService {
+    @Cacheable(key = &quot;#id&quot;, unless = &quot;#result == null&quot;)
+    public ProductDto get(long id) { return mapper.toDto(repo.findById(id).orElse(null)); }
+
+    @CachePut(key = &quot;#result.id()&quot;)
+    public ProductDto update(long id, UpdateProduct cmd) { ... }
+
+    @Caching(evict = { @CacheEvict(key = &quot;#id&quot;), @CacheEvict(cacheNames = &quot;productLists&quot;, allEntries = true) })
+    public void delete(long id) { repo.deleteById(id); }
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  cache:
+    type: redis
+    cache-names: products,productLists
+    redis:
+      time-to-live: 10m</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Caching inside the same class and wondering why nothing is cached.</li>
+  <li>No TTL, so stale data lives forever.</li>
+  <li>Caching JPA entities with lazy associations.</li>
+  <li>Local cache on several pods with no invalidation strategy.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I enable caching and annotate service methods: @Cacheable returns the cached value for a key or calls the method and stores the result, @CachePut always calls and updates the entry, and @CacheEvict removes entries after writes. The provider is pluggable: Caffeine for local caching, Redis for a shared distributed cache. The pitfalls: it's proxy-based, so self-invocation isn't cached; the default key is all method arguments, so I define keys explicitly; TTL and size must be configured on the provider; and caching mutable objects or nulls gives surprising results, so I cache immutable DTOs. With several instances I prefer Redis or a clear invalidation strategy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you cache a list of products but evict a single product when it changes?</strong> Separate caches: evict the product key and clear or version the list cache.</li>
+  <li><strong>How do you avoid a stampede?</strong> <code>sync = true</code>, TTL jitter, or refresh-ahead with Caffeine.</li>
+  <li><strong>How do you monitor it?</strong> Micrometer cache metrics: hits, misses, evictions.</li>
+</ul>
+</article>
+</body>
+</html>

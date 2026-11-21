@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-317 · How do SQS visibility timeouts and message delays affect processing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-317" data-topic="Cloud (AWS)">
+<h1>How do SQS visibility timeouts and message delays affect processing?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The <strong>visibility timeout</strong> hides a message after it is received; if not deleted in time it <strong>reappears</strong>: <strong>too short causes duplicate parallel processing</strong>, <strong>too long delays retries</strong>; for Lambda set it to about <strong>six times the function timeout</strong> and extend it with <strong><code>ChangeMessageVisibility</code></strong> for long work. <strong>Message delays</strong> (delay queues or <code>DelaySeconds</code>, up to <strong>15 minutes</strong>) postpone <strong>first delivery</strong>, useful for <strong>backoff and deferred checks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Visibility timeout</strong> (default 30 seconds, up to 12 hours) starts when a consumer receives a message. During it, other consumers cannot see the message. Outcomes:</p>
+<ul>
+  <li>Consumer deletes it in time: done.</li>
+  <li>Consumer fails or crashes: after the timeout, the message reappears and is retried; <code>ApproximateReceiveCount</code> increases and the DLQ policy may apply.</li>
+  <li>Processing takes longer than the timeout: the message reappears <strong>while still being processed</strong>, and a second consumer processes it in parallel, causing duplicates.</li>
+</ul>
+<p>So set it above the realistic maximum processing time. For Lambda, AWS recommends at least <strong>six times the function timeout</strong>, to cover retries when invocations are throttled. For long or variable work, consumers send a <strong>heartbeat</strong> with <code>ChangeMessageVisibility</code> to extend it. You can also set it to a short value on purpose in a failure handler to retry sooner, or longer for <strong>backoff</strong>.</p>
+<p><strong>Delays</strong> affect messages <strong>before first delivery</strong>:</p>
+<ul>
+  <li><strong>Delay queue:</strong> a queue-level <code>DelaySeconds</code> applying to all new messages.</li>
+  <li><strong>Per-message timers:</strong> <code>DelaySeconds</code> on <code>SendMessage</code> for standard queues (FIFO supports only queue-level delay).</li>
+  <li>Maximum <strong>15 minutes</strong>.</li>
+</ul>
+<p>Uses: deferring work (&quot;check payment status in 5 minutes&quot;), smoothing bursts, and <strong>exponential backoff</strong> by re-sending a failed message with an increasing delay and an attempt counter attribute. Longer schedules need <strong>EventBridge Scheduler</strong> or Step Functions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Message sent, optionally with a delay.</li>
+  <li>After the delay, it becomes available.</li>
+  <li>Consumer receives it; visibility timeout starts.</li>
+  <li>Delete on success, or extend visibility while working.</li>
+  <li>If the timeout expires, it reappears for retry.</li>
+  <li>Exceeding <code>maxReceiveCount</code> sends it to the DLQ.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Backoff on failure: re-send with growing delay, then delete the original
+int attempt = Integer.parseInt(attrs.getOrDefault(&quot;attempt&quot;, &quot;0&quot;)) + 1;
+int delay = Math.min(900, (int) Math.pow(2, attempt) * 10);   // 20s, 40s, 80s ... cap 15 min
+sqs.sendMessage(b -&gt; b.queueUrl(url).messageBody(body).delaySeconds(delay)
+    .messageAttributes(Map.of(&quot;attempt&quot;, MessageAttributeValue.builder()
+        .dataType(&quot;Number&quot;).stringValue(String.valueOf(attempt)).build())));
+sqs.deleteMessage(b -&gt; b.queueUrl(url).receiptHandle(receiptHandle));</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Visibility timeout</th><th>Delay</th></tr></thead>
+<tbody>
+<tr><td>When it applies</td><td>After each receive</td><td>Before first delivery</td></tr>
+<tr><td>Max</td><td>12 hours</td><td>15 minutes</td></tr>
+<tr><td>Purpose</td><td>Protect in-flight processing</td><td>Defer or back off</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default 30-second timeout for multi-minute processing.</li>
+  <li>Very long timeouts making failed messages wait hours.</li>
+  <li>Per-message delays on FIFO queues (not supported).</li>
+  <li>Unlimited re-send loops without an attempt cap.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The visibility timeout is how long a message stays hidden after a consumer receives it. If the consumer deletes it in time, it's gone; otherwise it reappears and may be processed again. If it's shorter than processing time, messages are processed twice in parallel; if it's very long, failed messages wait a long time before retry. For Lambda, AWS recommends about six times the function timeout, and long-running consumers can extend it with ChangeMessageVisibility. Delays, via a delay queue or DelaySeconds up to fifteen minutes, hide a new message before first delivery, which is useful for backoff or checking a status later.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Exponential backoff with SQS?</strong> Re-send with increasing <code>DelaySeconds</code> and an attempt counter, or change visibility on failure.</li>
+  <li><strong>Delays longer than 15 minutes?</strong> EventBridge Scheduler or Step Functions wait states.</li>
+  <li><strong>What is <code>ApproximateReceiveCount</code>?</strong> How many times a message has been received; drives DLQ redrive.</li>
+</ul>
+</article>
+</body>
+</html>

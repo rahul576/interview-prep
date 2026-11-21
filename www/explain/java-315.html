@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-315 · How do you insert or update a million rows efficiently with JPA?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-315" data-topic="Spring Data &amp; JPA">
+<h1>How do you insert or update a million rows efficiently with JPA?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>For a million rows, enable <strong>JDBC batching</strong> (<code>hibernate.jdbc.batch_size</code>, ordered inserts/updates), <strong>flush and clear</strong> every batch, use <strong>SEQUENCE ids with a pooled optimiser</strong> (IDENTITY disables insert batching), split into <strong>chunked transactions</strong> (Spring Batch), and for the largest loads bypass JPA with <strong>JdbcTemplate batch updates, bulk SQL or COPY</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Calling <code>save()</code> a million times in one transaction with default settings is slow for three reasons: each INSERT is a separate <strong>round trip</strong>, every entity stays in the <strong>persistence context</strong> with a snapshot (memory grows and each flush dirty-checks more), and one giant transaction holds locks, bloats undo/WAL and can't restart midway.</p>
+<p><strong>JDBC batching.</strong> Set <code>hibernate.jdbc.batch_size</code> to around 30-100 so Hibernate groups statements into JDBC batches. Add <code>hibernate.order_inserts=true</code> and <code>order_updates=true</code> so statements for the same table are grouped, otherwise interleaved entity types break batches. For MySQL add <code>rewriteBatchedStatements=true</code> to the JDBC URL; PostgreSQL's <code>reWriteBatchedInserts=true</code> similarly helps.</p>
+<p><strong>Flush and clear.</strong> Every batch-size entities, call <code>entityManager.flush()</code> then <code>clear()</code> so the persistence context stays small and memory stays constant. A <code>StatelessSession</code> is an alternative with no persistence context at all.</p>
+<p><strong>Id generation.</strong> With <code>GenerationType.IDENTITY</code> the id is only known after the INSERT executes, and Hibernate needs it immediately to manage the entity, so it executes each insert at once and <strong>disables insert batching</strong>. Use <code>SEQUENCE</code> with an <strong>allocationSize</strong> (for example 50) and the pooled optimiser, which fetches blocks of ids with one sequence call. Assigned UUIDs also work.</p>
+<p><strong>Chunked transactions.</strong> Commit every few thousand rows rather than once, so failures don't roll back hours of work and locks are short. <strong>Spring Batch</strong> gives chunk-oriented processing with reader, processor and writer, restartability, skip and retry policies.</p>
+<p><strong>Bypass JPA for bulk.</strong> If you don't need entity behaviour, <code>JdbcTemplate.batchUpdate</code> with prepared statements is much faster; a set-based <code>UPDATE ... WHERE</code> or <code>INSERT ... SELECT</code> runs entirely in the database; and PostgreSQL <strong>COPY</strong> (via <code>CopyManager</code>) or MySQL <code>LOAD DATA</code> loads millions of rows in seconds. Consider dropping or deferring secondary indexes for one-off huge loads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Configure batching, ordering and sequence-based ids.</li>
+  <li>Read input in a streaming fashion (cursor or file reader).</li>
+  <li>Persist entities; every N, flush and clear.</li>
+  <li>Commit per chunk; record progress for restart.</li>
+  <li>For pure data loads, use JDBC batch, bulk SQL or COPY.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  jpa:
+    properties:
+      hibernate:
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+  datasource:
+    url: jdbc:postgresql://db/app?reWriteBatchedInserts=true</code></pre>
+<pre><code class="language-java">@Entity
+class Reading {
+    @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = &quot;reading_seq&quot;)
+    @SequenceGenerator(name = &quot;reading_seq&quot;, sequenceName = &quot;reading_seq&quot;, allocationSize = 50)
+    Long id;
+}
+
+@Transactional
+public void importChunk(List&lt;ReadingDto&gt; chunk) {
+    for (int i = 0; i &lt; chunk.size(); i++) {
+        em.persist(map(chunk.get(i)));
+        if ((i + 1) % 50 == 0) { em.flush(); em.clear(); }
+    }
+}
+
+// Fastest path without entities
+jdbc.batchUpdate(&quot;insert into reading(id, sensor, value) values (nextval('reading_seq'), ?, ?)&quot;,
+    rows, 1000, (ps, r) -&gt; { ps.setString(1, r.sensor()); ps.setDouble(2, r.value()); });</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>IDENTITY ids with batching expectations.</li>
+  <li>Never clearing the persistence context, causing OutOfMemoryError.</li>
+  <li>One transaction for the whole million rows.</li>
+  <li>Loading all input into memory before processing.</li>
+  <li>Using <code>saveAll()</code> on a huge list and assuming it batches by itself.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I enable JDBC batching with hibernate.jdbc.batch_size around 50 plus ordered inserts and updates. Entities pile up in the persistence context, so every batch I flush and clear to keep memory constant. IDENTITY id generation disables insert batching, so I use sequences with a pooled optimiser. Work is split into chunked transactions, for example with Spring Batch, so failures can restart. For very large loads I bypass JPA with JdbcTemplate batch updates, set-based SQL, or the database COPY command, which is much faster.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does IDENTITY prevent batching?</strong> The id is generated by the INSERT, so Hibernate must execute each insert immediately.</li>
+  <li><strong>StatelessSession?</strong> No persistence context, no dirty checking or cascades; good for bulk.</li>
+  <li><strong>Updating a million rows?</strong> Prefer one set-based UPDATE in batches by key range.</li>
+</ul>
+</article>
+</body>
+</html>

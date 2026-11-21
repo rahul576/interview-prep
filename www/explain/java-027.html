@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-027 · What are common pitfalls with @Transactional in Spring?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-027" data-topic="Spring Data &amp; JPA">
+<h1>What are common pitfalls with @Transactional in Spring?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The main <code>@Transactional</code> pitfalls are <strong>proxy-based behaviour (self-invocation, private methods, non-Spring objects)</strong>, <strong>no rollback on checked exceptions</strong>, misunderstood <strong>propagation</strong> and <strong>rollback-only</strong> marking, <strong>long transactions around remote calls</strong>, and forgetting <strong>isolation/readOnly</strong> settings.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Proxy limits.</strong> <code>@Transactional</code> is implemented by an AOP proxy, so only calls that go through the proxy are transactional. Calling a transactional method from another method of the same class (<strong>self-invocation</strong>) bypasses it and no transaction starts. Objects created with <code>new</code> are not proxied. Historically only <strong>public</strong> methods were supported; since <strong>Spring 6.0</strong>, protected and package-private methods also work with class-based (CGLIB) proxies, but <strong>private</strong> methods never do, and <strong>final</strong> methods can't be intercepted by CGLIB.</p>
+<p><strong>Rollback rules.</strong> By default rollback happens on <code>RuntimeException</code> and <code>Error</code> only. A <strong>checked exception</strong> escaping the method <strong>commits</strong>. Use <code>rollbackFor = Exception.class</code> where needed. Swallowing exceptions inside the method also commits partial work.</p>
+<p><strong>Propagation surprises.</strong> REQUIRED joins the existing transaction, so an inner failure marks the shared transaction <strong>rollback-only</strong>; catching that exception in the outer method then leads to <strong>UnexpectedRollbackException</strong> at commit. REQUIRES_NEW suspends the outer transaction and runs separately, which is right for an <strong>audit log</strong> that must persist even if the main work fails, but it takes a <strong>second connection</strong> and can exhaust the pool.</p>
+<p><strong>Transaction scope.</strong> <strong>Long transactions</strong> that include HTTP calls, file processing or message publishing hold connections and row locks, hurting throughput and causing timeouts; external calls are not rolled back anyway. Keep transactions short and do remote work before or after, or use an outbox.</p>
+<p><strong>Settings and environment.</strong> Set <code>readOnly = true</code> for queries (Hibernate skips dirty checking) and choose <strong>isolation</strong> consciously. Transactions don't follow work onto <strong>other threads</strong> (<code>@Async</code>, parallel streams). Calling a transactional method from <code>@PostConstruct</code> runs before proxies exist. Using <code>jakarta.transaction.Transactional</code> vs Spring's annotation changes available attributes. With multiple data sources, the wrong transaction manager may be used.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check the call path: does it go through the proxy?</li>
+  <li>Check visibility and finality of the method.</li>
+  <li>Check which exceptions trigger rollback.</li>
+  <li>Check propagation of nested calls.</li>
+  <li>Check what the transaction encloses (remote calls, threads, duration).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class OrderService {
+    @Transactional
+    public void placeOrder(Order o) {
+        orderRepo.save(o);
+        paymentClient.charge(o);          // remote call inside tx: holds connection, not rolled back
+        notify(o);                        // self-invocation: its @Transactional is ignored
+    }
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void notify(Order o) { ... }
+}
+
+@Service
+class AuditService {                      // separate bean: REQUIRES_NEW really applies
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void record(String event) { auditRepo.save(new AuditEntry(event)); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Self-invocation and private methods.</li>
+  <li>Relying on checked-exception rollback.</li>
+  <li>Swallowing exceptions or catching inner failures (UnexpectedRollbackException).</li>
+  <li>Remote calls and long processing inside transactions.</li>
+  <li>Overusing REQUIRES_NEW and exhausting the pool.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Transactional is proxy-based, so self-invocation bypasses it and private methods never work; since Spring 6, protected and package-private methods work with class-based proxies. By default it rolls back only on RuntimeException and Error, so checked exceptions commit unless I set rollbackFor. Propagation matters: REQUIRED joins the transaction, so catching an inner failure gives UnexpectedRollbackException, while REQUIRES_NEW runs independently, which I use for audit logs. I also avoid long transactions holding connections during remote calls, use readOnly for queries and choose isolation deliberately.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Audit entry that survives rollback?</strong> A separate bean method with REQUIRES_NEW.</li>
+  <li><strong>Detect missing transactions?</strong> Log <code>TransactionSynchronizationManager.isActualTransactionActive()</code> or enable transaction debug logging.</li>
+  <li><strong>Where to call remote services?</strong> Outside the transaction, or after commit via events or an outbox.</li>
+</ul>
+</article>
+</body>
+</html>

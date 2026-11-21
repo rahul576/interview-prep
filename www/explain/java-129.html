@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-129 · How do you call other services from Spring Boot? Compare RestTemplate, WebClient, RestClient and Feign.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-129" data-topic="Spring Boot">
+<h1>How do you call other services from Spring Boot? Compare RestTemplate, WebClient, RestClient and Feign.</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>RestTemplate</strong> is the classic <strong>blocking</strong> client (maintenance mode), <strong>WebClient</strong> is the <strong>non-blocking reactive</strong> client, <strong>RestClient</strong> (Spring 6.1) is the <strong>modern fluent synchronous</strong> client, and <strong>OpenFeign / HTTP interfaces</strong> are <strong>declarative</strong>; whichever you choose, configure <strong>timeouts, pooling, retries, circuit breakers and tracing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>RestTemplate</strong> has existed since Spring 3. It uses a template-method API (<code>getForObject</code>, <code>exchange</code>) and blocks the calling thread. It still works and is not removed, but it is in <strong>maintenance mode</strong>; new features go to the newer clients, and the Spring team has signalled its eventual deprecation.</p>
+<p><strong>WebClient</strong> comes with <strong>Spring WebFlux</strong> and returns <code>Mono</code>/<code>Flux</code>. It is non-blocking, built on Reactor Netty by default, and shines when you need <strong>high concurrency with few threads</strong>, streaming responses, or many parallel calls combined reactively. In a blocking MVC app you can use it with <code>.block()</code>, but you pay for the reactive dependency and complexity.</p>
+<p><strong>RestClient</strong>, added in <strong>Spring Framework 6.1 / Boot 3.2</strong>, gives a fluent API similar to WebClient but <strong>synchronous</strong>, sharing RestTemplate's infrastructure (message converters, request factories, interceptors). It is my default for blocking code, especially with <strong>virtual threads</strong>, where blocking is cheap.</p>
+<p><strong>Declarative clients:</strong> <strong>Spring Cloud OpenFeign</strong> generates a client from an annotated interface and integrates with load balancing and circuit breakers. Spring's own <strong>HTTP interfaces</strong> (<code>@HttpExchange</code>, <code>@GetExchange</code>) do the same backed by RestClient or WebClient, without Spring Cloud. OpenFeign itself is now feature-complete, with the Spring Cloud team recommending HTTP interfaces for new code.</p>
+<p>Operational concerns matter more than API style. Set <strong>connect and read timeouts</strong> explicitly (JDK <code>HttpURLConnection</code> defaults to no timeout), use <strong>connection pooling</strong> (Apache HttpClient 5 or Reactor Netty), add <strong>retries with backoff</strong> only for idempotent calls, a <strong>circuit breaker</strong> (Resilience4j), and use the Boot-provided builders (<code>RestClient.Builder</code>, <code>WebClient.Builder</code>) so <strong>Micrometer observations and trace headers</strong> are propagated.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Inject the auto-configured builder (it carries observation and converters).</li>
+  <li>Configure base URL, timeouts and a pooled request factory.</li>
+  <li>Build the client or an HTTP interface proxy.</li>
+  <li>Wrap calls with retry and circuit breaker policies.</li>
+  <li>Map error status codes to domain exceptions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+RestClient inventoryClient(RestClient.Builder builder) {
+    var settings = ClientHttpRequestFactorySettings.defaults()
+        .withConnectTimeout(Duration.ofSeconds(1))
+        .withReadTimeout(Duration.ofSeconds(2));
+    return builder.baseUrl(&quot;http://inventory&quot;)
+        .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings))
+        .build();
+}
+
+StockDto stock = inventoryClient.get().uri(&quot;/stock/{sku}&quot;, sku)
+    .retrieve()
+    .onStatus(s -&gt; s.value() == 404, (req, res) -&gt; { throw new UnknownSkuException(sku); })
+    .body(StockDto.class);
+
+// Declarative HTTP interface on top of RestClient
+interface InventoryApi { @GetExchange(&quot;/stock/{sku}&quot;) StockDto stock(@PathVariable String sku); }
+
+@Bean
+InventoryApi inventoryApi(RestClient inventoryClient) {
+    return HttpServiceProxyFactory.builderFor(RestClientAdapter.create(inventoryClient))
+        .build().createClient(InventoryApi.class);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Client</th><th>Style</th><th>Blocking</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>RestTemplate</td><td>Template methods</td><td>Yes</td><td>Legacy code</td></tr>
+<tr><td>RestClient</td><td>Fluent</td><td>Yes</td><td>New blocking / virtual-thread code</td></tr>
+<tr><td>WebClient</td><td>Fluent, reactive</td><td>No</td><td>WebFlux, streaming, high fan-out</td></tr>
+<tr><td>Feign / HTTP interfaces</td><td>Declarative</td><td>Either</td><td>Many endpoints, clean contracts</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No timeouts configured, so a hung dependency exhausts threads.</li>
+  <li>Creating a new client per request, losing pooling.</li>
+  <li>Calling <code>.block()</code> inside a WebFlux event loop.</li>
+  <li>Retrying non-idempotent POSTs.</li>
+  <li>Using <code>new RestTemplate()</code> instead of the builder, losing tracing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;RestTemplate is the classic blocking client and is in maintenance mode, so I don't use it for new code. WebClient is the reactive non-blocking client from WebFlux, which I'd choose for high concurrency, streaming or reactive stacks. RestClient, from Spring 6.1, gives a modern fluent synchronous API and is my default for blocking services, especially with virtual threads. For many endpoints I like declarative clients, Spring HTTP interfaces or OpenFeign, where I write an interface and the client is generated. Whatever the client, I set connect and read timeouts, use connection pooling, add retries with backoff for idempotent calls and a circuit breaker, and build it from Boot's builder so trace headers propagate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What default timeout does a client have if you configure none?</strong> Often infinite or very long, which ties up threads and cascades failures.</li>
+  <li><strong>Feign or HTTP interfaces?</strong> HTTP interfaces for new code without Spring Cloud; Feign if already invested.</li>
+  <li><strong>How do you test a client?</strong> WireMock or <code>MockRestServiceServer</code> with RestClient.</li>
+</ul>
+</article>
+</body>
+</html>
