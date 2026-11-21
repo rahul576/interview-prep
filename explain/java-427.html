@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-427 · How does distributed tracing work across services and Kafka messages?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-427" data-topic="Observability">
+<h1>How does distributed tracing work across services and Kafka messages?</h1>
+<p class="ex-meta">Observability · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Each request gets a <strong>trace id</strong>; every operation is a <strong>span</strong> with its own id and a <strong>parent id</strong>; <strong>context propagation</strong> carries them across services in the <strong>W3C <code>traceparent</code> HTTP header</strong> and in <strong>Kafka record headers</strong>, instrumented by the <strong>OpenTelemetry agent</strong> or <strong>Micrometer Tracing</strong>, <strong>sampled</strong> and exported to Jaeger, Tempo or Zipkin.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>trace</strong> is the tree of all work done for one request. A <strong>span</strong> represents one unit of work (an HTTP server request, an outgoing call, a SQL query, a Kafka produce or consume) and records start time, duration, status, attributes (<code>http.route</code>, <code>db.system</code>, <code>messaging.destination</code>) and its parent span id. Together they show exactly where time was spent and where an error originated.</p>
+<p><strong>Propagation over HTTP:</strong> when service A calls B, the instrumented client injects <code>traceparent: 00-&lt;trace-id&gt;-&lt;parent-span-id&gt;-&lt;flags&gt;</code> (and optionally <code>tracestate</code> and <code>baggage</code>). B's server instrumentation extracts it and creates its span as a child. The flags byte carries the <strong>sampling decision</strong> so the whole trace is consistently kept or dropped.</p>
+<p><strong>Propagation over Kafka:</strong> the producer instrumentation writes the same context into <strong>record headers</strong>. The consumer extracts it and creates a consumer span. OpenTelemetry semantic conventions link the consumer span to the producer either as a child or through a <strong>span link</strong>, which is useful for batch consumption where one poll processes messages from many traces.</p>
+<p><strong>Instrumentation:</strong> the <strong>OpenTelemetry Java agent</strong> (<code>-javaagent</code>) auto-instruments Spring MVC, WebClient, RestClient, JDBC, Kafka clients and more. In Spring Boot 3, <strong>Micrometer Tracing</strong> with the OTel or Brave bridge instruments Spring components through the Observation API. Custom spans mark business steps.</p>
+<p><strong>Export and sampling:</strong> spans go via <strong>OTLP</strong> to an OpenTelemetry Collector and to a backend. <strong>Head sampling</strong> decides at the start (for example 10%); <strong>tail sampling</strong> in the Collector keeps all error or slow traces. The trace id in the MDC links logs to traces.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Edge service starts a root span with a new trace id.</li>
+  <li>Outgoing HTTP call injects <code>traceparent</code>; downstream extracts it.</li>
+  <li>Kafka producer adds the context to record headers.</li>
+  <li>Consumer extracts it and starts a consumer span (child or link).</li>
+  <li>Each service exports finished spans via OTLP.</li>
+  <li>The backend assembles spans by trace id into one timeline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+              ver trace-id                        parent span-id   sampled
+
+order-service   POST /orders            [==========================] 420 ms
+  ├─ INSERT orders (JDBC)               [==]                          18 ms
+  ├─ POST payment-service /charge        [==============]            250 ms
+  └─ kafka send order-created                         [=]              4 ms
+       inventory-service consume order-created          [=====]       60 ms</code></pre>
+<pre><code class="language-bash">java -javaagent:opentelemetry-javaagent.jar \
+     -Dotel.service.name=order-service \
+     -Dotel.exporter.otlp.endpoint=http://otel-collector:4317 \
+     -jar app.jar</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Handing work to thread pools or <code>@Async</code> without propagating context, breaking the trace.</li>
+  <li>Custom HTTP clients or message wrappers that drop headers.</li>
+  <li>Sampling 100% in high-traffic production, driving up cost.</li>
+  <li>Not putting the trace id into logs, so traces and logs cannot be joined.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A trace has one trace id and is made of spans, each with its own id, a parent id, timing and attributes. Context travels between services in the W3C traceparent header, and for Kafka the producer writes it into record headers so the consumer continues the trace or links to it. I get instrumentation from the OpenTelemetry Java agent or from Micrometer Tracing in Spring Boot 3, which covers HTTP, JDBC and Kafka automatically, and I add custom spans for business steps. Spans are exported over OTLP to a Collector with head or tail sampling, then to Tempo or Jaeger, and the trace id goes in every log line.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do traces break with @Async?</strong> Context is thread-local; executors must be wrapped to propagate it (context propagation, TaskDecorator).</li>
+  <li><strong>Child span or span link for Kafka?</strong> Links fit batches and long delays; child relations fit one-message processing.</li>
+  <li><strong>What is baggage?</strong> Key-value context propagated with the trace, such as tenant id; keep it small and non-sensitive.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-084 · Which identities does an AKS cluster use, and how does it pull images from ACR?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-084" data-topic="Azure Kubernetes (AKS)">
+<h1>Which identities does an AKS cluster use, and how does it pull images from ACR?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An AKS cluster uses a <strong>cluster (control plane) identity</strong> to manage Azure resources like load balancers and disks, a <strong>kubelet identity</strong> on nodes to <strong>pull images from ACR</strong> (granted <strong>AcrPull</strong>, which <code>--attach-acr</code> does for you), and applications use separate <strong>workload identities</strong>; prefer <strong>user-assigned identities</strong> with <strong>least privilege</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Cluster identity:</strong> AKS acts on your behalf when you create a <code>LoadBalancer</code> Service, a PVC or a public IP. It needs rights on the <strong>node resource group</strong> (<code>MC_...</code>), and with custom networking <strong>Network Contributor</strong> on the subnet or VNet, plus rights on any private DNS zone or route table you bring. In the past a service principal was used; today it is a <strong>managed identity</strong>, system-assigned or user-assigned.</p>
+<p><strong>Kubelet identity:</strong> a managed identity assigned to the node VM Scale Sets. The <strong>kubelet</strong> uses it to <strong>pull images</strong>. Granting <strong>AcrPull</strong> on the registry to this identity lets every node pull without image pull secrets. <code>az aks update --attach-acr myacr</code> creates that role assignment automatically (you need Owner or User Access Administrator rights on the registry to do so).</p>
+<p><strong>Neither identity is for applications.</strong> Any pod on a node could potentially reach the node identity through the instance metadata endpoint, so giving the kubelet identity rights to Key Vault, Storage or databases effectively gives those rights to every workload on the cluster. Applications use <strong>workload identities</strong>: a user-assigned managed identity <strong>federated</strong> with a Kubernetes <strong>service account</strong> via the cluster's OIDC issuer, each holding only the permissions that application needs.</p>
+<p><strong>User-assigned</strong> identities for the cluster and kubelet are preferable: you create them and their role assignments <strong>before</strong> the cluster (for example in Terraform), and they <strong>survive cluster recreation</strong>, so a rebuilt cluster can pull images immediately. When bringing your own kubelet identity, the cluster identity needs <strong>Managed Identity Operator</strong> on it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create user-assigned identities for control plane and kubelet.</li>
+  <li>Grant control plane identity Network Contributor on the subnet.</li>
+  <li>Grant kubelet identity AcrPull on ACR.</li>
+  <li>Create the cluster referencing both identities.</li>
+  <li>Create workload identities per app with federated credentials.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az identity create -g rg-id -n id-aks-cp
+az identity create -g rg-id -n id-aks-kubelet
+az role assignment create --assignee $KUBELET_PRINCIPAL_ID --role AcrPull --scope $ACR_ID
+
+az aks create -g rg-apps -n aks-prod \
+  --assign-identity $CP_ID --assign-kubelet-identity $KUBELET_ID \
+  --enable-oidc-issuer --enable-workload-identity
+
+az aks check-acr -g rg-apps -n aks-prod --acr myacr.azurecr.io</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Identity</th><th>Used by</th><th>Typical permissions</th></tr></thead>
+<tbody>
+<tr><td>Cluster</td><td>AKS resource provider</td><td>Node RG, subnet, DNS zones</td></tr>
+<tr><td>Kubelet</td><td>Nodes</td><td>AcrPull</td></tr>
+<tr><td>Workload</td><td>Application pods</td><td>App-specific data access</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting the kubelet identity Key Vault or Storage access for apps.</li>
+  <li>Using system-assigned identities and losing role assignments on rebuild.</li>
+  <li>Image pull secrets with admin ACR credentials instead of AcrPull.</li>
+  <li>Forgetting Network Contributor on a custom subnet, breaking load balancers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are two platform identities. The cluster identity lets AKS manage Azure resources like load balancers, public IPs and disks, so it needs rights on the node resource group and subnet. The kubelet identity is on the nodes and pulls images, so I give it AcrPull, which attach-acr does automatically. Applications never use those; they get workload identities federated with service accounts, each with least privilege. I use user-assigned identities so role assignments exist before the cluster and survive recreation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a broad kubelet identity risky?</strong> Any pod on the node can potentially use it, so it becomes cluster-wide access.</li>
+  <li><strong>How do you debug pull failures?</strong> <code>az aks check-acr</code>, events with <code>ErrImagePull</code>, and checking network access to ACR.</li>
+  <li><strong>Private ACR?</strong> Use a private endpoint and DNS resolution from the node subnet.</li>
+</ul>
+</article>
+</body>
+</html>

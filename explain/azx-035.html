@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-035 · An App Service app becomes slow with high CPU at peak times. How do you diagnose and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-035" data-topic="Azure">
+<h1>An App Service app becomes slow with high CPU at peak times. How do you diagnose and fix it?</h1>
+<p class="ex-meta">Azure · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Diagnose with <strong>Diagnose and solve problems</strong> and <strong>Application Insights</strong> (which requests and dependencies slowed), check whether the <strong>App Service plan is shared</strong>, find hot code with the <strong>Profiler or a CPU trace</strong>, then <strong>scale out with autoscale</strong> (or up) short term and <strong>fix the code</strong> (caching, async I/O, efficient queries) long term, confirmed by <strong>load testing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>First establish what &quot;slow&quot; means: high CPU on instances, or slow dependencies, or thread starvation. <strong>Diagnose and solve problems</strong> shows CPU and memory per instance, HTTP queue length, restarts and known issues like high CPU or SNAT exhaustion. <strong>Application Insights</strong> Performance view shows which operations got slow at peak and whether time is spent in the app or in <strong>dependencies</strong> such as SQL.</p>
+<p><strong>Plan sharing</strong> is a common hidden cause: all apps and slots on one <strong>App Service plan</strong> run on the same instances, so a noisy batch app or a staging slot under load steals CPU from production. Also check whether one instance is hot (uneven load, ARR affinity cookies keeping users sticky).</p>
+<p>To find <strong>hot code</strong>, use the <strong>Application Insights Profiler</strong> (traces sampled at high CPU), or collect a <strong>CPU profile</strong> via Kudu / diagnostics tools (<code>dotnet-trace</code> for .NET, profilers for Node, Java Flight Recorder). Typical culprits: large JSON serialisation, inefficient regular expressions, <strong>synchronous blocking</strong> on async code (<code>.Result</code>) causing thread pool starvation, N+1 database queries in loops, compression or image processing on the request path, or excessive logging.</p>
+<p><strong>Short term:</strong> <strong>scale out</strong> with autoscale rules on CPU percentage or HTTP queue length (or automatic scaling on Premium plans), or <strong>scale up</strong> to a Premium v3/v4 tier with faster CPUs. <strong>Long term:</strong> fix the code: caching (Azure Cache for Redis or in-memory), async I/O, query optimisation and indexes, moving heavy work to background queues. Validate with <strong>Azure Load Testing</strong> against a realistic peak profile.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm symptom: CPU vs dependency latency vs thread starvation.</li>
+  <li>Check plan composition and per-instance load.</li>
+  <li>Profile during peak to find hot paths.</li>
+  <li>Mitigate: autoscale out, isolate noisy apps to their own plan.</li>
+  <li>Fix code and queries; add caching.</li>
+  <li>Load test and set alerts on CPU and response time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az monitor autoscale create -g rg-web --resource asp-shop-prod \
+  --resource-type Microsoft.Web/serverfarms --name as-shop --min-count 3 --max-count 10 --count 3
+az monitor autoscale rule create -g rg-web --autoscale-name as-shop \
+  --condition &quot;CpuPercentage &gt; 70 avg 5m&quot; --scale out 2
+az monitor autoscale rule create -g rg-web --autoscale-name as-shop \
+  --condition &quot;CpuPercentage &lt; 35 avg 10m&quot; --scale in 1</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scaling out endlessly when the bottleneck is the database.</li>
+  <li>Running production and heavy staging/test apps on one plan.</li>
+  <li>No scale-in rule, or rules that flap.</li>
+  <li>Profiling outside the peak, missing the real hotspot.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd start with Diagnose and solve problems and Application Insights to see which requests got slow and whether time is in our code or in dependencies. I'd check if the plan is shared with other apps or slots competing for CPU. Then I'd profile at peak with the Application Insights Profiler or a CPU trace, which typically shows serialisation, sync-over-async blocking or chatty queries. Short term I scale out with autoscale on CPU or HTTP queue length, or scale up. Long term I fix the code with caching, async I/O and better queries, and confirm with a load test.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't scaling out help with a DB bottleneck?</strong> More instances just send more concurrent queries to the same constrained database.</li>
+  <li><strong>Thread pool starvation signs?</strong> Low CPU, rising latency, growing request queue.</li>
+  <li><strong>Autoscale flapping?</strong> Use wider thresholds and longer windows for scale in.</li>
+</ul>
+</article>
+</body>
+</html>

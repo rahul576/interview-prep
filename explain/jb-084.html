@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-084 · Can finally execute without a catch block?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-084" data-topic="Exceptions">
+<h1>Can finally execute without a catch block?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Yes</strong>: <code>try { } finally { }</code> without catch is valid; finally runs, then the <strong>exception propagates</strong> to the caller; it is the standard pattern for <strong>cleanup without handling</strong>, such as unlocking, while <strong>try-with-resources</strong> is preferred for closing resources.</p>
+
+<h2>Detailed explanation</h2>
+<p>Java requires a <code>try</code> block to be followed by at least one <code>catch</code> <strong>or</strong> a <code>finally</code>. A try-finally is therefore perfectly legal, and it expresses a useful intent: &quot;I don't know how to handle failures here, but whatever happens I must clean up&quot;.</p>
+<p>Behaviour:</p>
+<ul>
+  <li>If the try block completes normally, finally runs and execution continues.</li>
+  <li>If it throws, finally runs and then the <strong>same exception continues propagating</strong> up the stack, because nothing caught it. The method's <code>throws</code> clause must still declare checked exceptions.</li>
+  <li>If it executes <code>return</code>, the return value is computed, finally runs, then the method returns.</li>
+</ul>
+<p>The classic use is <strong>explicit locks</strong>:</p>
+<p><code>lock.lock(); try { ... } finally { lock.unlock(); }</code></p>
+<p>Note that <code>lock()</code> is called <strong>before</strong> the try. If it were inside and <code>lock()</code> itself failed (or was interrupted, for <code>lockInterruptibly</code>), finally would call <code>unlock()</code> on a lock the thread does not hold, throwing <code>IllegalMonitorStateException</code> and masking the original error.</p>
+<p>Other uses: restoring thread-local or MDC state, resetting a flag, recording metrics or timing, decrementing a counter. All of these must happen even if the work fails, and the caller is the right place to decide what the failure means.</p>
+<p>For closing things that implement <code>AutoCloseable</code> (streams, JDBC connections, HTTP responses, channels), <strong>try-with-resources</strong> is the modern replacement: it closes automatically in reverse order, handles null resources and attaches close failures as <strong>suppressed exceptions</strong> instead of losing the original. Try-with-resources itself can also have no catch blocks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Execute the try body.</li>
+  <li>On normal completion, return or exception, jump to finally.</li>
+  <li>Run finally.</li>
+  <li>Resume the pending action: continue, return the saved value, or rethrow the saved exception.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private final ReentrantLock lock = new ReentrantLock();
+
+public void transfer(Account from, Account to, BigDecimal amt) {
+    lock.lock();                       // outside try
+    try {
+        from.debit(amt);
+        to.credit(amt);                // may throw; caller handles it
+    } finally {
+        lock.unlock();                 // always released
+    }
+}
+
+public void handle(Request r) {
+    MDC.put(&quot;requestId&quot;, r.id());
+    try { process(r); }
+    finally { MDC.remove(&quot;requestId&quot;); }   // no leak to the next request on this thread
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>lock()</code> inside the try block.</li>
+  <li>Using try-finally to close streams instead of try-with-resources.</li>
+  <li>Throwing or returning from finally, masking the original exception.</li>
+  <li>Forgetting checked exceptions still need declaring when there's no catch.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Yes. A try must be followed by at least one catch or a finally, so try with only finally is valid. If the body throws, finally runs first and then the exception propagates to the caller, since nothing caught it. That's the right pattern when cleanup must happen but this method shouldn't handle the error, for example lock.lock(), then try, work, finally unlock. I call lock before the try so we never unlock a lock we didn't get. For AutoCloseable resources like streams and JDBC connections, I use try-with-resources, which closes them automatically and keeps suppressed exceptions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why must lock.lock() be called before the try block and not inside it?</strong> If acquiring fails, finally would unlock a lock not held, throwing and masking the real error.</li>
+  <li><strong>Does finally run if try returns?</strong> Yes, before the method returns.</li>
+  <li><strong>Can try-with-resources omit catch?</strong> Yes.</li>
+</ul>
+</article>
+</body>
+</html>

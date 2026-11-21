@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-029 · How do you make RAG retrieval permission-aware so users only see documents they are allowed to access?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-029" data-topic="LLMOps &amp; RAG">
+<h1>How do you make RAG retrieval permission-aware so users only see documents they are allowed to access?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Enforce permissions <strong>in retrieval, never in the prompt</strong>: store <strong>ACL metadata</strong> per chunk, <strong>filter by the user's identity and groups</strong> at query time, <strong>sync permission changes</strong> from sources (or check at query time for sensitive data), isolate tenants with <strong>separate indexes or namespaces</strong>, and <strong>test with different users</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An LLM cannot keep secrets: anything placed in its context can appear in its answer, whether through a direct question, a summarisation or a <strong>prompt injection</strong> hidden in another document. The only safe rule: <strong>a user's request may only retrieve content that user is allowed to read in the source system</strong>.</p>
+<p><strong>At ingestion</strong>, each chunk carries <strong>access control metadata</strong> from its source: allowed user IDs, group or role IDs, sensitivity labels, tenant ID, or a document ID that maps to an ACL table. Connectors must capture inherited permissions and deny entries faithfully.</p>
+<p><strong>At query time</strong>, the backend derives the user's identity from the <strong>verified token</strong> (OIDC / Entra ID / Okta), resolves <strong>group memberships</strong> (cached, with expiry), and adds them as a <strong>mandatory filter</strong> in the search query, so only permitted chunks are candidates. The filter must be applied server-side by the retrieval service, not by the client, and <strong>before</strong> top-k selection (pre-filtering); filtering after retrieving the top 10 can leave nothing or leak via counts.</p>
+<p><strong>Freshness.</strong> Permissions change: people move teams, documents are re-shared, employees leave. A <strong>permission sync</strong> process updates chunk metadata on change events or on a schedule, and group membership caches expire quickly. For highly sensitive content, <strong>late-binding checks</strong> call the source system's permission API for the final candidates before they go into the prompt. Define and monitor an SLA, for example revocations effective within 15 minutes.</p>
+<p><strong>Multi-tenant products</strong> add stronger isolation: separate indexes, namespaces or collections per tenant, separate encryption keys where required, and tenant ID enforced in every query.</p>
+<p><strong>Verification.</strong> Automated tests with personas at different permission levels, including recently removed users and guest accounts, assert that restricted documents never appear in retrieved sets or citations.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Connector ingests documents with ACLs and tenant ID.</li>
+  <li>User authenticates; backend resolves user and groups.</li>
+  <li>Search query includes a mandatory ACL and tenant filter.</li>
+  <li>Optional late check against source for sensitive hits.</li>
+  <li>Answer cites only permitted documents; access is logged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;query&quot;: { &quot;bool&quot;: {
+    &quot;must&quot;: [ { &quot;knn&quot;: { &quot;field&quot;: &quot;embedding&quot;, &quot;query_vector&quot;: [0.12, -0.03], &quot;k&quot;: 50 } } ],
+    &quot;filter&quot;: [
+      { &quot;term&quot;:  { &quot;tenant_id&quot;: &quot;acme&quot; } },
+      { &quot;terms&quot;: { &quot;allowed_principals&quot;: [&quot;user:u123&quot;, &quot;group:finance&quot;, &quot;group:all-staff&quot;] } }
+    ] } }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on the system prompt to hide restricted content.</li>
+  <li>Indexing everything with one service account and no ACLs.</li>
+  <li>Post-filtering after top-k retrieval.</li>
+  <li>Stale group caches that keep access after revocation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Permissions must be enforced in retrieval, never by asking the model to hide content, because anything in the prompt can come out. At ingestion each chunk stores access metadata from its source, like allowed users and groups. At query time I take the user identity and groups from the identity provider token and apply them as a mandatory server-side filter, so only permitted chunks are candidates. A sync process updates metadata when source permissions change, and for very sensitive content I recheck against the source at query time. For multi-tenant products I separate indexes or namespaces, and I test with users at different permission levels, including recently removed ones.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How fast should revocation apply?</strong> Define an SLA, often minutes; late-binding checks for sensitive data.</li>
+  <li><strong>Large group lists per user?</strong> Use group IDs and hierarchical ACL resolution, not per-user lists.</li>
+  <li><strong>Can embeddings leak data?</strong> They can be partly inverted, so protect vector stores like source data.</li>
+</ul>
+</article>
+</body>
+</html>

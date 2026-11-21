@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-073 · Your EKS or AKS cluster cannot schedule new pods because the subnet ran out of IP addresses. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-073" data-topic="Kubernetes">
+<h1>Your EKS or AKS cluster cannot schedule new pods because the subnet ran out of IP addresses. What do you do?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>With <strong>EKS VPC CNI</strong> or classic <strong>Azure CNI</strong>, every pod takes a <strong>real subnet IP</strong> (plus warm IPs), so subnets run out; short term, <strong>tune warm IP settings</strong>, add <strong>secondary CIDRs / new subnets</strong> or enable <strong>prefix delegation</strong>; long term, move to an <strong>overlay</strong> (Azure CNI Overlay, Cilium overlay) and <strong>plan IP space for growth</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>VPC-native CNIs give pods routable IPs from the VPC or VNet, which is great for performance and for security groups or firewall rules that see pod IPs directly. The cost is address consumption. On EKS, the <strong>VPC CNI</strong> attaches ENIs to nodes and keeps a pool of <strong>warm IPs</strong> (by default a whole spare ENI's worth) per node so pods start quickly. A /24 subnet with 251 usable addresses fills up after a handful of busy nodes. Classic Azure CNI pre-allocates <code>maxPods</code> IPs per node (30 by default) from the subnet at node creation, whether used or not. Symptoms: pods stuck in ContainerCreating with <code>failed to assign an IP address</code>, or new nodes failing to join.</p>
+<p><strong>Short-term on EKS</strong>: tune <code>WARM_IP_TARGET</code> and <code>MINIMUM_IP_TARGET</code> instead of <code>WARM_ENI_TARGET</code> to stop hoarding; enable <strong>prefix delegation</strong>, which assigns /28 prefixes per ENI slot and raises pod density, though it needs contiguous free space in the subnet; and add a <strong>secondary CIDR</strong> (for example from 100.64.0.0/10) to the VPC with <strong>custom networking</strong> (<code>ENIConfig</code> per zone) so pods use new subnets separate from node subnets. <strong>On AKS</strong>: add node pools in new subnets, or use <strong>Azure CNI with dynamic pod IP allocation</strong> (separate pod subnet).</p>
+<p><strong>Long-term</strong>: an <strong>overlay</strong> mode gives pods addresses from a private range not allocated in the VNet. <strong>Azure CNI Overlay</strong> is the recommended AKS default for most clusters; on EKS, options include Cilium in overlay mode or IPv6 clusters where address exhaustion disappears. Overlays trade away direct routability of pod IPs from outside the cluster.</p>
+<p>Finally, IP planning belongs in cluster design: maximum nodes times pods per node, upgrade surge nodes, and future clusters in the same network.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm IP exhaustion from pod events and subnet free IP metrics.</li>
+  <li>Reduce waste: warm IP targets or lower maxPods where appropriate.</li>
+  <li>Add capacity: secondary CIDR with custom networking, new subnets or node pools.</li>
+  <li>Consider prefix delegation for density.</li>
+  <li>Plan migration to overlay or IPv6 for new clusters.</li>
+  <li>Document an IP plan including upgrade surge.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ec2 describe-subnets --subnet-ids subnet-0a1b --query 'Subnets[].AvailableIpAddressCount'
+kubectl -n kube-system set env daemonset/aws-node WARM_IP_TARGET=5 MINIMUM_IP_TARGET=10
+kubectl -n kube-system set env daemonset/aws-node ENABLE_PREFIX_DELEGATION=true
+
+# AKS new cluster with overlay
+az aks create -n prod2 -g rg-prod --network-plugin azure --network-plugin-mode overlay --pod-cidr 192.168.0.0/16</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Small /24 node subnets for production clusters.</li>
+  <li>Forgetting surge nodes during upgrades need IPs.</li>
+  <li>Enabling prefix delegation on fragmented subnets.</li>
+  <li>Overlapping pod CIDRs with on-premises ranges.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With the VPC CNI on EKS or classic Azure CNI, each pod gets a real IP from the node subnet and nodes reserve warm IPs, so busy clusters run out. Short term I'd tune warm IP targets, then add capacity: on AWS a secondary CIDR with custom networking or prefix delegation; on AKS new node pools in new subnets or a dynamic pod subnet. Long term, an overlay mode such as Azure CNI Overlay or Cilium overlay gives pods a separate range that isn't routed in the VNet, which removes the pressure. And I'd add IP capacity planning, including upgrade surge, to cluster design.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What do you lose with an overlay?</strong> Pods are not directly reachable from the VNet; traffic is SNATed to node IPs, so external firewalls see node IPs.</li>
+  <li><strong>Why does upgrade surge matter?</strong> New nodes are added before old ones drain, temporarily needing extra IPs.</li>
+  <li><strong>Does IPv6 solve it?</strong> Yes for address space, but all dependencies must support IPv6.</li>
+</ul>
+</article>
+</body>
+</html>

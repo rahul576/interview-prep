@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-005 · Where do container logs go, and how do you read them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-005" data-topic="Docker">
+<h1>Where do container logs go, and how do you read them?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Apps in containers should log to <strong>stdout/stderr</strong>; Docker captures the streams via a <strong>logging driver</strong> (default <strong><code>json-file</code></strong> on the host), you read them with <strong><code>docker logs</code></strong> (<code>-f</code>, <code>--tail</code>, <code>--since</code>, <code>-t</code>), configure <strong>rotation</strong> (<code>max-size</code>, <code>max-file</code>) so disks don't fill, and <strong>ship logs centrally</strong> in production.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers are ephemeral and often read-only, so writing log files inside them is a trap: the files vanish with the container, fill the writable layer, and are invisible to tooling. The convention (twelve-factor) is to treat logs as an <strong>event stream on stdout/stderr</strong>. Official images such as nginx even symlink their log files to <code>/dev/stdout</code>.</p>
+<p>Docker's daemon captures both streams and hands them to the configured <strong>logging driver</strong>:</p>
+<ul>
+  <li><strong><code>json-file</code></strong> (default): one JSON object per line, stored under <code>/var/lib/docker/containers/&lt;id&gt;/&lt;id&gt;-json.log</code>. <strong>No rotation by default</strong>, so a chatty container can fill the disk.</li>
+  <li><strong><code>local</code></strong>: a compact format with rotation enabled by default; recommended by Docker for single hosts.</li>
+  <li><strong><code>journald</code>, <code>syslog</code>, <code>fluentd</code>, <code>gelf</code>, <code>awslogs</code>, <code>gcplogs</code>, <code>splunk</code></strong> send logs elsewhere. Since Docker 20.10, &quot;dual logging&quot; keeps a local cache so <code>docker logs</code> still works with remote drivers.</li>
+</ul>
+<p>Reading logs: <code>docker logs web</code> prints everything; <strong><code>-f</code></strong> follows; <strong><code>--tail 100</code></strong> shows the last lines; <strong><code>--since 10m</code></strong> or <code>--until</code> limit by time; <strong><code>-t</code></strong> adds timestamps. <code>docker compose logs -f api</code> does the same per service.</p>
+<p><strong>Rotation</strong> is set globally in <code>/etc/docker/daemon.json</code> (applies to new containers) or per container with <code>--log-opt</code>.</p>
+<p><strong>Production:</strong> a node-level agent (Fluent Bit, Vector, the OpenTelemetry Collector or Promtail/Alloy) tails container logs and ships them to <strong>Elasticsearch/OpenSearch, Loki, CloudWatch or Datadog</strong>, where they survive the container, are searchable across instances and power alerts. Log <strong>structured JSON</strong> with fields like level, request ID and trace ID.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App writes to stdout/stderr.</li>
+  <li>Docker daemon reads streams and passes them to the logging driver.</li>
+  <li><code>json-file</code>/<code>local</code> stores them on the host; <code>docker logs</code> reads from there.</li>
+  <li>An agent ships them to central storage; rotation prevents disk exhaustion.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker logs -f --tail 100 --since 10m -t web
+docker inspect -f '{{.HostConfig.LogConfig.Type}} {{.LogPath}}' web
+docker run -d --log-driver local --log-opt max-size=20m --log-opt max-file=5 nginx:1.27</code></pre>
+<pre><code class="language-json">{
+  &quot;log-driver&quot;: &quot;json-file&quot;,
+  &quot;log-opts&quot;: { &quot;max-size&quot;: &quot;50m&quot;, &quot;max-file&quot;: &quot;3&quot; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Logging to files inside the container.</li>
+  <li>No log rotation, then a full disk takes down every container on the host.</li>
+  <li>Unstructured multi-line logs that break parsing.</li>
+  <li>Logging secrets or personal data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In containers, apps should write logs to stdout and stderr, not to files. Docker captures those streams and docker logs shows them; -f follows, --tail 100 shows the last lines and --since 10m limits by time. By default the json-file driver stores them as JSON on the host, which grows without limit, so I configure rotation with max-size and max-file in daemon.json or use the local driver. In production a node agent like Fluent Bit ships them to Loki, Elasticsearch or CloudWatch, so logs survive the container and can be searched across instances, ideally as structured JSON with trace IDs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not log to a file in the container?</strong> Lost on removal, fills the writable layer, invisible to <code>docker logs</code> and agents.</li>
+  <li><strong>Change logging for existing containers?</strong> Daemon changes apply to new containers only; recreate them.</li>
+  <li><strong>Kubernetes?</strong> Kubelet/container runtime writes logs under <code>/var/log/pods</code>, rotated, and agents ship them.</li>
+</ul>
+</article>
+</body>
+</html>

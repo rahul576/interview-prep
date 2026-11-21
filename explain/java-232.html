@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-232 · What different kinds of OutOfMemoryError exist, and what does each mean?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-232" data-topic="JVM &amp; Performance">
+<h1>What different kinds of OutOfMemoryError exist, and what does each mean?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Java heap space</strong> (objects exceed <code>-Xmx</code>), <strong>Metaspace</strong> (too many classes or a class loader leak), <strong>GC overhead limit exceeded</strong> (almost all time spent in GC for little gain), <strong>unable to create native thread</strong> (OS, container or memory limits on threads) and <strong>Direct buffer memory</strong> (off-heap NIO buffers exceed <code>MaxDirectMemorySize</code>) each point to a <strong>different memory area</strong> and a different investigation.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>Java heap space</code>.</strong> An allocation could not be satisfied even after a full GC. Causes: a <strong>leak</strong> (static maps, unbounded caches, ThreadLocals), loading huge data sets into memory, or simply an undersized heap. Diagnose with a <strong>heap dump</strong> in Eclipse MAT.</p>
+<p><strong><code>Metaspace</code></strong> (and its sibling <strong><code>Compressed class space</code></strong>). Class metadata exceeded <code>MaxMetaspaceSize</code> or the compressed class space. Typical causes are <strong>class loader leaks</strong> after repeated hot redeploys in application servers, or libraries generating classes at runtime (dynamic proxies, bytecode generation, scripting engines, lambdas compiled per call through misuse). Diagnose with <code>jcmd VM.metaspace</code>, <code>jcmd VM.classloader_stats</code>, class-loading logs and a heap dump to see what keeps loaders alive.</p>
+<p><strong><code>GC overhead limit exceeded</code>.</strong> The JVM detected that it spent the vast majority of time (about 98%) in GC while recovering only a tiny amount of heap (about 2%). It is effectively an early warning of heap exhaustion: same causes and same diagnosis as heap space.</p>
+<p><strong><code>unable to create native thread</code>.</strong> The OS refused to create another thread. Causes: unbounded thread creation (a new <code>Thread</code> or executor per request), the user's process limit (<code>ulimit -u</code>), a container <code>pids</code> limit, or not enough native memory for thread stacks. A heap dump does not help; count threads with <code>jcmd Thread.print</code>, check <code>ulimit</code> and container limits, and use bounded pools or virtual threads.</p>
+<p><strong><code>Direct buffer memory</code>.</strong> Off-heap <code>ByteBuffer.allocateDirect</code> memory exceeded <code>-XX:MaxDirectMemorySize</code> (by default roughly the max heap size). Common with <strong>Netty</strong>, NIO servers and some database drivers, from buffer leaks (not released) or bursts. Diagnose with Native Memory Tracking, Netty's leak detector and buffer pool metrics (<code>jvm.buffer.memory.used</code>).</p>
+<p><strong>Others.</strong> <code>Requested array size exceeds VM limit</code> (an array larger than the JVM supports) and failures to reserve memory at startup. And a Kubernetes <strong>OOMKilled</strong> is the <strong>kernel</strong> killing the process for exceeding the container limit: no Java error at all, usually because heap plus off-heap exceeded the limit.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the exact message after <code>OutOfMemoryError:</code>.</li>
+  <li>Map it to the area: heap, Metaspace, threads or direct memory.</li>
+  <li>Collect matching evidence: heap dump, metaspace stats, thread count or NMT.</li>
+  <li>Find the cause: leak, unbounded creation, or undersized limit.</li>
+  <li>Fix the code first; adjust limits only with evidence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps -XX:+ExitOnOutOfMemoryError
+-XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=512m
+-XX:NativeMemoryTracking=summary
+
+jcmd &lt;pid&gt; VM.metaspace           # Metaspace usage by class loader type
+jcmd &lt;pid&gt; VM.native_memory summary
+jcmd &lt;pid&gt; Thread.print | grep -c '^&quot;'   # number of threads
+cat /sys/fs/cgroup/pids.max        # container thread/process limit</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Message</th><th>Area</th><th>Typical cause</th><th>Heap dump helps?</th></tr></thead>
+<tbody>
+<tr><td>Java heap space</td><td>Heap</td><td>Leak, big data, small heap</td><td>Yes</td></tr>
+<tr><td>GC overhead limit exceeded</td><td>Heap</td><td>Nearly full heap</td><td>Yes</td></tr>
+<tr><td>Metaspace</td><td>Native (class metadata)</td><td>Class loader leak, generated classes</td><td>Partly (loaders)</td></tr>
+<tr><td>unable to create native thread</td><td>OS/native</td><td>Unbounded threads, limits</td><td>No</td></tr>
+<tr><td>Direct buffer memory</td><td>Native (NIO)</td><td>Buffer leaks, Netty</td><td>Little</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising <code>-Xmx</code> for every kind of OOM.</li>
+  <li>Not noticing the message type at all.</li>
+  <li>Confusing a container OOM kill with a Java OOM.</li>
+  <li>Catching <code>OutOfMemoryError</code> and continuing to run in a corrupt state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Java heap space means live objects exceed the maximum heap, from a leak or an undersized heap. Metaspace means too many classes are loaded, often a class loader leak from redeploys or heavy runtime class generation. GC overhead limit exceeded means the JVM spends nearly all its time collecting while freeing almost nothing, so the heap is effectively full. Unable to create new native thread means the OS or container thread limit or native memory is exhausted, usually from unbounded thread creation. Direct buffer memory means off-heap NIO buffers exceeded MaxDirectMemorySize, common with Netty. Each needs different evidence: a heap dump for the first two, metaspace stats, thread counts or native memory tracking for the rest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which of these would a heap dump not help you diagnose?</strong> Native thread exhaustion and most direct-memory or native leaks; use thread counts and Native Memory Tracking.</li>
+  <li><strong>Should you catch OutOfMemoryError?</strong> Generally no; prefer <code>ExitOnOutOfMemoryError</code> so the orchestrator restarts a clean instance.</li>
+  <li><strong>What is an OOMKilled pod?</strong> The kernel cgroup killer terminating the process for exceeding the memory limit.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-079 · How would you process a large collection without creating unnecessary intermediate objects?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-079" data-topic="Java 8+ Features">
+<h1>How would you process a large collection without creating unnecessary intermediate objects?</h1>
+<p class="ex-meta">Java 8+ Features · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Keep work in <strong>one lazy stream pipeline</strong>, use <strong>primitive streams</strong> to avoid <strong>boxing</strong>, <strong>collect directly</strong> into the final structure with <strong>downstream collectors</strong>, <strong>stream from the source in batches</strong> (files, DB cursors, pagination), and use <strong>plain loops</strong> on proven hot paths, verifying with an <strong>allocation profiler</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Unnecessary objects cost allocation time, GC pressure and cache misses. With large collections the common culprits are intermediate lists, boxed numbers, repeated transformations and loading everything into memory at once.</p>
+<p><strong>Single pipeline</strong>: chaining <code>filter</code>, <code>map</code> and <code>collect</code> in one stream fuses them into one pass with no temporary lists. The anti-pattern is <code>list1 = filter...collect; list2 = list1.stream().map...collect; ...</code>.</p>
+<p><strong>Primitive streams</strong>: <code>Stream&lt;Long&gt;</code> boxes every value. <code>mapToLong(Order::amount).sum()</code>, <code>IntStream.range</code>, and collectors like <code>summingLong</code> keep primitives. Store data in primitive arrays where practical.</p>
+<p><strong>Collect once into the target shape</strong>: <code>groupingBy(Order::customerId, summingLong(Order::amount))</code> produces the result directly instead of grouping into lists and summing later. Pre-size collections (<code>new HashMap&lt;&gt;(expected)</code>) when building them manually, and avoid <code>sorted</code> unless needed.</p>
+<p><strong>Don't load everything</strong>: read files with <code>Files.lines</code> (lazy, closed with try-with-resources), read databases with a <strong>JDBC cursor and fetch size</strong>, Spring Data <code>Stream&lt;T&gt;</code> query methods inside a read-only transaction, or keyset <strong>pagination</strong> in batches, and use <strong>projections</strong> (records with only needed columns) rather than full entities. Detach or clear the persistence context periodically in batch jobs.</p>
+<p><strong>Hot paths</strong>: a simple <code>for</code> loop over an array can beat streams in tight code; reuse buffers like <code>StringBuilder</code>. Measure with <strong>JMH</strong> and inspect allocations with <strong>JFR</strong> or async-profiler before optimising.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the data source and stream it lazily.</li>
+  <li>Express all transformations in one pipeline.</li>
+  <li>Use primitive specialisations for numeric work.</li>
+  <li>Use downstream collectors to aggregate in one pass.</li>
+  <li>Profile allocation rate; refine hot spots with loops or primitive structures.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Wasteful: three intermediate lists and boxed Longs
+List&lt;Order&gt; paid = orders.stream().filter(Order::isPaid).collect(toList());
+List&lt;Long&gt; amounts = paid.stream().map(Order::amount).collect(toList());
+long total = amounts.stream().reduce(0L, Long::sum);
+
+// Efficient: one pass, no boxing
+long total2 = orders.stream().filter(Order::isPaid).mapToLong(Order::amount).sum();
+
+// Sum per customer for a million orders, directly
+Map&lt;String, Long&gt; perCustomer = orders.stream()
+    .collect(Collectors.groupingBy(Order::customerId,
+             HashMap::new, Collectors.summingLong(Order::amount)));
+
+// Stream from the DB instead of loading a List (Spring Data JPA)
+@QueryHints(@QueryHint(name = &quot;org.hibernate.fetchSize&quot;, value = &quot;500&quot;))
+@Query(&quot;select new com.shop.OrderRow(o.customerId, o.amount) from Order o&quot;)
+Stream&lt;OrderRow&gt; streamAll();     // use inside @Transactional(readOnly = true), in try-with-resources</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Collecting to a list after every step.</li>
+  <li>Using <code>Stream&lt;Integer&gt;</code> arithmetic instead of <code>IntStream</code>.</li>
+  <li>Calling <code>findAll()</code> on millions of rows and streaming the resulting list.</li>
+  <li>Optimising without measuring allocation and GC behaviour.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I keep the work in one lazy pipeline instead of building intermediate lists, so filter, map and the final collect process each element once. For numbers I use primitive streams like mapToLong or IntStream to avoid boxing. I collect directly into the structure I need, for example groupingBy with a summing downstream collector, rather than collecting and transforming again. If the data comes from a file or database I stream it from the source, with Files.lines, a JDBC cursor with a fetch size, or pagination, instead of loading everything. On very hot paths a plain loop is fine, and I confirm with an allocation profiler like JFR.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you sum the amount per customer for a million orders?</strong> One pass with <code>groupingBy(customerId, summingLong(amount))</code>, ideally pushed to SQL <code>GROUP BY</code>.</li>
+  <li><strong>Why are boxed streams slow?</strong> Each value is a heap object, adding allocation, GC and indirection.</li>
+  <li><strong>When should aggregation happen in the database?</strong> Usually when data lives there; <code>GROUP BY</code> avoids transferring rows.</li>
+</ul>
+</article>
+</body>
+</html>

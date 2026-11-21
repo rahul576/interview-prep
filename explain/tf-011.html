@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-011 · How do you pass provider configurations into modules, and what is configuration_aliases for?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-011" data-topic="Terraform">
+<h1>How do you pass provider configurations into modules, and what is configuration_aliases for?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Configure providers in the root module</strong>; child modules <strong>inherit the default provider</strong> automatically, and for extra configurations you define an <strong><code>alias</code></strong>, pass it via the module's <strong><code>providers</code></strong> argument, and declare the expected alias in the module with <strong><code>configuration_aliases</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>provider configuration</strong> (region, credentials, subscription, features) describes <em>where</em> Terraform manages resources. Terraform's rule is that <strong>reusable modules should not configure providers</strong>; they only declare which providers they need in <code>required_providers</code>. The <strong>root module</strong> configures them, and every child module <strong>implicitly inherits</strong> the default (unaliased) configuration of each provider.</p>
+<p>Many designs need more than one configuration of the same provider: a primary and a <strong>DR region</strong>, a <strong>second AWS account</strong> for DNS or logging, or a hub and spoke Azure subscription. In the root you create an <strong>aliased provider</strong>, such as <code>provider &quot;aws&quot; { alias = &quot;dr&quot;  region = &quot;eu-west-2&quot; }</code>. Aliased configurations are <strong>never inherited</strong>; you pass them explicitly with <code>providers = { aws.replica = aws.dr }</code> in the module block, mapping the module's local name on the left to the root's configuration on the right.</p>
+<p>Inside the module, <code>required_providers</code> declares <code>configuration_aliases = [aws.replica]</code>. This documents that the module expects a second AWS configuration, makes Terraform validate that the caller passes it, and lets resources use <code>provider = aws.replica</code>. Resources without a <code>provider</code> argument use the default <code>aws</code>.</p>
+<p>Why not configure providers inside modules? A module with its own provider block <strong>cannot use <code>count</code>, <code>for_each</code> or <code>depends_on</code></strong>. Worse, if you remove the module call, Terraform must destroy its resources but the provider configuration was deleted with the module, so the destroy fails with &quot;provider configuration not present&quot;. Passing providers from the root avoids both problems.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Root module defines default and aliased provider configurations.</li>
+  <li>Child modules declare provider requirements, plus <code>configuration_aliases</code> for extra ones.</li>
+  <li>Module blocks map aliases with <code>providers = {...}</code>.</li>
+  <li>Resources select a configuration with <code>provider = aws.&lt;alias&gt;</code>.</li>
+  <li>Terraform validates that all required aliases are passed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># root
+provider &quot;aws&quot; { region = &quot;eu-west-1&quot; }
+provider &quot;aws&quot; {
+  alias  = &quot;dr&quot;
+  region = &quot;eu-west-2&quot;
+}
+
+module &quot;backup&quot; {
+  source    = &quot;./modules/replicated-bucket&quot;
+  providers = { aws = aws, aws.replica = aws.dr }
+}</code></pre>
+<pre><code class="language-hcl"># modules/replicated-bucket/versions.tf
+terraform {
+  required_providers {
+    aws = {
+      source                = &quot;hashicorp/aws&quot;
+      version               = &quot;&gt;= 6.0&quot;
+      configuration_aliases = [aws.replica]
+    }
+  }
+}
+
+resource &quot;aws_s3_bucket&quot; &quot;replica&quot; {
+  provider = aws.replica
+  bucket   = &quot;acme-backup-replica&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Provider blocks with region or credentials inside shared modules.</li>
+  <li>Expecting aliased providers to be inherited automatically.</li>
+  <li>Trying to select providers dynamically with <code>for_each</code>; provider references must be static.</li>
+  <li>Removing a module that contains its own provider block, breaking destroy.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Provider configuration belongs in the root module, and child modules inherit the default provider automatically. When I need another configuration, like a DR region or a second account, I define a provider with an alias in the root and pass it explicitly with the providers argument in the module block, for example <code>aws.replica = aws.dr</code>. Inside the module, <code>required_providers</code> declares <code>configuration_aliases = [aws.replica]</code>, which documents and validates the expectation, and resources use <code>provider = aws.replica</code>. Reusable modules shouldn't contain configured provider blocks, because that prevents count and for_each on the module and breaks destroy when the module is removed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a module with its own provider not be removed cleanly?</strong> The provider configuration disappears with the module, so Terraform cannot destroy its resources.</li>
+  <li><strong>Same stack in five regions?</strong> One aliased provider per region and one module call per region, or Stacks with provider <code>for_each</code>.</li>
+  <li><strong>Since which version?</strong> <code>configuration_aliases</code> since Terraform 0.15.</li>
+</ul>
+</article>
+</body>
+</html>

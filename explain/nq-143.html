@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-143 · Why is volatile used in double-checked locking?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-143" data-topic="Design Patterns">
+<h1>Why is volatile used in double-checked locking?</h1>
+<p class="ex-meta">Design Patterns · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>volatile</code> is needed because <strong><code>instance = new Singleton()</code> is not atomic</strong> and may be <strong>reordered</strong>, so another thread could see a <strong>non-null reference to a half-initialised object</strong>; volatile's <strong>happens-before</strong> guarantee (Java 5+ memory model) prevents that.</p>
+
+<h2>Detailed explanation</h2>
+<p>Creating an object conceptually takes three steps: <strong>allocate</strong> memory, <strong>run the constructor</strong> to initialise fields, and <strong>assign</strong> the reference to the variable. The Java Memory Model allows the compiler, JIT and CPU to reorder operations as long as a <strong>single thread</strong> cannot tell the difference. So the reference may be published (step 3) before the constructor's field writes (step 2) are visible to other cores.</p>
+<p>In double-checked locking, the first null check runs <strong>outside</strong> the synchronized block. Thread A, inside the lock, is constructing the singleton. Thread B performs the unlocked check, sees a non-null <code>instance</code>, skips synchronisation, and calls a method that reads fields still at default values (<code>null</code>, <code>0</code>). Thread B never entered the lock, so the lock's memory guarantees do not apply to it. The result is rare, timing-dependent, hardware-dependent bugs.</p>
+<p>Declaring the field <strong>volatile</strong> fixes it. Under the revised memory model from <strong>JSR-133 (Java 5)</strong>, a write to a volatile variable <strong>happens-before</strong> every subsequent read of that variable. Everything thread A did before the volatile write, including all constructor writes, is visible to any thread that later reads the reference. Volatile also guarantees <strong>visibility</strong>: no thread keeps reading a stale cached <code>null</code>. Note that volatile does <strong>not</strong> make compound actions atomic; mutual exclusion still comes from the synchronized block.</p>
+<p>The <strong>holder idiom</strong> avoids all this: the JVM initialises the nested class under its own lock and the JLS guarantees that any thread seeing the class initialised also sees its static fields fully written, so no volatile is needed. Fields declared <strong>final</strong> also get special safe-publication semantics after construction.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A acquires the lock and starts <code>new Singleton()</code>.</li>
+  <li>Without volatile, the reference may become visible before constructor writes.</li>
+  <li>Thread B reads non-null on the unlocked path and uses a partial object.</li>
+  <li>With volatile, the write of the reference is ordered after construction and visible with all prior writes.</li>
+  <li>Thread B either sees null (and takes the lock) or a fully built object.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private static volatile Singleton instance;   // remove volatile = broken DCL
+
+public static Singleton getInstance() {
+    if (instance == null) {
+        synchronized (Singleton.class) {
+            if (instance == null) instance = new Singleton();
+        }
+    }
+    return instance;
+}
+
+// Holder idiom: no volatile needed
+private static class Holder { static final Singleton INSTANCE = new Singleton(); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking <code>synchronized</code> alone covers the unlocked first read.</li>
+  <li>Believing volatile makes <code>count++</code> atomic.</li>
+  <li>Claiming the bug &quot;never happens on x86&quot;, so it is safe; the JIT can still reorder.</li>
+  <li>Forgetting that pre-Java 5, DCL was broken even with volatile.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;instance = new Singleton() isn't atomic: it allocates memory, runs the constructor and assigns the reference, and the compiler or CPU may reorder them so the reference is visible before the constructor finishes. A second thread doing the unlocked first check could then see a non-null instance and use a half-initialised object. Declaring the field volatile, under the Java 5 memory model, prevents that reordering and creates a happens-before relationship, so any thread reading the field sees a fully constructed object. The holder idiom avoids the issue entirely, because class initialisation is already synchronised.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does the holder idiom not need volatile?</strong> JVM class initialisation is locked and guarantees visibility of static initialisers.</li>
+  <li><strong>Does volatile make operations atomic?</strong> Only single reads and writes; not read-modify-write sequences.</li>
+  <li><strong>What is happens-before?</strong> A JMM rule guaranteeing that one action's effects are visible to and ordered before another.</li>
+</ul>
+</article>
+</body>
+</html>

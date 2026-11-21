@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-330 · How do you containerise a Spring Boot application well?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-330" data-topic="Build Tools">
+<h1>How do you containerise a Spring Boot application well?</h1>
+<p class="ex-meta">Build Tools · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>layered images</strong> (Spring Boot layered jars via <strong>jarmode tools/layertools</strong>, <strong>Buildpacks</strong> or <strong>Jib</strong>) so dependencies cache separately from code, a <strong>small JRE or distroless base running as non-root</strong>, <strong>container-aware JVM memory</strong> (MaxRAMPercentage), <strong>graceful shutdown</strong> and <strong>liveness/readiness probes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Layering.</strong> A Spring Boot fat jar contains your code plus 50–150 MB of dependencies. Copying it as a single layer means every code change produces a new large layer to build, push and pull. Spring Boot's <strong>layered jars</strong> split the content into layers such as <code>dependencies</code>, <code>spring-boot-loader</code>, <code>snapshot-dependencies</code> and <code>application</code>. In a multi-stage Dockerfile you extract them (<code>java -Djarmode=tools -jar app.jar extract --layers --launcher</code> on Boot 3.3+, or the older <code>layertools extract</code>) and <code>COPY</code> each as its own layer; only the small application layer changes per commit.</p>
+<p><strong>No-Dockerfile options.</strong> <code>mvn spring-boot:build-image</code> (or <code>bootBuildImage</code>) uses <strong>Cloud Native Buildpacks</strong> to produce an optimised, layered image with a memory calculator and regularly patched base. <strong>Jib</strong> builds layered images directly from Maven/Gradle without a Docker daemon.</p>
+<p><strong>Base image and user.</strong> Use a <strong>JRE</strong>, not a JDK, from a maintained distribution (Eclipse Temurin, distroless Java, or a jlink-built runtime), pin it by tag or digest, scan it, and run as a <strong>non-root user</strong>.</p>
+<p><strong>JVM memory.</strong> Modern JVMs are <strong>container-aware</strong> and read cgroup limits, but the default heap is only 25% of the container limit. Set <code>-XX:MaxRAMPercentage=75</code> (leaving room for metaspace, threads and native memory) and set the container memory limit accordingly.</p>
+<p><strong>Lifecycle.</strong> Enable <code>server.shutdown=graceful</code> so in-flight requests finish when Kubernetes sends SIGTERM, use the exec form of ENTRYPOINT so the JVM receives signals, and expose <strong>Actuator liveness and readiness probes</strong> (<code>/actuator/health/liveness</code>, <code>/readiness</code>), with a startup probe for slow starts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build the layered jar in a build stage.</li>
+  <li>Extract layers.</li>
+  <li>Copy layers in order of change frequency onto a JRE base.</li>
+  <li>Run as non-root with container-aware JVM flags.</li>
+  <li>Configure graceful shutdown and health probes in Kubernetes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jdk AS build
+WORKDIR /src
+COPY . .
+RUN ./mvnw -q package -DskipTests &amp;&amp; \
+    java -Djarmode=tools -jar target/app.jar extract --layers --launcher --destination /layers
+
+FROM eclipse-temurin:21-jre
+RUN useradd -r -u 1001 app
+USER 1001
+WORKDIR /app
+COPY --from=build /layers/dependencies/ ./
+COPY --from=build /layers/spring-boot-loader/ ./
+COPY --from=build /layers/snapshot-dependencies/ ./
+COPY --from=build /layers/application/ ./
+ENV JAVA_TOOL_OPTIONS=&quot;-XX:MaxRAMPercentage=75&quot;
+ENTRYPOINT [&quot;java&quot;, &quot;org.springframework.boot.loader.launch.JarLauncher&quot;]</code></pre>
+<pre><code class="language-yaml"># application.yml
+server.shutdown: graceful
+management.endpoint.health.probes.enabled: true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying a single fat jar, so every build pushes the whole image.</li>
+  <li>Using a full JDK base image and running as root.</li>
+  <li>Setting <code>-Xmx</code> equal to the container limit, causing OOMKills.</li>
+  <li>Shell-form ENTRYPOINT, so SIGTERM never reaches the JVM.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring Boot supports layered jars, so dependencies, which rarely change, go into separate image layers from application code, making rebuilds and pushes fast. I either write a multi-stage Dockerfile that extracts the layers, or use Buildpacks with spring-boot:build-image, or Jib, which build optimised images without a Dockerfile. The image uses a small JRE or distroless base and runs as non-root. The JVM is container-aware, and I tune MaxRAMPercentage rather than a fixed Xmx. And I enable graceful shutdown and expose Actuator liveness and readiness probes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is copying a single fat jar inefficient?</strong> Any code change invalidates the whole large layer, so caching does not help.</li>
+  <li><strong>What about startup time?</strong> Class Data Sharing, Spring AOT, or GraalVM native images for fast start.</li>
+  <li><strong>Why not liveness check the database?</strong> A database outage would restart all pods without fixing anything; put it in readiness only if needed.</li>
+</ul>
+</article>
+</body>
+</html>

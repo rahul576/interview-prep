@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-088 · kubectl drain hangs during a node upgrade. What is blocking it and how do you proceed?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-088" data-topic="Kubernetes">
+<h1>kubectl drain hangs during a node upgrade. What is blocking it and how do you proceed?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>kubectl drain</code> uses the <strong>Eviction API</strong>, which honours <strong>PodDisruptionBudgets</strong>, so a drain that hangs is almost always a PDB with <strong>zero allowed disruptions</strong>; fix the budget or the replica count rather than forcing deletion.</p>
+
+<h2>Detailed explanation</h2>
+<p>When you drain a node, kubectl first <strong>cordons</strong> it and then asks the API server to evict each pod. An eviction is a polite request: the API server checks every PDB that selects the pod, and if evicting it would drop the workload below <code>minAvailable</code> (or above <code>maxUnavailable</code>), it answers <strong>HTTP 429</strong> and kubectl keeps retrying, printing &quot;Cannot evict pod as it would violate the pod's disruption budget&quot;. From the outside this looks like a hang.</p>
+<p>The typical culprits are a <strong>single-replica Deployment with <code>minAvailable: 1</code></strong>, which can never be evicted, a PDB with <code>maxUnavailable: 0</code>, or a workload whose <strong>replacement pods cannot schedule</strong> (no capacity, affinity rules, zone-bound volumes), so the budget never recovers and the next eviction never becomes allowed.</p>
+<p>Drain also stops on pods it refuses to touch by default: <strong>DaemonSet pods</strong> (need <code>--ignore-daemonsets</code>), pods with <strong>emptyDir</strong> data (<code>--delete-emptydir-data</code>) and <strong>bare pods</strong> not owned by a controller (<code>--force</code>, because they will not come back). These fail fast with a clear message rather than hanging.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the drain output to see which pod it is waiting on.</li>
+  <li>Run <code>kubectl get pdb -A</code> and look for <code>ALLOWED DISRUPTIONS = 0</code>.</li>
+  <li>Check whether the workload's other replicas are Ready and whether new pods are Pending.</li>
+  <li>Fix the cause: scale to two or more replicas, correct the PDB with the owning team, or add capacity.</li>
+  <li>Re-run the drain with a <code>--timeout</code> so automation fails visibly instead of hanging forever.</li>
+  <li>Only as a last resort use <code>--disable-eviction</code>, which deletes pods directly and bypasses PDBs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl drain node-7 --ignore-daemonsets --delete-emptydir-data --timeout=10m
+kubectl get pdb -A
+# NAMESPACE  NAME        MIN AVAILABLE  ALLOWED DISRUPTIONS
+# payments   ledger-pdb  1              0
+kubectl -n payments get deploy ledger     # READY 1/1  -&gt; single replica
+kubectl -n payments scale deploy ledger --replicas=2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Jumping straight to <code>--disable-eviction</code> or <code>--force</code> and causing the outage the PDB was protecting against.</li>
+  <li>Writing <code>minAvailable: 100%</code> or <code>maxUnavailable: 0</code>, which blocks every voluntary disruption.</li>
+  <li>Scaling up during the drain without checking that the new pods can actually schedule.</li>
+  <li>Running node upgrades with no drain timeout, so the pipeline stalls silently.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Drain evicts pods through the Eviction API, and that respects PodDisruptionBudgets, so when it hangs I first run kubectl get pdb across namespaces and look for zero allowed disruptions. The classic case is a single-replica Deployment with minAvailable one, or replacements that cannot schedule so the budget never recovers. I also check for DaemonSet, emptyDir and unmanaged pods, which need explicit flags. The proper fix is to scale the workload to two replicas or fix the PDB with its owners and make sure there is capacity. Disabling eviction deletes pods and ignores the budget, so I treat it as a last resort.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent teams from creating PDBs that block every upgrade?</strong> Enforce rules with Kyverno or Gatekeeper, for example rejecting PDBs that allow zero disruptions for workloads with one replica.</li>
+  <li><strong>What does Karpenter or a managed node upgrade do with a blocking PDB?</strong> It waits and retries, and some managed upgrades force-delete after a timeout, so the PDB only delays.</li>
+  <li><strong>PDB minAvailable or maxUnavailable?</strong> maxUnavailable scales better with autoscaled replica counts.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-010 · Compare online, real-time inference with batch inference. How do you choose?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-010" data-topic="MLOps">
+<h1>Compare online, real-time inference with batch inference. How do you choose?</h1>
+<p class="ex-meta">MLOps · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Online (real-time) inference</strong> scores each request as it arrives behind an API within a tight latency budget; <strong>batch inference</strong> scores many records on a schedule and stores the results. Choose by <strong>how fresh the prediction must be</strong>, whether the <strong>input only exists at request time</strong>, and the <strong>latency and cost budget</strong>, with <strong>streaming inference</strong> as a middle ground.</p>
+
+<h2>Detailed explanation</h2>
+<p>With <strong>online inference</strong>, a client calls a REST or gRPC endpoint and waits for the answer, typically within tens of milliseconds. Fraud checks during payment, search ranking and recommendations on a page work this way. The system needs <strong>fresh features at request time</strong> (often from an online feature store), <strong>scalable serving</strong> with autoscaling, high availability, and careful latency engineering. Every millisecond and every replica costs money, and failures are user-visible.</p>
+<p>With <strong>batch inference</strong>, a scheduled job scores a large set of entities, for example nightly churn scores for every customer, and writes them to a table or key-value store that applications read. It is <strong>cheaper and simpler</strong>: large compute is used efficiently, jobs are easy to retry, and nothing is on the user's critical path. The price is <strong>staleness</strong>: predictions can be hours old, and you can only score entities you know about in advance.</p>
+<p>The deciding questions are: how quickly does the world change relative to the decision, and does the key input exist only at request time (the basket contents, the transaction amount, the search query)? If decisions can wait or inputs change slowly, batch wins. <strong>Streaming inference</strong> consumes events from Kafka or Kinesis and scores them within seconds, giving near-real-time freshness without a synchronous API. Many production systems are <strong>hybrids</strong>: heavy scores precomputed in batch, combined with a light real-time adjustment.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the decision, its latency budget and how stale a prediction may be.</li>
+  <li>Check whether essential inputs are known in advance or only at request time.</li>
+  <li>For batch: schedule a job, score all entities, write results with model version, serve by lookup.</li>
+  <li>For online: deploy an endpoint, fetch online features, score per request, autoscale on traffic.</li>
+  <li>For streaming: consume events, score them, publish results to a topic or store.</li>
+  <li>Monitor latency (online) or freshness and job completion (batch).</li>
+</ol>
+
+<h2>Example</h2>
+<p>A retailer precomputes nightly &quot;propensity to buy&quot; scores per customer, but adjusts ranking with the live session:</p>
+<pre><code class="language-python"># batch: nightly job writes customer_id -&gt; base_score to Redis
+base = redis.hget(&quot;propensity&quot;, customer_id) or DEFAULT_SCORE
+
+# online: light model combines base score with request-time context
+features = {&quot;base&quot;: float(base), &quot;cart_value&quot;: cart.total, &quot;items_viewed&quot;: session.views}
+score = realtime_model.predict([list(features.values())])[0]</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Online</th><th>Batch</th><th>Streaming</th></tr></thead>
+<tbody>
+<tr><td>Latency</td><td>Milliseconds</td><td>Hours</td><td>Seconds</td></tr>
+<tr><td>Freshness</td><td>Request-time</td><td>Stale by schedule</td><td>Near real time</td></tr>
+<tr><td>Cost and complexity</td><td>Highest</td><td>Lowest</td><td>Medium</td></tr>
+<tr><td>Typical use</td><td>Fraud at payment, ranking</td><td>Churn, lead scoring</td><td>Alerting, IoT anomalies</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Building a real-time endpoint when a nightly table would meet the business need.</li>
+  <li>Batch-scoring decisions that depend on request-time inputs, so predictions ignore the most important signal.</li>
+  <li>Forgetting a default for entities missing from the batch output (new customers).</li>
+  <li>Not storing the model version and scoring time with batch results.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Online inference scores each request synchronously behind an API, usually within tens of milliseconds, so it needs fresh features, autoscaling and high availability; fraud checks at payment are the classic case. Batch inference scores everything on a schedule and writes results to a table, which is much cheaper and easier to retry, but the predictions can be hours old. I choose by asking how fresh the prediction must be and whether the key input only exists at request time. If the decision can wait, batch wins. Streaming inference from Kafka sits in between, and I often combine a batch base score with a small real-time adjustment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you serve a batch-scored model that needs some real-time context?</strong> Look up the precomputed score and combine it with request-time features in a lightweight online model or rule layer.</li>
+  <li><strong>What happens to new entities in batch scoring?</strong> Use a fallback score or trigger on-demand online scoring.</li>
+  <li><strong>How do you monitor batch inference?</strong> Job success, freshness SLAs, row counts and score distribution per run.</li>
+</ul>
+</article>
+</body>
+</html>

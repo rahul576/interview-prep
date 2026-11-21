@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-317 · How does connection pooling work, and how do you size HikariCP?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-317" data-topic="Spring Data &amp; JPA">
+<h1>How does connection pooling work, and how do you size HikariCP?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>connection pool</strong> keeps database connections open and <strong>reuses</strong> them to avoid expensive connects; <strong>HikariCP</strong> is Spring Boot's default; size it <strong>small</strong> (start near <em>cores × 2 + effective spindles</em>, often 10-20), set <strong>connectionTimeout</strong> and <strong>maxLifetime</strong>, and keep <strong>pool size × instances</strong> under the database's <strong>max_connections</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Opening a database connection involves a TCP handshake, often TLS, authentication and server-side session setup: milliseconds to tens of milliseconds, plus a process or thread on the database server. A pool opens a set of connections once and lends them out: <code>getConnection()</code> borrows one, <code>close()</code> returns it. HikariCP is fast, lightweight and the default in Spring Boot.</p>
+<p><strong>Sizing counterintuition.</strong> More connections don't mean more throughput. The database has a limited number of CPU cores and I/O channels; beyond that, extra concurrent queries just compete, add context switching and lock contention, and <strong>latency rises</strong>. HikariCP's wiki cites the PostgreSQL-derived starting formula <strong>connections = (core_count × 2) + effective_spindle_count</strong>, which for a typical database server gives 10-20. Then tune by measurement: watch <code>hikaricp.connections.pending</code> (threads waiting), <code>hikaricp.connections.acquire</code> time and usage, and database CPU and wait events. Also remember the default <code>maximumPoolSize</code> is 10 and Hikari recommends a fixed-size pool (minimumIdle equal to max).</p>
+<p><strong>Timeouts.</strong> <code>connectionTimeout</code> (default 30 s) is how long a thread waits for a connection; lower it (for example 2-5 s) so requests <strong>fail fast</strong> instead of piling up. <code>maxLifetime</code> (default 30 min) retires connections; set it a bit <strong>shorter than</strong> any database, firewall, load balancer or proxy idle timeout so connections aren't killed underneath you. <code>idleTimeout</code>, <code>keepaliveTime</code> and <code>leakDetectionThreshold</code> (logs connections held too long) help too.</p>
+<p><strong>Fleet-wide limits.</strong> Each application instance has its own pool. Ten pods with a pool of 20 means 200 connections; with autoscaling it can exceed the database's <code>max_connections</code>. Budget the total, and if you have many instances or serverless functions, put a server-side pooler such as <strong>PgBouncer</strong>, RDS Proxy or ProxySQL in front.</p>
+<p>If threads wait on <code>getConnection</code>, first check <strong>why connections are held</strong>: slow queries, long transactions, remote calls inside transactions, OSIV, or leaks. Increasing the pool often just moves the bottleneck into the database.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>At startup Hikari opens <code>minimumIdle</code> connections.</li>
+  <li>A request borrows a connection; if none free, it waits up to connectionTimeout.</li>
+  <li>Query runs; connection returned at transaction end.</li>
+  <li>Connections are retired after maxLifetime and replaced.</li>
+  <li>Metrics expose active, idle and pending counts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 16
+      minimum-idle: 16
+      connection-timeout: 3000      # ms
+      max-lifetime: 1680000         # 28 min, below a 30 min proxy idle timeout
+      keepalive-time: 300000
+      leak-detection-threshold: 20000</code></pre>
+<pre><code class="language-text">DB: 8 cores, SSD  → start at ~ 8*2 + 1 = 17 connections in total for the busiest workload
+6 pods × 16 = 96 connections  &lt;  max_connections 200 (leave room for admin, migrations)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pool size 100+ &quot;to be safe&quot;, overloading the database.</li>
+  <li>Ignoring the multiplier of instances and autoscaling.</li>
+  <li>maxLifetime longer than infrastructure idle timeouts, causing broken connections.</li>
+  <li>Raising the pool to hide long transactions or leaks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Opening a connection is expensive, so a pool keeps connections open and reuses them; HikariCP is the Spring Boot default. Pools should be small, because the database can only do so much in parallel; a common starting point is about twice the database cores plus effective spindles, often ten to twenty, then I tune by measuring wait time. I set connectionTimeout so requests fail fast and maxLifetime below any database or proxy idle timeout. I multiply pool size by instance count to stay under max connections, and use PgBouncer if needed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Threads waiting on getConnection; increase the pool?</strong> First find why connections are held long; only increase if the database has headroom.</li>
+  <li><strong>Pool with virtual threads?</strong> The pool becomes the concurrency limit; keep it sized for the database, not the thread count.</li>
+  <li><strong>Detect leaks?</strong> leakDetectionThreshold and active-connection metrics.</li>
+</ul>
+</article>
+</body>
+</html>

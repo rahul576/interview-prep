@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-418 · Design the classes for a parking lot system.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-418" data-topic="Low-Level Design">
+<h1>Design the classes for a parking lot system.</h1>
+<p class="ex-meta">Low-Level Design · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Model <strong>ParkingLot -&gt; Levels -&gt; Spots</strong>, <strong>Vehicle</strong> types and <strong>Ticket</strong>, let each spot decide <strong>canFit(vehicle)</strong> via polymorphism, use the <strong>Strategy pattern</strong> for allocation and pricing, and make spot assignment <strong>thread-safe</strong> so two cars never get the same spot.</p>
+
+<h2>Detailed explanation</h2>
+<p>Low-level design interviews test object modelling, SOLID principles and extensibility more than algorithms. Start by clarifying requirements: multiple levels, spot sizes (motorcycle, compact, large, EV), multiple entry/exit gates, hourly pricing, display of free spots, payment at exit.</p>
+<p><strong>Core entities:</strong></p>
+<ul>
+  <li><code>ParkingLot</code> (singleton per site, or just one instance) holds <code>Level</code>s and gates.</li>
+  <li><code>Level</code> holds <code>ParkingSpot</code>s and counts free spots per type.</li>
+  <li><code>ParkingSpot</code> has an ID, <code>SpotType</code>, and an occupied vehicle.</li>
+  <li><code>Vehicle</code> with <code>VehicleType</code> (enum or subclasses <code>Car</code>, <code>Bike</code>, <code>Truck</code>).</li>
+  <li><code>Ticket</code> records ticket ID, vehicle, spot, entry time, exit time and status.</li>
+  <li><code>Payment</code> / <code>Receipt</code>.</li>
+</ul>
+<p>Avoid <code>instanceof</code> chains: each <code>SpotType</code> (or spot class) answers <code>canFit(VehicleType)</code>, which follows the <strong>Open/Closed principle</strong>: adding EV spots adds a type, not edits everywhere.</p>
+<p><strong>Allocation</strong> is a <code>SpotAllocationStrategy</code> interface (nearest to entrance, lowest level first, EV preference), swappable without touching the lot. <strong>Pricing</strong> is a <code>PricingStrategy</code> (hourly, flat weekend rate, first 30 minutes free), composed per vehicle type.</p>
+<p><strong>Concurrency:</strong> several gates assign spots simultaneously. Use per-type free-spot queues (<code>ConcurrentLinkedQueue</code> or <code>BlockingQueue</code>) where polling a spot is atomic, or a lock per level, or a compare-and-set on the spot's occupied flag. <strong>Observer</strong> pattern updates display boards when spots change.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Vehicle arrives at an entry gate; gate calls <code>lot.park(vehicle)</code>.</li>
+  <li>Strategy picks a candidate spot; spot is claimed atomically.</li>
+  <li>A <code>Ticket</code> is issued with entry time.</li>
+  <li>At exit, <code>PricingStrategy</code> calculates the fee from duration and type.</li>
+  <li>Payment succeeds -&gt; spot released back to its free queue.</li>
+  <li>Observers update displays with free counts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">enum VehicleType { BIKE, CAR, TRUCK }
+
+enum SpotType {
+    SMALL(Set.of(VehicleType.BIKE)), COMPACT(Set.of(VehicleType.BIKE, VehicleType.CAR)),
+    LARGE(Set.of(VehicleType.CAR, VehicleType.TRUCK));
+    private final Set&lt;VehicleType&gt; fits;
+    SpotType(Set&lt;VehicleType&gt; fits) { this.fits = fits; }
+    boolean canFit(VehicleType v) { return fits.contains(v); }
+}
+
+final class ParkingSpot {
+    private final String id; private final SpotType type;
+    private final AtomicReference&lt;Vehicle&gt; vehicle = new AtomicReference&lt;&gt;();
+    ParkingSpot(String id, SpotType type) { this.id = id; this.type = type; }
+    boolean tryOccupy(Vehicle v) { return type.canFit(v.type()) &amp;&amp; vehicle.compareAndSet(null, v); }
+    void release() { vehicle.set(null); }
+}
+
+interface SpotAllocationStrategy { Optional&lt;ParkingSpot&gt; allocate(List&lt;Level&gt; levels, Vehicle v); }
+interface PricingStrategy { Money fee(Ticket t, Instant exit); }
+
+record Ticket(String id, Vehicle vehicle, ParkingSpot spot, Instant entry) {}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One god class <code>ParkingLot</code> doing allocation, pricing and payment.</li>
+  <li><code>if (vehicle instanceof Truck)</code> scattered through the code.</li>
+  <li>Ignoring concurrency across multiple gates.</li>
+  <li>Hard-coding pricing rules.</li>
+  <li>Not clarifying requirements before drawing classes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd clarify requirements first, then model ParkingLot containing Levels, each with Spots, plus Vehicle types and a Ticket recording vehicle, spot and times. Spot types decide which vehicles fit through a canFit method rather than type checks. Allocation is a strategy, say nearest to entrance, and pricing is another strategy so rules can change. Spot assignment is thread-safe, using an atomic compare-and-set on the spot or per-type concurrent queues, so two gates never assign the same spot. Display boards observe spot events.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Reservations in advance?</strong> A <code>Reservation</code> with time window; allocation excludes reserved spots for that window.</li>
+  <li><strong>Multiple lots in a city?</strong> A service layer with lot IDs, persistence and an availability API.</li>
+  <li><strong>EV charging?</strong> A spot capability plus a charging session with its own pricing.</li>
+</ul>
+</article>
+</body>
+</html>

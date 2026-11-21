@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-207 · How would you design a standard API response structure?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-207" data-topic="REST &amp; API Design">
+<h1>How would you design a standard API response structure?</h1>
+<p class="ex-meta">REST &amp; API Design · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep responses <strong>consistent across services</strong>: return the <strong>resource directly</strong> (or a <strong>data envelope with metadata</strong> for collections), let the <strong>HTTP status code</strong> carry the outcome, use one <strong>error format</strong> based on <strong>RFC 9457 Problem Details</strong> with a <strong>stable error code, field errors and trace id</strong>, and follow shared <strong>naming, date and versioning rules</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A standard structure lets client developers write one error handler and one pagination helper for all your APIs, and makes support easier.</p>
+<p><strong>Success responses.</strong> For single resources, return the resource itself: <code>{ &quot;id&quot;: 42, &quot;status&quot;: &quot;PAID&quot;, ... }</code>. For collections, use an envelope with metadata: <code>{ &quot;items&quot;: [...], &quot;page&quot;: {...} }</code> or <code>{ &quot;data&quot;: [...], &quot;nextCursor&quot;: &quot;...&quot; }</code>. Avoid wrapping everything in <code>{ &quot;success&quot;: true, &quot;data&quot;: ... }</code>: the <strong>status code</strong> already says success or failure, and HTTP tooling (gateways, monitoring, retries) relies on it.</p>
+<p><strong>Errors.</strong> Use <strong>RFC 9457 Problem Details for HTTP APIs</strong> (it obsoletes <strong>RFC 7807</strong>), media type <code>application/problem+json</code>. Standard members:</p>
+<ul>
+  <li><code>type</code>: URI identifying the error type (can link to documentation);</li>
+  <li><code>title</code>: short human-readable summary;</li>
+  <li><code>status</code>: HTTP status code;</li>
+  <li><code>detail</code>: explanation for this occurrence;</li>
+  <li><code>instance</code>: URI of the request or occurrence.</li>
+</ul>
+<p>Add <strong>extension members</strong>: a stable, machine-readable <strong><code>code</code></strong> (<code>ORDER_ALREADY_SHIPPED</code>) clients can branch on, an <strong><code>errors</code></strong> array of field-level validation problems, and a <strong><code>traceId</code>/correlation id</strong> that support can search in logs and traces. Spring 6 / Boot 3 support this with <strong><code>ProblemDetail</code></strong> and <code>ErrorResponseException</code>; set <code>spring.mvc.problemdetails.enabled=true</code> for built-in exceptions, and use a <code>@RestControllerAdvice</code> to map your own.</p>
+<p><strong>Never</strong> include stack traces, SQL or internal hostnames in errors; log them with the trace id instead.</p>
+<p><strong>Conventions.</strong> One naming style (camelCase JSON), <strong>ISO 8601</strong> timestamps with time zone (<code>2026-11-21T10:15:30Z</code>), money as decimal strings or minor units with currency, enums as strings, consistent null handling (omit or null, but be consistent). Changes are <strong>additive</strong> to stay backward compatible; clients should ignore unknown fields. Document everything in a shared <strong>OpenAPI</strong> components file and lint it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a shared API guideline and OpenAPI components.</li>
+  <li>Success: resource or collection envelope with metadata.</li>
+  <li>Errors: global handler converts exceptions to Problem Details.</li>
+  <li>Trace id added from the tracing context.</li>
+  <li>CI lints specs for compliance.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestControllerAdvice
+class ApiErrors {
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ProblemDetail validation(MethodArgumentNotValidException ex) {
+        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        pd.setType(URI.create(&quot;https://api.shop.com/errors/validation&quot;));
+        pd.setTitle(&quot;Validation failed&quot;);
+        pd.setProperty(&quot;code&quot;, &quot;VALIDATION_ERROR&quot;);
+        pd.setProperty(&quot;errors&quot;, ex.getFieldErrors().stream()
+            .map(f -&gt; Map.of(&quot;field&quot;, f.getField(), &quot;message&quot;, f.getDefaultMessage())).toList());
+        pd.setProperty(&quot;traceId&quot;, Span.current().getSpanContext().getTraceId());
+        return pd;
+    }
+}</code></pre>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;https://api.shop.com/errors/validation&quot;,
+  &quot;title&quot;: &quot;Validation failed&quot;,
+  &quot;status&quot;: 400,
+  &quot;code&quot;: &quot;VALIDATION_ERROR&quot;,
+  &quot;errors&quot;: [{ &quot;field&quot;: &quot;quantity&quot;, &quot;message&quot;: &quot;must be greater than 0&quot; }],
+  &quot;traceId&quot;: &quot;4bf92f3577b34da6a3ce929d0e0e4736&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>200 OK with <code>&quot;success&quot;: false</code>.</li>
+  <li>Different error shapes per service or endpoint.</li>
+  <li>Only human-readable messages, no stable error code.</li>
+  <li>Leaking exception details.</li>
+  <li>Inconsistent date formats and naming.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I keep one structure across all services. Success responses return the resource directly, or for collections an envelope with pagination metadata, and the HTTP status carries the outcome rather than a success flag inside a 200. Errors follow RFC 9457 Problem Details, the successor of RFC 7807, which Spring supports with ProblemDetail: type, title, status and detail, plus my own fields like a stable machine-readable error code, a list of field errors for validation, and a trace id support can search in logs. Field names are camelCase, dates ISO 8601, and changes are additive so existing clients don't break.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is returning 200 OK with an error flag in the body a bad idea?</strong> Gateways, monitoring, caches and retry logic see success; clients must parse every body.</li>
+  <li><strong>Why a separate error code when you have status?</strong> Status is coarse; the code identifies the specific business error.</li>
+  <li><strong>Should you wrap single resources in a data envelope?</strong> Not necessary; keep envelopes for collections and metadata.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-071 · How do you design Terraform pipelines for many AWS or Azure accounts with least privilege?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-071" data-topic="Infrastructure as Code">
+<h1>How do you design Terraform pipelines for many AWS or Azure accounts with least privilege?</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Give each account/subscription its own <strong>deployment roles</strong>, let CI assume them through <strong>OIDC federation scoped to repository, branch or environment</strong>, separate a <strong>read-only plan role</strong> from a <strong>write apply role</strong>, keep <strong>state per account</strong> with matching backend permissions, and add <strong>approval gates and audit trails</strong> for production.</p>
+
+<h2>Detailed explanation</h2>
+<p>A single all-powerful CI credential that can change every account is the biggest risk in infrastructure automation: one leaked secret or malicious pull request compromises everything. The design aims for <strong>no long-lived keys</strong> and <strong>least privilege per account and stage</strong>.</p>
+<p><strong>Identity.</strong> The landing zone creates, in every target account (or Azure subscription), roles such as <code>tf-plan</code> and <code>tf-apply</code>. Their trust policy accepts only the CI provider's <strong>OIDC</strong> tokens, with conditions on claims: for GitHub Actions the <code>sub</code> claim like <code>repo:acme/infra-live:environment:prod</code>; for Azure, federated credentials on a managed identity or app registration.</p>
+<p><strong>Plan versus apply.</strong> Pull-request plans run code nobody has reviewed yet. They use the <strong>plan role</strong>: read access to resources and state, plus only what locking needs. Even read access can expose data, and providers or external data sources in a PR can run arbitrary code, so the plan role should not read secret values, and secret-heavy stacks may skip automatic PR plans from forks. <strong>Apply</strong> runs only after merge, from the protected branch or a protected environment, using the <strong>apply role</strong> with write permissions scoped to what that stack manages.</p>
+<p><strong>State isolation.</strong> Each account has its own state bucket or container, and only that account's roles can access it. A dev pipeline cannot read production state, which often contains secrets.</p>
+<p><strong>Gates and audit.</strong> Production environments require reviewer approval of the exact saved plan. CloudTrail or the Azure activity log records actions by role session name, and CI keeps the plan, approver and logs, giving end-to-end traceability.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened → CI requests an OIDC token → assumes <code>tf-plan</code> in the target account.</li>
+  <li>Plan output posted for review; plan file stored as an artifact.</li>
+  <li>Merge to main → job in <code>prod</code> environment waits for approval.</li>
+  <li>Approved → assumes <code>tf-apply</code> (trust only for <code>environment:prod</code>).</li>
+  <li>Applies the saved plan; logs link CI run to cloud audit events.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Effect&quot;: &quot;Allow&quot;,
+  &quot;Principal&quot;: { &quot;Federated&quot;: &quot;arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com&quot; },
+  &quot;Action&quot;: &quot;sts:AssumeRoleWithWebIdentity&quot;,
+  &quot;Condition&quot;: {
+    &quot;StringEquals&quot;: {
+      &quot;token.actions.githubusercontent.com:aud&quot;: &quot;sts.amazonaws.com&quot;,
+      &quot;token.actions.githubusercontent.com:sub&quot;: &quot;repo:acme/infra-live:environment:prod&quot;
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One admin role trusted by every repository and branch.</li>
+  <li>Wildcard <code>sub</code> conditions such as <code>repo:acme/*</code>.</li>
+  <li>PR plans running with apply permissions.</li>
+  <li>A shared state bucket readable by all environments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each account has its own deployment roles created by the landing zone, and their trust policies only accept OIDC tokens from our CI, scoped to the specific repository and, for production, to the protected environment or main branch, so there are no static keys. Pull request plans use a read-only role, because that code isn't reviewed yet; applies after merge use a separate role with write access. State is per account and backend permissions match, so dev can't even read prod state. Production applies need an approval of the saved plan, and CloudTrail plus CI history give a full audit trail.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why shouldn't PR plans have write permissions?</strong> Unreviewed code, including providers and external data sources, runs during plan.</li>
+  <li><strong>Does the plan role need any write?</strong> Only for state locking, scoped to the lock object or table.</li>
+  <li><strong>How do you handle cross-account resources?</strong> Provider aliases assuming roles in each account, each scoped narrowly.</li>
+</ul>
+</article>
+</body>
+</html>

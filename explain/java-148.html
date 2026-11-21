@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-148 · How do you test microservice integrations without a full end-to-end environment?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-148" data-topic="Testing">
+<h1>How do you test microservice integrations without a full end-to-end environment?</h1>
+<p class="ex-meta">Testing · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Replace most end-to-end testing with <strong>consumer-driven contract tests</strong> (Pact or Spring Cloud Contract), test each service's own integrations with <strong>Testcontainers</strong> and <strong>WireMock</strong>, check <strong>event schema compatibility</strong>, and keep only a <strong>few end-to-end smoke tests</strong> after deployment.</p>
+
+<h2>Detailed explanation</h2>
+<p>A full end-to-end environment with twenty services is slow to build, shared by many teams, full of unrelated failures and always running the wrong versions. Tests there are flaky and feedback comes hours late. The goal is to get the same confidence from cheaper, isolated tests.</p>
+<p><strong>Consumer-driven contracts</strong> solve the core question: &quot;will my change break someone who calls me?&quot; With <strong>Pact</strong>, the consumer writes a test against a Pact mock server describing the requests it sends and the response fields it relies on. That produces a contract file published to a <strong>Pact Broker</strong>. The provider's pipeline replays each contract against the real provider (with its dependencies stubbed) and fails if any expectation is broken. <code>can-i-deploy</code> checks whether the versions about to be deployed are compatible. <strong>Spring Cloud Contract</strong> is provider-driven by default: the provider writes contracts in Groovy or YAML, generates provider tests and publishes WireMock stubs that consumers use.</p>
+<p><strong>Within each service</strong>, integration tests run against real infrastructure in <strong>Testcontainers</strong> (PostgreSQL, Kafka, Redis) and use <strong>WireMock</strong> for HTTP dependencies, including 500s, malformed bodies and timeouts, which a real environment rarely produces on demand.</p>
+<p><strong>Asynchronous contracts</strong> matter too: Pact supports message pacts, and Avro or Protobuf schemas in a <strong>schema registry</strong> with backward-compatibility checks stop producers breaking consumers.</p>
+<p>A small set of <strong>end-to-end smoke tests</strong> then verifies the critical journeys in staging after deployment, checking configuration and networking rather than business logic.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Consumer writes a Pact test; the contract is generated and published to the broker.</li>
+  <li>Provider CI fetches contracts and verifies them against its real API.</li>
+  <li><code>can-i-deploy</code> gates deployment on verified compatibility.</li>
+  <li>Each service runs Testcontainers and WireMock integration tests.</li>
+  <li>Schemas are checked for compatibility in the registry.</li>
+  <li>After deployment, a few smoke tests run the main journeys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@ExtendWith(PactConsumerTestExt.class)
+@PactTestFor(providerName = &quot;inventory-service&quot;)
+class InventoryClientPactTest {
+
+    @Pact(consumer = &quot;order-service&quot;)
+    V4Pact stockForSku(PactDslWithProvider b) {
+        return b.given(&quot;SKU-1 has 5 units&quot;)
+                .uponReceiving(&quot;get stock&quot;)
+                .path(&quot;/stock/SKU-1&quot;).method(&quot;GET&quot;)
+                .willRespondWith().status(200)
+                .body(new PactDslJsonBody().stringType(&quot;sku&quot;, &quot;SKU-1&quot;)
+                                           .integerType(&quot;available&quot;, 5))
+                .toPact(V4Pact.class);
+    }
+
+    @Test
+    void readsStock(MockServer server) {
+        var client = new InventoryClient(server.getUrl());
+        assertThat(client.available(&quot;SKU-1&quot;)).isEqualTo(5);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating contracts as full functional tests of the provider rather than of the interface.</li>
+  <li>Consumers asserting on fields they do not use, making contracts over-strict.</li>
+  <li>Publishing contracts but never gating deployment on verification.</li>
+  <li>Keeping a large flaky end-to-end suite &quot;just in case&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I rely on consumer-driven contract tests with Pact or Spring Cloud Contract. The consumer records exactly which requests it sends and which fields it needs, the contract goes to a broker, and the provider's pipeline verifies it, so breaking changes fail before deployment without any shared environment. Inside each service I run integration tests with Testcontainers for the database and Kafka, and WireMock for HTTP dependencies, including errors and timeouts. Event schemas are checked for compatibility in the registry. Then only a handful of smoke tests run against staging after deployment, because big end-to-end suites are slow and flaky.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Who owns a contract?</strong> The consumer defines its needs, but changes are negotiated; the provider must not break verified contracts without coordination.</li>
+  <li><strong>Pact vs Spring Cloud Contract?</strong> Pact is consumer-driven and polyglot; SCC fits Spring providers and generates WireMock stubs.</li>
+  <li><strong>What do smoke tests add?</strong> They catch deployment, configuration and networking problems that isolated tests cannot.</li>
+</ul>
+</article>
+</body>
+</html>

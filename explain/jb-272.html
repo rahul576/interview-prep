@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-272 · How would you implement role-based access control in Spring Security?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-272" data-topic="Security">
+<h1>How would you implement role-based access control in Spring Security?</h1>
+<p class="ex-meta">Security · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Get <strong>roles or authorities</strong> into Spring Security (from a <strong>UserDetailsService</strong> or mapped from <strong>JWT claims</strong> with a <strong>JwtAuthenticationConverter</strong>), enforce them with <strong>URL rules</strong> in the <strong>SecurityFilterChain</strong> and <strong>@PreAuthorize</strong> method security, add <strong>object-level ownership checks</strong>, <strong>deny by default</strong>, and <strong>test</strong> every rule.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>RBAC</strong> grants permissions to roles and roles to users. In Spring Security everything becomes a <strong>GrantedAuthority</strong>. A role is just an authority with the prefix <code>ROLE_</code>: <code>hasRole(&quot;ADMIN&quot;)</code> checks <code>ROLE_ADMIN</code>, while <code>hasAuthority(&quot;orders:write&quot;)</code> checks the exact string. A good design keeps coarse <strong>roles</strong> (ADMIN, SUPPORT, CUSTOMER) mapped to fine <strong>permissions</strong> (<code>orders:read</code>, <code>orders:refund</code>), and code checks permissions, so changing who can refund does not need a code change.</p>
+<p>Authorities come from somewhere. In a classic app a <strong>UserDetailsService</strong> loads the user and their roles from the database. In a <strong>resource server</strong>, they come from the token: by default Spring maps <code>scope</code>/<code>scp</code> into <code>SCOPE_xxx</code> authorities; for custom claims such as Keycloak's <code>realm_access.roles</code> or Entra ID's <code>roles</code>, you configure a <strong>JwtAuthenticationConverter</strong>.</p>
+<p>Enforcement happens in two layers. <strong>URL rules</strong> in <code>authorizeHttpRequests</code> give coarse protection, ending with <code>anyRequest().authenticated()</code> or <code>denyAll()</code> so new endpoints are not accidentally open. <strong>Method security</strong>, enabled with <code>@EnableMethodSecurity</code>, puts <code>@PreAuthorize</code> on service methods, closer to the business logic. Roles alone do not stop a customer reading another customer's order, so you also need <strong>object-level</strong> checks: a SpEL call to a bean, a <code>PermissionEvaluator</code>, <code>@PostAuthorize</code> on the returned object, or simply queries scoped to the current user. Finally write tests with <code>@WithMockUser</code> or <code>jwt()</code> request post-processors for each role, including negative cases.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define roles and permissions; store or issue them (database or identity provider).</li>
+  <li>Map them to <code>GrantedAuthority</code> objects (UserDetailsService or JwtAuthenticationConverter).</li>
+  <li>Add URL rules with deny by default.</li>
+  <li>Add <code>@PreAuthorize</code> on service methods, including ownership checks.</li>
+  <li>Test allowed and denied paths for each role.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+JwtAuthenticationConverter jwtAuthConverter() {
+    JwtGrantedAuthoritiesConverter roles = new JwtGrantedAuthoritiesConverter();
+    roles.setAuthoritiesClaimName(&quot;roles&quot;);
+    roles.setAuthorityPrefix(&quot;ROLE_&quot;);
+    JwtAuthenticationConverter c = new JwtAuthenticationConverter();
+    c.setJwtGrantedAuthoritiesConverter(roles);
+    return c;
+}
+
+@Bean
+SecurityFilterChain chain(HttpSecurity http) throws Exception {
+    http.authorizeHttpRequests(a -&gt; a
+            .requestMatchers(&quot;/admin/**&quot;).hasRole(&quot;ADMIN&quot;)
+            .requestMatchers(HttpMethod.GET, &quot;/orders/**&quot;).hasAnyRole(&quot;CUSTOMER&quot;, &quot;SUPPORT&quot;)
+            .anyRequest().denyAll())
+        .oauth2ResourceServer(o -&gt; o.jwt(j -&gt; j.jwtAuthenticationConverter(jwtAuthConverter())));
+    return http.build();
+}
+
+@PreAuthorize(&quot;hasAuthority('orders:refund') or @orderAccess.isOwner(#id, authentication)&quot;)
+public void refund(long id) { ... }
+
+@Test
+@WithMockUser(roles = &quot;CUSTOMER&quot;)
+void customerCannotOpenAdmin() throws Exception {
+    mvc.perform(get(&quot;/admin/users&quot;)).andExpect(status().isForbidden());
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing <code>hasRole(&quot;ROLE_ADMIN&quot;)</code>, which looks for <code>ROLE_ROLE_ADMIN</code>.</li>
+  <li>Hard-coding role names everywhere instead of permissions.</li>
+  <li>Only checking in the UI or only at URL level.</li>
+  <li>Ending rules with <code>permitAll()</code> instead of deny by default.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First the roles must reach Spring Security as GrantedAuthorities, either from the database through a UserDetailsService or, in a resource server, from JWT claims mapped by a JwtAuthenticationConverter. Then I enforce them in two layers: URL rules in the SecurityFilterChain, like admin paths requiring ROLE_ADMIN, with deny by default at the end; and method security with @PreAuthorize on service methods, ideally checking permissions like orders:refund rather than role names. Roles are not enough for data, so I add ownership checks through a bean or PermissionEvaluator. And I test every role, including the forbidden cases, with @WithMockUser.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>hasRole vs hasAuthority?</strong> <code>hasRole</code> adds the <code>ROLE_</code> prefix; <code>hasAuthority</code> matches the exact string.</li>
+  <li><strong>Role hierarchy?</strong> A <code>RoleHierarchy</code> bean lets ADMIN imply SUPPORT, and so on.</li>
+  <li><strong>RBAC vs ABAC?</strong> ABAC decides on attributes (department, time, owner); RBAC on roles; many systems combine them.</li>
+</ul>
+</article>
+</body>
+</html>

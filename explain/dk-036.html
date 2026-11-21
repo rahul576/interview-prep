@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-036 · How do you write a good entrypoint script for a container?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-036" data-topic="Docker">
+<h1>How do you write a good entrypoint script for a container?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A good entrypoint script does <strong>small, idempotent start-up work</strong> (render config, fix permissions, brief dependency wait, optional migrations), uses <strong><code>set -e</code></strong> to fail fast, and <strong>ends with <code>exec &quot;$@&quot;</code></strong> so the app becomes PID 1, with <strong>CMD providing default arguments</strong> and <strong>no secrets in logs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some work must happen at container start rather than build time, because it depends on the runtime environment: rendering a configuration file from environment variables, creating a directory on a freshly mounted volume, adjusting permissions, translating secrets mounted as files into the format the app expects, or, in simple setups, running a migration step. An <strong>entrypoint script</strong> is the place for this.</p>
+<p>Good scripts follow a few rules. Start with <strong><code>set -e</code></strong> (often <code>set -eu</code>) so that any failing command stops the container immediately instead of launching a half-configured application that fails later in confusing ways. Make every step <strong>idempotent</strong>, because containers restart: creating a directory that exists or rendering a file twice must be harmless. Keep it <strong>small</strong>, POSIX <code>sh</code> if the image has no bash, and fast, because it delays every start.</p>
+<p>Crucially, the script must <strong>end with <code>exec &quot;$@&quot;</code></strong>. <code>exec</code> replaces the shell process with the application, so the app becomes <strong>PID 1</strong> and receives <code>SIGTERM</code> directly. <code>&quot;$@&quot;</code> passes the arguments that came from <strong>CMD</strong> or from <code>docker run</code>, which keeps the image flexible: <code>ENTRYPOINT [&quot;/entrypoint.sh&quot;]</code> and <code>CMD [&quot;java&quot;,&quot;-jar&quot;,&quot;/app.jar&quot;]</code> run the app by default, while <code>docker run image sh</code> still gives a shell with the same preparation.</p>
+<p>Never <code>echo</code> secrets or run with <code>set -x</code> when secrets are present. Waiting for dependencies should be <strong>bounded</strong> (a few seconds with a timeout); real resilience belongs in the application's <strong>retry logic</strong>, and in Kubernetes, migrations are better as a separate Job or init container.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Docker runs <code>/entrypoint.sh</code> with CMD as arguments.</li>
+  <li>The script validates required variables.</li>
+  <li>It prepares config and directories idempotently.</li>
+  <li>Optionally it waits briefly for a dependency.</li>
+  <li><code>exec &quot;$@&quot;</code> replaces the shell with the application.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sh">#!/bin/sh
+set -eu
+: &quot;${DB_HOST:?DB_HOST is required}&quot;
+
+# Render config from template
+envsubst &lt; /app/config.tmpl &gt; /app/config.yml
+
+# Prepare volume directory (idempotent)
+mkdir -p /data/uploads
+
+# Allow a short wait for the database
+i=0; until nc -z &quot;$DB_HOST&quot; 5432 || [ $i -ge 30 ]; do i=$((i+1)); sleep 1; done
+
+exec &quot;$@&quot;</code></pre>
+<pre><code class="language-dockerfile">COPY --chmod=0755 entrypoint.sh /entrypoint.sh
+ENTRYPOINT [&quot;/entrypoint.sh&quot;]
+CMD [&quot;java&quot;, &quot;-jar&quot;, &quot;/app.jar&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>exec</code>, so the shell stays PID 1 and swallows signals.</li>
+  <li>Infinite &quot;wait for DB&quot; loops that hide real outages.</li>
+  <li>Printing environment variables (including secrets) for debugging.</li>
+  <li>Windows line endings or a missing execute bit, causing &quot;no such file or directory&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An entrypoint script handles start-up work the app can't do itself, like rendering a config file from environment variables, preparing a mounted volume or briefly waiting for a dependency. It starts with set -e so any failure stops the container instead of launching a half-configured app. It must end with exec &quot;$@&quot; so the shell is replaced by the real process, which becomes PID 1 and gets signals, while CMD supplies the default arguments. I keep it small and idempotent because containers restart, and I never print secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why isn't waiting in the entrypoint a replacement for app retries?</strong> Dependencies can fail after start-up too.</li>
+  <li><strong>Why use &quot;$@&quot; with quotes?</strong> It preserves each argument exactly, including spaces.</li>
+  <li><strong>Where should migrations run in Kubernetes?</strong> A Job, init container or Helm hook.</li>
+</ul>
+</article>
+</body>
+</html>

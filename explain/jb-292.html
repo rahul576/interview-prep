@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-292 · What metrics would you monitor for a production Java application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-292" data-topic="Observability">
+<h1>What metrics would you monitor for a production Java application?</h1>
+<p class="ex-meta">Observability · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Monitor <strong>RED metrics</strong> (rate, errors, duration percentiles) per endpoint, <strong>JVM health</strong> (heap after GC, GC pauses, threads, CPU, container memory), <strong>resource pools</strong> (DB connections, executors), <strong>dependencies and Kafka lag</strong>, and <strong>business metrics</strong>, collected with <strong>Micrometer</strong> into Prometheus and Grafana, with <strong>SLO-based alerts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Metrics answer &quot;is something wrong, and where?&quot; cheaply and continuously. A useful set has layers:</p>
+<p><strong>Service level (RED):</strong> request <strong>rate</strong>, <strong>error</strong> rate (5xx and important 4xx separately) and <strong>duration</strong> as histograms, so you can compute <strong>p95 and p99</strong>. Averages hide the slow tail that users actually feel; one request in a hundred taking 5 s is invisible in a 120 ms average.</p>
+<p><strong>JVM:</strong> heap used <strong>after GC</strong> (a rising floor indicates a leak), GC pause time and frequency, allocation rate, live and daemon threads, Metaspace, CPU usage and, in Kubernetes, <strong>container memory (RSS) against the limit</strong> and <strong>CPU throttling</strong>, which explain OOMKills and latency spikes that heap graphs do not.</p>
+<p><strong>Saturation of pools:</strong> <strong>HikariCP</strong> active, idle and <strong>pending</strong> connections plus acquisition time; executor active threads and <strong>queue size</strong>; Tomcat busy threads; cache hit ratio. Pending connections are often the first sign of a slow database.</p>
+<p><strong>Dependencies:</strong> latency and errors of each downstream HTTP call, <strong>circuit breaker state</strong> (Resilience4j exports it), database query time and <strong>Kafka consumer lag</strong> per group and partition.</p>
+<p><strong>Business metrics:</strong> orders placed, payments failed, sign-ups. A drop in orders can reveal a broken flow before any technical metric moves.</p>
+<p>Spring Boot Actuator plus Micrometer exports most of these automatically (<code>http.server.requests</code>, <code>jvm.<em></code>, <code>hikaricp.</em></code>, <code>kafka.*</code>); business metrics are custom counters and timers. Keep <strong>tag cardinality</strong> low (no user ids or raw URLs). Alerts follow <strong>SLOs</strong>: alert on error-budget burn and user-facing latency, keep causes on dashboards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Actuator exposes <code>/actuator/prometheus</code> with Micrometer metrics.</li>
+  <li>Prometheus scrapes every pod; percentile histograms are enabled.</li>
+  <li>Custom business counters and timers are added in code.</li>
+  <li>Grafana dashboards group RED, JVM, pools and dependencies.</li>
+  <li>SLOs and burn-rate alerts route to on-call with runbooks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql"># p99 latency per endpoint
+histogram_quantile(0.99,
+  sum by (le, uri) (rate(http_server_requests_seconds_bucket{app=&quot;orders&quot;}[5m])))
+
+# error ratio
+sum(rate(http_server_requests_seconds_count{status=~&quot;5..&quot;}[5m]))
+  / sum(rate(http_server_requests_seconds_count[5m]))
+
+# threads waiting for DB connections
+hikaricp_connections_pending{pool=&quot;HikariPool-1&quot;} &gt; 0</code></pre>
+<pre><code class="language-java">Timer.builder(&quot;payment.authorisation&quot;).tag(&quot;provider&quot;, &quot;stripe&quot;)
+     .publishPercentileHistogram().register(registry)
+     .record(() -&gt; gateway.authorise(request));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Watching average latency instead of percentiles.</li>
+  <li>Monitoring heap but not container RSS and CPU throttling.</li>
+  <li>High-cardinality tags that overload Prometheus.</li>
+  <li>Alerting on every CPU spike, causing alert fatigue.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with RED per endpoint: rate, errors, and latency as p95 and p99 rather than averages. Then JVM health: heap after GC, GC pauses, threads, CPU and, in containers, memory against the limit and CPU throttling. Then pools: Hikari active and pending connections, executor queues. Then dependencies: downstream latency and errors, circuit breaker state and Kafka consumer lag. And business metrics like orders placed, which often show problems first. Spring Boot exposes them via Micrometer to Prometheus and Grafana, and I alert on SLO burn rate, not every spike.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are averages misleading?</strong> They hide the tail; a few very slow requests barely move the mean.</li>
+  <li><strong>What does rising heap after GC mean?</strong> Live data is growing, a possible memory leak.</li>
+  <li><strong>How do you track Kafka lag?</strong> Consumer group lag metrics from the client or an exporter such as Burrow or kafka-exporter.</li>
+</ul>
+</article>
+</body>
+</html>

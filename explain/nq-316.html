@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-316 · How can you control the number of concurrent Lambda executions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-316" data-topic="Cloud (AWS)">
+<h1>How can you control the number of concurrent Lambda executions?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Control concurrency with <strong>reserved concurrency</strong> on the function (cap across all triggers), <strong>maximum concurrency on the SQS event source mapping</strong>, <strong>batch size and batching window</strong>, <strong>FIFO message groups</strong>, <strong>API Gateway throttling and usage plans</strong> for HTTP, and <strong>account-level quotas</strong>; size these by what the <strong>downstream system</strong> can sustain; <strong>provisioned concurrency</strong> controls warmth, not limits.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each lever acts at a different point:</p>
+<ul>
+  <li><strong>Reserved concurrency:</strong> a hard ceiling on concurrent executions of a function regardless of trigger, and a guarantee of capacity. Excess synchronous calls get throttling errors; queue and async events are retried.</li>
+  <li><strong>Maximum concurrency (SQS ESM):</strong> limits how many concurrent invocations a specific queue mapping creates, without throttling-induced retries. Different queues feeding one function can get different limits.</li>
+  <li><strong>Batch size and batching window:</strong> more messages per invocation means fewer concurrent invocations for the same throughput, and allows bulk database writes.</li>
+  <li><strong>FIFO message groups:</strong> each group is processed in order, one batch at a time, so the number of active groups caps parallelism.</li>
+  <li><strong>Event sources like Kinesis or DynamoDB Streams:</strong> concurrency per shard via the <strong>parallelization factor</strong>.</li>
+  <li><strong>API Gateway:</strong> stage and method throttling (rate and burst) and usage plans per API key limit incoming request rate before Lambda.</li>
+  <li><strong>Account quota:</strong> regional ceiling for all functions.</li>
+  <li><strong>Provisioned concurrency</strong> pre-warms instances; it does not cap concurrency unless combined with reserved concurrency.</li>
+</ul>
+<p><strong>Sizing:</strong> start from the bottleneck. If the database allows 50 connections and other apps need 10, allow about 40 for Lambda; with RDS Proxy pooling you can multiplex more safely. Then check throughput: concurrency multiplied by (batch size divided by processing time) must exceed the arrival rate, or the queue grows, which is acceptable if latency requirements allow.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the downstream limit (connections, API quota).</li>
+  <li>Set ESM maximum concurrency or reserved concurrency to fit.</li>
+  <li>Tune batch size and window for efficiency.</li>
+  <li>Throttle entry points with API Gateway.</li>
+  <li>Monitor throttles, queue age and downstream saturation.</li>
+  <li>Adjust based on measured throughput.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># AWS SAM
+OrderWorker:
+  Type: AWS::Serverless::Function
+  Properties:
+    ReservedConcurrentExecutions: 50
+    Events:
+      Orders:
+        Type: SQS
+        Properties:
+          Queue: !GetAtt OrdersQueue.Arn
+          BatchSize: 25
+          MaximumBatchingWindowInSeconds: 2
+          ScalingConfig: { MaximumConcurrency: 40 }
+          FunctionResponseTypes: [ReportBatchItemFailures]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only one lever applied, at the wrong layer.</li>
+  <li>Forgetting other consumers of the database connection pool.</li>
+  <li>Large batches with no partial failure reporting.</li>
+  <li>Assuming provisioned concurrency limits scale.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are several levers. Reserved concurrency caps how many instances of a function run across all triggers. For SQS, maximum concurrency on the event source mapping limits the concurrent invocations the poller creates, without throttling errors. Batch size and batching window decide how much work each invocation does. With FIFO queues, the number of message groups limits parallelism. For HTTP, API Gateway throttling and usage plans limit request rates, and the account quota is the global ceiling. I choose the values from what the downstream system can sustain, for example the database connection pool, and monitor throttles and queue age.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Size concurrency for a database with 50 connections?</strong> Reserve some for other apps, cap Lambda around 40, or use RDS Proxy.</li>
+  <li><strong>What if the queue keeps growing?</strong> Increase batch size, optimise processing or raise limits if downstream allows.</li>
+  <li><strong>Throttling for async invocations?</strong> Lambda retries internally for up to six hours by default.</li>
+</ul>
+</article>
+</body>
+</html>

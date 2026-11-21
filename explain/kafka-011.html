@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-011 · What are log compaction and retention policies in Kafka?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-011" data-topic="Kafka">
+<h1>What are log compaction and retention policies in Kafka?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Kafka's <strong>delete</strong> cleanup policy removes old segments by <strong>time (retention.ms) or size (retention.bytes)</strong>, while the <strong>compact</strong> policy keeps <strong>at least the latest value per key</strong>, with <strong>tombstones</strong> (null values) deleting keys; compaction suits <strong>changelogs, state and CDC</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A partition's log is stored as <strong>segments</strong> on disk. Only closed (non-active) segments are eligible for cleanup, which is why a topic can briefly hold data older than its retention.</p>
+<p>With <strong>cleanup.policy=delete</strong> (the default), the broker deletes whole segments whose newest record is older than <strong>retention.ms</strong> (7 days by default) or when the partition exceeds <strong>retention.bytes</strong>. This is the right model for event streams like clicks or logs, where old events lose value.</p>
+<p>With <strong>cleanup.policy=compact</strong>, the <strong>log cleaner</strong> threads periodically rewrite segments, keeping only the most recent record for each <strong>key</strong>. The topic becomes a durable <strong>snapshot of current state</strong>: a new consumer reading from the beginning rebuilds the latest value of every key without replaying full history. To delete a key, a producer writes a <strong>tombstone</strong>, a record with that key and a <strong>null value</strong>. The tombstone itself is retained for <strong>delete.retention.ms</strong> (24 hours by default) so slow consumers see the deletion, then removed. Compaction does not guarantee only one value per key at any moment; the active segment and uncleaned &quot;dirty&quot; portion still hold older versions, controlled by <code>min.cleanable.dirty.ratio</code> and <code>min.compaction.lag.ms</code>.</p>
+<p>Typical uses: <strong>Kafka Streams</strong> changelog topics for state stores, <code>__consumer_offsets</code> itself, <strong>CDC</strong> topics from Debezium (latest row per primary key), and reference data such as customer profiles or configuration. You can combine both with <strong>cleanup.policy=compact,delete</strong>, keeping the latest value per key but also dropping anything older than retention, which is useful for windowed state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer writes keyed records; segments roll by size or time.</li>
+  <li>Cleaner picks partitions with a high dirty ratio.</li>
+  <li>It builds an offset map of the latest offset per key.</li>
+  <li>It copies segments, dropping superseded records.</li>
+  <li>Tombstones remain for delete.retention.ms, then disappear.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kafka-topics.sh --bootstrap-server broker:9092 --create --topic customer-profile \
+  --partitions 12 --replication-factor 3 \
+  --config cleanup.policy=compact \
+  --config min.compaction.lag.ms=60000 \
+  --config delete.retention.ms=86400000
+# delete customer 42
+echo &quot;42:&quot; | kafka-console-producer.sh --bootstrap-server broker:9092 \
+  --topic customer-profile --property parse.key=true --property key.separator=: --property null.marker=</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Policy</th><th>Keeps</th><th>Good for</th></tr></thead>
+<tbody>
+<tr><td>delete</td><td>Recent time/size window</td><td>Event streams, logs</td></tr>
+<tr><td>compact</td><td>Latest per key</td><td>State, CDC, config</td></tr>
+<tr><td>compact,delete</td><td>Latest per key within retention</td><td>Windowed state</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Producing null keys to a compacted topic (the broker rejects them).</li>
+  <li>Expecting compaction to be immediate.</li>
+  <li>Setting delete.retention.ms too low so consumers miss tombstones.</li>
+  <li>Using compaction when consumers actually need full history.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The delete policy drops old segments once they exceed retention.ms or retention.bytes, which suits normal event streams. The compact policy instead keeps at least the latest value for each key, cleaning older ones in the background, so the topic acts like a table of current state. A record with a null value is a tombstone that removes the key after delete.retention.ms. I use compaction for Kafka Streams changelogs, CDC topics and reference data, and you can combine compact and delete when you want both.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why must compacted topics have keys?</strong> Compaction is per key; keyless records are rejected.</li>
+  <li><strong>Does compaction preserve order?</strong> Yes, offsets keep their order; only superseded records are removed.</li>
+  <li><strong>When are segments eligible?</strong> Only closed segments; tune segment.ms for faster cleanup.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-314 · What are the first-level and second-level caches in Hibernate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-314" data-topic="Spring Data &amp; JPA">
+<h1>What are the first-level and second-level caches in Hibernate?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>first-level cache</strong> is the <strong>persistence context</strong>, always on and scoped to one session/transaction, guaranteeing <strong>one instance per row</strong>; the <strong>second-level cache</strong> is <strong>optional, shared across sessions</strong> (Ehcache, Infinispan, Hazelcast via JCache) for <strong>read-mostly data</strong>, plus an optional <strong>query cache</strong>, with <strong>staleness and invalidation</strong> as the main risks.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>First-level cache.</strong> Every Hibernate <code>Session</code> (JPA <code>EntityManager</code>) has a persistence context, a map from entity type and id to the managed instance. In Spring it normally lives for one transaction. Calling <code>find(Order.class, 42)</code> twice returns the <strong>same instance</strong> with only one SELECT, and a query returning that row also returns the existing instance. This guarantees <strong>identity</strong> (<code>==</code> works within the session) and <strong>repeatable reads</strong> of entities at the application level, and it is the basis of dirty checking. You cannot switch it off; you manage it with <code>flush()</code>, <code>clear()</code> and <code>detach()</code>, which matters in batch jobs where it grows without bound. Note that JPQL queries still hit the database; only lookups by id are served from it.</p>
+<p><strong>Second-level cache (L2).</strong> Optional, configured per entity with <code>@Cache</code>/<code>@Cacheable</code> and a provider: <strong>Ehcache 3</strong>, <strong>Infinispan</strong>, <strong>Hazelcast</strong> or others through <strong>JCache (JSR-107)</strong>. It is shared by all sessions in the <code>SessionFactory</code>, so a second transaction can load an entity by id without a query. It stores <strong>dehydrated entity state</strong>, not instances. <strong>Concurrency strategies</strong> define consistency: <code>READ_ONLY</code> (immutable data, fastest), <code>NONSTRICT_READ_WRITE</code>, <code>READ_WRITE</code> (soft locks), <code>TRANSACTIONAL</code> (JTA). Collections can be cached separately.</p>
+<p><strong>Query cache.</strong> Caches the <strong>ids</strong> returned by a query for given parameters, combined with the entity L2 cache. It is invalidated whenever <strong>any</strong> table involved changes, so it only helps for rarely changing data.</p>
+<p><strong>Concerns.</strong> The L2 cache is only kept consistent for changes made <strong>through Hibernate in the same cluster-aware cache</strong>. Native SQL updates, bulk updates, other services or database scripts writing the same tables leave <strong>stale entries</strong>. With multiple application instances you need a <strong>distributed or invalidating</strong> cache (Infinispan/Hazelcast cluster) or per-node caches with short TTLs. Memory, warm-up and debugging add complexity. That's why I use it selectively, for <strong>reference data</strong> like countries, currencies or product categories, and often prefer an <strong>application-level cache</strong> (Spring <code>@Cacheable</code> with Redis or Caffeine) where I control keys, TTLs and invalidation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>em.find(Product, 7)</code>: check persistence context (L1).</li>
+  <li>Miss: check L2 region for Product#7 if enabled.</li>
+  <li>Miss: SELECT from database, put into L2 and L1.</li>
+  <li>Update via Hibernate: L2 entry invalidated or updated per strategy at commit.</li>
+  <li>New transaction: L1 empty, L2 hit avoids the query.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+@Cacheable
+@org.hibernate.annotations.Cache(usage = CacheConcurrencyStrategy.READ_ONLY, region = &quot;country&quot;)
+public class Country {
+    @Id String code;
+    String name;
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  jpa:
+    properties:
+      hibernate:
+        cache:
+          use_second_level_cache: true
+          use_query_cache: false
+          region.factory_class: jcache
+        javax.cache.provider: org.ehcache.jsr107.EhcacheCachingProvider
+      jakarta.persistence.sharedCache.mode: ENABLE_SELECTIVE</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>First-level</th><th>Second-level</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>One session/transaction</td><td>Whole SessionFactory</td></tr>
+<tr><td>Enabled</td><td>Always</td><td>Opt-in per entity</td></tr>
+<tr><td>Stores</td><td>Managed instances</td><td>Dehydrated state</td></tr>
+<tr><td>Main risk</td><td>Memory in big batches</td><td>Stale data, invalidation</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Enabling L2 for frequently updated entities.</li>
+  <li>Turning on the query cache everywhere.</li>
+  <li>Ignoring other writers (services, scripts) to the same tables.</li>
+  <li>Expecting JPQL queries to be served from the first-level cache.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The first-level cache is the persistence context, scoped to a session or transaction and always on: loading the same entity twice returns the same instance without another query, which guarantees identity. The second-level cache is optional and shared across sessions, provided by Ehcache, Infinispan or Hazelcast through JCache, and suits read-mostly reference data. There is also a query cache. The concerns are stale data and invalidation, especially with multiple instances or other systems writing to the database, so I use it selectively and often prefer an application-level cache.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is L2 risky when another service writes the tables?</strong> Hibernate doesn't see those writes, so cached entries go stale.</li>
+  <li><strong>Which concurrency strategy?</strong> READ_ONLY for immutable data, READ_WRITE for occasionally updated data.</li>
+  <li><strong>L2 vs Spring @Cacheable?</strong> L2 caches entities by id transparently; @Cacheable caches any method result with your own keys and TTLs.</li>
+</ul>
+</article>
+</body>
+</html>

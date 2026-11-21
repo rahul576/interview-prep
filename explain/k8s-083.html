@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-083 · How do you restrict and audit kubectl exec into production pods?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-083" data-topic="Kubernetes">
+<h1>How do you restrict and audit kubectl exec into production pods?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Exec is governed by <strong>RBAC on the <code>pods/exec</code> subresource</strong>, separate from reading pods, so grant it via <strong>just-in-time access with approval and expiry</strong>, <strong>audit every exec</strong>, keep a monitored <strong>break-glass</strong> account, and invest in <strong>observability and kubectl debug</strong> so shell access becomes rare.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>kubectl exec</code> opens an interactive channel into a running container. Anyone with it can read secrets from the environment and filesystem, alter running code, and use the pod's ServiceAccount and cloud identity. In production that is effectively the pod's full privilege, so it should not be a standing permission.</p>
+<p><strong>RBAC</strong>: exec is authorised as the <code>create</code> verb on <code>pods/exec</code> (and <code>pods/attach</code>, <code>pods/portforward</code> are similar subresources). Engineers can have <code>get</code>, <code>list</code>, <code>watch</code> on pods and <code>pods/log</code> without exec. Since Kubernetes 1.30 exec uses WebSockets, and RBAC requires <code>create</code> on <code>pods/exec</code>; older clusters or configurations may also accept <code>get</code>, so check both when reviewing roles. Be careful with broad wildcard roles and with permissions that indirectly grant exec, such as creating pods (which can mount any Secret in the namespace) or <code>nodes/proxy</code>.</p>
+<p><strong>Just-in-time access</strong>: engineers request elevation for a reason, with approval and an automatic expiry. Implementations include <strong>Entra ID PIM</strong> for groups mapped to AKS RBAC, <strong>AWS IAM Identity Center</strong> with EKS access entries, <strong>Teleport</strong> or similar access proxies, or a workflow that creates a temporary RoleBinding and deletes it after an hour.</p>
+<p><strong>Auditing</strong>: the API server audit log records each exec request (user, pod, command for non-interactive execs) at Metadata or Request level. Tools such as Teleport can record entire sessions. Alert on exec in production namespaces.</p>
+<p><strong>Break-glass</strong>: a documented emergency account or group, credentials sealed, use triggers alerts and a review.</p>
+<p><strong>Reduce the need</strong>: good logs, metrics and traces; <strong>kubectl debug</strong> with ephemeral debug containers (also RBAC-controlled via <code>pods/ephemeralcontainers</code>); distroless images without shells.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Default production roles: read pods and logs, no exec.</li>
+  <li>Separate role granting <code>pods/exec</code>, bound only through JIT groups.</li>
+  <li>Approval workflow with reason and expiry.</li>
+  <li>Audit logs and session recording; alerts on exec.</li>
+  <li>Break-glass account with alerting.</li>
+  <li>Improve observability to remove reasons for exec.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: prod-exec, namespace: payments }
+rules:
+  - apiGroups: [&quot;&quot;]
+    resources: [&quot;pods/exec&quot;]
+    verbs: [&quot;create&quot;, &quot;get&quot;]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: prod-exec-jit, namespace: payments }
+subjects:
+  - { kind: Group, name: &quot;jit-payments-exec&quot;, apiGroup: rbac.authorization.k8s.io }   # PIM-managed group
+roleRef: { kind: Role, name: prod-exec, apiGroup: rbac.authorization.k8s.io }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting <code>edit</code> or <code>admin</code> cluster roles that include exec.</li>
+  <li>Permanent exec bindings for whole teams.</li>
+  <li>Audit policy level None for exec requests.</li>
+  <li>Ignoring that pod creation rights equal access to the namespace's secrets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Exec is controlled by RBAC on the pods/exec subresource, separate from reading pods, so engineers can view pods and logs in production without a shell. When someone needs exec, they get just-in-time access through an approval workflow, like Entra PIM or Teleport, that expires after an hour. The audit log records every exec with user and pod, and some tools record the whole session; we alert on it. A break-glass account exists for emergencies with alerting. Long term, good observability and kubectl debug make shell access rare.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is exec risky even for well-meaning engineers?</strong> Manual changes cause drift, mistakes in production, and exposure of secrets in terminals.</li>
+  <li><strong>Is kubectl debug safer?</strong> It can use limited images and is separately controlled, but it still needs strict RBAC.</li>
+  <li><strong>How do you audit interactive commands?</strong> The API audit shows the session start; session recording tools capture the content.</li>
+</ul>
+</article>
+</body>
+</html>

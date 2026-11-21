@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-243 · How does Cassandra support high availability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-243" data-topic="Databases &amp; SQL">
+<h1>How does Cassandra support high availability?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Cassandra achieves <strong>high availability</strong> through <strong>masterless replication</strong> across nodes, racks and data centres, <strong>tunable consistency</strong> levels such as <strong>QUORUM</strong> and <strong>LOCAL_QUORUM</strong> that tolerate replica failures, and repair mechanisms (<strong>hinted handoff, read repair, anti-entropy repair</strong>) that bring missed writes back in sync.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>No single point of failure</strong>: every node is equal and any node can coordinate. Each partition has a <strong>replication factor</strong>, typically RF=3 per data centre, with <strong>NetworkTopologyStrategy</strong> placing replicas on different racks or availability zones. Multi-DC clusters replicate asynchronously between regions, so a whole region can fail while others keep serving.</p>
+<p><strong>Tunable consistency</strong>: per request the client chooses how many replicas must acknowledge:</p>
+<ul>
+  <li><strong>ONE / LOCAL_ONE</strong>: fastest, tolerates two of three replicas down.</li>
+  <li><strong>QUORUM</strong>: a majority across all DCs; <strong>LOCAL_QUORUM</strong>: majority in the local DC (2 of 3), tolerating one replica down per DC without cross-region latency.</li>
+  <li><strong>ALL</strong>: every replica; strongest but any failure causes errors.</li>
+  <li><strong>EACH_QUORUM</strong> for writes needing a quorum in every DC.</li>
+</ul>
+<p>With RF=3, <code>LOCAL_QUORUM</code> for both reads and writes gives R + W &gt; RF (2 + 2 &gt; 3), so reads see the latest acknowledged write while one replica is down.</p>
+<p><strong>Recovering missed writes</strong>:</p>
+<ul>
+  <li><strong>Hinted handoff</strong>: if a replica is down, the coordinator stores a <strong>hint</strong> and replays it when the replica returns (within <code>max_hint_window</code>, default 3 hours).</li>
+  <li><strong>Read repair</strong>: during reads with consistency above ONE, if replicas disagree, the newest value (by timestamp) is returned and written back to the stale replicas.</li>
+  <li><strong>Anti-entropy repair</strong>: <code>nodetool repair</code> (incremental or full, often run via Cassandra Reaper) compares Merkle trees and streams differences; it must run regularly, within <code>gc_grace_seconds</code> (default 10 days), so deleted data does not resurrect.</li>
+</ul>
+<p>The client driver adds resilience with token-aware, DC-aware load balancing, speculative retries and retry policies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends a write at LOCAL_QUORUM to a coordinator.</li>
+  <li>Coordinator sends it to all three local replicas.</li>
+  <li>Two acknowledge, so the write succeeds; the third is down.</li>
+  <li>The coordinator stores a hint for the down replica.</li>
+  <li>The replica returns and the hint is replayed.</li>
+  <li>Scheduled repair fixes anything hints missed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// DataStax Java driver 4.x
+CqlSession session = CqlSession.builder()
+    .withLocalDatacenter(&quot;eu-west&quot;).build();
+
+SimpleStatement write = SimpleStatement
+    .newInstance(&quot;INSERT INTO shop.cart (user_id, sku, qty) VALUES (?, ?, ?)&quot;, 42L, &quot;LAMP-01&quot;, 2)
+    .setConsistencyLevel(DefaultConsistencyLevel.LOCAL_QUORUM);
+session.execute(write);</code></pre>
+<pre><code class="language-bash">nodetool repair -pr shop     # primary-range repair, run on each node on a schedule</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Consistency level (RF=3)</th><th>Replicas needed</th><th>Replicas that can be down</th></tr></thead>
+<tbody>
+<tr><td>ONE</td><td>1</td><td>2</td></tr>
+<tr><td>LOCAL_QUORUM</td><td>2</td><td>1</td></tr>
+<tr><td>ALL</td><td>3</td><td>0</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using QUORUM instead of LOCAL_QUORUM in multi-DC clusters, adding cross-region latency.</li>
+  <li>Never running repair, leading to inconsistency and zombie data after deletes.</li>
+  <li>RF=1 in production, which gives no availability.</li>
+  <li>Relying only on hinted handoff for long outages beyond the hint window.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;High availability comes from masterless replication. Each partition lives on several replicas, usually three per data centre on different racks, possibly in multiple data centres, and any node can coordinate, so there's no single point of failure. Clients choose a consistency level per request: with LOCAL_QUORUM two of three local replicas must respond, so one node can be down with no errors, and ONE tolerates even more. Missed writes are recovered through hinted handoff, where the coordinator stores hints for the down replica, through read repair, and through regular anti-entropy repair with nodetool repair, run within gc_grace_seconds.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do QUORUM reads plus QUORUM writes give strong consistency?</strong> Read and write sets overlap (R + W &gt; RF), so at least one replica read has the latest write.</li>
+  <li><strong>What is gc_grace_seconds?</strong> How long tombstones are kept; repair must run within it to avoid resurrected data.</li>
+  <li><strong>What happens if a whole DC fails?</strong> Clients fail over to another DC using its LOCAL_QUORUM.</li>
+</ul>
+</article>
+</body>
+</html>

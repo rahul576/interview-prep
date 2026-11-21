@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-095 · What does the message Objects have changed outside of Terraform mean in a plan?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-095" data-topic="Terraform">
+<h1>What does the message Objects have changed outside of Terraform mean in a plan?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>&quot;Objects have changed outside of Terraform&quot; means the <strong>refresh</strong> found differences between <strong>state and the real objects</strong>; it is <strong>informational drift reporting</strong>, and what matters is whether the <strong>proposed changes</strong> will revert any of it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before computing a plan, Terraform <strong>refreshes</strong>: it reads every managed object from the provider APIs and compares it with the last recorded state. If attributes differ, the plan output shows a section titled <em>&quot;Note: Objects have changed outside of Terraform&quot;</em> listing those differences, followed by the normal <em>&quot;Terraform will perform the following actions&quot;</em> section.</p>
+<p>The note itself changes nothing. It explains <strong>why</strong> the plan might contain actions, and it also shows drift that will <strong>not</strong> cause actions. Many entries are harmless: <strong>computed attributes</strong> the platform updates on its own (timestamps, etags, latest versions), <strong>tags added by Azure Policy or AWS Config</strong>, autoscaler-managed counts, or default values the API fills in after creation.</p>
+<p>The important question is what the <strong>proposed changes</strong> section does with that drift. If someone scaled an instance group in the console from 3 to 6, the note shows 6, and the plan proposes setting it back to 3. Applying would silently undo that person's change — possibly a hot-fix during an incident.</p>
+<p>So I treat the section as a review aid. For unexpected drift I find out who changed what (activity logs, CloudTrail) and decide: <strong>codify</strong> it by updating the configuration, <strong>revert</strong> it by applying, or <strong>ignore</strong> it with <code>lifecycle { ignore_changes }</code> if another system legitimately owns that attribute. To accept legitimate changes into state without changing infrastructure, <code>terraform apply -refresh-only</code> records the current real values.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>terraform plan</code> refreshes all resources from the provider.</li>
+  <li>Differences from state are listed under &quot;Objects have changed outside of Terraform&quot;.</li>
+  <li>Terraform compares the refreshed state with the configuration.</li>
+  <li>Actions needed to match configuration appear in the proposed changes.</li>
+  <li>You decide to codify, revert, ignore or accept with <code>-refresh-only</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Note: Objects have changed outside of Terraform
+
+  # azurerm_linux_web_app.api has changed
+  ~ resource &quot;azurerm_linux_web_app&quot; &quot;api&quot; {
+      ~ tags = {
+          + &quot;CostCenter&quot; = &quot;1234&quot;    # added by Azure Policy
+        }
+    }
+
+Terraform will perform the following actions:
+  # azurerm_linux_web_app.api will be updated in-place
+  ~ tags = {
+      - &quot;CostCenter&quot; = &quot;1234&quot; -&gt; null
+    }</code></pre>
+<pre><code class="language-hcl">lifecycle {
+  ignore_changes = [tags[&quot;CostCenter&quot;]]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ignoring the section entirely and reverting someone's emergency fix.</li>
+  <li>Assuming the note means Terraform will change those objects.</li>
+  <li>Running <code>apply -refresh-only</code> without reviewing what is being accepted.</li>
+  <li>Overusing <code>ignore_changes</code> so real drift is hidden.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;During refresh Terraform compares its state with what the APIs return. When something differs, the plan shows 'objects have changed outside of Terraform' before the proposed changes. It's informational — it explains detected drift, which may or may not lead to actions. Many entries are harmless, like computed values or tags added by policy. The key is whether the proposed changes will revert any of it, for example scaling back a value someone changed by hand. I investigate unexpected drift, codify or revert it, use ignore_changes for attributes another system owns, and use a refresh-only apply to accept legitimate changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can you reduce harmless noise?</strong> <code>ignore_changes</code> for externally managed attributes, and set defaults explicitly in code.</li>
+  <li><strong>How do you detect drift regularly?</strong> A scheduled plan with <code>-detailed-exitcode</code> that alerts on exit code 2.</li>
+  <li><strong>What is <code>-refresh=false</code>?</strong> Skips refresh for speed; risky because plans are based on stale state.</li>
+</ul>
+</article>
+</body>
+</html>

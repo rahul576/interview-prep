@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-100 · How do you trace and debug an AI agent or LLM application running on Azure?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-100" data-topic="Azure AI &amp; Foundry">
+<h1>How do you trace and debug an AI agent or LLM application running on Azure?</h1>
+<p class="ex-meta">Azure AI &amp; Foundry · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Trace AI apps with <strong>OpenTelemetry</strong> using the <strong>generative AI semantic conventions</strong>: each request is a trace with <strong>spans for model calls (model, tokens, latency, finish reason), retrieval and tool calls</strong>, sent to <strong>Application Insights</strong> and viewed step by step in <strong>Foundry</strong>, capturing <strong>prompt content carefully</strong> for privacy and turning failures into <strong>evaluation cases</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When an agent gives a wrong answer, logs saying &quot;200 OK&quot; tell you nothing. You need to see <strong>what the model saw, what it decided and what each tool returned</strong>.</p>
+<p><strong>Instrumentation:</strong> the Azure AI SDKs, the OpenAI SDK instrumentation, Semantic Kernel, Microsoft Agent Framework, LangChain and others emit <strong>OpenTelemetry</strong> spans following the <strong>GenAI semantic conventions</strong>. Attributes include <code>gen_ai.operation.name</code>, <code>gen_ai.request.model</code>, <code>gen_ai.usage.input_tokens</code>, <code>gen_ai.usage.output_tokens</code>, <code>gen_ai.response.finish_reasons</code>, and for tools the tool name and call ID. You add your own spans for retrieval (query, returned document IDs and scores) and business steps.</p>
+<p><strong>Trace structure:</strong> one user request is a root span; below it are spans for each <strong>model call</strong>, each <strong>retrieval</strong>, each <strong>tool call</strong> with arguments and results, and nested agent steps. Latency, token counts and errors are visible per step.</p>
+<p><strong>Backend:</strong> export to <strong>Application Insights</strong> with the Azure Monitor OpenTelemetry distro. The <strong>Foundry portal</strong> reads the same data and shows an <strong>agent-style step view</strong>, so you can see why the agent picked a tool, what it passed and how it reacted to the result. Application Insights adds dashboards, alerts and KQL queries for tokens, latency and failure rates.</p>
+<p><strong>Privacy:</strong> prompts and responses are extremely useful for debugging but may contain <strong>personal or confidential data</strong>. Content recording is <strong>off by default</strong> and enabled explicitly; capture it only in environments where allowed, <strong>redact</strong> sensitive fields, limit <strong>retention</strong>, and restrict access to the workspace.</p>
+<p><strong>Learning loop:</strong> interesting failures (wrong tool, hallucination, loops) become <strong>evaluation dataset</strong> entries, so fixes are verified and regressions prevented.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Configure the Azure Monitor OpenTelemetry exporter.</li>
+  <li>Enable GenAI instrumentation for the SDK or framework.</li>
+  <li>Add custom spans for retrieval and business logic.</li>
+  <li>Decide on content capture and redaction per environment.</li>
+  <li>Inspect traces in Foundry or Application Insights; alert on anomalies.</li>
+  <li>Promote failing traces to evaluation cases.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import os
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
+from opentelemetry import trace
+
+os.environ[&quot;OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT&quot;] = &quot;false&quot;  # true only in dev
+configure_azure_monitor(connection_string=os.environ[&quot;APPLICATIONINSIGHTS_CONNECTION_STRING&quot;])
+OpenAIInstrumentor().instrument()
+
+tracer = trace.get_tracer(&quot;helpdesk&quot;)
+with tracer.start_as_current_span(&quot;retrieve_kb&quot;) as span:
+    docs = search(query)
+    span.set_attribute(&quot;retrieval.doc_ids&quot;, [d.id for d in docs])</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Logging full prompts with personal data in production by default.</li>
+  <li>Only tracing model calls, not retrieval and tools.</li>
+  <li>No correlation between user feedback and traces.</li>
+  <li>Debugging from single anecdotes rather than aggregated traces.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I instrument with OpenTelemetry using the GenAI semantic conventions supported by the Azure AI SDKs and agent frameworks. Each request becomes a trace with spans for model calls, including model, tokens, latency and finish reason, retrieval with the documents returned, and every tool call with arguments and results. Traces go to Application Insights, and Foundry shows them step by step, so I can see why the agent chose a tool or answered wrongly. Prompt content is captured only where allowed, with redaction and access control. Failures become evaluation cases to prevent regressions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Agent loops calling the same tool?</strong> Look at tool results, errors the model can't interpret, and missing stop conditions; add max-iteration limits.</li>
+  <li><strong>How to measure cost per request?</strong> Sum token attributes per trace times model price.</li>
+  <li><strong>Sampling?</strong> Sample normal traffic, but keep all errors and flagged conversations.</li>
+</ul>
+</article>
+</body>
+</html>

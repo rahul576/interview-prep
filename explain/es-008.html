@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-008 · How do you manage log data lifecycle and cost in Elasticsearch or OpenSearch?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-008" data-topic="Elasticsearch">
+<h1>How do you manage log data lifecycle and cost in Elasticsearch or OpenSearch?</h1>
+<p class="ex-meta">Elasticsearch · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>ILM</strong> (Elasticsearch) or <strong>ISM</strong> (OpenSearch) with <strong>data streams</strong>. <strong>Hot</strong> on fast disks, <strong>rollover</strong> by size or age, then <strong>warm, cold and frozen</strong> tiers on cheaper storage (frozen uses <strong>searchable snapshots in S3/object storage</strong>), then <strong>delete</strong> per retention. The biggest savings come from <strong>reducing volume</strong>: drop noisy fields and debug logs, sample, and use efficient mappings.</p>
+
+<h2>Detailed explanation</h2>
+<p>Log data is write-heavy, mostly queried when recent, and grows without limit. Keeping 90 days on the same SSD nodes with 1 replica is expensive. <strong>Lifecycle management</strong> automates moving indices through phases as they age:</p>
+<ul>
+  <li><strong>Hot:</strong> active writes and frequent queries. Fast NVMe/SSD nodes. <strong>Rollover</strong> creates a new backing index when the current one reaches a size (for example 50 GB primary shard size) or age (1 day), keeping shards well sized.</li>
+  <li><strong>Warm:</strong> read-only, queried less often. Cheaper nodes. Actions include <code>forcemerge</code> to 1 segment, <code>shrink</code>, and fewer replicas.</li>
+  <li><strong>Cold:</strong> rarely queried. In Elasticsearch it can be backed by <strong>searchable snapshots</strong> (fully mounted), so replicas aren't needed because the snapshot in the repository provides resilience.</li>
+  <li><strong>Frozen:</strong> <strong>partially mounted searchable snapshots</strong>. Data lives in <strong>S3, GCS or Azure Blob</strong>, and nodes keep only a local cache. Very cheap per TB, with slower queries.</li>
+  <li><strong>Delete:</strong> remove after the retention period, which is set by business, security and legal needs (for example 30 days hot/warm, 1 year frozen for audit).</li>
+</ul>
+<p>Note: searchable snapshots for cold and frozen tiers require an appropriate Elastic subscription. OpenSearch has its own equivalents (ISM, UltraWarm/cold storage on AWS OpenSearch Service, and searchable snapshots in recent OpenSearch versions).</p>
+<p><strong>Snapshots</strong> (SLM in Elasticsearch) to object storage double as <strong>backup and DR</strong>.</p>
+<p><strong>Reduce volume first.</strong> Storage you never ingest is the cheapest:</p>
+<ul>
+  <li>Drop or sample <strong>DEBUG/TRACE</strong> logs and health-check noise at the shipper (Fluent Bit, Logstash, an ingest pipeline).</li>
+  <li>Remove unused fields and avoid indexing fields you never search (<code>index: false</code>, or don't map them).</li>
+  <li>Use <code>keyword</code> instead of text+keyword multi-fields where full-text isn't needed. Consider <code>logsdb</code> index mode or synthetic <code>_source</code> in newer Elasticsearch versions to cut storage.</li>
+  <li>Turn high-volume repetitive logs into <strong>metrics</strong>.</li>
+  <li>Put different retention on different streams (audit versus app debug).</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Apps log JSON, and the shipper filters and enriches it.</li>
+  <li>Data is written to the data stream <code>logs-app-default</code>, with an index template that applies the ILM policy.</li>
+  <li>Rollover at 50 GB/shard or 1 day.</li>
+  <li>After 3 days: warm (forcemerge, replicas 1 to 0 if a snapshot exists).</li>
+  <li>After 14 days: frozen (searchable snapshot in S3).</li>
+  <li>After 365 days: delete.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">PUT _ilm/policy/app-logs
+{ &quot;policy&quot;: { &quot;phases&quot;: {
+  &quot;hot&quot;:    { &quot;actions&quot;: { &quot;rollover&quot;: { &quot;max_primary_shard_size&quot;: &quot;50gb&quot;, &quot;max_age&quot;: &quot;1d&quot; } } },
+  &quot;warm&quot;:   { &quot;min_age&quot;: &quot;3d&quot;,  &quot;actions&quot;: { &quot;forcemerge&quot;: { &quot;max_num_segments&quot;: 1 },
+                                             &quot;allocate&quot;: { &quot;number_of_replicas&quot;: 1 } } },
+  &quot;frozen&quot;: { &quot;min_age&quot;: &quot;14d&quot;, &quot;actions&quot;: { &quot;searchable_snapshot&quot;: { &quot;snapshot_repository&quot;: &quot;s3-logs&quot; } } },
+  &quot;delete&quot;: { &quot;min_age&quot;: &quot;365d&quot;, &quot;actions&quot;: { &quot;delete&quot;: {} } }
+} } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One giant index, or daily indices with no lifecycle, so retention means manual deletes.</li>
+  <li>Keeping everything on hot SSD nodes.</li>
+  <li>Ingesting debug logs from production at full volume.</li>
+  <li>No snapshot repository, or untested restores.</li>
+  <li>Retention that ignores compliance (too short) or privacy (too long).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use index lifecycle management, ILM in Elasticsearch or ISM in OpenSearch, with data streams. New data lands on a hot tier with fast disks, and rollover creates a new backing index by size or age. Older indices move to warm and cold tiers on cheaper hardware with fewer replicas, then to a frozen tier backed by searchable snapshots in object storage like S3. Finally the delete phase removes them according to the retention policy. Snapshots double as backups. But the biggest savings come from not ingesting noise: dropping debug logs and unused fields, sampling, and converting repetitive logs into metrics.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Retention period for app logs?</strong> Driven by incident investigation needs, compliance (audit or PCI) and privacy law. Often 14–30 days searchable, longer archived.</li>
+  <li><strong>Searchable snapshots versus a restore?</strong> Searchable snapshots query directly from object storage. A restore copies the data back first.</li>
+  <li><strong>Why forcemerge in warm?</strong> Fewer segments mean less overhead and faster searches on read-only indices.</li>
+</ul>
+</article>
+</body>
+</html>

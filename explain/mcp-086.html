@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-086 · One MCP server has become a bottleneck that slows every agent using it. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-086" data-topic="MCP Servers">
+<h1>One MCP server has become a bottleneck that slows every agent using it. What do you do?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Measure where time goes</strong> (server CPU, downstream calls, queuing, retry loops), then apply the matching fix: <strong>scale out horizontally</strong> if stateless, <strong>cache</strong> expensive results and tool lists, <strong>optimise or batch downstream calls</strong>, <strong>rate-limit noisy agents</strong>, <strong>isolate heavy tools</strong> or <strong>split the server</strong>, and <strong>return less data</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A shared MCP server becomes a bottleneck when many agents depend on it and its latency sets the pace for all of them. Guessing at the fix wastes time; traces and metrics usually point to one dominant cause.</p>
+<p><strong>Diagnose.</strong> Look at per-tool latency broken into server processing and downstream time; <strong>in-flight requests</strong> and queue depth; connection pool and thread pool utilisation; CPU and memory; and <strong>callers</strong>: is the load evenly spread, or are a few agents in <strong>retry loops</strong> responsible for most of it?</p>
+<p><strong>Matching fixes:</strong></p>
+<ul>
+  <li><strong>CPU-bound or simply overloaded</strong>: if the server is <strong>stateless</strong>, <strong>scale out</strong> horizontally with autoscaling on concurrency and latency. If it holds in-memory state, making it stateless (external Redis or database) is the first step.</li>
+  <li><strong>Slow downstream</strong>: add <strong>caching</strong> for expensive, slow-changing results and for tool lists; <strong>batch</strong> calls (one query for many IDs instead of N); add <strong>connection pool</strong> capacity; push work to the downstream (filter server-side, not in the MCP server).</li>
+  <li><strong>Queuing on limited concurrency</strong>: raise limits where downstream capacity allows; use async I/O.</li>
+  <li><strong>Noisy agents</strong>: <strong>per-client rate limits</strong> and quotas, plus clear 429 errors with retry-after so agents back off instead of hammering.</li>
+  <li><strong>Mixed workloads</strong>: <strong>isolate expensive tools</strong> (report generation, large exports) into a separate deployment so they do not starve cheap, frequent ones, or <strong>split the server by domain</strong>.</li>
+</ul>
+<p><strong>Return less data.</strong> Large results slow serialisation, transfer and the next model call. Pagination, field selection and summaries help both the server and the agents.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Dashboards: p95 per tool, in-flight requests, pool saturation, top callers.</li>
+  <li>Identify the dominant contributor.</li>
+  <li>Apply targeted fix; load test with a realistic agent traffic replay.</li>
+  <li>Add autoscaling and per-client limits as standing protection.</li>
+  <li>Re-measure end-to-end agent task time, not just server latency.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Before: p95 get_inventory 4.8 s
+  - 70% waiting on inventory DB (N+1 queries per SKU)
+  - 3 agents in retry loops = 45% of traffic
+Fixes:
+  - batch SKU lookup: 1 query per call      -&gt; p95 900 ms
+  - 60 s cache for SKU metadata              -&gt; p95 300 ms
+  - per-client limit 30/min + Retry-After    -&gt; traffic -40%
+  - export_report moved to separate deployment</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding replicas when the downstream database is the bottleneck.</li>
+  <li>Scaling a stateful server horizontally and introducing session bugs.</li>
+  <li>Ignoring retry loops that multiply load.</li>
+  <li>One deployment for cheap lookups and heavy exports.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure where the time goes with traces and metrics: is the server CPU-bound, waiting on slow downstream APIs, queueing because of limited concurrency or connection pools, or being hammered by a few agents in retry loops. Then the matching fix. If it's stateless, I scale out with autoscaling on concurrency and latency; if not, making it stateless comes first. I cache expensive, slow-changing results and tool lists. Downstream calls get batched, optimised or more connections. Noisy agents get per-client rate limits, and expensive tools can move to a separate deployment or the server gets split by domain. Returning less data also helps everyone.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do retry loops make it worse?</strong> Each slow response triggers more calls, increasing load exactly when capacity is short.</li>
+  <li><strong>Separate deployment or split server?</strong> Separate deployment for heavy tools; split when domains are unrelated.</li>
+  <li><strong>Which metric to scale on?</strong> In-flight requests or latency, not CPU.</li>
+</ul>
+</article>
+</body>
+</html>

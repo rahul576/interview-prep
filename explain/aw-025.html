@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-025 · What are EC2 user data and instance metadata?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-025" data-topic="Cloud (AWS)">
+<h1>What are EC2 user data and instance metadata?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>User data</strong> is a script or <strong>cloud-init</strong> config that runs <strong>once at first boot</strong> to bootstrap an instance; the <strong>instance metadata service (IMDS)</strong> at <strong>169.254.169.254</strong> exposes instance details and the <strong>IAM role's temporary credentials</strong>, so you should <strong>require IMDSv2</strong> session tokens to block <strong>SSRF</strong> abuse.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>User data</strong> is passed at launch, in the console, CLI, launch template or Terraform. On Linux, <strong>cloud-init</strong> executes it, by default only on the <strong>first boot</strong>: install packages, write config files, fetch secrets, join a cluster, start services. Output goes to <code>/var/log/cloud-init-output.log</code>. User data is limited to 16 KB and is <strong>not secret</strong>: anyone who can describe the instance or reach IMDS can read it, so never put passwords in it. Long bootstrap scripts slow scaling and fail unpredictably, so heavy installation usually moves into a <strong>golden AMI</strong>, leaving user data for small instance-specific settings.</p>
+<p>The <strong>instance metadata service</strong> is a link-local HTTP endpoint reachable only from inside the instance. It returns the <strong>instance ID, type, AMI, AZ, region, private and public IPs, network interfaces, tags (if enabled), user data</strong> and, crucially, <strong>temporary credentials</strong> for the attached IAM role at <code>/latest/meta-data/iam/security-credentials/&lt;role&gt;</code>. AWS SDKs use this automatically, which is why apps on EC2 need no stored keys.</p>
+<p>The danger: if an application has a <strong>server-side request forgery (SSRF)</strong> flaw, an attacker can make it fetch the metadata URL and steal the role's credentials. That is essentially what happened in the <strong>2019 Capital One breach</strong>, via a misconfigured WAF and an over-privileged role. <strong>IMDSv2</strong> defends against this: a client must first send a <code>PUT</code> request to obtain a <strong>session token</strong> and include it as a header on every request; typical SSRF primitives cannot do that, and a default <strong>hop limit</strong> of 1 stops containers from reaching it through extra network hops unless configured. Set <code>HttpTokens=required</code> on all instances, enforce it with account defaults, SCPs or Config rules.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Launch with user data; cloud-init runs it on first boot.</li>
+  <li>The app or SDK calls IMDS for metadata and credentials.</li>
+  <li>IMDSv2: <code>PUT /latest/api/token</code> returns a token.</li>
+  <li>Subsequent <code>GET</code> requests include <code>X-aws-ec2-metadata-token</code>.</li>
+  <li>Credentials refresh automatically before expiry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">#!/bin/bash
+# user data
+dnf install -y nginx amazon-cloudwatch-agent
+aws s3 cp s3://acme-config/nginx.conf /etc/nginx/nginx.conf
+systemctl enable --now nginx</code></pre>
+<pre><code class="language-bash"># IMDSv2 from inside the instance
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H &quot;X-aws-ec2-metadata-token-ttl-seconds: 300&quot;)
+curl -s -H &quot;X-aws-ec2-metadata-token: $TOKEN&quot; \
+  http://169.254.169.254/latest/meta-data/placement/region
+
+# Enforce IMDSv2 on an existing instance
+aws ec2 modify-instance-metadata-options --instance-id i-0123 \
+  --http-tokens required --http-endpoint enabled</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Secrets in user data.</li>
+  <li>Leaving IMDSv1 enabled.</li>
+  <li>Expecting user data to rerun on every reboot.</li>
+  <li>Huge bootstrap scripts instead of baked AMIs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;User data is a script or cloud-init config passed at launch that runs once at first boot to bootstrap the server: install packages, fetch config, start services. For speed and reliability, most of that is better baked into a golden AMI. The metadata service at 169.254.169.254 lets software on the instance read its ID, region, network details, user data and the IAM role's temporary credentials, which is how SDKs get credentials without keys. Because an SSRF bug could expose those credentials, as in the Capital One breach, I require IMDSv2, which needs a session token obtained by a PUT request.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How did Capital One relate to metadata?</strong> SSRF through a misconfigured WAF fetched role credentials from IMDSv1, which had broad S3 access.</li>
+  <li><strong>Can user data run on every boot?</strong> Yes, with cloud-init configuration such as <code>[scripts-user, always]</code>, but it is not the default.</li>
+  <li><strong>Where do you debug user data?</strong> <code>/var/log/cloud-init-output.log</code>.</li>
+</ul>
+</article>
+</body>
+</html>

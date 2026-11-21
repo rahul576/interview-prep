@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-037 · How do you write a reliable Kubernetes operator?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-037" data-topic="Kubernetes">
+<h1>How do you write a reliable Kubernetes operator?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>An operator is a <strong>CRD</strong> (your domain API) plus a <strong>controller</strong> that <strong>reconciles</strong> it; build it with <strong>Kubebuilder or Operator SDK</strong> on <strong>controller-runtime</strong>, keep reconcile <strong>idempotent</strong>, report progress in <strong>status conditions with observedGeneration</strong>, use <strong>owner references and finalizers</strong> for cleanup, <strong>requeue with backoff</strong>, enable <strong>leader election</strong>, and test with <strong>envtest</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Operators encode operational knowledge (provisioning, backup, upgrades) as software following the controller pattern.</p>
+<p><strong>API design:</strong> the CRD has a <code>spec</code> (desired, written by users) and a <code>status</code> subresource (observed, written only by the controller). Use OpenAPI validation, defaults and CEL validation rules in the CRD so bad input is rejected at admission. Keep the API declarative (&quot;version: 17&quot;) rather than imperative (&quot;upgradeNow: true&quot;).</p>
+<p><strong>Reconcile logic:</strong></p>
+<ul>
+  <li>Read the custom resource from the informer cache; if gone, return.</li>
+  <li>Compute the <strong>desired child objects</strong> (StatefulSet, Services, Secrets, PDB) and <strong>create or patch</strong> them, preferably with server-side apply and a fixed field manager. Never &quot;always create&quot;.</li>
+  <li>Reconcile must be <strong>idempotent</strong> and <strong>level-based</strong>: it may run any number of times, after restarts or for unrelated events. Don't store state only in memory; derive it from the cluster or persist it in status.</li>
+  <li>Report progress in <strong>status.conditions</strong> (<code>Ready</code>, <code>Progressing</code>, <code>Degraded</code>) and <code>status.observedGeneration</code>, so users and tools know whether the latest spec has been processed.</li>
+</ul>
+<p><strong>Lifecycle:</strong> set <strong>owner references</strong> (<code>SetControllerReference</code>) on children, so Kubernetes garbage-collects them and changes to children trigger reconciles via <code>Owns()</code>. For <strong>external</strong> resources (a cloud database, DNS record, bucket), add a <strong>finalizer</strong>; on deletion, clean up externally, then remove the finalizer.</p>
+<p><strong>Robustness:</strong> return errors to requeue with exponential backoff; use <code>RequeueAfter</code> for polling slow external operations rather than blocking; run several replicas with <strong>leader election</strong> so only one reconciles; emit Events and metrics, and read from the cache rather than the API.</p>
+<p><strong>Testing and versioning:</strong> unit-test pure functions, use <strong>envtest</strong> (a real API server and etcd without nodes) for reconcile tests, and run end-to-end tests in kind. Evolve CRDs with new versions and <strong>conversion webhooks</strong>, keeping one storage version.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scaffold project and CRD types with Kubebuilder.</li>
+  <li>Controller watches the CR and owned resources.</li>
+  <li>Reconcile: fetch, handle deletion and finalizer, apply children, update status.</li>
+  <li>Errors → requeue with backoff; long operations → RequeueAfter.</li>
+  <li>Deploy with leader election, RBAC from markers, metrics and webhooks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-go">func (r *PGReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    var pg dbv1.PostgresCluster
+    if err := r.Get(ctx, req.NamespacedName, &amp;pg); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+    if !pg.DeletionTimestamp.IsZero() {
+        if err := r.deleteBackupsBucket(ctx, &amp;pg); err != nil { return ctrl.Result{}, err }
+        controllerutil.RemoveFinalizer(&amp;pg, finalizer)
+        return ctrl.Result{}, r.Update(ctx, &amp;pg)
+    }
+    if controllerutil.AddFinalizer(&amp;pg, finalizer) {
+        if err := r.Update(ctx, &amp;pg); err != nil { return ctrl.Result{}, err }
+    }
+    sts := r.desiredStatefulSet(&amp;pg)
+    if err := ctrl.SetControllerReference(&amp;pg, sts, r.Scheme); err != nil { return ctrl.Result{}, err }
+    if err := r.Patch(ctx, sts, client.Apply, client.FieldOwner(&quot;pg-operator&quot;), client.ForceOwnership); err != nil {
+        return ctrl.Result{}, err
+    }
+    meta.SetStatusCondition(&amp;pg.Status.Conditions, metav1.Condition{Type: &quot;Ready&quot;, Status: &quot;True&quot;, Reason: &quot;Reconciled&quot;, ObservedGeneration: pg.Generation})
+    pg.Status.ObservedGeneration = pg.Generation
+    return ctrl.Result{}, r.Status().Update(ctx, &amp;pg)
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Imperative, non-idempotent reconcile logic.</li>
+  <li>Writing spec from the controller or status from users.</li>
+  <li>Blocking reconcile for minutes waiting on external systems.</li>
+  <li>Missing finalizers, leaking cloud resources on delete.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An operator is a CRD defining a domain API, like a PostgresCluster, plus a controller that reconciles it. I build it with Kubebuilder or Operator SDK on controller-runtime, which gives informers, caching and work queues. Reconcile must be idempotent: read the resource, compute desired children, create or patch them, and report progress in status conditions with observedGeneration, never keeping state only in memory. Children get owner references for garbage collection, and finalizers handle external cleanup. Errors requeue with backoff, slow work uses RequeueAfter, replicas use leader election, and I test reconcile logic with envtest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you version a CRD schema?</strong> Add a new version, conversion webhook, migrate storage version, deprecate the old one.</li>
+  <li><strong>Why observedGeneration?</strong> Shows whether status reflects the latest spec.</li>
+  <li><strong>When not to write an operator?</strong> When Helm or plain manifests with GitOps already handle the lifecycle.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-033 · How do you make MCP tools that change things safe to retry?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-033" data-topic="MCP Servers">
+<h1>How do you make MCP tools that change things safe to retry?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Assume <strong>side-effecting tools will be called twice</strong> (timeouts, dropped connections, re-issued requests with new ids), so make them <strong>idempotent</strong>: accept an <strong>idempotency key</strong>, <strong>record each key with its result</strong>, and on a duplicate <strong>return the existing result instead of repeating the action</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A client cannot distinguish &quot;the request failed&quot; from &quot;it succeeded but the response was lost&quot;. If <code>create_ticket</code> succeeds and the connection then drops, the retry creates <strong>two tickets</strong>, or worse, two payments.</p>
+<p>MCP makes this more likely: per the reference material for this question, in the <strong>stateless 2026-07-28</strong> revision response streams are <strong>not resumable</strong>, so a dropped request is simply <strong>re-issued with a new JSON-RPC id</strong>, and the server cannot use the request id to detect duplicates. Agents also retry on their own when results look ambiguous.</p>
+<p><strong>Read-only tools are naturally safe</strong> to repeat. Tools with side effects need <strong>idempotency</strong>:</p>
+<ul>
+  <li><strong>Idempotency key parameter.</strong> The tool accepts a key supplied by the client or agent, or <strong>derived deterministically</strong> from the task, for example a hash of the conversation id, step and normalised inputs. Keys from the model itself are acceptable if the description asks for a unique key per intended action, but deterministic derivation is more reliable.</li>
+  <li><strong>Server deduplication.</strong> Store <code>key → {status, result, request_hash}</code> atomically (unique constraint or <code>SET NX</code>) <strong>before</strong> performing the action. If the key exists and the action completed, <strong>return the stored result</strong>. If it is in progress, return a &quot;still processing&quot; result. If the same key arrives with different arguments, reject it.</li>
+  <li><strong>Pass keys downstream</strong> where supported: payment APIs such as Stripe accept <code>Idempotency-Key</code> headers, and many cloud APIs accept client tokens.</li>
+  <li><strong>Natural idempotency</strong>: prefer &quot;set status to X&quot; over &quot;toggle&quot;, and upserts by business key.</li>
+  <li>Mark such tools with <strong><code>idempotentHint: true</code></strong> and tell the model not to retry blindly.</li>
+</ul>
+<p>Asking the model to &quot;remember whether it already called the tool&quot; is not enough: the model never saw the lost response, and its context may be summarised or restarted.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Tool receives arguments plus <code>idempotency_key</code>.</li>
+  <li>Atomically insert the key with status &quot;pending&quot;; if it exists, return its stored outcome.</li>
+  <li>Perform the action, passing the key downstream.</li>
+  <li>Store the result under the key with a TTL (e.g. 24 h).</li>
+  <li>Return the result; duplicates within TTL get the same answer.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool(annotations={&quot;idempotentHint&quot;: True, &quot;destructiveHint&quot;: False})
+def create_ticket(project: str, title: str, body: str, idempotency_key: str) -&gt; dict:
+    &quot;&quot;&quot;Create a ticket. Use a new idempotency_key per intended ticket; reuse it when retrying.&quot;&quot;&quot;
+    req_hash = sha256(f&quot;{project}|{title}|{body}&quot;.encode()).hexdigest()
+    inserted = db.execute(
+        &quot;INSERT INTO idem(key, req_hash, status) VALUES (%s, %s, 'pending') ON CONFLICT DO NOTHING&quot;,
+        (idempotency_key, req_hash)).rowcount
+    if not inserted:
+        row = db.get_idem(idempotency_key)
+        if row.req_hash != req_hash:
+            raise ToolError(&quot;idempotency_key already used with different arguments.&quot;)
+        return row.result or {&quot;status&quot;: &quot;processing&quot;}
+    ticket = jira.create(project, title, body)
+    db.complete_idem(idempotency_key, {&quot;ticket&quot;: ticket.key, &quot;url&quot;: ticket.url})
+    return {&quot;ticket&quot;: ticket.key, &quot;url&quot;: ticket.url}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the JSON-RPC request id as the dedup key.</li>
+  <li>Check-then-act without atomicity, so concurrent retries both execute.</li>
+  <li>Relying on the model's memory to avoid duplicates.</li>
+  <li>Storing keys forever, or for too short a time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Networks fail and clients time out, and in the stateless revision streams aren't resumable, so a dropped request is just re-issued with a new id. A create_ticket or place_order might run twice even though the first attempt succeeded. Read-only tools are fine, but side-effecting ones must be idempotent. I add an idempotency key parameter, supplied by the client or derived deterministically from the task, and the server records each key atomically with its result. If the same key comes again, it returns the existing result instead of repeating the action. I pass the key downstream where APIs support it, like payments, and mark the tool with idempotentHint.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why isn't the model's memory enough?</strong> It never saw the lost response, and contexts get summarised or restarted.</li>
+  <li><strong>How long to keep keys?</strong> Longer than any realistic retry window, often 24 hours to a few days.</li>
+  <li><strong>Same key, different arguments?</strong> Reject with a clear error.</li>
+</ul>
+</article>
+</body>
+</html>

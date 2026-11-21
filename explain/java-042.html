@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-042 · Design a URL shortening service like bit.ly. Walk me through the key components.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-042" data-topic="System Design">
+<h1>Design a URL shortening service like bit.ly. Walk me through the key components.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A URL shortener has a <strong>create API</strong> and a <strong>redirect API</strong>, generates <strong>unique IDs encoded in base62</strong>, stores the mapping in a <strong>horizontally scalable key-value store</strong>, serves reads from <strong>Redis and the CDN</strong>, and chooses <strong>301 vs 302</strong> depending on whether every click must be counted.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start with requirements and scale. Suppose 100 million new links per month and a 100:1 read/write ratio: about 40 writes/s and 4,000 redirects/s on average, with peaks several times higher. Over 5 years that is 6 billion links, so a <strong>7-character base62</strong> code (62^7 ≈ 3.5 trillion) is plenty.</p>
+<p><strong>ID generation</strong> is the key design decision. Options: (1) a <strong>distributed counter</strong> where each app instance leases ranges of IDs (e.g. 1,000 at a time) from a coordinator like a DB sequence or ZooKeeper, then encodes them in base62; (2) a <strong>Snowflake-style</strong> 64-bit ID (timestamp + worker + sequence); (3) <strong>hashing</strong> the long URL (MD5/SHA-256 truncated), which needs collision checks and re-hashing. Sequential counters make codes guessable; if that matters, shuffle the ID with a reversible permutation or add random bits.</p>
+<p><strong>Storage</strong> is a simple key-value lookup: <code>code -&gt; {longUrl, owner, createdAt, expiresAt}</code>. <strong>DynamoDB</strong> or <strong>Cassandra</strong> shard by code naturally; a relational DB with read replicas also works at moderate scale.</p>
+<p><strong>Reads dominate</strong>, so hot links are cached in <strong>Redis</strong> (LRU) and redirects can even be cached at the <strong>CDN edge</strong>. A <strong>301 (permanent)</strong> lets browsers cache the redirect, cutting load but hiding repeat clicks; a <strong>302/307 (temporary)</strong> sends every click to us for analytics. Analytics events go asynchronously to <strong>Kafka</strong>, never blocking the redirect.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>POST /api/links {longUrl}</code> -&gt; validate URL, check malware blocklists, rate-limit the caller.</li>
+  <li>Take the next ID from the local range, base62-encode it, store the mapping.</li>
+  <li>Return <code>https://sho.rt/aZ3k9Q</code>.</li>
+  <li><code>GET /aZ3k9Q</code> -&gt; Redis -&gt; on miss, DB -&gt; populate cache.</li>
+  <li>Respond <code>302 Location: &lt;longUrl&gt;</code> and publish a click event to Kafka.</li>
+  <li>Expired links return 404/410; a cleanup job removes them.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public final class Base62 {
+    private static final char[] ALPHABET =
+        &quot;0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz&quot;.toCharArray();
+
+    public static String encode(long id) {
+        StringBuilder sb = new StringBuilder();
+        do { sb.append(ALPHABET[(int) (id % 62)]); id /= 62; } while (id &gt; 0);
+        return sb.reverse().toString();
+    }
+}
+
+@GetMapping(&quot;/{code}&quot;)
+ResponseEntity&lt;Void&gt; redirect(@PathVariable String code) {
+    String target = linkService.resolve(code);          // Redis, then DynamoDB
+    clickPublisher.publishAsync(code);                   // Kafka, fire-and-forget
+    return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(target)).build();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hashing URLs without handling collisions.</li>
+  <li>Using a single auto-increment database as a global bottleneck.</li>
+  <li>Writing click analytics synchronously in the redirect path.</li>
+  <li>Choosing 301 and then wondering why click counts are low.</li>
+  <li>No abuse protection: phishing links and enumeration of sequential codes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are two APIs: create a short link and redirect. For IDs I'd lease ranges from a distributed counter or use a Snowflake-style generator, then base62-encode, so seven characters give about 3.5 trillion codes with no collisions. The mapping lives in DynamoDB or Cassandra sharded by code. Reads dominate, so I'd cache hot links in Redis and at the CDN. I'd use 302 when we need analytics on every click, 301 when we want browsers to cache, and send click events asynchronously via Kafka. Rate limiting, malware checks and expiry complete it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do two servers avoid the same code?</strong> Each leases a disjoint ID range or has a unique worker ID in Snowflake.</li>
+  <li><strong>Custom aliases?</strong> Conditional insert (<code>attribute_not_exists</code>) so a taken alias fails atomically.</li>
+  <li><strong>How do you make codes non-guessable?</strong> Permute IDs with a keyed bijection or use random 8-character codes with a uniqueness check.</li>
+</ul>
+</article>
+</body>
+</html>

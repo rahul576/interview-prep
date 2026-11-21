@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-025 · What is change data capture, and which problems does it solve in system design?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-025" data-topic="Data &amp; Storage Design">
+<h1>What is change data capture, and which problems does it solve in system design?</h1>
+<p class="ex-meta">Data &amp; Storage Design · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Change data capture</strong> reads the database's transaction log and streams every row change (insert/update/delete) in commit order, so caches, search indexes, warehouses and other services stay <strong>in sync without dual writes or polling</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every serious database already records changes in a log for durability and replication: PostgreSQL's <strong>WAL</strong> (via logical decoding), MySQL's <strong>binlog</strong>, SQL Server's CDC tables, MongoDB's oplog/change streams. CDC tools such as <strong>Debezium</strong> (on Kafka Connect), AWS DMS, Azure Data Factory or Fivetran read that log and emit change events.</p>
+<p>Benefits: changes are captured even if the application forgets or crashes, ordering matches commits, load on the DB is low compared with polling queries, and you can rebuild derived systems by replaying.</p>
+<p>Cautions: events expose the <strong>internal schema</strong>, so consumers are coupled to table structure; schema changes must be managed (schema registry); delivery is <strong>at least once</strong>; and initial snapshots of big tables need planning.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable logical replication / binlog in row format.</li>
+  <li>Connector takes an initial snapshot, then tails the log.</li>
+  <li>Each change becomes an event (<code>before</code>, <code>after</code>, <code>op</code>, source position) on a Kafka topic per table.</li>
+  <li>Sinks/consumers update Elasticsearch, Redis, the warehouse, or other services.</li>
+  <li>Offsets are stored so the connector resumes after restarts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;op&quot;:&quot;u&quot;,&quot;before&quot;:{&quot;id&quot;:42,&quot;status&quot;:&quot;PENDING&quot;},
+ &quot;after&quot;:{&quot;id&quot;:42,&quot;status&quot;:&quot;PAID&quot;},
+ &quot;source&quot;:{&quot;table&quot;:&quot;orders&quot;,&quot;lsn&quot;:123456789}}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Polling</th><th>Dual write</th><th>CDC</th></tr></thead>
+<tbody>
+<tr><td>Misses changes?</td><td>Deletes/fast updates</td><td>On failures</td><td>No</td></tr>
+<tr><td>DB load</td><td>High</td><td>None</td><td>Low</td></tr>
+<tr><td>Ordering</td><td>Weak</td><td>None</td><td>Commit order</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using raw table CDC as public domain events (couples everyone to your schema).</li>
+  <li>Forgetting that long-running replication slots retain WAL and fill the disk.</li>
+  <li>Not handling deletes/tombstones in sinks.</li>
+  <li>No plan for schema evolution.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CDC tails the database transaction log, typically with Debezium into Kafka, giving an ordered stream of row changes. I use it to keep search indexes, caches and the warehouse in sync, to implement the outbox pattern and to migrate databases with little downtime. For events other teams consume I prefer outbox-based domain events over raw table changes, to avoid coupling them to my schema.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why prefer outbox events for integration?</strong> Stable, intentional contracts instead of internal tables.</li>
+  <li><strong>What's the risk with Postgres replication slots?</strong> WAL piles up if the consumer stops.</li>
+  <li><strong>How do you migrate a DB with CDC?</strong> Snapshot + stream to the new DB, verify, then cut over.</li>
+</ul>
+</article>
+</body>
+</html>

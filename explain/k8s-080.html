@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-080 · Should you run production databases on Kubernetes? How do you decide?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-080" data-topic="Kubernetes">
+<h1>Should you run production databases on Kubernetes? How do you decide?</h1>
+<p class="ex-meta">Kubernetes · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Default to a <strong>managed database service</strong> for lower operational risk; run databases <strong>on Kubernetes</strong> when portability, on-prem, many small databases or cost justify it, using a mature <strong>operator</strong> (CloudNativePG, Percona, Strimzi for Kafka) with <strong>stable storage, anti-affinity, PDBs, tested backups and failover</strong>, and a team with <strong>database operations skills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The question is less &quot;can Kubernetes run databases?&quot; (it can) and more &quot;who carries the operational load?&quot; A <strong>managed service</strong> (Amazon RDS or Aurora, Azure Database for PostgreSQL Flexible Server, Cloud SQL, AlloyDB) handles provisioning, patching, automated backups with point-in-time recovery, replication, failover and monitoring, with an SLA. For most product teams in the cloud, that is the lower-risk and often cheaper choice once engineering time is counted.</p>
+<p>Kubernetes has become a solid place for databases thanks to <strong>operators</strong>, which encode DBA runbooks as controllers. <strong>CloudNativePG</strong> manages PostgreSQL clusters with streaming replication, automated failover with fencing, continuous WAL archiving and backups to object storage, PITR, rolling minor upgrades and declarative major upgrades. Similar operators exist for MySQL (Percona, Oracle MySQL Operator, Vitess), MongoDB, Redis and <strong>Strimzi</strong> for Kafka.</p>
+<p>Good reasons to run on Kubernetes: <strong>portability</strong> across clouds and on-prem; <strong>on-premises or edge</strong> with no managed option; <strong>many small databases</strong> for dev, test or per-tenant setups created on demand; cost at scale; or features or extensions a managed service does not offer.</p>
+<p>Requirements if you do: fast <strong>stable storage</strong> (SSD, appropriate IOPS, <code>Retain</code> reclaim policy, volume expansion), <strong>pod anti-affinity and topology spread</strong> across zones, <strong>PDBs</strong> so drains do not take out the primary and replicas together, <strong>dedicated nodes</strong> to avoid noisy neighbours, <strong>monitoring</strong> of replication lag and disk, <strong>backups to another region</strong> with restore tests, and documented <strong>failover drills</strong>. And critically, a team with database operations skills, since the operator automates actions but does not replace understanding.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assess requirements: RPO/RTO, scale, compliance, team skills, cost.</li>
+  <li>If managed fits, use it and integrate via workload identity and private endpoints.</li>
+  <li>If on Kubernetes, choose a mature operator.</li>
+  <li>Provision storage classes, dedicated nodes, anti-affinity and PDBs.</li>
+  <li>Configure backups to object storage and PITR.</li>
+  <li>Test failover, node loss, restores and upgrades regularly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: orders-db }
+spec:
+  instances: 3
+  storage: { size: 200Gi, storageClass: premium-ssd-retain }
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://pg-backups-eu/orders
+      s3Credentials: { inheritFromIAMRole: true }
+    retentionPolicy: &quot;30d&quot;</code></pre>
+<p>(Newer CloudNativePG versions move object-store backups to the Barman Cloud plugin; check the version you run.)</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Managed service</th><th>Operator on Kubernetes</th></tr></thead>
+<tbody>
+<tr><td>Ops burden</td><td>Low</td><td>Medium to high</td></tr>
+<tr><td>Portability</td><td>Low</td><td>High</td></tr>
+<tr><td>Control and extensions</td><td>Limited</td><td>Full</td></tr>
+<tr><td>Cost at scale</td><td>Higher list price</td><td>Lower infra, more people time</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running a single-replica StatefulSet with no operator and calling it HA.</li>
+  <li>Never testing restores.</li>
+  <li>Ignoring storage performance and zone placement.</li>
+  <li>Choosing Kubernetes for &quot;consistency&quot; without DBA skills.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;It depends on the team and requirements. Managed services like RDS, Azure Database for PostgreSQL or Cloud SQL handle backups, patching, replication and failover, so for most product teams in the cloud they're the lower-risk choice. Running on Kubernetes is practical now with mature operators like CloudNativePG or Strimzi, which automate replication, failover, backups to object storage and upgrades. I'd choose it for portability, on-prem, many small databases or cost at scale. Then I'd require fast stable storage, zone anti-affinity, PDBs, dedicated nodes, monitoring, tested restores and failover drills, and people with database operations skills.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Failure scenarios to test?</strong> Primary node loss, zone loss, network partition, full disk, failed backup restore, major version upgrade.</li>
+  <li><strong>How does CloudNativePG avoid split-brain?</strong> It fences the old primary before promoting a replica.</li>
+  <li><strong>Why Retain reclaim policy?</strong> Accidental PVC deletion does not destroy the data disk.</li>
+</ul>
+</article>
+</body>
+</html>

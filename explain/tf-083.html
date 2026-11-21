@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-083 · How do you secure the Terraform state storage itself?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-083" data-topic="Terraform">
+<h1>How do you secure the Terraform state storage itself?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>State holds <strong>secrets and a full map of your infrastructure</strong>, so protect it like a secret store: <strong>encryption at rest</strong> (optionally <strong>customer-managed keys</strong>) and TLS, <strong>least-privilege access</strong> with <strong>only pipelines writing</strong>, <strong>private network access</strong>, <strong>versioning, soft delete and deletion locks</strong>, <strong>audited access logs</strong>, and <strong>fewer secrets in state</strong> via <strong>ephemeral resources and write-only arguments</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform state records every attribute of every managed resource. That includes generated passwords, connection strings, access keys and private keys, plus resource IDs, IPs and topology that are valuable for an attacker. Anyone who can read production state effectively holds production secrets. Anyone who can <strong>write</strong> it can make Terraform destroy or recreate resources.</p>
+<p><strong>Encryption.</strong> Azure Storage and S3 encrypt at rest by default; use <strong>customer-managed keys</strong> in Key Vault or KMS where compliance requires it, and enforce <strong>TLS</strong> (secure transfer required, minimum TLS 1.2). HCP Terraform encrypts state with Vault-backed keys. OpenTofu also offers client-side state encryption.</p>
+<p><strong>Access control.</strong> Only <strong>pipeline identities</strong> can write production state. A small platform group gets read access for troubleshooting, ideally through just-in-time elevation. Developers do not get direct access to production state. Use data plane RBAC (Storage Blob Data Contributor on the specific container, scoped IAM on the bucket prefix) and disable shared key access on Azure storage where possible.</p>
+<p><strong>Network.</strong> Disable public network access; reach the storage through <strong>private endpoints</strong> or <strong>VPC endpoints</strong>, which also means runners must be inside the network.</p>
+<p><strong>Resilience.</strong> Enable <strong>blob versioning</strong> or <strong>S3 versioning</strong>, <strong>soft delete</strong>, and <strong>resource locks</strong> or deletion protection on the account or bucket, so corruption or accidental deletion is recoverable. Use <strong>state locking</strong> (blob leases, S3 native lockfile or DynamoDB).</p>
+<p><strong>Monitoring.</strong> Send access logs to the SIEM and alert on unusual reads, for example a human identity reading production state.</p>
+<p><strong>Reduce what is stored.</strong> Use <strong>ephemeral resources</strong> (Terraform 1.10+) and <strong>write-only arguments</strong> (1.11+) so secrets are never persisted, and prefer managed identities over keys.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Dedicated storage account or bucket per environment tier.</li>
+  <li>Encryption at rest with CMK if required; TLS enforced.</li>
+  <li>RBAC: pipelines write, few humans read, no shared keys.</li>
+  <li>Private endpoints; public access disabled.</li>
+  <li>Versioning, soft delete, locks and state locking.</li>
+  <li>Access logs to SIEM with alerts; minimise secrets in state.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_storage_account&quot; &quot;tfstate&quot; {
+  name                            = &quot;sttfstateprod01&quot;
+  resource_group_name             = azurerm_resource_group.tfstate.name
+  location                        = &quot;westeurope&quot;
+  account_tier                    = &quot;Standard&quot;
+  account_replication_type        = &quot;ZRS&quot;
+  min_tls_version                 = &quot;TLS1_2&quot;
+  shared_access_key_enabled       = false
+  public_network_access_enabled   = false
+  allow_nested_items_to_be_public = false
+
+  blob_properties {
+    versioning_enabled = true
+    delete_retention_policy { days = 30 }
+    container_delete_retention_policy { days = 30 }
+  }
+}
+
+resource &quot;azurerm_management_lock&quot; &quot;tfstate&quot; {
+  name       = &quot;do-not-delete&quot;
+  scope      = azurerm_storage_account.tfstate.id
+  lock_level = &quot;CanNotDelete&quot;
+}</code></pre>
+<pre><code class="language-hcl">terraform {
+  backend &quot;azurerm&quot; {
+    storage_account_name = &quot;sttfstateprod01&quot;
+    container_name       = &quot;tfstate&quot;
+    key                  = &quot;orders.tfstate&quot;
+    use_azuread_auth     = true
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Granting developers Contributor on the state account &quot;for debugging&quot;.</li>
+  <li>Using storage account keys in pipelines.</li>
+  <li>No versioning, so corruption is unrecoverable.</li>
+  <li>Assuming <code>sensitive = true</code> keeps values out of state; it does not.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;State contains secrets and a full map of the infrastructure, so I protect it like a secret store. Encryption at rest, with customer-managed keys where required, and TLS. Least privilege: only pipeline identities can write, a small group can read, developers have no direct access to production state. Private endpoints with public access disabled. Versioning and soft delete for recovery, plus deletion locks. Access logs are audited with alerts on unusual reads. And I reduce secrets in state with ephemeral resources and write-only arguments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is remote_state across teams risky?</strong> Readers get the whole state, including secrets.</li>
+  <li><strong>Does sensitive hide values in state?</strong> No, only in CLI output.</li>
+  <li><strong>One storage account for all environments?</strong> Separate at least production from non-production.</li>
+</ul>
+</article>
+</body>
+</html>

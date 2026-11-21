@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-221 · How does thread interruption work, and how should code handle InterruptedException?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-221" data-topic="Concurrency">
+<h1>How does thread interruption work, and how should code handle InterruptedException?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Interruption</strong> is a <strong>cooperative cancellation</strong> mechanism: <code>interrupt()</code> sets a <strong>flag</strong>, blocking methods throw <strong>InterruptedException</strong> and <strong>clear the flag</strong>, and code must <strong>never swallow it</strong> but either <strong>propagate</strong> it or <strong>restore</strong> it with <code>Thread.currentThread().interrupt()</code>; executors rely on it for <strong>shutdownNow</strong> and <strong>Future.cancel(true)</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Java has no safe way to forcibly stop a thread (<code>Thread.stop</code> is deprecated and removed in recent JDKs because it could leave objects corrupted). Instead, <code>t.interrupt()</code> <strong>asks</strong> a thread to stop by setting its <strong>interrupt status</strong>. What happens next depends on the target:</p>
+<ul>
+  <li>If it is <strong>blocked</strong> in an interruptible method, <code>sleep</code>, <code>wait</code>, <code>join</code>, <code>BlockingQueue.put/take</code>, <code>Future.get</code>, <code>lockInterruptibly</code>, <code>CountDownLatch.await</code>, the method throws <strong>InterruptedException</strong> and <strong>clears</strong> the flag.</li>
+  <li>If it is in an <code>InterruptibleChannel</code> I/O operation, the channel is closed and it gets <code>ClosedByInterruptException</code>. Classic <code>java.io</code> socket streams are not interruptible on platform threads (closing the socket is the usual workaround), but virtual threads do support interrupting blocking socket I/O.</li>
+  <li>If it is <strong>running CPU code</strong>, nothing happens automatically; the code must check <code>Thread.currentThread().isInterrupted()</code> periodically.</li>
+  <li><code>Thread.interrupted()</code> (static) checks <strong>and clears</strong> the flag; <code>isInterrupted()</code> only checks.</li>
+</ul>
+<p><strong>Handling InterruptedException.</strong> It is a request to stop, so swallowing it (<code>catch (InterruptedException e) {}</code>) breaks cancellation for everyone up the stack. The two correct options:</p>
+<ol>
+  <li><strong>Propagate</strong>: declare <code>throws InterruptedException</code> and let the caller decide.</li>
+  <li><strong>Restore and exit</strong>: if you can't throw (e.g. inside <code>Runnable.run</code>), call <code>Thread.currentThread().interrupt()</code> to re-set the flag, then return or wrap in an unchecked exception, so higher layers still see it.</li>
+</ol>
+<p>Only code that <strong>owns the thread</strong> (the executor's worker loop) should decide to ignore it.</p>
+<p><strong>Where it's used.</strong> <code>ExecutorService.shutdownNow()</code> interrupts all workers; <code>Future.cancel(true)</code> interrupts the task's thread; structured concurrency cancels subtasks by interrupting them; frameworks use it for request timeouts. Tasks that ignore interruption can't be cancelled and delay shutdown. Note <code>CompletableFuture.cancel(true)</code> does not interrupt.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Caller invokes <code>t.interrupt()</code>; flag set.</li>
+  <li>Blocking call in <code>t</code> throws InterruptedException and clears the flag.</li>
+  <li>Handler propagates or restores the flag.</li>
+  <li>Loop checks <code>isInterrupted()</code> and exits cleanly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Restoring the flag in a Runnable
+public void run() {
+    try {
+        while (!Thread.currentThread().isInterrupted()) {
+            Job job = queue.take();             // throws if interrupted
+            handle(job);
+        }
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();     // restore, then exit
+    } finally {
+        cleanup();
+    }
+}
+
+// CPU-bound loop made cancellable
+for (int i = 0; i &lt; rows.size(); i++) {
+    if ((i &amp; 1023) == 0 &amp;&amp; Thread.currentThread().isInterrupted()) {
+        throw new CancellationException(&quot;cancelled at row &quot; + i);
+    }
+    compute(rows.get(i));
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Empty catch blocks for InterruptedException.</li>
+  <li>Using <code>Thread.interrupted()</code> when you meant <code>isInterrupted()</code>, clearing the flag.</li>
+  <li>Long CPU loops that never check the flag.</li>
+  <li>Retrying in a loop after interruption, so the thread never stops.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Interruption is a cooperative cancellation mechanism: interrupt sets a flag on the thread, and the thread decides how to respond. Blocking methods like sleep, wait, join and BlockingQueue.take throw InterruptedException and clear the flag. Code must not swallow it: either propagate the exception or restore the status with Thread.currentThread().interrupt(), so callers higher up can see it. Executors use interruption for shutdownNow and Future.cancel(true), so tasks that ignore it can't be cancelled. For CPU-bound loops I check isInterrupted periodically.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Make a long CPU loop cancellable?</strong> Check <code>isInterrupted()</code> every N iterations and exit or throw.</li>
+  <li><strong>Why does InterruptedException clear the flag?</strong> The exception itself delivers the signal; you restore the flag if you can't propagate it.</li>
+  <li><strong>Why was Thread.stop removed?</strong> It released locks at arbitrary points, leaving shared state corrupted.</li>
+</ul>
+</article>
+</body>
+</html>

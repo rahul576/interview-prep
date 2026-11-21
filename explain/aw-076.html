@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-076 · How do you scale a relational database on AWS when it becomes the bottleneck?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-076" data-topic="Cloud (AWS)">
+<h1>How do you scale a relational database on AWS when it becomes the bottleneck?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Scale a bottlenecked relational database in order of cost: <strong>fix queries and indexes</strong> with <strong>Performance Insights</strong>, <strong>cache</strong> hot data in ElastiCache, offload reads to <strong>read replicas</strong>, <strong>scale up</strong> or move to <strong>Aurora</strong> (Serverless v2, RDS Proxy), and finally <strong>partition or shard</strong> writes or move suitable data to <strong>DynamoDB or analytics stores</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Find the cause.</strong> <strong>Performance Insights</strong> (now part of CloudWatch Database Insights) shows database load by <strong>top SQL</strong>, waits, hosts and users. Most bottlenecks are a few queries: missing or wrong <strong>indexes</strong>, <strong>N+1</strong> patterns from ORMs, full table scans, heavy reports running on the primary, lock contention, or too many connections. Use EXPLAIN, slow query logs and pg_stat_statements. This is the cheapest and often most effective fix.</p>
+<p><strong>Cache</strong> read-heavy, rarely changing data (catalogue, configuration, sessions, computed pages) in <strong>ElastiCache</strong> with cache-aside and TTLs. Even a modest hit ratio removes a large share of reads.</p>
+<p><strong>Read replicas</strong> take read traffic and reports off the primary. The application must route reads separately (reader endpoint, separate data source) and <strong>tolerate replica lag</strong>, keeping read-your-own-writes paths on the primary. Aurora replicas share storage and usually lag milliseconds.</p>
+<p><strong>Vertical scaling</strong>: move to a larger or newer instance class (Graviton, memory-optimised), faster storage (gp3 with provisioned IOPS, io2), or <strong>Aurora</strong> for its storage engine, up to 15 replicas, and <strong>Serverless v2</strong> for spiky load. <strong>RDS Proxy</strong> smooths connection storms from Lambda or large fleets.</p>
+<p><strong>Write scaling</strong> eventually needs structural changes: table <strong>partitioning</strong> (PostgreSQL declarative partitioning) for large tables, <strong>sharding</strong> by tenant or customer across clusters, <strong>Aurora Limitless Database</strong> for managed horizontal scaling on PostgreSQL, or moving workloads that do not need relational features, such as sessions, events, carts or time series, to <strong>DynamoDB</strong>, and analytics to <strong>Redshift</strong> or a lake via zero-ETL. Asynchronous processing with queues can also flatten write peaks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: Performance Insights, slow logs, CPU, IOPS, connections.</li>
+  <li>Optimise the top queries and indexes.</li>
+  <li>Add caching for hot reads.</li>
+  <li>Route reads and reports to replicas.</li>
+  <li>Scale up or migrate to Aurora; add RDS Proxy.</li>
+  <li>Partition, shard or offload when writes still saturate.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Find the heaviest queries (PostgreSQL)
+SELECT query, calls, total_exec_time/1000 AS total_s, mean_exec_time AS mean_ms
+FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 10;
+
+EXPLAIN ANALYZE SELECT * FROM orders WHERE customer_id = 42 ORDER BY created_at DESC LIMIT 20;
+CREATE INDEX CONCURRENTLY idx_orders_customer_created
+  ON orders (customer_id, created_at DESC);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Buying a bigger instance before looking at the queries.</li>
+  <li>Sending all reads to replicas and breaking read-your-own-writes.</li>
+  <li>Caching without invalidation, serving stale data indefinitely.</li>
+  <li>Sharding too early, adding huge complexity for a fixable index problem.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start by finding what is expensive: Performance Insights shows top SQL and waits, and usually missing indexes, N+1 queries or heavy reports are the cause, which is the cheapest fix. Then I cache hot, rarely changing data in ElastiCache. Read replicas take reads and reports off the primary, as long as the app tolerates lag. The primary can scale up or move to Aurora for faster storage, more replicas and Serverless v2, with RDS Proxy smoothing connections. Beyond that, write scaling needs partitioning or sharding by tenant, or moving suitable data like sessions or events to DynamoDB or an analytics store.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What are the risks of reading from replicas?</strong> Stale reads, broken read-after-write, and lag spikes under heavy writes.</li>
+  <li><strong>How do you choose a shard key?</strong> High cardinality, even load, and most queries scoped to one key, like tenant ID.</li>
+  <li><strong>When is DynamoDB a better fit?</strong> Known access patterns at massive scale without complex joins.</li>
+</ul>
+</article>
+</body>
+</html>

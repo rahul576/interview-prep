@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-039 · What is lazy evaluation, and when does a stream pipeline execute?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-039" data-topic="Java 8+ Features">
+<h1>What is lazy evaluation, and when does a stream pipeline execute?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Streams use <strong>lazy evaluation</strong>: <strong>intermediate operations</strong> such as <code>filter</code> and <code>map</code> only describe the pipeline, and nothing runs until a <strong>terminal operation</strong> such as <code>collect</code>, <code>findFirst</code> or <code>forEach</code> is invoked; then elements are pulled through all stages <strong>one at a time</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When you write <code>list.stream().filter(...).map(...)</code>, each call returns a new stream object that records the operation and links it to the previous stage. No element of the source has been read yet. This is why a stream with no terminal operation does nothing at all, and why a <code>peek</code> with a print statement stays silent until you add <code>collect</code> or <code>count</code>.</p>
+<p>When the terminal operation is called, the stream builds a chain of <strong>sinks</strong>, one per stage, and pushes elements from the source through that chain. Processing is <strong>vertical</strong>, not horizontal: the first element goes through <code>filter</code>, then <code>map</code>, then into the collector, before the second element is read. In effect the stages are fused into <strong>a single pass</strong> (often called <strong>loop fusion</strong>), so there are no intermediate lists between stages.</p>
+<p>Laziness enables <strong>short-circuiting</strong>. Operations like <code>findFirst</code>, <code>anyMatch</code>, <code>allMatch</code>, <code>noneMatch</code> and <code>limit</code> can stop the pull as soon as the answer is known. With <code>filter(...).findFirst()</code> over a million elements, processing stops at the first match. The same mechanism makes <strong>infinite streams</strong> practical: <code>Stream.iterate(1, n -&gt; n + 1)</code> or <code>Stream.generate(...)</code> never terminate on their own, but <code>limit(10)</code> or <code>takeWhile(...)</code> ends the pull.</p>
+<p>One exception to pure element-by-element flow is <strong>stateful</strong> intermediate operations such as <code>sorted</code> and <code>distinct</code>. <code>sorted</code> must see every element before it can emit the first one, so it acts as a barrier in the pipeline. Laziness still applies (nothing happens before the terminal call), but the single-pass flow is interrupted at that stage.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each intermediate call creates a new pipeline stage and returns immediately.</li>
+  <li>The terminal operation triggers evaluation and builds a chain of sinks.</li>
+  <li>The source's <code>Spliterator</code> supplies elements one by one into the first sink.</li>
+  <li>Each element passes through every stage before the next element is read.</li>
+  <li>Short-circuiting operations signal &quot;cancellation requested&quot; and the source stops.</li>
+  <li>Stateful stages such as <code>sorted</code> buffer elements until upstream is exhausted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">List&lt;String&gt; names = List.of(&quot;anna&quot;, &quot;bob&quot;, &quot;carla&quot;, &quot;dave&quot;);
+
+Optional&lt;String&gt; first = names.stream()
+    .peek(n -&gt; System.out.println(&quot;read &quot; + n))
+    .filter(n -&gt; n.length() &gt; 3)
+    .map(String::toUpperCase)
+    .findFirst();      // only now does anything print
+
+// Output:
+// read anna
+// result: ANNA   (&quot;bob&quot;, &quot;carla&quot;, &quot;dave&quot; are never read)
+
+List&lt;Integer&gt; squares = Stream.iterate(1, n -&gt; n + 1)
+    .map(n -&gt; n * n)
+    .limit(5)
+    .toList();         // [1, 4, 9, 16, 25] from an infinite source</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting side effects inside <code>map</code> or <code>peek</code> to run when no terminal operation is called.</li>
+  <li>Reusing a stream after its terminal operation; it throws <code>IllegalStateException</code>.</li>
+  <li>Putting <code>sorted</code> before <code>limit</code> on an infinite stream, which never finishes.</li>
+  <li>Assuming <code>peek</code> is meant for business logic; it is a debugging aid.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Streams are lazy. Calling filter or map just adds a stage to a pipeline and returns a new stream; nothing is processed. Execution starts only at the terminal operation. Then the elements are pulled through all the stages one at a time, so the first element goes through filter, map and into the collector before the second one is read. That fuses everything into one pass with no intermediate lists, and it allows short-circuiting: filter followed by findFirst stops at the first match. It is also why infinite streams like Stream.iterate work, as long as something like limit or takeWhile ends the pull. Stateful operations such as sorted are the exception, because they must buffer everything first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does laziness let you work with infinite streams?</strong> The source is only asked for elements on demand, so <code>limit</code> or <code>takeWhile</code> stops the pull after enough elements.</li>
+  <li><strong>Is <code>sorted</code> lazy?</strong> It does not run before the terminal operation, but once running it must consume all upstream elements before emitting any.</li>
+  <li><strong>What happens if you call two terminal operations on one stream?</strong> The second throws <code>IllegalStateException</code>; streams are single-use.</li>
+</ul>
+</article>
+</body>
+</html>

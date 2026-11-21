@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-016 · What is the difference between Alpine, Debian slim and full base images?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-016" data-topic="Docker">
+<h1>What is the difference between Alpine, Debian slim and full base images?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Base images differ mainly in <strong>size</strong>, <strong>C library</strong> and <strong>package manager</strong>: <strong>Alpine</strong> is tiny and uses <strong>musl libc</strong> and <strong>apk</strong>, <strong>Debian slim</strong> is small but keeps <strong>glibc</strong> compatibility, and <strong>full images</strong> add many tools at the cost of size and attack surface.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every image starts from a base, and that choice affects pull time, compatibility, debugging comfort and how many vulnerabilities you have to patch. <strong>Alpine Linux</strong> is only a few megabytes because it is built on <strong>musl libc</strong> and <strong>BusyBox</strong>, and it installs packages with <strong>apk</strong>. That makes images very small and fast to pull, which is attractive for simple static binaries and small tools.</p>
+<p>The catch is that most prebuilt software on Linux is compiled against <strong>glibc</strong>. Native extensions for Python or Node.js may need to be compiled from source on Alpine (although many popular Python packages now ship <strong>musllinux wheels</strong>), which slows builds and requires a compiler in the build stage. musl also behaves differently in places: its <strong>DNS resolver</strong> has historically handled search domains and large responses differently from glibc, memory allocation performance can differ, and some JVM and locale behaviour is not identical. These surprises cost more engineering time than the few megabytes saved.</p>
+<p><strong>Debian slim</strong> (for example <code>python:3.12-slim</code> or <code>debian:bookworm-slim</code>) strips documentation, man pages and extra packages but keeps glibc and <strong>apt</strong>, so prebuilt wheels and binaries just work. <strong>Full images</strong> such as <code>python:3.12</code> or <code>node:22</code> include compilers, <code>git</code>, <code>curl</code> and many libraries, which is convenient for build stages and CI but heavy (often close to 1 GB) and full of packages that produce CVE findings. A good habit is a full or slim image to build and a slim or distroless image to run.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide what the runtime really needs: a static binary, an interpreter, native libraries.</li>
+  <li>Check the compatibility of native dependencies with musl versus glibc.</li>
+  <li>Compare image size and the number of known CVEs with a scanner such as Trivy or Grype.</li>
+  <li>Check how quickly the base is rebuilt when security fixes appear.</li>
+  <li>Use a multi-stage build: heavy image for building, slim image for running.</li>
+  <li>Pin the tag (and ideally the digest) so the base does not change unexpectedly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># Build stage: full image with compilers
+FROM python:3.12 AS build
+COPY requirements.txt .
+RUN pip wheel --wheel-dir /wheels -r requirements.txt
+
+# Runtime stage: glibc-compatible but small
+FROM python:3.12-slim
+COPY --from=build /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* &amp;&amp; rm -rf /wheels
+COPY app/ /app
+CMD [&quot;python&quot;, &quot;/app/main.py&quot;]</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Base</th><th>Typical size</th><th>libc</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>Alpine</td><td>~5-8 MB</td><td>musl</td><td>Static binaries, small tools</td></tr>
+<tr><td>Debian slim</td><td>~30-80 MB</td><td>glibc</td><td>Python, Java, Node runtimes</td></tr>
+<tr><td>Full</td><td>300 MB-1 GB</td><td>glibc</td><td>Build stages, CI</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Choosing Alpine for Python apps and then spending minutes compiling wheels on every build.</li>
+  <li>Assuming a smaller image is automatically more secure without scanning it.</li>
+  <li>Shipping the full image to production because it was used for building.</li>
+  <li>Using <code>latest</code> instead of a pinned version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The main differences are size and the C library. Alpine is only a few megabytes and uses musl and apk, which is great for static binaries but can cause problems with native Python or Node modules and with DNS or performance differences. Debian slim is a bit bigger but keeps glibc, so prebuilt packages work, which is why I usually prefer slim for Java and Python. Full images have lots of tools, so I use them only in the build stage of a multi-stage build. I decide based on compatibility, size and how fast the base gets security patches, and I check with a scanner.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you choose a distroless image instead?</strong> When you want only the runtime, no shell or package manager, to minimise attack surface in production.</li>
+  <li><strong>Why can DNS behave differently on Alpine?</strong> musl's resolver handles search domains and fallbacks differently from glibc.</li>
+  <li><strong>How do you compare two base images objectively?</strong> Measure size, scan for CVEs and test the app's build and startup on both.</li>
+</ul>
+</article>
+</body>
+</html>

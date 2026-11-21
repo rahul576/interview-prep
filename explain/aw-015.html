@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-015 · What is the difference between an S3 bucket policy, an IAM policy and an ACL?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-015" data-topic="Cloud (AWS)">
+<h1>What is the difference between an S3 bucket policy, an IAM policy and an ACL?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>An <strong>IAM policy</strong> attaches to an <strong>identity</strong> and says what it can do; a <strong>bucket policy</strong> is a <strong>resource-based policy</strong> on the bucket with a <strong><code>Principal</code></strong>, able to grant <strong>cross-account or service access</strong> and enforce rules; <strong>ACLs</strong> are a <strong>legacy</strong> mechanism, <strong>disabled by default</strong> with <strong>Bucket owner enforced</strong>; access needs an <strong>Allow and no explicit Deny</strong>, and <strong>Block Public Access</strong> overrides public grants.</p>
+
+<h2>Detailed explanation</h2>
+<p>S3 access can be granted from two directions. An <strong>IAM policy</strong> (identity-based) is attached to a user, group or role: &quot;this role may <code>s3:GetObject</code> on <code>reports-bucket/*</code>&quot;. It is the natural way to give your own workloads and people access, and it has no <code>Principal</code> because the principal is whoever holds the policy.</p>
+<p>A <strong>bucket policy</strong> (resource-based) is attached to the bucket and includes a <strong><code>Principal</code></strong>: another AWS account, a specific role, a service such as CloudFront (with a condition on the distribution ARN), or <code>*</code>. It is used for <strong>cross-account access</strong>, for service access, and for <strong>bucket-wide guardrails</strong> applying to every caller, such as denying requests that are not over TLS (<code>aws:SecureTransport = false</code>), requiring a specific KMS key, or restricting access to a VPC endpoint (<code>aws:SourceVpce</code>).</p>
+<p><strong>ACLs</strong> (access control lists) are the original S3 permission system, granting coarse read/write to accounts or groups per bucket or object. Since April 2023, new buckets default to <strong>Object Ownership = Bucket owner enforced</strong>, which disables ACLs entirely so the bucket owner owns every object and access is controlled only by policies. AWS recommends keeping ACLs disabled.</p>
+<p>Evaluation: within the same account, an Allow in <strong>either</strong> the IAM policy or the bucket policy is enough. <strong>Cross-account</strong>, both sides must allow: the caller's IAM policy and the bucket policy. An <strong>explicit Deny</strong> anywhere wins. <strong>Block Public Access</strong>, at account and bucket level, overrides any policy or ACL that would make data public, and it is enabled by default for new buckets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A request arrives for <code>s3:GetObject</code> on an object.</li>
+  <li>S3 checks Block Public Access for public grants.</li>
+  <li>It evaluates SCPs, identity policies, bucket policy (and ACLs if enabled).</li>
+  <li>Explicit Deny: rejected.</li>
+  <li>Same account: one Allow suffices; cross-account: both sides must Allow.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Version&quot;: &quot;2012-10-17&quot;,
+  &quot;Statement&quot;: [
+    {
+      &quot;Sid&quot;: &quot;AllowAnalyticsAccountRead&quot;,
+      &quot;Effect&quot;: &quot;Allow&quot;,
+      &quot;Principal&quot;: { &quot;AWS&quot;: &quot;arn:aws:iam::222222222222:role/analytics-reader&quot; },
+      &quot;Action&quot;: [&quot;s3:GetObject&quot;, &quot;s3:ListBucket&quot;],
+      &quot;Resource&quot;: [&quot;arn:aws:s3:::reports-bucket&quot;, &quot;arn:aws:s3:::reports-bucket/*&quot;]
+    },
+    {
+      &quot;Sid&quot;: &quot;DenyInsecureTransport&quot;,
+      &quot;Effect&quot;: &quot;Deny&quot;,
+      &quot;Principal&quot;: &quot;*&quot;,
+      &quot;Action&quot;: &quot;s3:*&quot;,
+      &quot;Resource&quot;: [&quot;arn:aws:s3:::reports-bucket&quot;, &quot;arn:aws:s3:::reports-bucket/*&quot;],
+      &quot;Condition&quot;: { &quot;Bool&quot;: { &quot;aws:SecureTransport&quot;: &quot;false&quot; } }
+    }
+  ]
+}</code></pre>
+<p>The analytics account must also give <code>analytics-reader</code> an IAM policy allowing those actions.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Re-enabling ACLs for new designs.</li>
+  <li>Granting cross-account access in the bucket policy only, forgetting the caller's IAM policy.</li>
+  <li><code>&quot;Principal&quot;: &quot;*&quot;</code> without conditions.</li>
+  <li>Disabling Block Public Access to &quot;fix&quot; an access problem.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An IAM policy is attached to an identity and says what that user or role can do in S3. A bucket policy is a resource-based policy on the bucket itself, with a Principal, so it can grant access to other accounts or services like CloudFront and enforce rules for everyone, such as requiring HTTPS or a particular KMS key. ACLs are the legacy mechanism; new buckets use Bucket owner enforced, which disables them, and that's what I'd keep. A request succeeds when something allows it and nothing explicitly denies it, cross-account needs both sides to allow, and Block Public Access overrides public grants.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Grant another account read access to one bucket?</strong> Bucket policy allowing their role, plus an IAM policy in their account; KMS key policy too if SSE-KMS.</li>
+  <li><strong>Why disable ACLs?</strong> Simpler, policy-only access and the bucket owner owns all objects.</li>
+  <li><strong>How do you find publicly accessible buckets?</strong> IAM Access Analyzer for S3 and Security Hub checks.</li>
+</ul>
+</article>
+</body>
+</html>

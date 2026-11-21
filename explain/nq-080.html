@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-080 · What is a race condition, and how can it occur?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-080" data-topic="Concurrency">
+<h1>What is a race condition, and how can it occur?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>race condition</strong> occurs when the <strong>correctness of a result depends on the timing or interleaving of threads</strong> accessing shared data; typical forms are <strong>read-modify-write</strong> (<code>count++</code>) and <strong>check-then-act</strong> (<code>if absent, put</code>), fixed by making the compound action <strong>atomic</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The scheduler can pause a thread between any two instructions and run another. When several threads touch shared mutable data, some interleavings produce wrong results. Because the bad interleaving is rare, race conditions often pass tests and appear only under production load.</p>
+<p><strong>Read-modify-write.</strong> <code>count++</code> compiles to three steps: read <code>count</code>, add one, write it back. Thread A reads 5, thread B reads 5, both write 6: one increment is <strong>lost</strong>. Bank balances (<code>balance = balance - amount</code>) suffer the same problem, which can create money out of thin air or allow overdrafts.</p>
+<p><strong>Check-then-act.</strong> The decision is based on an observation that may be out of date by the time you act. <code>if (!map.containsKey(k)) map.put(k, v)</code> lets two threads both see &quot;missing&quot; and both insert. <strong>Lazy initialisation</strong> (<code>if (instance == null) instance = new Service()</code>) can create two singletons. Checking a file exists and then opening it is a time-of-check to time-of-use (TOCTOU) race.</p>
+<p>Note the difference from a <strong>data race</strong>, a Java Memory Model term for conflicting accesses not ordered by happens-before. They overlap but are not identical: a program can be free of data races (every access is synchronised) yet still contain a race condition if a compound action spans two separate synchronised calls.</p>
+<p><strong>Fixes</strong>: make the whole compound action atomic. Use <code>synchronized</code> or a <code>Lock</code> around it, atomic classes (<code>AtomicInteger.incrementAndGet</code>, <code>compareAndSet</code>), or atomic methods of concurrent collections (<code>putIfAbsent</code>, <code>computeIfAbsent</code>, <code>merge</code>). For lazy singletons use the holder idiom or an enum. In databases, use conditional updates, row locks or optimistic locking.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Two threads share mutable state.</li>
+  <li>Each performs a multi-step operation (read then write, or check then act).</li>
+  <li>The scheduler interleaves the steps.</li>
+  <li>One thread acts on stale information and overwrites or duplicates the other's work.</li>
+  <li>Making the steps atomic removes the harmful interleavings.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Counter {
+    private int count;
+    void increment() { count++; }                 // race: read-add-write
+}
+
+Counter c = new Counter();
+try (var pool = Executors.newFixedThreadPool(8)) {
+    for (int i = 0; i &lt; 100_000; i++) pool.execute(c::increment);
+}
+System.out.println(c.count);                      // often &lt; 100000
+
+// Fixes
+AtomicInteger safe = new AtomicInteger();
+safe.incrementAndGet();                            // atomic CAS
+
+ConcurrentHashMap&lt;String, Session&gt; sessions = new ConcurrentHashMap&lt;&gt;();
+sessions.computeIfAbsent(userId, Session::new);   // atomic check-then-act</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing <code>volatile</code> fixes <code>count++</code>.</li>
+  <li>Using a thread-safe map but doing <code>containsKey</code> then <code>put</code> separately.</li>
+  <li>Assuming a test passing once proves there is no race.</li>
+  <li>Locking the write but not the read that decides it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A race condition happens when the correctness of a result depends on the unpredictable interleaving of threads using shared data. The classic example is count++, which is really read, add one, write back, so two threads can both read 5 and both write 6, losing an update. Another is check-then-act, like containsKey followed by put, where two threads both see the key missing. Lazy singleton creation and balance updates have the same problem. I fix it by making the compound action atomic: synchronized or a Lock, AtomicInteger.incrementAndGet, or atomic methods like ConcurrentHashMap.computeIfAbsent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you reproduce a race condition in a test?</strong> Run many threads hammering the operation, start them together with a CountDownLatch, repeat many times, and assert the total; tools like jcstress help for low-level cases.</li>
+  <li><strong>What is the difference between a race condition and a data race?</strong> A data race is unsynchronised conflicting access in JMM terms; a race condition is any timing-dependent bug, which can exist even without data races.</li>
+  <li><strong>How do databases avoid lost updates?</strong> Conditional updates, SELECT ... FOR UPDATE, or optimistic locking with a version column.</li>
+</ul>
+</article>
+</body>
+</html>

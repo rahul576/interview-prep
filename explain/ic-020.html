@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-020 · How do Ansible templates work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-020" data-topic="Configuration Management">
+<h1>How do Ansible templates work?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>The <strong>template</strong> module renders a <strong>Jinja2</strong> file on the control node with each host's <strong>variables and facts</strong>, copies the result to the host, reports <strong>changed only when the output differs</strong> (so it can <strong>notify a handler</strong>), and can <strong>validate</strong> the file before replacing it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Configuration files usually differ per host or environment: server names, ports, memory sizes, lists of backends. Instead of keeping many copies, you keep one <strong>Jinja2 template</strong>, typically <code>templates/nginx.conf.j2</code> in a role, and let Ansible render it. Rendering happens on the <strong>control node</strong>, using all variables available for that host: inventory and group_vars, role defaults, facts, registered results and magic variables like <code>inventory_hostname</code>, <code>groups</code> and <code>hostvars</code>.</p>
+<p>Templates support <strong>expressions</strong> (<code>{{ nginx_port }}</code>), <strong>filters</strong> (<code>{{ name | upper }}</code>, <code>{{ value | default('x') }}</code>, <code>{{ list | join(',') }}</code>), <strong>loops</strong> (<code>{% for host in groups['app'] %}</code>), <strong>conditionals</strong> (<code>{% if enable_tls %}</code>) and comments (<code>{# ... #}</code>). A common pattern is generating an upstream block listing every host in a group using <code>hostvars</code> to read their IP addresses from facts.</p>
+<p>The module compares the rendered content with the file on the target. If they are the same it reports <strong>ok</strong>; if not, it writes the file and reports <strong>changed</strong>, which is exactly when it should <code>notify</code> a handler to reload the service. Useful options: <code>owner</code>, <code>group</code>, <code>mode</code>, <code>backup: true</code> to keep the previous version, and <strong>validate</strong>, which runs a command against the temporary file (<code>%s</code>) and only replaces the real file if the command succeeds, for example <code>nginx -t -c %s</code> or <code>visudo -cf %s</code>. Adding <code>{{ ansible_managed }}</code> at the top warns humans not to edit the file by hand.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ansible collects variables and facts for the host.</li>
+  <li>It renders the <code>.j2</code> template on the control node.</li>
+  <li>It transfers the result to a temporary file on the host.</li>
+  <li>If <code>validate</code> is set, it runs the check command.</li>
+  <li>It replaces the destination only if content differs, then reports changed and notifies handlers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-jinja"># {{ ansible_managed }}
+upstream app {
+{% for host in groups['app'] %}
+    server {{ hostvars[host]['ansible_facts']['default_ipv4']['address'] }}:{{ app_port }};
+{% endfor %}
+}
+server {
+    listen {{ nginx_port }};
+    server_name {{ server_name }};
+{% if enable_tls %}
+    ssl_certificate /etc/ssl/{{ server_name }}.crt;
+{% endif %}
+}</code></pre>
+<pre><code class="language-yaml">- name: Render nginx site
+  ansible.builtin.template:
+    src: site.conf.j2
+    dest: /etc/nginx/conf.d/site.conf
+    mode: &quot;0644&quot;
+    validate: nginx -t -c /etc/nginx/nginx.conf -p /etc/nginx/ -g 'include %s;'
+  notify: Reload nginx</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Referencing facts of hosts that were not gathered in this run (hostvars empty).</li>
+  <li>Restarting the service unconditionally instead of via handlers.</li>
+  <li>No validation, so a broken config takes the service down on reload.</li>
+  <li>Complex logic inside templates that belongs in variables or filters.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The template module takes a Jinja2 file, usually from the role's templates folder, renders it on the control node with that host's variables and facts, and copies the result to the target. So one nginx.conf.j2 produces the right server names, ports and upstreams for every environment. Inside I can use loops, for example one upstream line per host in the app group via hostvars, plus conditionals and filters. The task only reports changed when the rendered output differs, which is when it notifies a handler to reload. And the validate option, like nginx -t, checks the new file before it replaces the old one.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you generate a config listing all hosts in the database group?</strong> Loop over <code>groups['db']</code> and read each host's address from <code>hostvars</code>.</li>
+  <li><strong>template vs copy?</strong> copy transfers files as-is; template renders Jinja2 first.</li>
+  <li><strong>Why might hostvars facts be missing?</strong> Facts for those hosts weren't gathered; gather them or use fact caching.</li>
+</ul>
+</article>
+</body>
+</html>

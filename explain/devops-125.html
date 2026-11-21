@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-125 · Compare Loki with the ELK stack for log management.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-125" data-topic="Observability &amp; SRE">
+<h1>Compare Loki with the ELK stack for log management.</h1>
+<p class="ex-meta">Observability &amp; SRE · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>ELK</strong> (Elasticsearch, Logstash, Kibana) <strong>indexes the full text</strong> of every log line for <strong>fast arbitrary search and analytics</strong> at high storage and operational cost; <strong>Grafana Loki</strong> <strong>indexes only labels</strong> and stores <strong>compressed chunks in object storage</strong>, making it <strong>much cheaper and simpler</strong> but slower for unstructured full-text search; choose by <strong>query needs and budget</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>ELK / Elastic Stack:</strong> logs are shipped by <strong>Beats (Filebeat)</strong>, Elastic Agent or Fluent Bit, optionally parsed by <strong>Logstash</strong> or ingest pipelines, and stored in <strong>Elasticsearch</strong> (or <strong>OpenSearch</strong>, the open-source fork), which builds an <strong>inverted index</strong> over the content and fields. <strong>Kibana</strong> provides search (KQL, Lucene, ES|QL), dashboards, alerting and security analytics. Strengths: fast full-text search over any word, rich aggregations, field-level analytics, SIEM use cases. Costs: indexing makes storage several times larger than raw logs, ingestion is CPU- and memory-heavy, and running clusters means managing shards, mappings, JVM heap, <strong>index lifecycle management</strong> (hot, warm, cold, frozen tiers) and upgrades.</p>
+<p><strong>Loki:</strong> indexes only a small set of <strong>labels</strong> per stream (namespace, app, pod, level), like Prometheus. Log content is stored as <strong>compressed chunks in object storage</strong> (S3, GCS, Azure Blob). Queries in <strong>LogQL</strong> first select streams by labels, then filter content (<code>|= &quot;error&quot;</code>, <code>| json | status &gt;= 500</code>) by scanning chunks in parallel, and can produce metrics (<code>rate</code>, <code>count_over_time</code>). Strengths: low storage cost, simple operations, native Grafana integration and <strong>correlation with Prometheus metrics and Tempo traces</strong> using the same labels. Weaknesses: needle-in-haystack searches over long ranges scan a lot of data; high-cardinality labels (user IDs) hurt performance badly. Newer Loki versions add structured metadata and bloom filters to speed some searches.</p>
+<p><strong>Shippers:</strong> for Loki, <strong>Grafana Alloy</strong> (successor to Promtail, which is deprecated) or Fluent Bit; for ELK, Filebeat/Elastic Agent, Logstash or Fluent Bit. The <strong>OpenTelemetry Collector</strong> can feed both.</p>
+<p><strong>Decision:</strong> Loki for cost-effective operational logs in Kubernetes, troubleshooting alongside metrics and traces. Elasticsearch/OpenSearch when you need heavy ad-hoc full-text search, analytics on log fields, security use cases or long investigations. Many organisations run both, or use a managed service.</p>
+<p><strong>Keeping logs useful and affordable:</strong> structured JSON logs, consistent levels, trace IDs, sampling or dropping debug and health-check noise at the shipper, and tiered retention.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Applications log to stdout as structured JSON.</li>
+  <li>A shipper on each node tails logs and adds labels or metadata.</li>
+  <li>ELK: documents are parsed and indexed; Loki: streams by labels, chunks to object storage.</li>
+  <li>ELK queries hit the inverted index; Loki selects streams then scans chunks.</li>
+  <li>Retention policies age data to cheaper tiers or delete it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-logql">sum by (app) (rate({namespace=&quot;checkout&quot;} | json | level=&quot;error&quot; [5m]))
+{app=&quot;payments&quot;} |= &quot;timeout&quot; | json | duration_ms &gt; 2000 | line_format &quot;{{.trace_id}} {{.msg}}&quot;</code></pre>
+<pre><code class="language-text">Kibana KQL:  service.name:&quot;payments&quot; and message:&quot;timeout&quot; and http.response.status_code &gt;= 500</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ELK / OpenSearch</th><th>Loki</th></tr></thead>
+<tbody>
+<tr><td>Index</td><td>Full text and fields</td><td>Labels only</td></tr>
+<tr><td>Storage</td><td>Index-heavy, larger</td><td>Compressed chunks in object storage</td></tr>
+<tr><td>Query</td><td>KQL, Lucene, ES-QL</td><td>LogQL</td></tr>
+<tr><td>Best for</td><td>Search, analytics, SIEM</td><td>Cheap Kubernetes ops logs</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>High-cardinality labels in Loki.</li>
+  <li>Running Elasticsearch without ILM, letting indices grow until disks fill.</li>
+  <li>Unstructured logs that can't be filtered.</li>
+  <li>Keeping debug logs for months.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ELK indexes the full text of every log line in Elasticsearch, so arbitrary searches and analytics are fast, but it needs a lot of storage, memory and operational effort. Loki only indexes labels like namespace, app and level and keeps compressed chunks in object storage, so it's much cheaper and simpler, but queries select by labels and then scan content with LogQL in Grafana. Shippers are Fluent Bit or Grafana Alloy for Loki, Filebeat or Logstash for ELK. I'd choose Loki for cost-effective operational logs in Kubernetes, and Elasticsearch or OpenSearch when heavy search, analytics or security use cases matter.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep logs useful and affordable?</strong> Structured logs with trace IDs, drop noise at the shipper, sensible levels and tiered retention.</li>
+  <li><strong>Why are high-cardinality labels bad in Loki?</strong> Each label combination is a stream; too many streams create tiny chunks and a huge index.</li>
+  <li><strong>What replaced Promtail?</strong> Grafana Alloy.</li>
+</ul>
+</article>
+</body>
+</html>

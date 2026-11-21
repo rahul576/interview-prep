@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-235 · How do you prevent cascading failures across microservices?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-235" data-topic="Microservices">
+<h1>How do you prevent cascading failures across microservices?</h1>
+<p class="ex-meta">Microservices · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Prevent cascades at every hop with <strong>timeouts within the caller's budget</strong> (ideally <strong>deadline propagation</strong>), <strong>circuit breakers</strong>, <strong>bulkheads</strong> and limited concurrency, <strong>controlled retries</strong> (backoff, jitter, <strong>retry budgets</strong>), plus <strong>rate limiting, load shedding, autoscaling</strong> and <strong>asynchronous decoupling</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>cascading failure</strong> starts small: service D slows down. C's threads wait on D, C's pool fills, C becomes slow; B waits on C, and so on until the edge returns errors for everything, including features that never touched D. Retries make it worse by multiplying traffic just as capacity drops. Recovery is hard because restarted instances are immediately overwhelmed.</p>
+<p>Defences, layer by layer:</p>
+<p><strong>Timeouts and deadlines.</strong> Each call's timeout must fit inside the <strong>caller's remaining time budget</strong>. If the edge allows 2 s, downstream calls cannot each wait 5 s. <strong>Deadline propagation</strong> (gRPC deadlines, or a header carrying the remaining budget) lets downstream services abandon work nobody is waiting for.</p>
+<p><strong>Circuit breakers.</strong> Stop calling a dependency with a high failure or slow-call rate, fail fast with a fallback, and probe for recovery.</p>
+<p><strong>Bulkheads and concurrency limits.</strong> Separate thread pools, semaphores or connection pools per dependency, so one slow dependency can only exhaust its own share. Adaptive concurrency limiters adjust limits based on observed latency.</p>
+<p><strong>Controlled retries.</strong> Retry only transient errors, with exponential backoff and jitter, few attempts, in one layer only, and with <strong>retry budgets</strong> (retries capped at, say, 10 percent of normal traffic) so a failure cannot multiply load.</p>
+<p><strong>Self-protection.</strong> Services enforce <strong>rate limits</strong> per client and <strong>load shedding</strong>: when queues or latency exceed thresholds, reject excess requests early with <code>503</code>/<code>429</code>, prioritising critical traffic. Bounded queues prevent memory exhaustion. <strong>Autoscaling</strong> adds capacity, but it is slow, so it complements rather than replaces shedding.</p>
+<p><strong>Decoupling and design.</strong> Move non-urgent work to <strong>queues</strong> so slow consumers do not block users. Avoid deep synchronous call chains; cache data that can be stale. Test with <strong>chaos engineering</strong> and load tests to verify these limits.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Edge sets a deadline; each hop uses a smaller timeout.</li>
+  <li>Bulkheads cap concurrency per dependency.</li>
+  <li>Breakers open on sustained failures and return fallbacks.</li>
+  <li>Retries obey budget and backoff.</li>
+  <li>Overloaded services shed load early.</li>
+  <li>Autoscaling and queues absorb the remaining pressure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resilience4j:
+  timelimiter.instances.pricing: { timeoutDuration: 800ms }   # edge budget 2s
+  circuitbreaker.instances.pricing: { failureRateThreshold: 50, slowCallDurationThreshold: 500ms, slowCallRateThreshold: 50 }
+  bulkhead.instances.pricing: { maxConcurrentCalls: 30 }
+  retry.instances.pricing: { maxAttempts: 2, waitDuration: 100ms, enableRandomizedWait: true }</code></pre>
+<pre><code class="language-yaml"># Envoy/Istio retry budget idea: retries limited to 20% of active requests
+retry_budget:
+  budget_percent: { value: 20.0 }
+  min_retry_concurrency: 3</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Defence</th><th>Stops</th></tr></thead>
+<tbody>
+<tr><td>Timeouts/deadlines</td><td>Threads waiting forever</td></tr>
+<tr><td>Circuit breaker</td><td>Calling a dead dependency</td></tr>
+<tr><td>Bulkhead</td><td>One dependency exhausting all resources</td></tr>
+<tr><td>Retry budget</td><td>Retry storms</td></tr>
+<tr><td>Load shedding</td><td>Overload collapse</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Downstream timeouts longer than upstream ones.</li>
+  <li>Retries at every layer without budgets.</li>
+  <li>Unbounded queues and thread pools.</li>
+  <li>Relying on autoscaling alone during sudden spikes.</li>
+  <li>Health checks that fail on dependency outages, causing restart storms.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A cascading failure is when one slow service makes callers wait until they run out of threads, and their callers fail in turn. I defend at every hop. Each call has a timeout shorter than the caller's budget, ideally with deadline propagation. Circuit breakers stop calls to a failing dependency. Bulkheads give each dependency its own limited pool so it cannot exhaust everything. Retries use backoff, jitter and retry budgets to avoid retry storms. Services protect themselves with rate limiting and load shedding, returning 503 early when overloaded, autoscaling adds capacity, and queues decouple non-urgent work. I verify all of it with load and chaos tests.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a retry storm and how do budgets help?</strong> Layers of retries multiply traffic during an outage; budgets cap retries as a fraction of normal requests.</li>
+  <li><strong>What is load shedding?</strong> Rejecting excess work early and cheaply so the service can still serve what it accepts.</li>
+  <li><strong>Why shouldn't liveness probes check dependencies?</strong> A dependency outage would restart all instances and deepen the failure.</li>
+</ul>
+</article>
+</body>
+</html>

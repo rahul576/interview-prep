@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-069 · What extra risks appear when one remote MCP server serves many tenants, and how do you isolate them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-069" data-topic="MCP Servers">
+<h1>What extra risks appear when one remote MCP server serves many tenants, and how do you isolate them?</h1>
+<p class="ex-meta">MCP Servers · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>In a multi-tenant remote server the main risk is <strong>cross-tenant data leakage</strong>; derive <strong>tenant identity from the validated token</strong>, never arguments, enforce <strong>row-level or per-tenant data isolation</strong>, include the tenant in <strong>cache keys</strong> and mark results with a private <strong>cacheScope</strong>, <strong>scope handles, resource URIs and tasks</strong> to the tenant, and apply <strong>per-tenant rate limits</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A SaaS vendor running one MCP server for all its customers faces the classic multi-tenancy problems, with some MCP-specific twists.</p>
+<p><strong>Identity.</strong> The tenant must come from the <strong>validated access token</strong> (an issuer, audience and tenant claim), never from a <code>tenant_id</code> tool argument. The model fills arguments, and a prompt injection or a curious user could change them.</p>
+<p><strong>Data access.</strong> Every downstream query must be filtered by tenant. Application-level <code>WHERE tenant_id = ?</code> is necessary but fragile; one forgotten filter leaks data. Stronger options are <strong>row-level security</strong> in the database bound to the session's tenant, or <strong>separate databases or schemas</strong> per tenant for high-sensitivity customers.</p>
+<p><strong>Caching</strong> is a classic leak. Tool lists may differ per tenant (feature flags, plans), and resource reads and query results are tenant-specific. Cache keys must include the tenant (and user, where permissions differ). Newer protocol revisions add caching hints such as <strong><code>cacheScope</code></strong>, which lets the server mark results as <strong>private</strong> to a user or tenant rather than shareable, so intermediaries and clients do not reuse them across principals.</p>
+<p><strong>Handles and identifiers.</strong> Resource URIs, opaque handles, task IDs and pagination cursors must be <strong>unguessable and validated against the tenant</strong> on every use, so tenant B cannot access tenant A's task by guessing an ID.</p>
+<p><strong>Noisy neighbours.</strong> <strong>Per-tenant rate limits and quotas</strong> stop one customer's runaway agent from degrading everyone. <strong>Logs and traces carry tenant IDs</strong> for audit and incident response.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives; gateway or server validates token, extracts <code>tenant_id</code> and <code>user_id</code>.</li>
+  <li>A request context carries the tenant; tool arguments cannot override it.</li>
+  <li>Database session sets the tenant for row-level security.</li>
+  <li>Cache lookups use <code>tenant:user:key</code> and results are marked private.</li>
+  <li>Handles are signed or stored with the owning tenant and checked on access.</li>
+  <li>Rate limiter keys on tenant; logs include tenant.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON tickets
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);</code></pre>
+<pre><code class="language-python">async def search_tickets(args, ctx):
+    async with db.session() as s:
+        await s.execute(&quot;SET LOCAL app.tenant_id = :t&quot;, {&quot;t&quot;: ctx.token.tenant_id})
+        key = f&quot;{ctx.token.tenant_id}:{ctx.token.user_id}:tickets:{hash_args(args)}&quot;
+        return await cache.get_or_load(key, lambda: s.search(args[&quot;query&quot;]))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>tenant_id</code> as a tool parameter.</li>
+  <li>Global caches keyed only by query text.</li>
+  <li>Sequential task or handle IDs.</li>
+  <li>Shared rate limits, so one tenant can exhaust capacity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In a multi-tenant server the main risk is data leaking between tenants. Tenant identity must come from the validated token, never from tool arguments the model or an attacker could manipulate. Every downstream query is filtered by tenant, ideally enforced by row-level security or separate databases rather than only application code. Caches are a classic leak, so cache keys include the tenant, and the cacheScope hint marks tenant- or user-specific results as private. Handles, resource URIs and tasks are scoped and validated so nobody can access another tenant's by guessing. Per-tenant rate limits stop noisy neighbours, and logs carry tenant IDs for audit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Test for leaks?</strong> Automated tests with two tenants trying each other's IDs, plus penetration testing.</li>
+  <li><strong>Separate DB per tenant?</strong> For regulated or large customers; costlier but strongest isolation.</li>
+  <li><strong>Tool list per tenant?</strong> Yes, it can differ, so cache it per tenant too.</li>
+</ul>
+</article>
+</body>
+</html>

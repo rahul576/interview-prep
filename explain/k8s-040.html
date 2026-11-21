@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-040 · How is monitoring typically set up for a Kubernetes cluster, and what is the difference between metrics-server and kube-state-metrics?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-040" data-topic="Kubernetes">
+<h1>How is monitoring typically set up for a Kubernetes cluster, and what is the difference between metrics-server and kube-state-metrics?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>metrics-server</strong> gives live CPU and memory usage for <strong>kubectl top</strong> and the <strong>HPA</strong> with no history, while <strong>kube-state-metrics</strong> turns <strong>object state</strong> (replicas, pod phase, restarts) into metrics; real monitoring uses <strong>Prometheus</strong> (often <strong>kube-prometheus-stack</strong>) with node-exporter, cAdvisor, Grafana and SLO-based alerts.</p>
+
+<h2>Detailed explanation</h2>
+<p>These two components are often confused because both have &quot;metrics&quot; in their name. <strong>metrics-server</strong> scrapes the kubelet's resource metrics endpoint on every node, keeps only the latest sample in memory and serves it through the aggregated <code>metrics.k8s.io</code> API. It exists to power <code>kubectl top</code> and resource-based autoscaling (HPA, VPA). It is not a monitoring system: no history, no Prometheus format, no alerting.</p>
+<p><strong>kube-state-metrics (KSM)</strong> watches the API server and exposes the <strong>state of objects</strong> in Prometheus format: <code>kube_deployment_status_replicas_available</code>, <code>kube_pod_status_phase</code>, <code>kube_pod_container_status_restarts_total</code>, job failures, PVC phases, node conditions. It does not measure resource usage; it answers &quot;is the cluster in the state I asked for?&quot;</p>
+<p>A typical stack is the <strong>Prometheus Operator</strong>, usually installed via <strong>kube-prometheus-stack</strong>. It manages Prometheus and Alertmanager and discovers targets with <strong>ServiceMonitor</strong> and <strong>PodMonitor</strong> objects. <strong>node-exporter</strong> provides host metrics (CPU, disk, network, filesystem), the kubelet's <strong>cAdvisor</strong> endpoint provides per-container usage and throttling, and control plane components expose their own metrics. Grafana provides dashboards, and <strong>Thanos</strong>, <strong>Mimir</strong> or a managed Prometheus service provide long-term, multi-cluster storage. Many teams now add <strong>OpenTelemetry</strong> collectors for traces and logs.</p>
+<p><strong>Alerting</strong> should focus on <strong>symptoms users feel</strong>, such as SLO burn rate on error rate and latency, plus a small set of cluster-health signals: nodes NotReady, pods crash looping for a sustained time, PVCs filling up, API server errors, certificate expiry.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install metrics-server for <code>kubectl top</code> and HPA.</li>
+  <li>Install kube-prometheus-stack: Prometheus, Alertmanager, Grafana, KSM, node-exporter.</li>
+  <li>Applications expose <code>/metrics</code>; teams add ServiceMonitors to have them scraped.</li>
+  <li>Prometheus scrapes kubelet/cAdvisor, KSM, node-exporter and apps.</li>
+  <li>Remote-write to long-term storage; Grafana dashboards per service.</li>
+  <li>Alertmanager routes SLO and cluster alerts to on-call.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: checkout
+  labels: { release: kube-prometheus-stack }
+spec:
+  selector:
+    matchLabels: { app: checkout }
+  endpoints:
+    - port: http-metrics
+      interval: 30s</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>metrics-server</th><th>kube-state-metrics</th></tr></thead>
+<tbody>
+<tr><td>Source</td><td>kubelet resource metrics</td><td>API server objects</td></tr>
+<tr><td>Data</td><td>CPU, memory now</td><td>Object state and counts</td></tr>
+<tr><td>History</td><td>None</td><td>Via Prometheus</td></tr>
+<tr><td>Used by</td><td>kubectl top, HPA</td><td>Dashboards, alerts</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using metrics-server as a monitoring backend.</li>
+  <li>Alerting on every pod restart instead of sustained crash loops or SLO impact.</li>
+  <li>Unbounded label cardinality (user IDs in labels) overwhelming Prometheus.</li>
+  <li>No long-term storage or no monitoring of the monitoring stack itself.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;metrics-server gives the current CPU and memory of pods and nodes through the metrics API; it has no history and exists for kubectl top and the HPA. kube-state-metrics reads the API server and exposes object state, like desired versus available replicas, pod phase and restarts. For real monitoring I'd run kube-prometheus-stack with ServiceMonitors, node-exporter and cAdvisor, Grafana for dashboards and Thanos or a managed backend for retention. I alert on SLO burn rates plus key cluster signals like NotReady nodes and sustained crash loops.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not alert on every pod restart?</strong> Restarts are normal self-healing; alert on sustained crash loops or user impact to avoid alert fatigue.</li>
+  <li><strong>What is a burn-rate alert?</strong> It fires when the error budget is being consumed faster than the SLO allows, over short and long windows.</li>
+  <li><strong>How do you monitor many clusters?</strong> Remote-write to central Thanos/Mimir or a managed service, with a cluster label.</li>
+</ul>
+</article>
+</body>
+</html>

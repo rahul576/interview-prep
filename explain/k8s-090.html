@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-090 · A pod shows CreateContainerConfigError. What does it usually mean and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-090" data-topic="Kubernetes">
+<h1>A pod shows CreateContainerConfigError. What does it usually mean and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>CreateContainerConfigError</strong> means the kubelet could not assemble the container's configuration, almost always because a referenced <strong>ConfigMap, Secret or key does not exist</strong>; <code>kubectl describe pod</code> shows exactly which one.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before starting a container, the kubelet resolves everything the pod spec points to: <code>env.valueFrom</code>, <code>envFrom</code>, and projected or volume sources. If a referenced object is missing in the pod's namespace, or the object exists but the named key does not, the kubelet cannot build the config and the container sits in <code>CreateContainerConfigError</code>. The image is fine and the scheduler has done its job; this is purely a reference problem.</p>
+<p>Typical causes are a Secret or ConfigMap that was <strong>never created in that namespace</strong> (objects are namespaced, so one in <code>default</code> does not help a pod in <code>shop</code>), a <strong>name typo</strong>, a <strong>key renamed</strong> in a newer config version, or an <strong>External Secrets Operator or Sealed Secrets sync that failed</strong>, so the target Secret never appeared. A related cause with the same status is a security context conflict, for example <code>runAsNonRoot: true</code> with an image whose user is root.</p>
+<p>The kubelet retries automatically, so once you create the object or fix the reference the pod starts without being deleted. For genuinely optional configuration, mark the reference <code>optional: true</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get pod</code> shows <code>CreateContainerConfigError</code>.</li>
+  <li><code>kubectl describe pod</code> events give the message, e.g. <code>secret &quot;db-credentials&quot; not found</code>.</li>
+  <li>Check the object in the right namespace and list its keys.</li>
+  <li>If it is synced from an external store, check the ExternalSecret status and controller logs.</li>
+  <li>Create or fix the object or the reference; the kubelet retries on its own.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl -n shop describe pod api-7d9f | grep -A3 Events
+#  Error: couldn't find key password in Secret shop/db-credentials
+kubectl -n shop get secret db-credentials -o jsonpath='{.data}' | jq 'keys'
+# [&quot;pass&quot;,&quot;user&quot;]   -&gt; key was renamed</code></pre>
+<pre><code class="language-yaml">env:
+  - name: FEATURE_FLAGS
+    valueFrom:
+      configMapKeyRef: { name: flags, key: all, optional: true }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating the Secret in a different namespace from the pod.</li>
+  <li>Deleting and recreating pods repeatedly instead of reading the event message.</li>
+  <li>Marking required secrets <code>optional: true</code> just to make the error go away.</li>
+  <li>Deploying workloads before the secrets they depend on in the pipeline.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CreateContainerConfigError means the kubelet could not build the container configuration, which almost always means something the pod references does not exist. I run kubectl describe pod and the events tell me exactly what, for example secret not found or a missing key in a ConfigMap. Then I check the namespace, spelling and keys, and if the secret comes from External Secrets I check that sync. Once the object exists the kubelet retries by itself. For optional settings I use optional true, and in pipelines I make sure secrets are created before the workloads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you catch this before deploying?</strong> Render manifests in CI and run policy or dry-run checks that referenced objects exist, plus GitOps sync ordering.</li>
+  <li><strong>How does it differ from CreateContainerError?</strong> That one comes from the runtime, such as a bad command or mount, after the config was built.</li>
+  <li><strong>Does updating a ConfigMap restart pods?</strong> No; mounted files update eventually, but env vars need a rollout.</li>
+</ul>
+</article>
+</body>
+</html>

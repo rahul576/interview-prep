@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-177 · How does @Transactional work internally?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-177" data-topic="Spring Boot">
+<h1>How does @Transactional work internally?</h1>
+<p class="ex-meta">Spring Boot · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><code>@Transactional</code> works through an <strong>AOP proxy</strong>: a <strong>TransactionInterceptor</strong> asks the <strong>PlatformTransactionManager</strong> to begin, commit or roll back around the method call, and binds the connection to the current thread via <strong>TransactionSynchronizationManager</strong>, which is why <strong>self-invocation</strong> and private methods bypass it.</p>
+
+<h2>Detailed explanation</h2>
+<p>When Spring creates a bean whose class or methods carry <code>@Transactional</code>, an auto-proxy <strong>BeanPostProcessor</strong> wraps it in a proxy. If the bean implements interfaces and you use plain Spring, this can be a <strong>JDK dynamic proxy</strong>; in Spring Boot the default is a <strong>CGLIB subclass</strong> (<code>proxyTargetClass=true</code>). Every other bean that injects it actually receives the proxy, not the raw object.</p>
+<p>On each call, the proxy runs the <strong>TransactionInterceptor</strong>. It looks up the method's <strong>transaction attributes</strong> (propagation, isolation, timeout, readOnly, rollback rules) and calls <code>PlatformTransactionManager.getTransaction()</code>. For JPA that is the <strong>JpaTransactionManager</strong>, which opens an <code>EntityManager</code>, gets a JDBC connection, switches off auto-commit and binds both to the current thread through the ThreadLocal-based <strong>TransactionSynchronizationManager</strong>. Repositories, <code>JdbcTemplate</code> and the shared <code>EntityManager</code> proxy look up that thread-bound resource, so every call inside the method takes part in the same transaction without passing anything around.</p>
+<p>When the method returns, the interceptor <strong>commits</strong> (with JPA, Hibernate flushes pending changes first). If an exception escapes and matches the rollback rules (by default <code>RuntimeException</code> and <code>Error</code>), it <strong>rolls back</strong>. Then it unbinds the resources and returns the connection to the pool.</p>
+<p>Because everything happens in the proxy, a call like <code>this.otherMethod()</code> inside the same class never goes through it, so no new transaction attributes apply. Private methods cannot be intercepted at all. Since Spring 6, protected and package-private methods work with class-based proxies, but public is still the safe convention.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>At startup, a BeanPostProcessor finds <code>@Transactional</code> and creates a proxy around the bean.</li>
+  <li>A caller invokes the method on the proxy.</li>
+  <li>TransactionInterceptor reads the attributes and calls <code>getTransaction()</code> on the transaction manager.</li>
+  <li>The manager joins, suspends or starts a transaction according to propagation and binds the connection to the thread.</li>
+  <li>The target method runs; repositories reuse the thread-bound connection.</li>
+  <li>On return the interceptor commits; on a matching exception it rolls back, then unbinds the resources.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+public class OrderService {
+    private final OrderService self;          // injected proxy of itself
+    public OrderService(@Lazy OrderService self) { this.self = self; }
+
+    public void importAll(List&lt;Order&gt; orders) {
+        orders.forEach(self::saveOne);        // goes through the proxy
+        // orders.forEach(this::saveOne);     // would bypass the proxy
+    }
+
+    @Transactional
+    public void saveOne(Order o) { /* repository calls share one connection */ }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling a <code>@Transactional</code> method from the same class and expecting a new transaction.</li>
+  <li>Putting <code>@Transactional</code> on private methods.</li>
+  <li>Starting work on another thread (<code>@Async</code>, parallel streams) and expecting it to join the transaction.</li>
+  <li>Assuming checked exceptions roll back by default.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring wraps the bean in a proxy, CGLIB by default in Spring Boot. When I call a transactional method, the TransactionInterceptor reads the attributes and asks the PlatformTransactionManager, for example JpaTransactionManager, to begin a transaction according to propagation. The connection and EntityManager are bound to the current thread through TransactionSynchronizationManager, so all repositories reuse them. After the method returns it commits, or rolls back on a runtime exception. Because it is proxy-based, self-invocation and private methods bypass it, so I move such methods to another bean or use TransactionTemplate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you fix self-invocation?</strong> Move the method to a separate bean, inject the proxy of itself, or use TransactionTemplate.</li>
+  <li><strong>Does it work across threads?</strong> No, the transaction is bound to the calling thread only.</li>
+  <li><strong>Where are the proxies created?</strong> In <code>postProcessAfterInitialization</code> of an auto-proxy creator BeanPostProcessor.</li>
+</ul>
+</article>
+</body>
+</html>

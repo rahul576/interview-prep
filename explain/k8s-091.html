@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-091 · A Java service is restarted repeatedly by its liveness probe during traffic peaks, causing an outage. What went wrong?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-091" data-topic="Kubernetes">
+<h1>A Java service is restarted repeatedly by its liveness probe during traffic peaks, causing an outage. What went wrong?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The liveness probe was timing out because the JVM was <strong>slow under load or paused in GC</strong>, so the kubelet restarted healthy-but-busy pods, which shifted load to the rest and caused a <strong>cascading failure</strong>; liveness must only detect a <strong>stuck process</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>liveness probe</strong> answers one question: should the kubelet kill and restart this container? During a traffic peak, request threads are saturated or a long <strong>garbage collection pause</strong> freezes the JVM. The probe request waits behind real traffic, exceeds <code>timeoutSeconds</code> (default 1 second) a few times in a row, reaches <code>failureThreshold</code>, and the container is restarted.</p>
+<p>Each restart removes a replica exactly when capacity is most needed, and a restarting JVM is slow to warm up. The remaining pods receive more traffic, they slow down, they fail liveness too, and the whole Deployment collapses, although nothing was actually broken. It is often worse when the liveness endpoint checks the <strong>database or downstream services</strong>: one slow dependency then restarts every pod at once.</p>
+<p>The fix is to separate the probes by purpose. <strong>Liveness</strong> checks only that the process is not deadlocked, using a cheap endpoint (Spring Boot's <code>/actuator/health/liveness</code>) with generous <code>timeoutSeconds</code> and <code>failureThreshold</code>. <strong>Readiness</strong> can fail under overload, removing a pod from Service endpoints temporarily without restarting it. A <strong>startup probe</strong> protects slow JVM startup. And the root cause, too little capacity, poor autoscaling or GC tuning, still needs fixing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Peak traffic or GC pause makes responses slow.</li>
+  <li>Liveness probe times out repeatedly and hits <code>failureThreshold</code>.</li>
+  <li>Kubelet restarts the container; capacity drops.</li>
+  <li>Surviving pods get more load and fail liveness in turn.</li>
+  <li>Fix: cheap liveness, tolerant thresholds, readiness for overload, startup probe, more capacity.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">startupProbe:
+  httpGet: { path: /actuator/health/liveness, port: 8080 }
+  periodSeconds: 5
+  failureThreshold: 36          # up to 3 minutes to start
+livenessProbe:
+  httpGet: { path: /actuator/health/liveness, port: 8080 }
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6           # ~1 minute of failures before restart
+readinessProbe:
+  httpGet: { path: /actuator/health/readiness, port: 8080 }
+  periodSeconds: 5
+  timeoutSeconds: 3</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the same deep health endpoint, including database checks, for liveness and readiness.</li>
+  <li>Keeping the 1-second default timeout for a JVM service.</li>
+  <li>Using <code>initialDelaySeconds</code> instead of a startup probe for slow starts.</li>
+  <li>Treating the restarts as the problem and ignoring the capacity or GC issue behind them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Under peak load the service responded slowly, or long GC pauses froze it, so the liveness probe timed out and the kubelet restarted the container. Each restart removed capacity, pushing more traffic to the rest, which then failed too, so we got a cascade with nothing actually broken. Often liveness also checked the database, which makes it worse. I would make liveness a cheap check that the process is not stuck, with longer timeouts and a higher failure threshold, let readiness take overloaded pods out of rotation, add a startup probe for JVM startup, and then fix the capacity and GC problem underneath.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is it reasonable to have no liveness probe at all?</strong> When the process exits on its own when it breaks, so the restart policy already handles it.</li>
+  <li><strong>Can readiness failures cascade too?</strong> Yes, if all pods go unready together, so keep readiness thresholds sensible.</li>
+  <li><strong>How do you confirm GC is the cause?</strong> GC logs or JFR showing pauses aligned with probe failures.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-188 · What is the default bean scope?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-188" data-topic="Spring Framework">
+<h1>What is the default bean scope?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>The default scope is <strong>singleton</strong>: <strong>one instance per ApplicationContext</strong> (not per JVM), <strong>created eagerly at startup</strong> unless <code>@Lazy</code>, and shared by all threads, so it must be <strong>stateless or thread-safe</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>If you declare a bean without <code>@Scope</code>, Spring creates exactly one instance of it, caches it in the singleton registry and injects that same instance into every dependent bean and every <code>getBean</code> call.</p>
+<p>It is important to distinguish this from the <strong>Gang of Four Singleton pattern</strong>. A GoF singleton enforces one instance per class loader through a private constructor and a static <code>getInstance()</code>. A Spring singleton is just &quot;one per container&quot;: the class is ordinary, you can still create other instances with <code>new</code> in a test, and if you create two application contexts, or declare two <code>@Bean</code> methods returning the same type, you get two instances. This makes Spring singletons easy to test and replace.</p>
+<p>Singletons are <strong>instantiated eagerly</strong> during context refresh. That is deliberate: missing dependencies, bad configuration or failing connections surface at <strong>startup</strong> instead of on the first user request. You can defer creation with <code>@Lazy</code> on a bean or globally with <code>spring.main.lazy-initialization=true</code>, trading fast startup for late failures.</p>
+<p>Because one instance serves all <strong>concurrent requests</strong>, singleton beans such as services and controllers must be <strong>stateless</strong>: dependencies in final fields are fine, but per-request data like the current user, an order being processed or a temporary list must live in local variables or method parameters. If shared state is necessary, use thread-safe structures (<code>ConcurrentHashMap</code>, <code>AtomicLong</code>) or a properly scoped bean.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Context refresh iterates over non-lazy singleton definitions.</li>
+  <li>Each bean is created, injected and initialised once.</li>
+  <li>The instance is stored in the singleton cache.</li>
+  <li>Every injection and lookup returns the cached instance.</li>
+  <li>On context close, destroy callbacks run once.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class PriceService {                       // BUG: shared mutable state
+    private BigDecimal lastTotal;          // overwritten by concurrent requests
+    BigDecimal total(Cart cart) {
+        lastTotal = cart.sum();
+        return lastTotal.multiply(TAX);
+    }
+}
+
+@Service
+class SafePriceService {                   // stateless
+    private final TaxRates rates;          // immutable dependency
+    SafePriceService(TaxRates rates) { this.rates = rates; }
+    BigDecimal total(Cart cart) {
+        BigDecimal sum = cart.sum();       // local variable per call
+        return sum.multiply(rates.forRegion(cart.region()));
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing request or user data in fields of a <code>@Service</code> or controller.</li>
+  <li>Believing a Spring singleton is one per JVM.</li>
+  <li>Making everything <code>@Lazy</code> and discovering configuration errors in production.</li>
+  <li>Using <code>synchronized</code> on whole service methods, serialising all requests.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The default scope is singleton: the container creates one instance and injects it everywhere. It's one per ApplicationContext, unlike the GoF singleton which is one per class loader. Singletons are created eagerly at startup unless marked lazy, so configuration errors surface early. Since one instance serves all concurrent requests, services and controllers must be stateless, or keep only thread-safe state, never per-request data in fields.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is request data in a service field a bug?</strong> Concurrent requests overwrite each other's data, leaking information.</li>
+  <li><strong>How to get lazy creation?</strong> <code>@Lazy</code> or global lazy initialisation.</li>
+  <li><strong>Are singletons garbage collected?</strong> Not while the context is alive; it holds references.</li>
+</ul>
+</article>
+</body>
+</html>

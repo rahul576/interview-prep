@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-011 · Explain Kubernetes RBAC: Roles, ClusterRoles, bindings and service accounts.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-011" data-topic="Kubernetes">
+<h1>Explain Kubernetes RBAC: Roles, ClusterRoles, bindings and service accounts.</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>RBAC grants <strong>verbs</strong> on <strong>resources</strong> in <strong>apiGroups</strong>: a <strong>Role</strong> is <strong>namespaced</strong>, a <strong>ClusterRole</strong> is <strong>cluster-wide</strong>; a <strong>RoleBinding</strong> grants a role within one namespace and a <strong>ClusterRoleBinding</strong> across the cluster, to <strong>users, groups or service accounts</strong>. Apply <strong>least privilege</strong> and verify with <strong><code>kubectl auth can-i</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every API request is authenticated (who are you) and then authorised (may you do this). RBAC is the standard authoriser. It is <strong>purely additive</strong>: there are no deny rules, so permissions are the union of all bindings.</p>
+<p>A <strong>rule</strong> lists <code>apiGroups</code> (<code>&quot;&quot;</code> for core, <code>apps</code>, <code>batch</code>...), <code>resources</code> (<code>pods</code>, <code>deployments</code>, subresources like <code>pods/log</code> or <code>pods/exec</code>), optional <code>resourceNames</code>, and <code>verbs</code> (<code>get</code>, <code>list</code>, <code>watch</code>, <code>create</code>, <code>update</code>, <code>patch</code>, <code>delete</code>, plus special verbs like <code>impersonate</code>, <code>bind</code>, <code>escalate</code>).</p>
+<ul>
+  <li><strong>Role:</strong> rules valid in its namespace.</li>
+  <li><strong>ClusterRole:</strong> rules for cluster-scoped resources (nodes, PVs, namespaces), non-resource URLs, or reusable namespaced permissions.</li>
+  <li><strong>RoleBinding:</strong> grants a Role or ClusterRole to subjects, <strong>only inside that namespace</strong>. Binding the built-in <code>view</code>, <code>edit</code> or <code>admin</code> ClusterRole per namespace is the common pattern.</li>
+  <li><strong>ClusterRoleBinding:</strong> grants a ClusterRole everywhere. Use sparingly.</li>
+</ul>
+<p><strong>Subjects</strong> are users and groups (from OIDC, cloud IAM mappings or certificates; Kubernetes has no user objects) and <strong>ServiceAccounts</strong>, the identities pods use to call the API with projected tokens.</p>
+<p>Some permissions are more powerful than they look: <code>create pods</code> in a namespace lets you mount any Secret or service account there; <code>get secrets</code> reveals credentials; <code>pods/exec</code> gives shells; <code>escalate</code>, <code>bind</code> and <code>impersonate</code> let you gain other roles.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives with an identity (user, groups or service account).</li>
+  <li>Authoriser collects all bindings matching the subject.</li>
+  <li>Checks if any rule allows verb + resource + namespace.</li>
+  <li>Allowed → admission → stored; otherwise 403 Forbidden.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: deployer, namespace: shop }
+rules:
+- apiGroups: [apps]
+  resources: [deployments]
+  verbs: [get, list, watch, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: ci-deployer, namespace: shop }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: deployer }
+subjects:
+- { kind: ServiceAccount, name: ci, namespace: shop }</code></pre>
+<pre><code class="language-bash">kubectl auth can-i delete pods -n shop --as=system:serviceaccount:shop:ci   # no
+kubectl auth can-i --list -n shop --as=alice@example.com</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Giving CI or operators <code>cluster-admin</code>.</li>
+  <li>Wildcards (<code>*</code>) for resources or verbs.</li>
+  <li>Using ClusterRoleBindings when a namespaced RoleBinding would do.</li>
+  <li>Forgetting that <code>create pods</code> implies access to Secrets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;RBAC rules list API groups, resources and verbs. A Role holds rules in one namespace; a ClusterRole is cluster-wide and can cover cluster-scoped resources like nodes. A RoleBinding grants a Role or ClusterRole to subjects within a namespace, and a ClusterRoleBinding grants it across the cluster. Subjects are users and groups from the identity provider, or service accounts that pods use. I follow least privilege: bind view or edit per namespace, avoid wildcards, never give cluster-admin to CI, and check permissions with kubectl auth can-i --as.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is <code>create pods</code> nearly equal to reading all Secrets?</strong> A pod can mount any Secret in its namespace and print it.</li>
+  <li><strong>How do you audit RBAC?</strong> <code>kubectl auth can-i --list</code>, tools like rbac-lookup or rakkess, and API audit logs.</li>
+  <li><strong>What are aggregated ClusterRoles?</strong> Roles built from others by label, for example CRD permissions added to <code>edit</code>.</li>
+</ul>
+</article>
+</body>
+</html>

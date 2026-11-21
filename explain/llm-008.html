@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-008 · How do you estimate GPU memory needs for serving a model, and how does quantisation help?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-008" data-topic="LLMOps &amp; RAG">
+<h1>How do you estimate GPU memory needs for serving a model, and how does quantisation help?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>GPU memory ≈ <strong>weights (parameters x bytes per parameter)</strong> + <strong>KV cache</strong> + <strong>activations and overhead</strong>; a <strong>70B model in FP16 needs about 140 GB for weights alone</strong>, and <strong>quantisation (FP8, INT8, 4-bit AWQ/GPTQ, GGUF)</strong> shrinks that by 2 to 4 times, at a <strong>quality cost you must evaluate</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Weights.</strong> BF16/FP16 uses 2 bytes per parameter, FP8/INT8 uses 1, 4-bit about 0.5 (plus small scale overheads). So a 7–8B model needs about 14–16 GB in BF16, and a 70B model about <strong>140 GB</strong>, which does not fit on one 80 GB H100 and needs at least two GPUs, usually with tensor parallelism. For <strong>MoE</strong> models, memory follows the <strong>total</strong>, not active, parameter count.</p>
+<p><strong>KV cache.</strong> This is what makes serving efficient. Per token it is <code>2 x layers x KV heads x head_dim x bytes</code>; for a 70B GQA model roughly 0.3 MB per token in BF16. In practice you often want <strong>as much memory for the cache as for the weights</strong> to get good batch sizes.</p>
+<p><strong>Overhead.</strong> Activations, CUDA graphs, the engine's workspace and fragmentation typically take a few GB per GPU. Budget <strong>20 to 50 percent above the weights</strong> as a minimum, then size the KV part from target concurrency and context length.</p>
+<p><strong>Quantisation.</strong> <strong>FP8</strong> (on Hopper, Blackwell and recent AMD GPUs) halves weight memory with very small quality loss and also speeds up compute; <strong>INT8</strong> (for example SmoothQuant or W8A8) is similar. <strong>4-bit weight-only</strong> methods such as <strong>AWQ</strong> and <strong>GPTQ</strong>, or <strong>GGUF</strong> Q4/Q5 formats for llama.cpp, cut weights to about a quarter, so a 70B model fits in about 35–40 GB, on one large GPU with room for cache. The KV cache can be quantised to FP8 too. Lower precision loses more quality, especially on reasoning, maths, code and non-English text, so evaluate on your own task set, not only perplexity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Weights = params x bytes/param.</li>
+  <li>KV per token = 2 x layers x KV heads x head_dim x bytes.</li>
+  <li>KV total = KV per token x context length x concurrent sequences.</li>
+  <li>Add 20 percent or more for activations and overhead.</li>
+  <li>Pick precision and GPU count; validate with a load test and quality eval.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Llama-3.1-70B, target 32 concurrent users x 8K tokens
+Weights BF16: 70e9 x 2 = 140 GB      | FP8: 70 GB      | AWQ 4-bit: ~38 GB
+KV (BF16, ~0.32 MB/token): 32 x 8192 x 0.32 MB ≈ 84 GB (FP8 KV ≈ 42 GB)
+Overhead ~10-15 GB
+BF16 total ≈ 240 GB → 4 x 80 GB (TP=4)
+FP8 + FP8 KV ≈ 125 GB → 2 x 80 GB (TP=2)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sizing only for weights and leaving no room for KV cache.</li>
+  <li>Using active parameters for MoE memory estimates.</li>
+  <li>Assuming 4-bit quantisation is free in quality.</li>
+  <li>Mixing up GB and GiB and ending up a few GB short.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with weights: parameters times bytes per parameter, so a 7B model in BF16 is about 14 GB and a 70B is about 140 GB, already more than one 80 GB GPU. Then the KV cache, which grows with context length and concurrency and often needs as much memory again for good throughput, plus activations and engine overhead, so I budget 20 to 50 percent extra. Quantisation helps a lot: FP8 or INT8 halves weight memory, 4-bit AWQ, GPTQ or GGUF cuts it to a quarter, and the KV cache can be FP8 too. The cost is some quality loss, so I evaluate it on our own tasks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>200 users with 8K prompts?</strong> Compute KV for realistic concurrent active users, not total users, then GPUs per replica and replicas.</li>
+  <li><strong>Weight-only vs weight-and-activation quantisation?</strong> Weight-only saves memory; W8A8/FP8 also speeds compute.</li>
+  <li><strong>Does quantisation speed decode?</strong> Yes, fewer bytes to read per step.</li>
+</ul>
+</article>
+</body>
+</html>

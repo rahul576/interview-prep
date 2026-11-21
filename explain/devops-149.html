@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-149 · How would you write a script to find the top 10 IP addresses in a web server access log?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-149" data-topic="Scripting">
+<h1>How would you write a script to find the top 10 IP addresses in a web server access log?</h1>
+<p class="ex-meta">Scripting · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Extract the IP field with <strong><code>awk '{print $1}'</code></strong>, count with <strong><code>sort | uniq -c</code></strong>, order with <strong><code>sort -rn</code></strong> and take <strong><code>head -10</code></strong>; for structured or huge logs use a streaming <strong>Python <code>Counter</code></strong> or tools that handle compression and parallelism.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the common and combined log formats used by Nginx and Apache, the <strong>client IP is the first whitespace-separated field</strong>. The classic pipeline is: <code>awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -10</code>. <code>uniq -c</code> only counts <strong>adjacent</strong> duplicates, which is why the first <code>sort</code> is required. <code>sort -rn</code> sorts numerically in reverse so the highest counts come first.</p>
+<p>The pipeline <strong>streams</strong> the file, so memory use is low, except that <code>sort</code> must see all lines; GNU sort handles that with temporary files on disk. A faster variant counts in awk itself with an associative array, so only unique IPs are kept in memory: <code>awk '{c[$1]++} END {for (ip in c) print c[ip], ip}' access.log | sort -rn | head</code>.</p>
+<p>Real logs add complications. Behind a load balancer the first field may be the <strong>proxy's IP</strong>, and the real client is in <strong>X-Forwarded-For</strong>, so you need the right field or log format. <strong>JSON logs</strong> are better parsed with <code>jq</code> or Python. In Python, read the file <strong>line by line</strong> (not <code>read()</code>), split or parse JSON, and use <code>collections.Counter</code> with <code>most_common(10)</code>. For <strong>rotated or compressed logs</strong>, <code>zcat -f access.log*</code> reads both plain and gzip files. For very large volumes, split work with GNU parallel, or better, query a log platform such as Loki, Elasticsearch or CloudWatch Logs Insights.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the log as a stream.</li>
+  <li>Extract the IP field per line.</li>
+  <li>Count occurrences (sort + uniq -c, or a hash map).</li>
+  <li>Sort counts descending.</li>
+  <li>Print the top ten.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -10
+
+# include rotated and gzipped logs, counting in awk
+zcat -f /var/log/nginx/access.log* | awk '{c[$1]++} END {for (ip in c) print c[ip], ip}' | sort -rn | head -10</code></pre>
+<pre><code class="language-python">import sys
+from collections import Counter
+
+counts = Counter()
+with open(sys.argv[1], encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;) as f:
+    for line in f:
+        ip = line.split(&quot; &quot;, 1)[0]
+        counts[ip] += 1
+
+for ip, n in counts.most_common(10):
+    print(f&quot;{n:&gt;8} {ip}&quot;)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>uniq -c</code> without sorting first.</li>
+  <li>Sorting counts alphabetically instead of with <code>-n</code>.</li>
+  <li>Reading huge files fully into memory in Python.</li>
+  <li>Counting the load balancer's IP instead of the real client.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In the shell I extract the first field with awk, pipe it to sort and uniq -c to count, then sort -rn to get the highest counts first and head to take ten. It streams the file so memory stays low, apart from sort, which can spill to disk; counting in an awk array avoids even that. For JSON logs or more complex parsing I would write a short Python script that reads line by line and uses Counter with most_common of ten. For rotated or compressed files I use zcat -f, and behind a load balancer I make sure I use the X-Forwarded-For client IP.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you count only 5xx responses in the last hour?</strong> Filter on the status field and timestamp first, e.g. <code>awk '$9 ~ /^5/'</code> combined with a time filter.</li>
+  <li><strong>Why is awk counting faster?</strong> It keeps only unique keys instead of sorting every line.</li>
+  <li><strong>Where would you do this in production?</strong> In the log platform, with a query and a dashboard.</li>
+</ul>
+</article>
+</body>
+</html>

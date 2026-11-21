@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-041 · How does Kubernetes schedule GPUs and other accelerators, and what does Dynamic Resource Allocation add?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-041" data-topic="Kubernetes">
+<h1>How does Kubernetes schedule GPUs and other accelerators, and what does Dynamic Resource Allocation add?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Classically, <strong>device plugins</strong> advertise accelerators as integer <strong>extended resources</strong> like <code>nvidia.com/gpu</code> (whole devices, no overcommit, sharing only via <strong>MIG</strong> or <strong>time-slicing</strong>); <strong>Dynamic Resource Allocation (DRA)</strong>, <strong>GA in Kubernetes 1.34</strong>, adds <strong>ResourceClaims</strong>, <strong>DeviceClasses</strong> and attribute-based selection with <strong>CEL</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>With the <strong>device plugin</strong> framework, a vendor DaemonSet (for NVIDIA usually deployed by the <strong>GPU Operator</strong>, which also installs drivers, the container toolkit and the DCGM exporter) registers with the kubelet and reports a count of devices. The node then advertises, say, <code>nvidia.com/gpu: 8</code>. Pods request them in <code>resources.limits</code> as <strong>integers</strong>: no fractions and no overcommit. The scheduler only sees a number, so it cannot express &quot;a GPU with 80 GB of memory&quot; or &quot;two GPUs on the same NVLink&quot; except with node labels and affinity.</p>
+<p>Sharing is possible in two ways. <strong>Multi-Instance GPU (MIG)</strong> on supported GPUs splits a card into hardware-isolated slices that appear as separate resources such as <code>nvidia.com/mig-1g.10gb</code>. <strong>Time-slicing</strong> advertises one GPU as several replicas but gives no memory or fault isolation. GPU nodes are usually a dedicated pool with a <strong>taint</strong> like <code>nvidia.com/gpu=present:NoSchedule</code>, so only workloads that tolerate it (and request GPUs) land there.</p>
+<p><strong>DRA</strong> generalises this, much like PVCs did for storage. DRA drivers publish devices and their attributes (model, memory, capacity) in <strong>ResourceSlices</strong>. Admins define <strong>DeviceClasses</strong>. Workloads create a <strong>ResourceClaim</strong> or a <strong>ResourceClaimTemplate</strong> (one claim per pod) that selects devices with <strong>CEL expressions</strong>, and the scheduler allocates matching devices. Claims can be shared between containers or pods, can request several devices with constraints, and allocations are visible as API objects. This makes heterogeneous accelerator fleets far easier to schedule.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Driver or device plugin runs as a DaemonSet on GPU nodes.</li>
+  <li>Device plugin path: node advertises <code>nvidia.com/gpu: N</code>; pod requests an integer.</li>
+  <li>DRA path: driver publishes ResourceSlices with device attributes.</li>
+  <li>Admin creates a DeviceClass; workload creates a ResourceClaim with a CEL selector.</li>
+  <li>Scheduler allocates a matching device and binds the pod to that node.</li>
+  <li>Kubelet asks the driver to prepare the device and injects it into the container.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata: { name: big-gpu }
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.nvidia.com
+            selectors:
+              - cel:
+                  expression: device.capacity[&quot;gpu.nvidia.com&quot;].memory.compareTo(quantity(&quot;40Gi&quot;)) &gt;= 0
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: trainer }
+spec:
+  resourceClaims:
+    - name: gpu
+      resourceClaimTemplateName: big-gpu
+  containers:
+    - name: app
+      image: registry.example.com/trainer:1.4
+      resources:
+        claims: [{ name: gpu }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Requesting fractional GPUs with the device plugin (not allowed).</li>
+  <li>Using time-slicing for multi-tenant workloads that need isolation.</li>
+  <li>Forgetting taints, so ordinary pods fill expensive GPU nodes.</li>
+  <li>Assuming the scheduler understands GPU memory or topology without DRA or labels.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Traditionally a device plugin, usually installed by the NVIDIA GPU Operator, advertises nvidia.com/gpu as an extended resource and pods request whole GPUs as integers, with no overcommit. Sharing needs MIG for isolated slices or time-slicing without isolation, and GPU pools are tainted. DRA, GA in 1.34, is the newer model: drivers publish devices with attributes in ResourceSlices, admins define DeviceClasses, and pods use ResourceClaims with CEL selectors, for example a GPU with at least 40 GB, and claims can be shared. It's like PVCs for devices.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is gang scheduling important for training?</strong> Distributed jobs need all workers at once; partial placement holds GPUs idle and can deadlock; Kueue or Volcano solve this.</li>
+  <li><strong>MIG vs time-slicing?</strong> MIG has hardware isolation of memory and compute; time-slicing just shares time.</li>
+  <li><strong>How do you monitor GPU use?</strong> DCGM exporter metrics in Prometheus.</li>
+</ul>
+</article>
+</body>
+</html>

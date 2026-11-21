@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-216 · How do you secure communication between microservices?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-216" data-topic="Security">
+<h1>How do you secure communication between microservices?</h1>
+<p class="ex-meta">Security · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Assume the internal network is <strong>hostile (zero trust)</strong>: encrypt and authenticate every hop with <strong>mutual TLS</strong> (often automated by a <strong>service mesh</strong>), add <strong>application-level identity</strong> through <strong>token propagation, token exchange or client credentials</strong>, restrict reachability with <strong>network policies</strong>, and manage <strong>secrets with rotation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Old perimeter thinking said &quot;inside the firewall is safe&quot;. In practice one compromised pod or a misconfigured route gives an attacker the run of the network, so each service must authenticate its callers and decide what they may do.</p>
+<p><strong>Transport identity: mTLS.</strong> In ordinary TLS only the server presents a certificate. With <strong>mutual TLS</strong> both sides do, so the receiver knows which <strong>workload</strong> is calling, and all traffic is encrypted. Managing certificates by hand is painful, so a <strong>service mesh</strong> (Istio, Linkerd, Cilium) issues short-lived certificates bound to the workload identity (SPIFFE IDs, usually based on the Kubernetes service account), rotates them automatically and enforces mTLS in sidecars or node proxies. Mesh <strong>authorization policies</strong> then say, for example, &quot;only the checkout service may call payments on POST /charges&quot;.</p>
+<p><strong>Application identity: tokens.</strong> mTLS tells you which service is calling, not on whose behalf. When acting for a user, the caller <strong>propagates</strong> the user's access token, or better uses <strong>OAuth 2.0 Token Exchange (RFC 8693)</strong> to get a token with a narrower audience for the downstream service. For background jobs with no user, the service uses the <strong>client credentials</strong> grant with narrow scopes. The receiver validates the token like any resource server.</p>
+<p><strong>Network and secrets:</strong> Kubernetes <strong>NetworkPolicies</strong>, private subnets and security groups limit who can even connect (default deny). Secrets and keys live in a vault or cloud secret manager, preferably replaced by <strong>workload identity</strong>, and rotate automatically. Finally, <strong>log and monitor</strong> service-to-service calls and denials.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each workload gets an identity (service account) and a mesh-issued certificate.</li>
+  <li>Every connection uses mTLS; plaintext is rejected (STRICT mode).</li>
+  <li>Mesh policies allow only the expected caller-callee pairs.</li>
+  <li>Requests carry a user token (propagated or exchanged) or a client-credentials token.</li>
+  <li>The receiving service validates the token and applies its own authorization.</li>
+  <li>Network policies block unexpected connections; access is logged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata: { name: default, namespace: shop }
+spec:
+  mtls: { mode: STRICT }
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: { name: payments-allow-checkout, namespace: shop }
+spec:
+  selector: { matchLabels: { app: payments } }
+  action: ALLOW
+  rules:
+    - from:
+        - source: { principals: [&quot;cluster.local/ns/shop/sa/checkout&quot;] }
+      to:
+        - operation: { methods: [&quot;POST&quot;], paths: [&quot;/charges&quot;] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No authentication between services because they are &quot;internal&quot;.</li>
+  <li>Sharing one static API key across all services.</li>
+  <li>Forwarding a broad user token everywhere instead of exchanging it.</li>
+  <li>mTLS in PERMISSIVE mode forever after migration.</li>
+  <li>Long-lived certificates rotated by hand.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I assume the internal network isn't trusted. First, every call uses mutual TLS so both sides prove their identity and traffic is encrypted; a service mesh like Istio or Linkerd issues and rotates the certificates and enforces authorization policies about which service may call which. Second, application-level identity: when acting for a user I propagate the token or, better, exchange it for a narrower one; for background calls I use client credentials tokens with tight scopes, validated by the receiver. Third, I limit reachability with Kubernetes NetworkPolicies and private networks. Secrets live in a vault with rotation, and service-to-service traffic is logged and monitored.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is token exchange and when would you use it?</strong> Swapping one token for another with a different audience or reduced scope, when calling downstream on a user's behalf.</li>
+  <li><strong>mTLS without a mesh?</strong> Possible with Spring Boot SSL bundles and an internal CA, but rotation is harder.</li>
+  <li><strong>What is SPIFFE?</strong> A standard for workload identities (<code>spiffe://...</code>) used by meshes and SPIRE.</li>
+</ul>
+</article>
+</body>
+</html>

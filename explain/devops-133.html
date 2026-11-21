@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-133 · A terraform apply failed halfway through. How do you recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-133" data-topic="Infrastructure as Code">
+<h1>A terraform apply failed halfway through. How do you recover?</h1>
+<p class="ex-meta">Infrastructure as Code · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Don't panic or delete things: Terraform <strong>writes each resource to state as soon as it is created</strong>, so a partial apply usually leaves a <strong>consistent state</strong>; <strong>read the error and fix the root cause</strong>, <strong>re-run <code>plan</code></strong> to see what remains, <strong>apply again</strong>, carefully <strong><code>force-unlock</code></strong> a stale lock, and repair mismatches with <strong><code>import</code></strong> or <strong><code>state rm</code></strong>, never by hand-editing state.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform applies changes in dependency order and, for each resource, updates the state after the provider reports success. If the apply fails halfway, resources that were created are already in state; resources not yet attempted are simply still pending; the one that failed may be marked <strong>tainted</strong> (created but failed later steps), so it will be replaced next time. Because Terraform is declarative, the normal recovery is to <strong>fix the cause and run it again</strong>: the next plan shows only the remaining work.</p>
+<p>Typical causes: <strong>quotas</strong>, <strong>missing IAM permissions</strong>, <strong>invalid arguments</strong>, API <strong>rate limits</strong>, <strong>name conflicts</strong> or <strong>eventual consistency</strong> (an IAM role not yet visible). Fix the cause, then <code>plan</code> again.</p>
+<p>Edge cases:</p>
+<ul>
+  <li><strong>Stale lock:</strong> if the CI job was killed, the lock may remain. Confirm nobody else is running (check pipelines, ask the team), then <code>terraform force-unlock &lt;LOCK_ID&gt;</code>. Forcing a lock while someone is applying can corrupt state.</li>
+  <li><strong>Created but not recorded:</strong> if the process crashed between creation and state write, the resource exists but Terraform doesn't know it; the next apply fails with &quot;already exists&quot;. Adopt it with <strong><code>terraform import</code></strong> or an <code>import</code> block.</li>
+  <li><strong>State references something gone:</strong> remove it with <strong><code>terraform state rm</code></strong> or let plan recreate it.</li>
+  <li><strong>Corrupted or lost state:</strong> restore a previous <strong>version</strong> from the versioned backend bucket; Terraform also writes <code>errored.tfstate</code> locally if it can't save state remotely, which you push with <code>terraform state push</code>.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stop and read the error; don't delete resources manually.</li>
+  <li>Fix root cause (quota, permission, argument).</li>
+  <li><code>terraform plan</code> to see remaining and replacement actions.</li>
+  <li>Resolve lock or state mismatches if present.</li>
+  <li><code>terraform apply</code> again; verify a clean plan afterwards.</li>
+  <li>Postmortem: add checks or policies to prevent recurrence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform plan -out=tfplan             # shows what is still missing
+terraform force-unlock 6c1a7e2b-...    # only after confirming no other run is active
+terraform import aws_iam_role.app app-role-prod      # resource exists but not in state
+terraform state rm aws_route53_record.old            # state points to something deleted
+terraform state push errored.tfstate                 # if apply couldn't upload state
+terraform apply tfplan</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting partially created resources in the console, causing more drift.</li>
+  <li>Force-unlocking while a colleague's apply is still running.</li>
+  <li>Editing <code>terraform.tfstate</code> JSON manually.</li>
+  <li>Running <code>apply -auto-approve</code> repeatedly without reading the plan.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First, I don't panic or start deleting things. Terraform records each resource in state as soon as it's created, so a partial apply usually leaves state consistent for what was created. I read the error and fix the root cause, maybe a quota, a missing permission or an invalid argument, then run plan to see the remaining changes and apply again. If the crashed run left the lock behind, I confirm nobody else is running and use force-unlock carefully. If a resource was created but not recorded, I bring it in with terraform import; if state references something that no longer exists, I use state rm. I never edit the state file by hand, and versioned state lets me restore if needed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent concurrent applies?</strong> Remote backend locking and applies only from one CI pipeline with concurrency limits.</li>
+  <li><strong>What does tainted mean?</strong> The resource will be destroyed and recreated on next apply; <code>-replace</code> does this deliberately.</li>
+  <li><strong>How do you recover a corrupted state?</strong> Restore an earlier version from the versioned bucket and reconcile with plan.</li>
+</ul>
+</article>
+</body>
+</html>

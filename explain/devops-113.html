@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-113 · How does Kubernetes scheduling work? Explain node selectors, affinity, taints and tolerations.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-113" data-topic="Kubernetes">
+<h1>How does Kubernetes scheduling work? Explain node selectors, affinity, taints and tolerations.</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>scheduler filters</strong> nodes that can run a pod (<strong>resource requests</strong>, ports, volumes, <strong>nodeSelector/affinity</strong>, <strong>taints</strong>) and <strong>scores</strong> the rest; <strong>node affinity</strong> attracts pods to labelled nodes, <strong>pod (anti-)affinity</strong> and <strong>topology spread constraints</strong> co-locate or spread replicas, and <strong>taints repel</strong> pods unless they have matching <strong>tolerations</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>For each pending pod, <strong>kube-scheduler</strong> runs two phases. <strong>Filtering</strong> removes nodes that cannot run it: not enough allocatable CPU or memory after existing <strong>requests</strong>, host port conflicts, volume zone constraints, a nodeSelector or required affinity that does not match, or a <strong>taint</strong> the pod does not tolerate. <strong>Scoring</strong> ranks the remaining nodes with plugins (spreading load, image locality, preferred affinities, topology spread), and the pod is <strong>bound</strong> to the best one. If no node passes filtering, the pod stays <strong>Pending</strong> with an event explaining why, and a node autoscaler may add capacity.</p>
+<p><strong>nodeSelector and node affinity.</strong> <code>nodeSelector</code> is a simple label match (<code>gpu: &quot;true&quot;</code>). <strong>Node affinity</strong> is more expressive: <code>requiredDuringSchedulingIgnoredDuringExecution</code> (hard) and <code>preferredDuringScheduling…</code> (soft, weighted), with operators like <code>In</code>, <code>NotIn</code>, <code>Exists</code>. Use it for hardware (GPU, ARM), zones or node pools.</p>
+<p><strong>Pod affinity and anti-affinity</strong> place pods relative to other pods by label within a <strong>topology key</strong> (node, zone). Affinity co-locates (cache next to app); anti-affinity separates (no two replicas on one node). <strong>Topology spread constraints</strong> are usually better for spreading: <code>maxSkew: 1</code> across <code>topology.kubernetes.io/zone</code> keeps replicas evenly distributed, with <code>whenUnsatisfiable</code> choosing hard or soft behaviour.</p>
+<p><strong>Taints and tolerations</strong> work the other way round: a node <strong>taint</strong> (<code>dedicated=gpu:NoSchedule</code>) repels all pods except those with a matching <strong>toleration</strong>. Effects are <code>NoSchedule</code>, <code>PreferNoSchedule</code> and <code>NoExecute</code> (also evicts running pods). Kubernetes itself taints nodes that are not ready or under pressure.</p>
+<p><strong>Priority and preemption</strong> let important pods evict lower-priority ones when no node fits.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod created without <code>nodeName</code>.</li>
+  <li>Filter: requests fit, selectors/affinity match, taints tolerated.</li>
+  <li>Score: spread, preferences, image locality.</li>
+  <li>Bind to highest-scoring node; kubelet starts it.</li>
+  <li>None fit → Pending; preemption or autoscaling may help.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  tolerations:
+    - { key: dedicated, operator: Equal, value: gpu, effect: NoSchedule }
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions: [{ key: accelerator, operator: In, values: [nvidia-l4] }]
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector: { matchLabels: { app: inference } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using only a toleration and expecting pods to land on the tainted nodes.</li>
+  <li>Hard anti-affinity with more replicas than nodes, leaving pods Pending.</li>
+  <li>Missing requests, so the scheduler packs nodes badly.</li>
+  <li>Forgetting that <code>IgnoredDuringExecution</code> means label changes don't move running pods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The scheduler first filters nodes that can run the pod, based on resource requests, ports, volumes, selectors and taints, then scores the rest and binds to the best one. nodeSelector and node affinity attract pods to nodes with certain labels, like GPU nodes, with hard or soft rules. Pod anti-affinity and topology spread constraints spread replicas across nodes and zones for availability, while pod affinity co-locates pods. Taints on nodes repel pods unless they have matching tolerations, which is how you dedicate nodes, like a system or GPU pool. If nothing fits, the pod stays Pending and the event tells you why.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should GPU nodes use both taints and node affinity?</strong> The taint keeps other pods off; the affinity makes GPU pods go there; a toleration alone only permits.</li>
+  <li><strong>Spread constraints or anti-affinity?</strong> Spread constraints give even distribution with skew control and scale better.</li>
+  <li><strong>What does NoExecute do?</strong> Evicts running pods without a toleration, optionally after <code>tolerationSeconds</code>.</li>
+</ul>
+</article>
+</body>
+</html>

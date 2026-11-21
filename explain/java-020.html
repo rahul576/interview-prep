@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-020 · Describe the JVM memory areas and how garbage collection generations work.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-020" data-topic="JVM &amp; Performance">
+<h1>Describe the JVM memory areas and how garbage collection generations work.</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The JVM has a <strong>shared heap</strong> for objects, a <strong>stack per thread</strong> for frames and locals, <strong>Metaspace</strong> in native memory for class metadata, plus the <strong>PC register</strong>, <strong>native method stacks</strong> and <strong>code cache</strong>; most collectors are <strong>generational</strong>, allocating in <strong>Eden</strong>, aging objects through <strong>survivor spaces</strong> and <strong>promoting</strong> long-lived ones to the <strong>old generation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Heap.</strong> Shared by all threads; holds every object and array; sized with <code>-Xms</code>/<code>-Xmx</code> (or <code>MaxRAMPercentage</code> in containers); managed by the garbage collector. Exhausting it gives <code>OutOfMemoryError: Java heap space</code>.</p>
+<p><strong>Thread stacks.</strong> Each thread has its own stack of <strong>frames</strong>, one per method call, containing local variables, the operand stack and return information. Frames vanish when the method returns, so no GC is needed. Size is set by <code>-Xss</code>; deep recursion gives <code>StackOverflowError</code>.</p>
+<p><strong>Metaspace.</strong> Since Java 8, class metadata (class structures, method bytecode, constant pools) lives in native memory, replacing <strong>PermGen</strong>. It grows dynamically, so it is usually capped with <code>-XX:MaxMetaspaceSize</code>.</p>
+<p><strong>Others.</strong> The <strong>PC register</strong> per thread points at the current bytecode instruction; <strong>native method stacks</strong> serve JNI code; the <strong>code cache</strong> stores JIT-compiled machine code. Thread stacks, Metaspace, code cache, GC structures and direct <code>ByteBuffer</code>s are all <strong>off-heap</strong>, which matters when sizing containers.</p>
+<p><strong>Generations.</strong> The <strong>weak generational hypothesis</strong> says most objects die young. So the heap is split: the <strong>young generation</strong> (Eden plus two survivor spaces) and the <strong>old generation</strong>. New objects are allocated in Eden by pointer bumping in thread-local buffers. When Eden fills, a <strong>minor GC</strong> copies the few live objects into a survivor space and increments their age; dead objects cost nothing. Objects that reach the <strong>tenuring threshold</strong> (up to 15) or do not fit are <strong>promoted</strong> to the old generation, which is collected less often by <strong>major</strong> or <strong>mixed</strong> collections.</p>
+<p><strong>G1</strong> (default since Java 9) keeps this logic but uses many equal-sized <strong>regions</strong> tagged as eden, survivor, old or humongous. <strong>ZGC</strong> became generational in Java 21 and, in recent JDKs, generational-only. Parallel and Serial use contiguous generations.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Class metadata is loaded into Metaspace.</li>
+  <li>A thread calls a method; a frame is pushed on its stack.</li>
+  <li><code>new</code> allocates the object in Eden; the reference sits in the frame.</li>
+  <li>Eden fills; a minor GC copies live objects to a survivor space.</li>
+  <li>Objects surviving several cycles are promoted to the old generation.</li>
+  <li>Old generation fills; a concurrent cycle, mixed or full GC reclaims it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -Xms2g -Xmx2g -Xss512k -XX:MaxMetaspaceSize=256m \
+     -XX:+UseG1GC -Xlog:gc*:file=gc.log:time,uptime -jar app.jar
+
+jcmd &lt;pid&gt; GC.heap_info        # current generation/region usage
+jstat -gcutil &lt;pid&gt; 1000       # S0 S1 E O M percentages every second</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Area</th><th>Shared?</th><th>Holds</th><th>Error when exhausted</th></tr></thead>
+<tbody>
+<tr><td>Heap</td><td>Yes</td><td>Objects, arrays</td><td>OOM: Java heap space</td></tr>
+<tr><td>Stack</td><td>Per thread</td><td>Frames, locals</td><td>StackOverflowError</td></tr>
+<tr><td>Metaspace</td><td>Yes</td><td>Class metadata</td><td>OOM: Metaspace</td></tr>
+<tr><td>Code cache</td><td>Yes</td><td>JIT code</td><td>JIT stops compiling (warning)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying objects live on the stack; only references and primitives do (escape analysis aside).</li>
+  <li>Calling Metaspace part of the heap.</li>
+  <li>Setting container memory equal to <code>-Xmx</code>, ignoring off-heap usage.</li>
+  <li>Assuming every collector uses fixed contiguous generations.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The heap is shared by all threads and holds objects and arrays; it is managed by the garbage collector. Each thread has its own stack of frames holding local variables, operand stacks and return addresses, which is why deep recursion gives StackOverflowError. Metaspace, in native memory since Java 8, stores class metadata, and there are also the PC register, native method stacks and the code cache for JIT-compiled code. Most collectors are generational: new objects go into Eden, minor GCs copy survivors between the survivor spaces, and objects that survive enough cycles are promoted to the old generation, which is collected less often, because most objects die young. G1 does the same with regions instead of fixed areas.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the difference between a minor GC, a major GC and a full GC?</strong> Minor collects young only; major targets the old generation; full collects the entire heap, usually in a long stop-the-world pause.</li>
+  <li><strong>Why two survivor spaces?</strong> Copying between them compacts live objects and keeps one always empty.</li>
+  <li><strong>What is a TLAB?</strong> A thread-local allocation buffer in Eden that makes allocation a lock-free pointer bump.</li>
+</ul>
+</article>
+</body>
+</html>

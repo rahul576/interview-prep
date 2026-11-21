@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-045 · How do parallel streams work internally?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-045" data-topic="Java 8+ Features">
+<h1>How do parallel streams work internally?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A parallel stream <strong>recursively splits</strong> its source with <strong><code>Spliterator.trySplit()</code></strong>, runs each chunk as a <strong>fork/join task</strong> in the <strong>common ForkJoinPool</strong> (with <strong>work stealing</strong>), and <strong>combines</strong> the partial results up the task tree using the reduction or collector <strong>combiner</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every stream source provides a <strong><code>Spliterator</code></strong>, an iterator that can also split itself. When a parallel pipeline's terminal operation runs, the framework wraps it in a task (internally classes such as <code>ReduceTask</code> or <code>ForEachTask</code>, built on <code>CountedCompleter</code>). The task calls <code>trySplit()</code> on the spliterator: if it returns a new spliterator, the task forks a child for one half and continues splitting the other. Splitting stops when chunks are small enough, based on the estimated size divided by a multiple of the pool's parallelism.</p>
+<p>Each leaf task runs the <strong>entire pipeline</strong> (filter, map, and so on) over its chunk sequentially and produces a <strong>partial result</strong>: a partial sum, a partial list, or a partial map. As tasks complete, results are merged up the tree using the <strong>combiner</strong>: the third argument of <code>reduce</code>, or the collector's <code>combiner()</code> function, for example <code>addAll</code> for lists or a map merge for <code>groupingBy</code>.</p>
+<p>The tasks run in <strong><code>ForkJoinPool.commonPool()</code></strong>, whose default parallelism is <strong>number of cores minus one</strong>; the thread that calls the terminal operation also participates, so all cores are used. Each worker has its own <strong>deque</strong>; it pushes and pops its own tasks at one end, and idle workers <strong>steal</strong> from the other end of busy workers' deques. That balances load without a central queue.</p>
+<p>Performance depends heavily on the source. <strong><code>ArrayList</code></strong>, arrays and <strong><code>IntStream.range</code></strong> know their size and split in constant time into equal halves. <strong><code>LinkedList</code></strong> must be walked to split, <code>Stream.iterate</code> is inherently sequential, and I/O-based sources like <code>BufferedReader.lines()</code> split poorly. <strong><code>HashSet</code></strong> and <code>HashMap</code> split reasonably but unevenly. Ordered operations add coordination costs, because partial results must be kept in order.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terminal operation creates the root task for the pipeline.</li>
+  <li><code>trySplit()</code> is called recursively; children are forked into worker deques.</li>
+  <li>Each leaf processes its chunk through all stages sequentially.</li>
+  <li>Idle workers steal tasks to keep all cores busy.</li>
+  <li>Partial results are combined pairwise via the combiner.</li>
+  <li>The caller receives the final merged result.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// reduce with identity, accumulator and combiner makes the merge step visible
+int totalLength = words.parallelStream()
+    .reduce(0,
+            (partial, word) -&gt; partial + word.length(), // within a chunk
+            Integer::sum);                             // merging chunks
+
+// Splitting quality:
+List&lt;Integer&gt; array = new ArrayList&lt;&gt;(data);   // splits in O(1), balanced
+List&lt;Integer&gt; linked = new LinkedList&lt;&gt;(data); // must traverse to split
+
+System.out.println(ForkJoinPool.commonPool().getParallelism()); // e.g. 7 on 8 cores</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Source</th><th>Split quality</th><th>Parallel suitability</th></tr></thead>
+<tbody>
+<tr><td>ArrayList, arrays</td><td>Excellent, sized</td><td>Good</td></tr>
+<tr><td>IntStream.range</td><td>Excellent</td><td>Good</td></tr>
+<tr><td>HashSet/HashMap</td><td>Fair, uneven</td><td>Moderate</td></tr>
+<tr><td>LinkedList</td><td>Poor, linear walk</td><td>Bad</td></tr>
+<tr><td>Stream.iterate, I/O lines</td><td>Poor</td><td>Bad</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing each element gets its own thread.</li>
+  <li>Using a combiner that is not consistent with the accumulator in <code>reduce</code>.</li>
+  <li>Parallelising over <code>LinkedList</code> or <code>Stream.iterate</code>.</li>
+  <li>Ignoring that the common pool is shared by the whole JVM.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A parallel stream asks the source Spliterator to split itself. trySplit is called recursively until the chunks are small enough, and each chunk becomes a fork/join task in the common ForkJoinPool, whose parallelism is cores minus one, with the calling thread helping too. Each task runs the whole pipeline over its chunk and produces a partial result, and those are combined up the tree with the reduce combiner or the collector's combiner. Workers have their own deques and idle ones steal tasks from busy ones, which balances load. How well it performs depends on splitting: ArrayList, arrays and ranges split cheaply and evenly, while LinkedList, iterate or I/O sources do not.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a parallel stream over a LinkedList perform badly?</strong> It cannot split in constant time; it must traverse nodes, producing unbalanced, expensive splits.</li>
+  <li><strong>What is a <code>CountedCompleter</code>?</strong> A fork/join task type that triggers completion when all child tasks finish, used inside stream implementations.</li>
+  <li><strong>Can you write your own Spliterator?</strong> Yes, implementing <code>tryAdvance</code>, <code>trySplit</code>, <code>estimateSize</code> and <code>characteristics</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-040 · How do you control startup order and readiness in Docker Compose?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-040" data-topic="Docker">
+<h1>How do you control startup order and readiness in Docker Compose?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>depends_on</code></strong> alone only orders <strong>container start</strong>; add a <strong>healthcheck</strong> and <strong><code>condition: service_healthy</code></strong> to wait for readiness, <strong><code>condition: service_completed_successfully</code></strong> for one-off jobs such as migrations, and still make apps <strong>retry connections</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Postgres container &quot;starts&quot; in a fraction of a second, but the database needs several more seconds to initialise and accept connections. With a plain <code>depends_on: [db]</code>, Compose starts <code>db</code> first and <code>api</code> immediately after, so the API often fails its first connection attempt and crashes.</p>
+<p>Compose's long-form <code>depends_on</code> supports <strong>conditions</strong>. <strong><code>service_started</code></strong> is the default ordering. <strong><code>service_healthy</code></strong> waits until the dependency's <strong>healthcheck</strong> reports healthy, for example <code>pg_isready</code> for Postgres, <code>redis-cli ping</code> for Redis, or an HTTP health endpoint for another API. <strong><code>service_completed_successfully</code></strong> waits until a one-off container <strong>exits with code 0</strong>, perfect for a <strong>migration</strong> or seed job that must finish before the application starts. Options like <code>restart: true</code> restart dependants when the dependency is restarted by Compose, and <code>required: false</code> makes a dependency optional.</p>
+<p>This is <strong>start-up ordering</strong>, not resilience. Databases restart, networks blip and dependencies are redeployed while the app is running. Applications should therefore <strong>retry connections with exponential backoff</strong> and expose their own readiness. That matters even more outside Compose: <strong>Kubernetes has no depends_on</strong>; it uses readiness probes, init containers and application retries instead, so code that only works because of Compose ordering breaks there.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compose builds a dependency graph from <code>depends_on</code>.</li>
+  <li>It starts services without dependencies first.</li>
+  <li>For <code>service_healthy</code>, it polls the dependency's health status.</li>
+  <li>For <code>service_completed_successfully</code>, it waits for exit code 0.</li>
+  <li>Only then are dependent services started; a failed condition aborts <code>up</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: dev }
+    healthcheck:
+      test: [&quot;CMD-SHELL&quot;, &quot;pg_isready -U postgres&quot;]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    image: flyway/flyway:10
+    command: -url=jdbc:postgresql://db:5432/postgres -user=postgres -password=dev migrate
+    volumes: [&quot;./db/migrations:/flyway/sql&quot;]
+    depends_on:
+      db: { condition: service_healthy }
+  api:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>depends_on</code> waits for readiness.</li>
+  <li>Old <code>wait-for-it.sh</code> hacks instead of healthchecks.</li>
+  <li>Healthchecks that pass before the service truly accepts work.</li>
+  <li>Apps that crash on the first failed connection instead of retrying.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;depends_on on its own only orders container start, so the API may start while the database is still initialising. I give the database a healthcheck like pg_isready and declare depends_on with condition service_healthy, so the API starts only when the database is healthy. For one-off jobs like migrations I use service_completed_successfully, so the API waits until the migration container exits with zero. Even so, the application should retry connections with backoff, because dependencies restart later too, and Kubernetes has no depends_on at all.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you run migrations before the API?</strong> A migrate service with service_completed_successfully.</li>
+  <li><strong>What replaces depends_on in Kubernetes?</strong> Readiness probes, init containers and retries.</li>
+  <li><strong>What if the healthcheck never passes?</strong> <code>docker compose up</code> fails and reports the unhealthy dependency.</li>
+</ul>
+</article>
+</body>
+</html>

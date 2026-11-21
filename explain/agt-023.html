@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-023 · An agent keeps calling the same tool with the same arguments in a loop. How do you diagnose and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-023" data-topic="AI Agents &amp; AIOps">
+<h1>An agent keeps calling the same tool with the same arguments in a loop. How do you diagnose and fix it?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Open the <strong>trace</strong> and see what the agent <strong>observed</strong> after each call: loops usually come from <strong>ambiguous or unchanged tool results</strong>, <strong>non-actionable errors</strong>, <strong>missing information or tool relationships</strong>, or <strong>unclear completion criteria</strong>; fix the tools, descriptions and instructions, and add <strong>runtime loop detection</strong> with <strong>step limits</strong> as a safety net.</p>
+
+<h2>Detailed explanation</h2>
+<p>Repeating the same call with the same arguments is the agent's way of saying &quot;I don't understand what happened&quot;. The diagnosis therefore starts from the model's point of view: read the trace step by step and look at <strong>exactly what it received</strong>.</p>
+<p>Common causes:</p>
+<ul>
+  <li><strong>Ambiguous results</strong>: an empty list without explanation looks like a failure, so the agent retries. &quot;No orders found for this customer in the last 90 days&quot; is clear.</li>
+  <li><strong>Truncated or unchanged output</strong>: the tool returns the first 50 lines each time, and the needed information is on line 400, so the agent asks again hoping for more. Pagination parameters and &quot;more results available: use page=2&quot; fix this.</li>
+  <li><strong>Non-actionable errors</strong>: &quot;Error: request failed&quot; gives no hint, so the model retries the same call.</li>
+  <li><strong>Missing information</strong>: the tool needs a customer ID that another tool provides, but neither description mentions the relationship.</li>
+  <li><strong>Unclear completion criteria</strong>: the agent does not know when it is done, so it keeps verifying.</li>
+  <li><strong>Side-effect confusion</strong>: an action succeeded but the response did not say so, so the agent repeats it, which is dangerous for non-idempotent tools.</li>
+</ul>
+<p>Fixes go to the root: make results explicit, including <strong>empty and already-done states</strong>; write errors that suggest the next step; describe <strong>relationships between tools</strong> (&quot;use find_customer first to get customer_id&quot;); state <strong>completion criteria</strong> in the instructions.</p>
+<p>In the runtime, add <strong>loop detection</strong>: hash tool name plus arguments and, after two or three repeats, inject a hint such as &quot;you already called this with identical arguments; the result was X&quot; or stop the run. <strong>Step limits</strong> remain the final safety net. Then turn the failing trace into a <strong>regression test</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find the looping run's trace; locate the first repeat.</li>
+  <li>Read the observation preceding each repeat.</li>
+  <li>Classify the cause: ambiguous result, error, missing info, completion.</li>
+  <li>Fix the tool output, error message, description or instructions.</li>
+  <li>Add loop detection with a hint, then a stop.</li>
+  <li>Add the scenario to the eval suite; verify the fix over several runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Trace excerpt (before fix):
+step 4  search_tickets(query=&quot;VPN outage&quot;, status=&quot;open&quot;)  -&gt; []
+step 5  search_tickets(query=&quot;VPN outage&quot;, status=&quot;open&quot;)  -&gt; []
+step 6  search_tickets(query=&quot;VPN outage&quot;, status=&quot;open&quot;)  -&gt; []
+
+Fixed tool result:
+{&quot;ok&quot;: true, &quot;count&quot;: 0,
+ &quot;message&quot;: &quot;No open tickets match 'VPN outage'. 3 closed tickets match; use status='any' to include them, or create_ticket if this is a new issue.&quot;}
+
+Runtime hint injected on 2nd identical call:
+&quot;You already called search_tickets with identical arguments and got 0 results. Choose a different action.&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only raising the step limit.</li>
+  <li>Adding &quot;do not repeat yourself&quot; to the prompt without fixing the tool output.</li>
+  <li>Empty results without explanation.</li>
+  <li>Ignoring that repeated non-idempotent calls may have side effects.</li>
+  <li>Not adding a regression test.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I open the trace and look at what the agent saw after each call, because loops usually mean it didn't understand the result. Typical causes are an ambiguous result, like an empty list without saying 'no matches', a truncated output that never changes, a generic error that gives no hint, a missing ID that another tool provides but nothing points there, or instructions that don't say when the task is done. I fix those: explicit results including empty and already-done states, errors that suggest the next step, descriptions that explain how tools relate, and clear completion criteria. In the runtime, loop detection flags repeated identical calls and injects a hint or stops, with step limits as a final safety net.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Test that catches loop regressions?</strong> A scenario with the triggering fixture, run several times, asserting no repeated identical calls and a step count below a threshold.</li>
+  <li><strong>Is a loop ever legitimate?</strong> Polling a job status is, but it should be a dedicated wait tool with backoff.</li>
+  <li><strong>What if the model is the problem?</strong> Compare with a stronger model on the same trace; often tool clarity still matters more.</li>
+</ul>
+</article>
+</body>
+</html>

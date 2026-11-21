@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-067 · Terraform plans in a large configuration take 20 minutes. How do you speed them up?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-067" data-topic="Infrastructure as Code">
+<h1>Terraform plans in a large configuration take 20 minutes. How do you speed them up?</h1>
+<p class="ex-meta">Infrastructure as Code · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Slow plans usually mean <strong>too many resources in one state</strong>, each <strong>refreshed with API calls</strong> that hit <strong>rate limits</strong>; the real fix is <strong>splitting the state</strong>, with short-term help from tuned <strong><code>-parallelism</code></strong>, removing slow <strong>data sources</strong> and the <strong>plugin cache</strong>, while <strong><code>-refresh=false</code></strong> and <strong><code>-target</code></strong> are emergency tools only.</p>
+
+<h2>Detailed explanation</h2>
+<p>During <code>plan</code>, Terraform first <strong>refreshes</strong> every resource in state: the provider calls the cloud API to read its current attributes. A configuration with 5,000 resources means at least 5,000 API calls, often several per resource. Cloud APIs throttle (AWS returns throttling errors, the provider backs off and retries), so the plan becomes a long queue of retries. Data sources that list many objects, large <code>for_each</code> expressions and slow backends add more time.</p>
+<p><strong>Diagnose first.</strong> <code>TF_LOG=debug</code> or <code>trace</code> with timestamps shows which resource types are slow and whether throttling occurs. Count resources with <code>terraform state list | wc -l</code>.</p>
+<p><strong>Structural fix: split the state.</strong> Break the configuration into components along ownership and change frequency (network, cluster, data stores, each service). Migration uses <strong><code>removed</code> blocks</strong> (with <code>destroy = false</code>) in the old stack and <strong><code>import</code> blocks</strong> in the new one, or <code>state mv</code> between state files, verified by clean plans on both sides. Smaller states also reduce blast radius and lock contention.</p>
+<p><strong>Short-term tuning.</strong></p>
+<ul>
+  <li><strong><code>-parallelism</code></strong> (default 10) can be raised if the API tolerates it; too high causes more throttling.</li>
+  <li>Replace expensive data sources (for example listing all AMIs or all subnets) with direct references or outputs.</li>
+  <li><strong>Plugin cache</strong> (<code>TF_PLUGIN_CACHE_DIR</code>) and a provider mirror avoid downloading providers every run.</li>
+</ul>
+<p><strong>Use with care.</strong> <code>-refresh=false</code> skips reading real state, so the plan can miss drift and make wrong decisions. <code>-target</code> plans a subset but ignores dependencies outside it and leaves the state partially applied; Terraform itself warns it is for exceptional situations.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: resource count, time per type, throttling in logs.</li>
+  <li>Quick wins: parallelism, data sources, plugin cache, runner location.</li>
+  <li>Design the split into components with clear interfaces.</li>
+  <li>Migrate with <code>removed</code>/<code>import</code> blocks; verify clean plans.</li>
+  <li>Pipelines plan only components whose files changed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">export TF_PLUGIN_CACHE_DIR=&quot;$HOME/.terraform.d/plugin-cache&quot;
+TF_LOG=debug terraform plan -parallelism=20 -out tfplan 2&gt; plan.log
+grep -c &quot;Throttling&quot; plan.log
+terraform state list | cut -d. -f1-2 | sort | uniq -c | sort -rn | head</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making <code>-refresh=false</code> or <code>-target</code> part of the normal pipeline.</li>
+  <li>Raising parallelism so far that throttling gets worse.</li>
+  <li>Splitting state without a plan for shared outputs.</li>
+  <li>Ignoring the root cause and buying faster runners.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Plan time grows with the number of resources, because Terraform refreshes each one with API calls and providers hit rate limits. A 20-minute plan almost always means the state is too big, so the real fix is splitting it into smaller components with clear ownership, migrating with removed and import blocks and checking for clean plans. Short-term I'd check logs for throttling, tune parallelism, replace data sources that list lots of objects, and use the plugin cache. Refresh false and target make plans faster but hide drift and dependencies, so they're only for emergencies.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is routine use of <code>-target</code> dangerous?</strong> It ignores dependencies outside the target and leaves the configuration only partially applied.</li>
+  <li><strong>How big should a state be?</strong> No fixed number; small enough for fast plans and one owning team.</li>
+  <li><strong>Does refresh-only help?</strong> It shows drift without proposing changes, not faster plans.</li>
+</ul>
+</article>
+</body>
+</html>

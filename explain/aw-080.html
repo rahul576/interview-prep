@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-080 · How do you design private, zero-trust style access to internal applications on AWS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-080" data-topic="Cloud (AWS)">
+<h1>How do you design private, zero-trust style access to internal applications on AWS?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Zero trust means <strong>no implicit trust from network location</strong>: internal apps are never public, employees reach them through <strong>AWS Verified Access</strong> or another <strong>identity-aware proxy</strong> that checks <strong>SSO identity and device posture per request</strong>, services talk privately over <strong>PrivateLink and VPC endpoints</strong> with <strong>IAM SigV4 or mTLS</strong> authentication and least privilege, and everything is <strong>logged</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Traditional designs trust anyone on the VPN or inside the VPC; once inside, an attacker can move laterally. <strong>Zero trust</strong> verifies every request based on <strong>identity, device and context</strong>, grants least privilege and assumes the network is hostile.</p>
+<p><strong>User-to-application access</strong>: <strong>AWS Verified Access</strong> puts internal web apps (and now TCP endpoints) behind an endpoint that authenticates users via <strong>IAM Identity Center</strong> or an OIDC provider such as Okta or Entra ID, and evaluates <strong>Cedar policies</strong> using user claims like group and department plus <strong>device trust</strong> signals from providers like CrowdStrike, Jamf or JumpCloud. Each request is evaluated, apps stay in private subnets, and access logs record everything. Alternatives include ALB with OIDC authentication plus WAF, or third-party ZTNA products. Administrative access uses <strong>Session Manager</strong> rather than SSH bastions.</p>
+<p><strong>Service-to-service access</strong>: traffic stays off the internet with <strong>VPC endpoints</strong>, <strong>PrivateLink endpoint services</strong> for exposing APIs to other VPCs or accounts without peering, and <strong>VPC Lattice</strong>, which connects services across VPCs and accounts with <strong>auth policies</strong> using IAM SigV4 identities. Alternatively a <strong>service mesh</strong> provides <strong>mutual TLS</strong> with workload identities (for example via ACM Private CA). Each service has its own IAM role with <strong>least privilege</strong>, <strong>security groups</strong> reference each other, and network segmentation limits blast radius.</p>
+<p><strong>Data and monitoring</strong>: encryption in transit everywhere, short-lived credentials, central logs from Verified Access, CloudTrail, VPC flow logs and Lattice access logs, analysed by GuardDuty and a SIEM for anomalies, plus regular access reviews.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User opens internal.example.com; Verified Access redirects to SSO.</li>
+  <li>Identity and device claims are evaluated against Cedar policy.</li>
+  <li>Allowed requests reach the app in a private subnet.</li>
+  <li>The app calls backend services via Lattice or PrivateLink with SigV4 or mTLS.</li>
+  <li>Each hop is authorised and logged centrally.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">// Verified Access Cedar policy: finance group on a managed, healthy device
+permit(principal, action, resource)
+when {
+  context.idc.groups has &quot;finance-group-id&quot; &amp;&amp;
+  context.crowdstrike.assessment.overall &gt; 50
+};</code></pre>
+<pre><code class="language-json">{
+  &quot;Statement&quot;: [{
+    &quot;Effect&quot;: &quot;Allow&quot;,
+    &quot;Principal&quot;: {&quot;AWS&quot;: &quot;arn:aws:iam::111122223333:role/billing-service&quot;},
+    &quot;Action&quot;: &quot;vpc-lattice-svcs:Invoke&quot;,
+    &quot;Resource&quot;: &quot;*&quot;,
+    &quot;Condition&quot;: {&quot;StringEquals&quot;: {&quot;vpc-lattice-svcs:RequestMethod&quot;: &quot;GET&quot;}}
+  }]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating the VPN as proof of trust and leaving internal apps without auth.</li>
+  <li>Allowing broad CIDR ranges between services instead of identities.</li>
+  <li>Ignoring device posture, so stolen credentials from any laptop work.</li>
+  <li>No central logging, making investigations impossible.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Zero trust means no implicit trust from network location, so internal apps are never public and being on the VPN is not enough. For employees I would use AWS Verified Access or another identity-aware proxy: each request is authenticated through corporate SSO and evaluated against policies that include group membership and device posture from tools like CrowdStrike or Jamf. Service-to-service traffic stays private via PrivateLink, VPC endpoints or VPC Lattice, and each call is authenticated with IAM SigV4 or mTLS, with least privilege roles. Everything is logged centrally for audit and anomaly detection.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does this improve on a traditional VPN?</strong> Per-app, per-request decisions with device checks, no broad network access and no lateral movement.</li>
+  <li><strong>PrivateLink or VPC Lattice?</strong> PrivateLink exposes one service via an NLB; Lattice is a service network with routing and IAM auth policies.</li>
+  <li><strong>How handle legacy apps without SSO?</strong> Put them behind the proxy, which handles authentication, and pass identity headers.</li>
+</ul>
+</article>
+</body>
+</html>

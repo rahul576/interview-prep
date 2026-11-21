@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-006 · What are aggregations in Elasticsearch? Give examples.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-006" data-topic="Elasticsearch">
+<h1>What are aggregations in Elasticsearch? Give examples.</h1>
+<p class="ex-meta">Elasticsearch · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Aggregations</strong> compute analytics over the documents matching a query. <strong>Bucket</strong> aggregations group them (<code>terms</code>, <code>date_histogram</code>, <code>range</code>), <strong>metric</strong> aggregations compute values (<code>avg</code>, <code>sum</code>, <code>percentiles</code>, <code>cardinality</code>), and <strong>pipeline</strong> aggregations work on other aggregations' output (<code>derivative</code>, <code>moving_fn</code>, <code>bucket_sort</code>). They run on <strong>keyword, numeric and date</strong> fields via <strong>doc values</strong>, and some are <strong>approximate</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Aggregations are why Elasticsearch powers dashboards (Kibana) and faceted search (&quot;Brand: Acme (124)&quot;). They run on the <strong>same filtered result set</strong> as the query, so a search and its facets come back in one request. Use <code>&quot;size&quot;: 0</code> when you only want the numbers.</p>
+<p><strong>Bucket aggregations</strong> create groups, and can nest:</p>
+<ul>
+  <li><code>terms</code>: top values of a field (top 10 brands)</li>
+  <li><code>date_histogram</code>: counts per minute, hour or day (<code>calendar_interval</code> or <code>fixed_interval</code>)</li>
+  <li><code>range</code> / <code>histogram</code>: price bands</li>
+  <li><code>filters</code>, <code>composite</code> (paginate through all buckets), <code>significant_terms</code></li>
+</ul>
+<p><strong>Metric aggregations</strong> compute numbers, overall or inside each bucket: <code>avg</code>, <code>sum</code>, <code>min</code>, <code>max</code>, <code>stats</code>, <code>value_count</code>, <code>percentiles</code> (p95 latency), <code>cardinality</code> (distinct count), <code>top_hits</code>.</p>
+<p><strong>Pipeline aggregations</strong> take other aggregations as input: <code>derivative</code> (rate of change), <code>cumulative_sum</code>, <code>moving_fn</code> (moving averages), <code>bucket_script</code>, <code>bucket_selector</code> (HAVING-like filtering), <code>bucket_sort</code>.</p>
+<p><strong>Data structures:</strong> aggregations read <strong>doc values</strong> (columnar), so they work on <code>keyword</code>, numeric, date, IP and boolean fields. Aggregating on an analysed <code>text</code> field is disabled by default. Enabling <code>fielddata</code> loads terms into heap and is a classic memory killer. Use the <code>.keyword</code> sub-field instead.</p>
+<p><strong>Approximate by design:</strong></p>
+<ul>
+  <li><code>terms</code> over multiple shards: each shard returns its local top <code>shard_size</code> terms, and the coordinator merges them. A term that is moderately common on every shard but never in any local top list can be <strong>undercounted or missed</strong> (<code>doc_count_error_upper_bound</code> reports the bound). Raise <code>shard_size</code>, or use <code>composite</code> for exact exhaustive results.</li>
+  <li><code>cardinality</code> uses <strong>HyperLogLog++</strong> (exact below <code>precision_threshold</code>, approximate above).</li>
+  <li><code>percentiles</code> uses <strong>TDigest</strong> (accurate at the extremes, approximate in the middle). <code>hdr</code> is an alternative.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>The query and filters select the documents on each shard.</li>
+  <li>Each shard builds its buckets and metrics from doc values.</li>
+  <li>Shards return partial results (the top <code>shard_size</code> for terms).</li>
+  <li>The coordinating node reduces and merges them.</li>
+  <li>Pipeline aggregations run on the merged buckets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">GET /orders/_search
+{
+  &quot;size&quot;: 0,
+  &quot;query&quot;: { &quot;range&quot;: { &quot;createdAt&quot;: { &quot;gte&quot;: &quot;now-7d/d&quot; } } },
+  &quot;aggs&quot;: {
+    &quot;per_day&quot;: {
+      &quot;date_histogram&quot;: { &quot;field&quot;: &quot;createdAt&quot;, &quot;calendar_interval&quot;: &quot;day&quot; },
+      &quot;aggs&quot;: {
+        &quot;revenue&quot;:   { &quot;sum&quot;: { &quot;field&quot;: &quot;total&quot; } },
+        &quot;p95_total&quot;: { &quot;percentiles&quot;: { &quot;field&quot;: &quot;total&quot;, &quot;percents&quot;: [95] } },
+        &quot;buyers&quot;:    { &quot;cardinality&quot;: { &quot;field&quot;: &quot;customerId&quot; } },
+        &quot;growth&quot;:    { &quot;derivative&quot;: { &quot;buckets_path&quot;: &quot;revenue&quot; } }
+      }
+    },
+    &quot;top_brands&quot;: { &quot;terms&quot;: { &quot;field&quot;: &quot;brand.keyword&quot;, &quot;size&quot;: 5 } }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Aggregating on <code>text</code> fields, or enabling fielddata.</li>
+  <li><code>terms</code> aggregations with a huge <code>size</code> on high-cardinality fields (memory and latency). Use <code>composite</code>.</li>
+  <li>Treating <code>cardinality</code> or <code>terms</code> results as exact.</li>
+  <li>Forgetting <code>size: 0</code> and fetching hits you don't need.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Aggregations compute analytics over the documents a query matches. Bucket aggregations group documents, like terms for top values or date_histogram for counts per hour. Metric aggregations compute values such as avg, sum, percentiles and cardinality, inside each bucket if nested. Pipeline aggregations work on other aggregations' output, like derivatives or moving averages. They run on keyword, numeric and date fields using doc values, not on analysed text. Some results are approximate by design: terms counts across shards, cardinality via HyperLogLog, and percentiles via TDigest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are terms counts slightly wrong?</strong> Each shard returns only its local top terms, so the merge can miss counts. Raise <code>shard_size</code> or use <code>composite</code>.</li>
+  <li><strong>Paging through all buckets?</strong> The <code>composite</code> aggregation with <code>after_key</code>.</li>
+  <li><strong>Heavy dashboards?</strong> Transforms or rollups into summary indices, plus a sensible time range.</li>
+</ul>
+</article>
+</body>
+</html>

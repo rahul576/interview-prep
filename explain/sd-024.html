@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-024 · How do you store and serve large files such as images, videos or documents?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-024" data-topic="Data &amp; Storage Design">
+<h1>How do you store and serve large files such as images, videos or documents?</h1>
+<p class="ex-meta">Data &amp; Storage Design · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Store large files in <strong>object storage</strong> (S3/Blob), keep only <strong>metadata</strong> in the database, upload and download <strong>directly via pre-signed URLs</strong> with <strong>multipart/resumable</strong> uploads, process asynchronously, and deliver through a <strong>CDN</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Putting files in a database bloats it, slows backups and wastes expensive storage. Proxying uploads through app servers ties up threads and bandwidth. Object storage is cheap, extremely durable (11 nines on S3) and scales without limit.</p>
+<p>The backend's job becomes <strong>authorisation and bookkeeping</strong>: issue a short-lived pre-signed URL, record metadata, and react when the upload completes. <strong>Multipart uploads</strong> split big files into parts that upload in parallel and can be retried individually, so a 4 GB video doesn't restart from zero on a network blip.</p>
+<p>After upload, an event triggers <strong>processing</strong>: virus scanning, thumbnails, video transcoding, text extraction. Files are served through a <strong>CDN</strong>, with <strong>signed URLs/cookies</strong> for private content. <strong>Lifecycle policies</strong> move old objects to cheaper tiers (S3 IA/Glacier, Azure Cool/Archive).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client: <code>POST /uploads {name, size, type}</code> → server validates quota/type, creates metadata row <code>PENDING</code>, returns pre-signed (multipart) URLs.</li>
+  <li>Client uploads parts directly to storage, then calls complete.</li>
+  <li>Storage event → queue → workers scan and process; status <code>READY</code> or <code>REJECTED</code>.</li>
+  <li>Download: server checks permission, returns a signed CDN URL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">url = s3.generate_presigned_url(&quot;put_object&quot;,
+    Params={&quot;Bucket&quot;: &quot;uploads&quot;, &quot;Key&quot;: f&quot;u/{user_id}/{file_id}&quot;, &quot;ContentType&quot;: ctype},
+    ExpiresIn=900)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Streaming uploads through the API servers.</li>
+  <li>Trusting the client-provided content type (validate after upload).</li>
+  <li>Making the bucket public instead of using signed URLs.</li>
+  <li>No cleanup of abandoned multipart uploads.</li>
+  <li>Serving user files from the main domain (XSS risk); use a separate domain.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Files go to object storage, not the database. The API only authorises and records metadata, then hands out pre-signed URLs so clients upload directly, using multipart uploads for large files. Upload completion triggers asynchronous scanning and processing through a queue. Downloads go through a CDN with signed URLs, and lifecycle rules move old files to cheaper tiers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you enforce quotas?</strong> Check before issuing URLs; verify actual size on completion.</li>
+  <li><strong>How do you stop malware?</strong> Quarantine until a scanner marks it clean.</li>
+  <li><strong>Resumable uploads protocol?</strong> S3 multipart or the tus protocol.</li>
+</ul>
+</article>
+</body>
+</html>

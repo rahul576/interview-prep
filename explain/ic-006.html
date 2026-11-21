@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-006 · How do Terraform outputs work, and what does sensitive = true do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-006" data-topic="Infrastructure as Code">
+<h1>How do Terraform outputs work, and what does sensitive = true do?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Outputs</strong> expose values after apply to people, scripts (<code>terraform output -json</code>) and <strong>parent modules</strong>; <code>sensitive = true</code> <strong>redacts the value in CLI output</strong> but it is still stored <strong>in plain text in the state</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <code>output</code> block declares a value the configuration exposes, such as a load balancer DNS name, a VPC ID or a database endpoint. In a <strong>root module</strong>, outputs are printed at the end of <code>terraform apply</code> and can be read later with <code>terraform output</code>, or in machine-readable form with <code>terraform output -json</code> or <code>terraform output -raw name</code>, which is how scripts and pipelines consume them. In a <strong>child module</strong>, outputs are the module's return values: the parent references them as <code>module.network.vpc_id</code>. Other configurations can also read root outputs through <code>terraform_remote_state</code>.</p>
+<p>Marking an output <code>sensitive = true</code> tells Terraform to show <code>(sensitive value)</code> instead of the value in plan and apply output. Terraform tracks <strong>sensitivity</strong> through expressions: if an output is derived from a sensitive variable or a sensitive resource attribute, Terraform requires you to mark the output sensitive too, otherwise it errors. This prevents accidental leakage into CI logs.</p>
+<p>What sensitive does <strong>not</strong> do is encrypt anything. The value is still written to the <strong>state file</strong> in plain text, and <code>terraform output -json</code> or <code>terraform output -raw</code> will still print it. That is why the state backend must be encrypted, access-controlled and audited, and why the better pattern for secrets is to keep them out of Terraform outputs altogether: store them in a secret manager and let applications read them at runtime.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform evaluates output expressions after apply.</li>
+  <li>Values are stored in the state's outputs section.</li>
+  <li>Root outputs are printed; sensitive ones are redacted.</li>
+  <li><code>terraform output -json</code> returns all outputs, including sensitive values, for automation.</li>
+  <li>Parent modules read child outputs as <code>module.&lt;name&gt;.&lt;output&gt;</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">output &quot;alb_dns_name&quot; {
+  value       = aws_lb.app.dns_name
+  description = &quot;Public DNS name of the load balancer&quot;
+}
+
+output &quot;db_password&quot; {
+  value     = random_password.db.result
+  sensitive = true
+}</code></pre>
+<pre><code class="language-bash">terraform output alb_dns_name
+terraform output -json | jq -r '.alb_dns_name.value'
+terraform output -raw db_password   # still prints the secret: protect access</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing <code>sensitive = true</code> encrypts the value or keeps it out of state.</li>
+  <li>Passing secrets between pipeline stages through outputs printed in logs.</li>
+  <li>Exposing too many outputs, creating hidden coupling with consumers.</li>
+  <li>Outputs without descriptions in shared modules.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Outputs are the values a configuration exposes after apply: people see them at the end of apply or with terraform output, scripts use terraform output -json, and in modules they're how a parent gets values from a child. Marking an output sensitive hides it in CLI and plan output, and Terraform propagates that flag so derived values must be sensitive too. But it doesn't encrypt anything: the value is still in plain text in the state, and output -json still shows it. So the state backend has to be encrypted and locked down, and for real secrets I prefer keeping them in a secret manager instead of passing them around as outputs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How should a pipeline pass a database password to an application safely?</strong> Store it in a secret manager and grant the app's identity read access; pass only the secret's ARN or name.</li>
+  <li><strong>What is the sensitive() function?</strong> It marks any expression as sensitive, like the output argument.</li>
+  <li><strong>Can outputs depend on resources explicitly?</strong> Yes, outputs support <code>depends_on</code> for hidden dependencies.</li>
+</ul>
+</article>
+</body>
+</html>

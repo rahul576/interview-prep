@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-080 · What outbound types exist for AKS, and how do you route cluster egress through Azure Firewall?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-080" data-topic="Azure Kubernetes (AKS)">
+<h1>What outbound types exist for AKS, and how do you route cluster egress through Azure Firewall?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>AKS outbound types are <strong>loadBalancer</strong> (default, SNAT via LB public IPs), <strong>managedNATGateway / userAssignedNATGateway</strong> (scalable SNAT, stable IPs), and <strong>userDefinedRouting</strong> (route table sends <code>0.0.0.0/0</code> to <strong>Azure Firewall</strong>); with firewall egress you must allow <strong>required AKS FQDNs, service tags and ports</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>loadBalancer:</strong> AKS adds outbound rules on the Standard Load Balancer, translating node traffic to its public IPs. It is simple, but each IP gives a limited number of <strong>SNAT ports</strong> per node, and busy clusters calling many external endpoints can hit <strong>SNAT port exhaustion</strong>, seen as intermittent connection timeouts. You can add more outbound IPs or allocate ports manually.</p>
+<p><strong>managedNATGateway / userAssignedNATGateway:</strong> a <strong>NAT Gateway</strong> on the node subnet provides up to 64,000 SNAT ports per public IP, up to 16 IPs, with dynamic allocation. It is the better option for high outbound volume and gives <strong>stable public IPs</strong> for partner allowlisting. Managed means AKS creates it; user-assigned means you bring your own on the subnet.</p>
+<p><strong>userDefinedRouting:</strong> AKS creates <strong>no outbound path</strong> and expects a <strong>route table</strong> on the subnet, usually with <code>0.0.0.0/0</code> next hop to an <strong>Azure Firewall</strong> or network virtual appliance in the hub. All egress is then <strong>inspected, filtered and logged</strong> centrally, which hub-and-spoke enterprises usually require.</p>
+<p>With firewall egress you must allow what AKS needs, otherwise <strong>cluster creation, upgrades or node joins fail</strong>:</p>
+<ul>
+  <li>The <strong>AzureKubernetesService FQDN tag</strong> in application rules (covers MCR, AKS endpoints, package repositories and more).</li>
+  <li>The API server endpoint (TCP 443) and <strong>NTP</strong> (UDP 123).</li>
+  <li>Azure Monitor, Key Vault, ACR and other services workloads use, ideally via <strong>private endpoints</strong> so they bypass the firewall.</li>
+  <li>Rules for application dependencies: external APIs, package mirrors, image registries.</li>
+</ul>
+<p>Ingress through a public load balancer with UDR can cause <strong>asymmetric routing</strong>, so expose public endpoints through the firewall (DNAT) or an Application Gateway instead.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose an outbound type at cluster design time.</li>
+  <li>For UDR: create the firewall and route table, associate it with the node subnet.</li>
+  <li>Add FQDN tag, network rules and app-specific rules.</li>
+  <li>Create the cluster with <code>--outbound-type userDefinedRouting</code>.</li>
+  <li>Monitor firewall logs for denied traffic during first deployments.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az network route-table route create -g rg-net --route-table-name rt-aks -n default \
+  --address-prefix 0.0.0.0/0 --next-hop-type VirtualAppliance --next-hop-ip-address 10.0.1.4
+
+az network firewall application-rule create -g rg-hub -f fw-hub --collection-name aks \
+  -n aks-fqdn --priority 100 --action Allow --source-addresses 10.1.0.0/16 \
+  --protocols Https=443 Http=80 --fqdn-tags AzureKubernetesService
+
+az aks create -g rg-apps -n aks-prod --vnet-subnet-id $SUBNET_ID \
+  --outbound-type userDefinedRouting --network-plugin azure --network-plugin-mode overlay</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Outbound type</th><th>SNAT scale</th><th>Static IP</th><th>Inspection</th></tr></thead>
+<tbody>
+<tr><td>loadBalancer</td><td>Limited</td><td>Yes</td><td>No</td></tr>
+<tr><td>NAT Gateway</td><td>High</td><td>Yes</td><td>No</td></tr>
+<tr><td>userDefinedRouting</td><td>Depends on firewall</td><td>Firewall IP</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Missing the FQDN tag or NTP rule, so nodes never become ready.</li>
+  <li>Not associating the route table before cluster creation.</li>
+  <li>Exposing public LoadBalancer services in UDR clusters and hitting asymmetric routing.</li>
+  <li>Ignoring SNAT exhaustion on busy default clusters.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are four outbound types. loadBalancer, the default, uses the LB public IPs for SNAT but can hit port limits. Managed or user-assigned NAT Gateway gives many more ports and stable IPs. userDefinedRouting means AKS creates no outbound path and the subnet route table sends 0.0.0.0/0 to Azure Firewall in the hub, so egress is inspected and logged. Then I must allow the AKS FQDN tag, the API server and NTP, plus whatever workloads need, ideally using private endpoints for Azure services, otherwise creation and upgrades fail.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why decide at creation?</strong> It shapes subnet routing and IP design; changing it later is limited and disruptive.</li>
+  <li><strong>How do you detect SNAT exhaustion?</strong> Load balancer SNAT connection metrics and failed outbound connections.</li>
+  <li><strong>Can you restrict egress per namespace?</strong> Yes, with Cilium FQDN network policies in addition to the firewall.</li>
+</ul>
+</article>
+</body>
+</html>

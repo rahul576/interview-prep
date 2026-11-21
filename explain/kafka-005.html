@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-005 · What is consumer lag, how do you measure it, and how do you fix growing lag?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-005" data-topic="Kafka">
+<h1>What is consumer lag, how do you measure it, and how do you fix growing lag?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Consumer lag</strong> is the <strong>log-end offset minus the group's committed offset</strong>, per partition; measure it with CLI tools or exporters, diagnose <strong>skewed versus uniform lag</strong>, and fix it with faster handlers, more consumers, more partitions or hot-key fixes.</p>
+
+<h2>Detailed explanation</h2>
+<p>For each partition, the broker knows the <strong>log-end offset</strong> (the next offset to be written) and the consumer group's <strong>committed offset</strong> (the next record it will read). The difference is how many records are waiting. Total lag across a topic hides important detail, so always look <strong>per partition</strong>.</p>
+<p>Measurement options: <code>kafka-consumer-groups.sh --describe</code>, <strong>Burrow</strong> (which evaluates lag trends rather than thresholds), the Prometheus <strong>kafka-exporter</strong> or <strong>Kafka Lag Exporter</strong>, and managed dashboards in MSK or Confluent Cloud. Count lag is hard to interpret because 10,000 messages could be one second or one hour of work. <strong>Time lag</strong> (the age of the oldest unconsumed record, or estimated time to catch up) maps directly to an SLA such as &quot;orders processed within 30 s&quot;, so it is the better alert.</p>
+<p>Diagnosis depends on the shape. <strong>Lag on one or two partitions</strong> means skew: a hot key, a stuck consumer, or a poison message being retried. <strong>Uniform lag across all partitions</strong> means the group's total capacity is below the incoming rate, or a shared downstream (database, API) has slowed down. <strong>Sawtooth lag</strong> that recovers is usually just batching or rebalances.</p>
+<p>Fixes: make the handler faster (batch database writes, async I/O, avoid per-record remote calls), add consumers <strong>up to the partition count</strong>, increase partitions if you need more parallelism (accepting key remapping), fix hot keys with better key design, and resolve stuck records with a dead letter topic.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Collect log-end and committed offsets per partition every few seconds.</li>
+  <li>Compute lag in records and in time.</li>
+  <li>Alert on sustained growth or time lag above the SLA.</li>
+  <li>Check distribution: one partition or all partitions.</li>
+  <li>Apply the matching fix and confirm lag trends down.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kafka-consumer-groups.sh --bootstrap-server broker:9092 --describe --group payments
+# GROUP    TOPIC     PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG
+# payments payments  0         102400         102410         10
+# payments payments  7         88000          240000         152000   &lt;- skew</code></pre>
+<pre><code class="language-yaml"># KEDA scaler on lag (scales consumers, capped by partitions)
+triggers:
+  - type: kafka
+    metadata: { topic: payments, consumerGroup: payments, lagThreshold: &quot;1000&quot; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Alerting on a fixed message count instead of lag growth or time lag.</li>
+  <li>Adding consumers beyond the partition count.</li>
+  <li>Looking only at total lag and missing a single stuck partition.</li>
+  <li>Ignoring that a slow database is the true bottleneck.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Lag is the log-end offset minus the committed offset for each partition. I track it with the consumer groups tool or an exporter into Prometheus, and alert on time lag or sustained growth rather than a raw count. Then I look at the shape: one lagging partition means a hot key or a stuck consumer, while uniform lag means we lack capacity. Fixes are a faster handler with batching, more consumers up to the partition count, more partitions if needed, and fixing hot keys.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why time lag?</strong> It maps to business SLAs regardless of message rate.</li>
+  <li><strong>Can lag be negative or misleading?</strong> Uncommitted progress or compacted topics can distort counts; use trends.</li>
+  <li><strong>Autoscale on lag?</strong> Yes, with KEDA, capped at the partition count.</li>
+</ul>
+</article>
+</body>
+</html>

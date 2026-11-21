@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-077 · How do you back up workloads on AKS, and how does Azure Backup for AKS compare with Velero?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-077" data-topic="Azure Kubernetes (AKS)">
+<h1>How do you back up workloads on AKS, and how does Azure Backup for AKS compare with Velero?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Azure Backup for AKS</strong> uses a <strong>backup extension</strong> and a <strong>Backup vault</strong> to protect <strong>cluster resources and persistent volumes (disk snapshots)</strong> on a schedule, restoring to the <strong>same or another cluster, even another region</strong>; <strong>Velero</strong> is the <strong>open source, cloud-agnostic</strong> alternative; both complement <strong>GitOps</strong> and <strong>database-native backups</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes workloads have two parts to protect: <strong>resource definitions</strong> (deployments, configmaps, secrets, PVCs, CRDs) and <strong>data in persistent volumes</strong>. Ideally definitions already live in Git, but backups also catch things created by hand, operators' generated state and secrets.</p>
+<p><strong>Azure Backup for AKS</strong> installs the <strong>backup extension</strong> (<code>microsoft.dataprotection.kubernetes</code>) in the cluster with a storage account for metadata, and uses <strong>Trusted Access</strong> so the Backup vault can talk to the cluster. A <strong>backup policy</strong> defines schedule and retention. Each backup captures selected <strong>namespaces</strong> and resources, filtered by labels if needed, plus <strong>Azure Disk snapshots</strong> of persistent volumes. Snapshots stay in an operational tier (in your subscription); the <strong>vault tier</strong> copies data into the Backup vault, which supports <strong>geo-redundant storage</strong> and <strong>cross-region restore</strong> for disaster recovery. You can restore everything or selected namespaces and resources, to the original cluster or a different one, with conflict handling options. It integrates with <strong>Backup Center</strong>, Azure Policy and RBAC.</p>
+<p><strong>Velero</strong> is open source, widely used and works across clouds, backing up resources to object storage (Blob) and volumes via CSI snapshots or file-level backup. It suits multi-cloud teams but you operate it yourself.</p>
+<p>In both cases, volume snapshots are <strong>crash-consistent</strong>, not application-consistent: a database may be mid-write. So for databases I rely on <strong>native backups</strong> (point-in-time restore of Azure Database for PostgreSQL, or <code>pg_dump</code> and WAL archiving), use pre-backup hooks to quiesce writes, and <strong>test restores regularly</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a Backup vault and policy.</li>
+  <li>Install the backup extension and enable Trusted Access.</li>
+  <li>Configure a backup instance for the cluster and namespaces.</li>
+  <li>Backups run on schedule; snapshots and optional vault copies are retained.</li>
+  <li>Restore to the same or a different cluster, testing quarterly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az k8s-extension create --name azure-aks-backup --extension-type microsoft.dataprotection.kubernetes \
+  --scope cluster --cluster-type managedClusters --cluster-name aks-prod -g rg-apps \
+  --release-train stable --configuration-settings blobContainer=aksbackup \
+  storageAccount=staksbackup storageAccountResourceGroup=rg-backup storageAccountSubscriptionId=$SUB
+
+# Velero alternative
+velero backup create orders-daily --include-namespaces orders --snapshot-volumes
+velero restore create --from-backup orders-daily</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating backups as the only recovery plan instead of GitOps plus data backups.</li>
+  <li>Assuming disk snapshots give consistent database backups.</li>
+  <li>Never testing a restore into a clean cluster.</li>
+  <li>Keeping backups only in the same region as the cluster.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Azure Backup for AKS installs a backup extension and uses a Backup vault and policy. It backs up Kubernetes resources for selected namespaces plus persistent volumes as disk snapshots, and can restore to the same or a different cluster, including another region with vaulted copies. Velero is the open source, cloud-agnostic alternative storing backups in object storage. Either way, GitOps is my main way to recreate workloads, databases use their own native backups because snapshots are only crash-consistent, and we test restores regularly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are snapshots inconsistent for databases?</strong> They capture disk state mid-write without flushing or coordinating transactions.</li>
+  <li><strong>What about Azure Files volumes?</strong> Protect them with Azure Files backup or Velero file-level backup.</li>
+  <li><strong>How do you prove recoverability?</strong> Scheduled restore drills with measured RTO and RPO.</li>
+</ul>
+</article>
+</body>
+</html>

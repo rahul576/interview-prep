@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-325 · What Spring Boot test slices exist, and when do you use each?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-325" data-topic="Testing">
+<h1>What Spring Boot test slices exist, and when do you use each?</h1>
+<p class="ex-meta">Testing · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Spring Boot <strong>test slices</strong> load only one layer of the context: <strong>@WebMvcTest</strong> (controllers + MockMvc), <strong>@WebFluxTest</strong>, <strong>@DataJpaTest</strong> (repositories), <strong>@JsonTest</strong>, <strong>@RestClientTest</strong> and more, while <strong>@SpringBootTest</strong> loads everything; replace beans with <strong>@MockitoBean</strong> (which superseded @MockBean in Boot 3.4) and keep configurations uniform to benefit from <strong>context caching</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A full application context can take seconds to start and pulls in every dependency. Slices use auto-configuration filters to include only the beans relevant to one layer, so tests start faster and failures point to that layer.</p>
+<ul>
+  <li><strong>@WebMvcTest(Controller.class):</strong> controllers, <code>@ControllerAdvice</code>, converters, filters and Spring Security; provides <strong>MockMvc</strong> (and <strong>MockMvcTester</strong> with AssertJ since Boot 3.4). Services must be supplied as mocks. Use it for mapping, validation, status codes, JSON shape and security rules.</li>
+  <li><strong>@WebFluxTest:</strong> the reactive equivalent with <strong>WebTestClient</strong>.</li>
+  <li><strong>@DataJpaTest:</strong> entities, repositories, Flyway/Liquibase and a <code>TestEntityManager</code>; each test is <strong>transactional and rolled back</strong>. By default it replaces the DataSource with an embedded database; with Testcontainers and <code>@ServiceConnection</code> (or <code>@AutoConfigureTestDatabase(replace = NONE)</code>) you test against the real engine. Also <code>@DataJdbcTest</code>, <code>@DataMongoTest</code>, <code>@DataRedisTest</code>.</li>
+  <li><strong>@JsonTest:</strong> Jackson configuration, with <code>JacksonTester</code> to assert serialised JSON.</li>
+  <li><strong>@RestClientTest:</strong> a <code>RestClient</code>/<code>RestTemplate</code>-based client with <code>MockRestServiceServer</code>.</li>
+  <li><strong>@SpringBootTest:</strong> the full context, optionally with a real server (<code>webEnvironment = RANDOM_PORT</code>) for integration tests.</li>
+</ul>
+<p><strong>@MockitoBean</strong> and <strong>@MockitoSpyBean</strong> (Spring Framework 6.2) replace a bean in the context with a Mockito mock or spy; Boot's <code>@MockBean</code> was deprecated in 3.4 and removed in Boot 4.</p>
+<p><strong>Context caching:</strong> Spring caches contexts by their configuration key. Every distinct combination of mock beans, properties or profiles creates a new context, so many slightly different test classes mean many startups and a slow suite.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The slice annotation imports a limited set of auto-configurations.</li>
+  <li>Component scanning is filtered to that layer's stereotypes.</li>
+  <li>Missing dependencies are provided via <code>@MockitoBean</code> or <code>@Import</code>.</li>
+  <li>The context is built once per unique configuration and cached.</li>
+  <li>Test utilities (MockMvc, TestEntityManager, JacksonTester) are injected.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@DataJpaTest
+@Testcontainers
+class OrderRepositoryTest {
+    @Container @ServiceConnection
+    static PostgreSQLContainer&lt;?&gt; pg = new PostgreSQLContainer&lt;&gt;(&quot;postgres:16&quot;);
+
+    @Autowired OrderRepository repo;
+
+    @Test
+    void findsOpenOrdersForCustomer() {
+        repo.save(new Order(7L, Status.OPEN));
+        repo.save(new Order(7L, Status.CLOSED));
+        assertThat(repo.findByCustomerIdAndStatus(7L, Status.OPEN)).hasSize(1);
+    }
+}
+
+@JsonTest
+class OrderJsonTest {
+    @Autowired JacksonTester&lt;OrderDto&gt; json;
+    @Test void writesIsoDates() throws Exception {
+        assertThat(json.write(sampleDto())).extractingJsonPathStringValue(&quot;$.createdAt&quot;)
+            .isEqualTo(&quot;2026-01-10T10:00:00Z&quot;);
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Annotation</th><th>Loads</th><th>Tool</th></tr></thead>
+<tbody>
+<tr><td>@WebMvcTest</td><td>MVC layer</td><td>MockMvc / MockMvcTester</td></tr>
+<tr><td>@DataJpaTest</td><td>JPA layer, rollback</td><td>TestEntityManager</td></tr>
+<tr><td>@JsonTest</td><td>Jackson</td><td>JacksonTester</td></tr>
+<tr><td>@RestClientTest</td><td>HTTP client</td><td>MockRestServiceServer</td></tr>
+<tr><td>@SpringBootTest</td><td>Everything</td><td>Real beans</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using @SpringBootTest where a slice would do.</li>
+  <li>Expecting services to be injected in @WebMvcTest without mocking them.</li>
+  <li>Each test class mocking a different set of beans, creating dozens of contexts.</li>
+  <li>Relying on the embedded database in @DataJpaTest and missing dialect issues.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Slices load just one layer, so tests are faster and focused. WebMvcTest loads the controller layer with MockMvc and security, with services mocked; DataJpaTest loads repositories and migrations and rolls back each test, and I point it at Testcontainers rather than an embedded database. JsonTest checks Jackson serialisation and RestClientTest checks HTTP clients against a mock server. SpringBootTest loads the whole context for real integration tests. I replace beans with MockitoBean, which superseded MockBean from Boot 3.4, and keep mock and property combinations consistent so Spring can cache and reuse contexts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do many @MockitoBean combinations slow the suite?</strong> Each unique set changes the context cache key, forcing a new context startup.</li>
+  <li><strong>Is @DataJpaTest transactional?</strong> Yes, every test rolls back by default.</li>
+  <li><strong>How do you include an extra bean in a slice?</strong> Use <code>@Import</code> with the configuration or component.</li>
+</ul>
+</article>
+</body>
+</html>

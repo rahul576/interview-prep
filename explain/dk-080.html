@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-080 · When would you use sandboxed runtimes such as gVisor or Kata Containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-080" data-topic="Docker">
+<h1>When would you use sandboxed runtimes such as gVisor or Kata Containers?</h1>
+<p class="ex-meta">Docker · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Standard containers <strong>share the host kernel</strong>, so for <strong>untrusted or multi-tenant</strong> workloads you add a stronger boundary: <strong>gVisor</strong> intercepts system calls in a <strong>user-space kernel</strong>, while <strong>Kata Containers</strong> run each pod in a <strong>lightweight VM</strong> with its own kernel; both cost some <strong>performance, compatibility and money</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Namespaces, cgroups, seccomp and capabilities restrict what a container can do, but every container still makes system calls into the <strong>same host kernel</strong>. A kernel vulnerability (there are several container escapes every year) can let a malicious workload break out to the host and to every other tenant on it. For your own trusted services that risk is acceptable with good hardening; for code you don't control it may not be.</p>
+<p><strong>gVisor</strong> (by Google, runtime <code>runsc</code>) puts an application kernel called the <strong>Sentry</strong>, written in Go, between the app and the host. The Sentry implements Linux system calls itself and uses only a small, filtered set of host system calls. The attack surface on the real kernel shrinks dramatically. It is used in GKE Sandbox and Google Cloud Run's first generation environment. Trade-offs: overhead for syscall-heavy and I/O-heavy workloads, and not every syscall or <code>/proc</code> feature is supported.</p>
+<p><strong>Kata Containers</strong> run each pod in a <strong>lightweight virtual machine</strong> (QEMU, Cloud Hypervisor or Firecracker) with its own guest kernel, while still looking like a normal container to Kubernetes through containerd. That gives <strong>hardware-virtualisation isolation</strong> with better syscall compatibility, at the cost of extra memory per pod, slower start than plain containers and a need for virtualisation support (nested virtualisation or bare-metal nodes in the cloud). Firecracker itself powers AWS Lambda and Fargate.</p>
+<p>Typical use cases: running <strong>customer-supplied code</strong>, CI jobs from forks, notebooks, plug-in systems, and <strong>multi-tenant platforms</strong> where tenants must not reach each other.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install the sandbox runtime on selected nodes and register it with containerd.</li>
+  <li>Create a Kubernetes <strong>RuntimeClass</strong> naming the handler (<code>runsc</code>, <code>kata</code>).</li>
+  <li>Untrusted pods set <code>runtimeClassName</code>; others use the default runc.</li>
+  <li>Use node pools, taints and scheduling so sandboxed pods land on capable nodes.</li>
+  <li>Benchmark and test compatibility before rollout.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: { name: gvisor }
+handler: runsc
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: tenant-job }
+spec:
+  runtimeClassName: gvisor
+  containers:
+    - name: job
+      image: registry.example.com/tenant/job:42</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>runc</th><th>gVisor</th><th>Kata</th></tr></thead>
+<tbody>
+<tr><td>Isolation</td><td>Namespaces, shared kernel</td><td>User-space kernel</td><td>VM per pod</td></tr>
+<tr><td>Overhead</td><td>Lowest</td><td>Syscall/I/O overhead</td><td>Memory + boot time</td></tr>
+<tr><td>Compatibility</td><td>Full</td><td>Most apps</td><td>Near full</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing seccomp and non-root alone make hostile code safe.</li>
+  <li>Sandboxing everything, including trusted high-throughput services, and paying the overhead everywhere.</li>
+  <li>Not testing compatibility (some syscalls, GPUs, <code>/proc</code> features).</li>
+  <li>Forgetting network isolation; a sandbox doesn't stop network access.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Normal containers share the host kernel, so a kernel exploit can escape to the host and other tenants. Sandboxed runtimes add a stronger boundary. gVisor runs a user-space kernel, the Sentry, that implements system calls itself so the workload barely touches the host kernel. Kata Containers run each pod in a lightweight VM with its own kernel, giving VM-level isolation behind a container interface. I'd use them for untrusted code: customer workloads, forked CI jobs, multi-tenant platforms. The costs are overhead for syscall- or I/O-heavy apps, some compatibility gaps and more resources, so in Kubernetes I'd apply them only to selected pods with a RuntimeClass.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you sandbox only some pods?</strong> A RuntimeClass plus <code>runtimeClassName</code> on those pods, scheduled to nodes with the runtime installed.</li>
+  <li><strong>gVisor or Kata for databases?</strong> Neither ideally; I/O-heavy trusted workloads run better on runc.</li>
+  <li><strong>What is Firecracker?</strong> A minimal VMM for microVMs, used by Lambda and Fargate, and usable as a Kata hypervisor.</li>
+</ul>
+</article>
+</body>
+</html>

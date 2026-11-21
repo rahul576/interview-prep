@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-081 · What is specific about operating time series forecasting models in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-081" data-topic="MLOps">
+<h1>What is specific about operating time series forecasting models in production?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Operating forecasts means <strong>backtesting with rolling origins</strong>, choosing <strong>global versus per-series models</strong>, <strong>frequent retraining</strong>, careful <strong>calendar, promotion and external regressor</strong> pipelines, tracking <strong>WAPE/MASE and bias</strong> per segment, and publishing <strong>prediction intervals</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Evaluation:</strong> a single train/test split hides instability. <strong>Rolling-origin backtesting</strong> (time-series cross-validation) trains on data up to cut-off T, forecasts the next horizon, moves T forward and repeats across many cut-offs, matching how the model is used. Never shuffle; respect gaps between data availability and forecast date.</p>
+<p><strong>Scale:</strong> retailers forecast millions of series (product by store by day). <strong>Global models</strong> (one LightGBM or deep model across all series with series features) share patterns, help <strong>cold-start and sparse series</strong>, and are one artefact to operate. <strong>Per-series models</strong> (ARIMA, ETS per item) can fit idiosyncrasies but multiply training, monitoring and failure handling. <strong>Hierarchical reconciliation</strong> keeps store, region and total forecasts consistent.</p>
+<p><strong>Retraining:</strong> new observations arrive daily, so models retrain or refit frequently; pipelines must handle late data, backfills and restatements.</p>
+<p><strong>Features:</strong> holidays (moving ones like Easter or Diwali), promotions, price changes, weather and events are often more important than the model. These <strong>external regressors</strong> must be known for the forecast horizon; a missing promotion flag gives a terrible forecast. Pipelines need validation for future-known features.</p>
+<p><strong>Metrics:</strong> <strong>MAPE</strong> explodes for low-volume series (division by small actuals) and is undefined at zero, so prefer <strong>WAPE</strong> (sum of absolute errors over sum of actuals), <strong>MASE</strong> (scaled against a naive forecast) or <strong>pinball loss</strong> for quantiles. Track <strong>bias</strong> separately: systematic over-forecasting means excess stock. Report per segment (category, region, volume tier).</p>
+<p><strong>Uncertainty:</strong> planners need <strong>prediction intervals</strong> or quantile forecasts (P10, P50, P90) for safety stock decisions; check interval <strong>coverage</strong>.</p>
+<p><strong>Monitoring</strong> compares forecasts to actuals as they arrive, with alerts on accuracy and bias drops, plus a <strong>naive baseline</strong> as a sanity check.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build the feature pipeline including calendar, promotions and known future regressors.</li>
+  <li>Backtest across rolling origins against naive and seasonal-naive baselines.</li>
+  <li>Train a global model; publish quantile forecasts per series.</li>
+  <li>Reconcile hierarchy levels if needed.</li>
+  <li>Monitor WAPE, bias and interval coverage per segment as actuals land.</li>
+  <li>Retrain on schedule; alert on regressions versus baseline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def backtest(df, cutoffs, horizon=28):
+    rows = []
+    for cutoff in cutoffs:
+        train = df[df.date &lt;= cutoff]
+        test = df[(df.date &gt; cutoff) &amp; (df.date &lt;= cutoff + pd.Timedelta(days=horizon))]
+        model = fit_global_lgbm(train)
+        pred = model.predict(make_features(test))
+        wape = (test.y - pred).abs().sum() / test.y.sum()
+        bias = (pred.sum() - test.y.sum()) / test.y.sum()
+        rows.append({&quot;cutoff&quot;: cutoff, &quot;wape&quot;: wape, &quot;bias&quot;: bias})
+    return pd.DataFrame(rows)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Random train/test splits on time series.</li>
+  <li>Using MAPE for intermittent demand.</li>
+  <li>Features that are not actually known at forecast time (leakage).</li>
+  <li>Reporting only one aggregate metric and missing bias.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Forecasting needs backtesting with rolling origins, retraining at many cut-offs, because one split hides instability. With thousands of series I usually prefer a global model across series, which handles sparse and new items better and is one thing to operate. Models retrain frequently. Calendar effects, promotions and external regressors need careful pipelines because a missing promotion flag ruins forecasts. I track WAPE or MASE plus bias per segment rather than MAPE, publish prediction intervals for planners, and monitor forecasts against actuals and a naive baseline.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is MAPE problematic for low sellers?</strong> Small denominators inflate errors and zeros make it undefined; WAPE or MASE are more stable.</li>
+  <li><strong>How do you handle new products?</strong> Global models with product attributes, or analogues from similar items.</li>
+  <li><strong>What is interval coverage?</strong> The share of actuals falling inside the interval, which should match its nominal level.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-313 · How does Argo CD work? Explain Applications, sync and health status.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-313" data-topic="GitOps &amp; Helm">
+<h1>How does Argo CD work? Explain Applications, sync and health status.</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>An Argo CD <strong>Application</strong> maps a <strong>Git source</strong> (plain YAML, Kustomize or Helm) to a <strong>destination cluster and namespace</strong>; Argo CD renders the source and compares it with the live cluster to show <strong>sync status</strong> (<strong>Synced/OutOfSync</strong>) and separately <strong>health status</strong> (<strong>Healthy, Progressing, Degraded</strong>, etc.), syncing <strong>manually or automatically</strong> with <strong>prune</strong> and <strong>self-heal</strong>, ordered by <strong>sync waves and hooks</strong>, and governed by <strong>projects and RBAC</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Argo CD's <strong>repo server</strong> renders manifests, the <strong>application controller</strong> compares desired and live state and applies changes, and the <strong>API server/UI</strong> handles SSO and RBAC.</p>
+<p>An <strong>Application</strong> has a <code>source</code> (repo URL, revision, path, and Helm or Kustomize options) and a <code>destination</code> (cluster API and namespace), plus a <code>project</code> and <code>syncPolicy</code>.</p>
+<p><strong>Sync status</strong> answers &quot;does the cluster match Git?&quot; Argo CD renders the manifests and diffs them with live objects. If everything matches it is <strong>Synced</strong>; otherwise <strong>OutOfSync</strong>, and the UI or <code>argocd app diff</code> shows exactly which fields differ. Fields changed by controllers (like HPA replicas) can be excluded with <code>ignoreDifferences</code>.</p>
+<p><strong>Health status</strong> answers &quot;is it working?&quot; It is calculated per resource with built-in checks: a Deployment is <strong>Progressing</strong> while rolling out and <strong>Healthy</strong> when all replicas are updated and available; <strong>Degraded</strong> if it fails (for example progress deadline exceeded). An app can be Synced but Degraded, for example the right image deployed but crash-looping.</p>
+<p><strong>Sync</strong> can be <strong>manual</strong> (click or CLI) or <strong>automated</strong> on every Git change. <strong>Prune</strong> deletes resources removed from Git; <strong>self-heal</strong> reverts manual changes. <strong>Sync waves</strong> (annotation with a number) and <strong>hooks</strong> (PreSync, Sync, PostSync, SyncFail) order work, for example CRDs, then a migration Job, then the Deployment. <strong>AppProjects</strong> with RBAC limit which repos, clusters and namespaces each team can deploy to.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create an Application (UI, CLI or YAML, ideally YAML in Git).</li>
+  <li>Repo server renders manifests from the source revision.</li>
+  <li>Controller diffs them with live state → sync status.</li>
+  <li>Sync applies changes in wave order, running hooks.</li>
+  <li>Health checks evaluate resources → health status; repeat continuously.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: orders-prod, namespace: argocd }
+spec:
+  project: shop
+  source:
+    repoURL: https://github.com/acme/deploy-config
+    targetRevision: main
+    path: apps/orders/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: orders
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [ CreateNamespace=true ]</code></pre>
+<pre><code class="language-yaml"># migration runs before the Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating Synced as &quot;working&quot;; check health too.</li>
+  <li>Fighting OutOfSync caused by HPA or mutating webhooks instead of using <code>ignoreDifferences</code>.</li>
+  <li>Creating Applications by clicking in the UI rather than declaring them in Git.</li>
+  <li>Enabling automated prune on a path that is shared with other tools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In Argo CD an Application defines a source, a Git path with plain manifests, Kustomize or a Helm chart, and a destination cluster and namespace. Argo CD renders the source and compares it with the live cluster: if they match the app is Synced, otherwise OutOfSync, with a diff I can inspect. Health is separate: each resource is Healthy, Progressing or Degraded based on things like rollout status, so an app can be Synced but Degraded. Sync can be manual or automated, with prune to delete what was removed from Git and self-heal to undo manual changes. Sync waves and hooks order things, like a migration job before the deployment, and AppProjects with RBAC limit what each team can deploy where.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>App of apps or ApplicationSet for many services?</strong> ApplicationSet generators (Git directories × clusters) usually scale better.</li>
+  <li><strong>Why OutOfSync right after sync?</strong> Controllers or webhooks mutate fields; use <code>ignoreDifferences</code> or server-side diff.</li>
+  <li><strong>How do you roll back?</strong> Revert the Git commit; Argo CD's own rollback is disabled when automated sync is on.</li>
+</ul>
+</article>
+</body>
+</html>

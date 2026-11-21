@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-017 · How do you design Log Analytics workspaces, and how do you query logs with KQL?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-017" data-topic="Azure">
+<h1>How do you design Log Analytics workspaces, and how do you query logs with KQL?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>as few Log Analytics workspaces as practical</strong> (split only for <strong>region/data residency, compliance or billing</strong>), control access with <strong>resource-context</strong> and <strong>table-level RBAC</strong>, ingest via <strong>diagnostic settings</strong> and <strong>Azure Monitor Agent with DCRs</strong>, query with <strong>KQL</strong> pipelines, and control cost with <strong>table plans (Analytics, Basic, Auxiliary)</strong>, retention and ingestion-time filtering.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every extra workspace makes correlation harder, because queries, workbooks and alerts must span workspaces. Microsoft's design guidance is therefore to start with <strong>one workspace</strong> and add more only for real reasons: <strong>data sovereignty</strong> (keep EU data in an EU region), separate <strong>tenants</strong>, distinct <strong>billing</strong> owners, or strong separation of security data (often Microsoft Sentinel's workspace). Many organisations end up with a central workspace per region or per environment.</p>
+<p>Access is handled without separate workspaces through <strong>resource-context access</strong>: a user who can read a resource can query that resource's logs, so an app team sees only its own data. <strong>Table-level RBAC</strong> restricts sensitive tables such as <code>SigninLogs</code> or security events.</p>
+<p>Data arrives through <strong>diagnostic settings</strong> on resources (often deployed at scale by <strong>Azure Policy deployIfNotExists</strong>), the <strong>Azure Monitor Agent</strong> with <strong>data collection rules (DCRs)</strong> for VMs, and Application Insights for apps. DCRs can also <strong>transform</strong> data at ingestion, dropping noisy columns or rows before you pay for them.</p>
+<p><strong>KQL</strong> reads like a pipeline: a table, then operators like <code>where</code>, <code>extend</code>, <code>summarize</code>, <code>project</code>, <code>join</code>, <code>render</code>. Always filter on <code>TimeGenerated</code> early. For cost, each table has a <strong>plan</strong>: <strong>Analytics</strong> for frequently queried, alertable data; <strong>Basic</strong> for high-volume troubleshooting logs with cheaper ingestion and pay-per-query; <strong>Auxiliary</strong> for very low-cost, rarely queried audit or verbose data. Retention is set per table, with long-term retention beyond interactive retention.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide workspace boundaries (region, compliance, billing).</li>
+  <li>Use resource-context RBAC; add table-level RBAC for sensitive data.</li>
+  <li>Enforce diagnostic settings via policy; deploy AMA and DCRs for VMs.</li>
+  <li>Apply ingestion transformations to drop noise.</li>
+  <li>Set table plans and retention per table.</li>
+  <li>Build workbooks and alerts on KQL queries.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-kusto">// Top failing operations in the last hour
+AppRequests
+| where TimeGenerated &gt; ago(1h) and Success == false
+| summarize failures = count() by Name, ResultCode
+| top 10 by failures
+
+// Slowest dependencies for one service
+AppDependencies
+| where TimeGenerated &gt; ago(24h) and AppRoleName == &quot;orders-api&quot;
+| summarize p95 = percentile(DurationMs, 95), calls = count() by Target, Name
+| order by p95 desc</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One workspace per application, making cross-service correlation painful.</li>
+  <li>Sending verbose debug logs into the Analytics plan.</li>
+  <li>Queries without a time filter scanning months of data.</li>
+  <li>Giving everyone workspace-wide Reader instead of resource-context access.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I keep workspaces few, usually central per region or environment, and split only for data residency, compliance or billing. Access is via resource-context RBAC so teams see logs of their own resources, plus table-level RBAC for sensitive tables. Logs come from diagnostic settings enforced by policy and the Azure Monitor Agent with data collection rules. I query with KQL, for example AppRequests filtered to the last hour and failures, summarised by name. For cost, I use Basic or Auxiliary plans for noisy, rarely queried tables, per-table retention and DCR transformations.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Slowest dependencies query?</strong> <code>AppDependencies</code> summarised by <code>percentile(DurationMs, 95)</code> per target.</li>
+  <li><strong>Can you alert on Basic logs?</strong> Not with standard log alerts; keep alerting data in Analytics.</li>
+  <li><strong>Commitment tiers?</strong> Discounted daily ingestion levels for predictable volumes.</li>
+</ul>
+</article>
+</body>
+</html>

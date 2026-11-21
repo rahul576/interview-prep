@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-022 · How do you know right now which model version is serving production traffic?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-022" data-topic="MLOps">
+<h1>How do you know right now which model version is serving production traffic?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Have <strong>one source of truth</strong>—a <strong>registry alias</strong> or a <strong>GitOps deployment manifest</strong>—that deployment writes and serving reads; the <strong>endpoint reports its loaded version and artefact hash at runtime</strong>, <strong>prediction logs include the version</strong>, and a check <strong>alerts when runtime and expected versions differ</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Which model is in production?&quot; sounds trivial but is often answered with &quot;let me ask the data scientist&quot;. That is a red flag, because rollbacks, audits and incident response all depend on the answer.</p>
+<p>The <strong>intended</strong> state lives in one place: a <strong>production alias</strong> in the model registry (for example <code>champion</code> in MLflow) or a <strong>deployment manifest</strong> in a Git repository that pins model version and image, applied by Argo CD or Flux. The deployment pipeline is the only thing that changes it.</p>
+<p>The <strong>actual</strong> state is reported by the serving system: a <strong>metadata or version endpoint</strong> returning model name, version and artefact hash; <strong>metrics labels</strong> with the model version, so dashboards show traffic per version; and the version field in <strong>every prediction log</strong>. KServe and Triton expose model metadata via the inference protocol; custom services should add it.</p>
+<p>A <strong>reconciliation check</strong> compares actual with intended and alerts on mismatch. It catches pods that failed to reload, a stale replica after a partial rollout, a manual hotfix or a cached old artefact. During a <strong>canary</strong>, several versions serve deliberately; the manifest then lists both with traffic weights, and dashboards split metrics per version.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CD sets the registry alias or updates the GitOps manifest.</li>
+  <li>Serving loads the artefact, verifies its hash and exposes version metadata.</li>
+  <li>Each prediction and metric carries the model version label.</li>
+  <li>A scheduled check compares runtime versions across all replicas with intended state.</li>
+  <li>Mismatch raises an alert to the on-call owner.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">curl -s https://models.internal/v2/models/fraud-model | jq '{name, versions}'
+# {&quot;name&quot;:&quot;fraud-model&quot;,&quot;versions&quot;:[&quot;14&quot;]}
+
+# Prometheus: traffic share per serving version
+sum by (model_version) (rate(predictions_total{model=&quot;fraud-model&quot;}[5m]))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tracking production versions on a wiki page or spreadsheet.</li>
+  <li>Version known only at deploy time, not reported at runtime.</li>
+  <li>Prediction logs without a version field.</li>
+  <li>Manual changes on the cluster outside the GitOps flow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There should be one source of truth that deployment writes and serving reads, like a production alias in the registry or a pinned version in a GitOps manifest. On top of that the endpoint itself reports the loaded model version and artefact hash through a metadata endpoint and metric labels, and every prediction log carries the version. A check compares runtime with expected and alerts on mismatch, which catches a pod that didn't reload or a manual hotfix. If the honest answer is 'we check a wiki', that's the first thing I'd fix.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle several versions during a canary?</strong> The manifest lists both with weights; metrics and logs are split by version label.</li>
+  <li><strong>Why an artefact hash as well as a version?</strong> It proves the exact bytes loaded, catching re-uploaded or corrupted artefacts.</li>
+  <li><strong>Who may change the alias?</strong> Only the CD pipeline or named approvers, with audit.</li>
+</ul>
+</article>
+</body>
+</html>

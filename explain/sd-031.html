@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-031 · Design a real-time leaderboard for a game with millions of players.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-031" data-topic="Classic Design Problems">
+<h1>Design a real-time leaderboard for a game with millions of players.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>Redis sorted sets</strong> (<code>ZINCRBY</code>, <code>ZREVRANGE</code>, <code>ZREVRANK</code>) for O(log N) updates, top-N and rank queries, back them with a <strong>durable store</strong>, keep <strong>one set per time window</strong>, and <strong>shard</strong> or approximate for very large boards.</p>
+
+<h2>Detailed explanation</h2>
+<p>A leaderboard needs two fast queries under constant updates: &quot;top 100&quot; and &quot;what's my rank, and who is around me?&quot;. A SQL <code>ORDER BY score LIMIT 100</code> is fine for small tables, but computing one player's rank (<code>COUNT(*) WHERE score &gt; mine</code>) over millions of rows on every request is expensive.</p>
+<p>A Redis sorted set is a skip list plus hash: each member has a score; updates, rank lookups and range queries are all <strong>O(log N)</strong>. Millions of members fit comfortably in memory.</p>
+<p>Redis isn't the source of truth: score events go to a durable database (or log) first, and the sorted set can be rebuilt. <strong>Time-windowed</strong> boards (daily, weekly, season) are separate keys with expiry. For hundreds of millions of players, you shard by region or score band, or show exact ranks only for the top and <strong>percentiles</strong> for everyone else.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Game server emits <code>ScoreEvent(player, delta, matchId)</code> with an idempotency key.</li>
+  <li>Leaderboard service persists it and runs <code>ZINCRBY lb:global:2026-w47 delta player</code>.</li>
+  <li>Top N: <code>ZREVRANGE lb:… 0 99 WITHSCORES</code>.</li>
+  <li>My rank: <code>ZREVRANK lb:… player</code>; neighbours: <code>ZREVRANGE lb:… rank-5 rank+5</code>.</li>
+  <li>Friends board: fetch friends' scores with <code>ZMSCORE</code> and sort in the app.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ZINCRBY lb:daily:2026-11-21 50 player:42
+ZREVRANGE lb:daily:2026-11-21 0 9 WITHSCORES
+ZREVRANK lb:daily:2026-11-21 player:42
+EXPIRE lb:daily:2026-11-21 172800</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating Redis as the only copy of scores.</li>
+  <li>Not deduplicating score events (double points on retries).</li>
+  <li>One giant key for a global board with hundreds of millions of members.</li>
+  <li>Ties: decide a tie-breaker (e.g. encode earlier timestamp into the score).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use Redis sorted sets: score updates with ZINCRBY, top-N with ZREVRANGE and a player's rank with ZREVRANK, all logarithmic. Score events are persisted durably first so Redis can be rebuilt. Daily and weekly boards are separate keys with TTLs. At very large scale I'd shard by region and show percentile ranks for players outside the top.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Friends-only leaderboard?</strong> Fetch friends' scores and sort, or maintain per-user small sets.</li>
+  <li><strong>How to break ties?</strong> Composite score: score × 10^k + (MAX_TS − timestamp).</li>
+  <li><strong>Cheating?</strong> Server-authoritative scores, anomaly detection.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-063 · How do you apply consistent naming and tagging conventions through Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-063" data-topic="Infrastructure as Code">
+<h1>How do you apply consistent naming and tagging conventions through Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>provider-level default tags/labels</strong> for mandatory tags, a <strong>naming module or locals</strong> that builds names from <strong>variables</strong> (org, app, env, component) and handles <strong>provider length and character limits</strong>, and enforce both with <strong>variable validation and policy checks</strong> in CI.</p>
+
+<h2>Detailed explanation</h2>
+<p>Consistent names and tags are what make a cloud estate operable: you can tell what a resource is from its name, find its owner, attribute its cost and write IAM or policy rules that match patterns. When each engineer types names by hand, you get <code>prod-db</code>, <code>db-production</code> and <code>DB1</code>.</p>
+<p><strong>Tags.</strong> The AWS provider's <strong><code>default_tags</code></strong> block adds a standard set (environment, application, owner, cost centre, managed-by) to every taggable resource; resource-level <code>tags</code> are merged on top. The Google provider has <strong><code>default_labels</code></strong>. The azurerm provider has no equivalent, so modules merge a <code>local.common_tags</code> map into every resource, often backed by Azure Policy that inherits tags from the resource group. Some resources need special care: auto scaling group tags must be marked to propagate to instances, and volumes created by instances may need explicit tags.</p>
+<p><strong>Names.</strong> A small <strong>naming module</strong> (or locals in each root module) takes inputs such as <code>org</code>, <code>app</code>, <code>env</code>, <code>region</code>, <code>component</code> and outputs standard names like <code>acme-pay-prod-euw1-api</code>. Because providers differ, the module handles the rules: S3 bucket names are global, lowercase and up to 63 characters; Azure storage account names are 3-24 lowercase letters and digits with no dashes; some names cannot be changed without replacement.</p>
+<p><strong>Enforcement.</strong> Variable <code>validation</code> blocks reject an <code>env</code> outside an allowed list. Policy checks on the plan (OPA/Conftest, Checkov, Sentinel) fail resources without mandatory tags. Cloud-side controls such as AWS Organizations tag policies or Azure Policy catch anything created outside Terraform.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Root module declares <code>org</code>, <code>app</code>, <code>env</code>, <code>owner</code> variables with validation.</li>
+  <li>Provider <code>default_tags</code> applies the common set.</li>
+  <li>Naming module returns names per resource type, truncated or stripped as required.</li>
+  <li>Resources use <code>module.name.*</code> outputs and add specific tags.</li>
+  <li>CI policy rejects missing tags; cloud policy audits drift.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;env&quot; {
+  type = string
+  validation {
+    condition     = contains([&quot;dev&quot;, &quot;test&quot;, &quot;prod&quot;], var.env)
+    error_message = &quot;env must be dev, test or prod.&quot;
+  }
+}
+
+locals {
+  base         = &quot;${var.org}-${var.app}-${var.env}&quot;
+  storage_name = substr(replace(lower(&quot;${var.org}${var.app}${var.env}&quot;), &quot;-&quot;, &quot;&quot;), 0, 24)
+}
+
+provider &quot;aws&quot; {
+  region = &quot;eu-west-1&quot;
+  default_tags {
+    tags = { env = var.env, app = var.app, owner = var.owner, managed-by = &quot;terraform&quot; }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Names that exceed limits only in production because the env string is longer.</li>
+  <li>Changing a naming convention on resources whose name change forces replacement.</li>
+  <li>Relying only on Terraform when resources are also created by consoles or other tools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For tags I use the provider's default_tags, or default_labels on GCP, so every resource gets environment, application, owner and cost centre automatically, and resources add their own tags on top. On Azure I merge a common tags map in modules. For names I have a small naming module that builds names from variables like org, app, env and component, and handles each provider's limits, like Azure storage accounts with no dashes and a 24-character limit. Variable validation and policy checks in CI reject anything missing mandatory tags, and cloud tag policies catch what's created outside Terraform.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you add a new mandatory tag to every existing resource?</strong> Add it to <code>default_tags</code>, roll out stack by stack; tag changes are in-place updates, then turn on enforcement.</li>
+  <li><strong>What about resources that cannot be renamed?</strong> Keep legacy names via overrides; apply the convention to new resources.</li>
+  <li><strong>Tags or names for automation?</strong> Tags; names are for humans and are harder to change.</li>
+</ul>
+</article>
+</body>
+</html>

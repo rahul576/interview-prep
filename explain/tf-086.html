@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-086 · Where should guardrails live: in Terraform validation, in CI policy checks or in cloud policies like Azure Policy and SCPs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-086" data-topic="Terraform">
+<h1>Where should guardrails live: in Terraform validation, in CI policy checks or in cloud policies like Azure Policy and SCPs?</h1>
+<p class="ex-meta">Terraform · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Guardrails belong in <strong>all three layers</strong> as <strong>defence in depth</strong>: Terraform <strong>variable validation and preconditions</strong> for fast feedback, <strong>policy as code in CI</strong> against the plan, and <strong>cloud-native policies</strong> (Azure Policy, AWS SCPs, GCP organisation policies) as the runtime backstop for every tool.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each layer catches different mistakes at a different cost. <strong>Terraform validation</strong> — <code>validation</code> blocks on variables, <code>precondition</code> and <code>postcondition</code> blocks, and opinionated module design — runs inside <code>terraform plan</code> on the developer's laptop. It is ideal for module-level correctness: an invalid SKU, a name that breaks the naming convention, a CIDR that is too small. Feedback arrives in seconds, but it only protects code that uses your modules.</p>
+<p><strong>Policy as code in CI</strong> — OPA with Conftest, HashiCorp Sentinel, Checkov or similar — evaluates the <strong>plan JSON</strong> before apply. It enforces organisation rules across every Terraform change, such as allowed regions, mandatory tags, no public storage accounts or no <code>0.0.0.0/0</code> ingress. Its strength is a clear, specific message in the pull request, before anything has been created.</p>
+<p><strong>Cloud-native policy</strong> — Azure Policy with <code>deny</code> or <code>modify</code> effects, AWS Service Control Policies and resource control policies, GCP organisation policy constraints — is enforced by the cloud API itself. It applies to the portal, the CLI, SDKs, other IaC tools and anyone with credentials. That makes it the <strong>real backstop</strong>: Terraform and CI can be bypassed, the cloud control plane cannot.</p>
+<p>The design principle is that the critical rules are strict at the cloud layer, while the earlier layers exist to make compliance <strong>easy and fast</strong>, so that developers rarely hit a cryptic deny error at apply time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write a short list of guardrails and classify each: critical (security, compliance, cost) or convention.</li>
+  <li>Encode module-level rules as variable <code>validation</code> and <code>precondition</code> blocks in shared modules.</li>
+  <li>Run <code>terraform show -json plan.out</code> in CI and evaluate it with Conftest or Sentinel; fail the PR with a readable message.</li>
+  <li>Enforce critical rules in Azure Policy, SCPs or organisation policies, assigned at management group or OU level.</li>
+  <li>Start new cloud policies in <strong>audit</strong> mode, review the impact, then switch to <strong>deny</strong>.</li>
+  <li>Keep rules consistent across layers so a change that passes CI does not fail at the cloud.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;location&quot; {
+  type = string
+  validation {
+    condition     = contains([&quot;westeurope&quot;, &quot;northeurope&quot;], var.location)
+    error_message = &quot;Only westeurope and northeurope are allowed.&quot;
+  }
+}</code></pre>
+<pre><code class="language-rego">package terraform.tags
+deny contains msg if {
+  r := input.resource_changes[_]
+  r.change.after.tags.owner == null
+  msg := sprintf(&quot;%s is missing the 'owner' tag&quot;, [r.address])
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Layer</th><th>When it runs</th><th>Scope</th><th>Bypassable?</th></tr></thead>
+<tbody>
+<tr><td>Terraform validation</td><td>plan, locally</td><td>Modules that use it</td><td>Yes</td></tr>
+<tr><td>CI policy as code</td><td>Before apply</td><td>All Terraform via pipeline</td><td>Yes, outside the pipeline</td></tr>
+<tr><td>Cloud policy</td><td>At API call</td><td>Every tool and user</td><td>No (except by policy admins)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on cloud policy, so developers discover violations as failed applies.</li>
+  <li>Relying only on CI checks, leaving portal and CLI changes uncontrolled.</li>
+  <li>Switching new cloud policies straight to deny and breaking existing workloads.</li>
+  <li>Rules that disagree between layers, causing confusion about which is correct.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use all three as defence in depth, each for what it does best. Variable validation and preconditions give instant feedback inside the plan, for example rejecting an invalid SKU or a bad name. Policy as code in CI, with Conftest or Sentinel against the plan JSON, enforces organisation rules like allowed regions, mandatory tags and no public storage on every Terraform change, with a clear message in the pull request. Cloud-native policies such as Azure Policy, SCPs or GCP organisation policies are the real backstop, because they apply to the portal, the CLI and every other tool. I keep the cloud layer strict for critical rules, and use the earlier layers to make compliance easy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to developer experience if only cloud policy exists?</strong> Violations surface late as failed applies with generic deny messages, often half-way through a run.</li>
+  <li><strong>How do you roll out a new cloud policy safely?</strong> Assign it in audit mode, review non-compliant resources, fix or exempt, then switch to deny.</li>
+  <li><strong>Where do exceptions live?</strong> As documented, time-limited policy exemptions, reviewed like code, not as disabled rules.</li>
+</ul>
+</article>
+</body>
+</html>

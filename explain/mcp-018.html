@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-018 · What changed architecturally in the 2026-07-28 MCP revision?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-018" data-topic="MCP Servers">
+<h1>What changed architecturally in the 2026-07-28 MCP revision?</h1>
+<p class="ex-meta">MCP Servers · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The <strong>2026-07-28</strong> revision makes the core <strong>stateless</strong>: no <code>initialize</code> handshake or <code>Mcp-Session-Id</code>; <strong>version and capabilities travel in each request's <code>_meta</code></strong>, a <strong>discovery method</strong> exposes support up front, servers <strong>no longer send requests to clients</strong> (using <strong>input-required results</strong> instead), and <strong>Tasks, MCP Apps and other features move to extensions</strong> under a <strong>formal feature lifecycle</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Earlier revisions were <strong>connection-oriented</strong>: a handshake negotiated capabilities, HTTP servers could keep sessions, and servers could send requests back to clients (sampling, elicitation, roots). That made remote servers awkward to scale: sessions pinned clients to replicas, and bidirectional requests required long-lived streams. According to the reference material for this question, the <strong>2026-07-28</strong> revision restructures the protocol around statelessness.</p>
+<p><strong>No handshake, no sessions.</strong> The <code>initialize</code>/<code>initialized</code> exchange and the <code>Mcp-Session-Id</code> header are removed. Instead, <strong>each request carries its protocol version and the client capabilities</strong> relevant to it in request metadata (the <code>_meta</code> field). A <strong>discovery method</strong> lets clients check supported versions and server capabilities in advance, and its results can be cached. Any replica can serve any request, so servers scale horizontally behind ordinary load balancers and suit serverless platforms.</p>
+<p><strong>No server-to-client requests.</strong> When a server needs more input mid-operation, it returns an <strong>input-required result</strong> describing what it needs; the client gathers the answer (for example from the user) and <strong>retries the request with the answers</strong>. This pattern is called <strong>multi round-trip requests</strong>. Change notifications such as list changes move to a <strong>long-lived subscription stream</strong> that clients open when they want them.</p>
+<p><strong>Extensions and lifecycle.</strong> <strong>Tasks</strong> for long-running work moves from core to an <strong>official extension</strong>. An <strong>extensions framework</strong> lets optional features, including <strong>MCP Apps</strong> for interactive interfaces, evolve outside the core and be negotiated via capabilities. A <strong>feature lifecycle</strong> (active, deprecated, removed) with minimum deprecation windows governs change; sampling, roots and logging are deprecated.</p>
+<p>Consequence for server authors: state must be <strong>explicit</strong>, via handles stored server-side and passed as tool arguments, and side-effecting tools must be <strong>idempotent</strong>, since dropped requests are simply re-issued.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client optionally calls discovery and caches versions and capabilities.</li>
+  <li>Each request includes <code>_meta</code> with protocol version and client capabilities.</li>
+  <li>Server processes it independently on any replica.</li>
+  <li>If input is needed, server returns input-required; client retries with answers.</li>
+  <li>Clients wanting notifications open a subscription stream.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:&quot;r-91&quot;,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{
+  &quot;name&quot;:&quot;deploy_service&quot;,&quot;arguments&quot;:{&quot;service&quot;:&quot;checkout&quot;},
+  &quot;_meta&quot;:{&quot;protocolVersion&quot;:&quot;2026-07-28&quot;,&quot;clientCapabilities&quot;:{&quot;elicitation&quot;:{}}}}}</code></pre>
+<p>(Field names shown illustratively; consult the published schema for exact shapes.)</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Handshake revisions (≤ 2025-11-25)</th><th>2026-07-28</th></tr></thead>
+<tbody>
+<tr><td>Negotiation</td><td><code>initialize</code> once per connection</td><td>Per request in <code>_meta</code>, plus discovery</td></tr>
+<tr><td>Sessions</td><td>Optional <code>Mcp-Session-Id</code></td><td>None</td></tr>
+<tr><td>Server needs input</td><td>Server sends request to client</td><td>Input-required result, client retries</td></tr>
+<tr><td>Tasks</td><td>Experimental core feature</td><td>Official extension</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping per-connection in-memory state and expecting it to survive.</li>
+  <li>Non-idempotent write tools in a world of re-issued requests.</li>
+  <li>Assuming every client supports the new revision immediately.</li>
+  <li>Treating deprecated features as removed.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The 2026-07-28 revision makes the core stateless. The initialize handshake and Mcp-Session-Id are gone; each request carries its protocol version and client capabilities in _meta, and there's a discovery method to check support up front. Without sessions, any replica can handle any request, so remote servers scale behind ordinary load balancers. Servers no longer send requests to clients; if they need input they return an input-required result and the client retries with the answers. Notifications move to a subscription stream. Tasks became an official extension, alongside an extensions framework, MCP Apps, and a formal feature lifecycle with deprecation windows.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a server keep state without sessions?</strong> Explicit handles returned by tools and stored in a database or cache.</li>
+  <li><strong>What happens to old clients?</strong> Servers can support older versions; clients negotiate or fall back.</li>
+  <li><strong>Why remove server-to-client requests?</strong> They needed long-lived bidirectional channels, which hurt scaling and simplicity.</li>
+</ul>
+</article>
+</body>
+</html>

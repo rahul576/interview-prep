@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-114 · Explain CountDownLatch, CyclicBarrier and Semaphore with use cases.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-114" data-topic="Concurrency">
+<h1>Explain CountDownLatch, CyclicBarrier and Semaphore with use cases.</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>CountDownLatch</strong> lets threads <strong>wait until N events have happened</strong> (one-shot), a <strong>CyclicBarrier</strong> makes a fixed group of threads <strong>wait for each other</strong> at a point (reusable), and a <strong>Semaphore</strong> <strong>limits concurrent access</strong> with permits; <strong>Phaser</strong> generalises latch and barrier.</p>
+
+<h2>Detailed explanation</h2>
+<p>All three are synchronisers in <code>java.util.concurrent</code>, built on AbstractQueuedSynchronizer, that replace hand-written <code>wait</code>/<code>notify</code> code.</p>
+<p><strong>CountDownLatch</strong> starts with a count. Worker threads call <code>countDown()</code> when they finish something; waiting threads call <code>await()</code> (optionally with a timeout) and are released when the count reaches <strong>zero</strong>. The roles are asymmetric: the counting threads don't wait. It is <strong>one-shot</strong>: once zero, it stays open and cannot be reset. Typical uses: the main thread waits until five services have started, a test waits until N async callbacks arrive, or a &quot;starting gun&quot; latch of 1 releases many threads at once for a load test.</p>
+<p><strong>CyclicBarrier</strong> is created for a fixed number of <strong>parties</strong>. Each thread calls <code>await()</code> and blocks until <strong>all parties</strong> have arrived; then all are released together, and an optional <strong>barrier action</strong> runs once (for example merging partial results). It then <strong>resets automatically</strong>, so it suits <strong>iterative, phased</strong> algorithms: each worker computes its slice of step k, waits at the barrier, then all move to step k+1. If one party times out or is interrupted, the barrier becomes <strong>broken</strong> and the others get <code>BrokenBarrierException</code>.</p>
+<p><strong>Semaphore</strong> holds a number of <strong>permits</strong>. <code>acquire()</code> takes one (blocking if none), <code>release()</code> returns one; <code>tryAcquire(timeout)</code> avoids waiting forever. It is used to <strong>limit concurrency</strong>: at most 20 simultaneous calls to a rate-limited partner API, or bounding how many virtual threads use a resource. A semaphore with one permit is a non-reentrant mutex, and any thread may release, so always release in <code>finally</code>.</p>
+<p><strong>Phaser</strong> supports a dynamic number of parties and multiple phases, covering both latch and barrier use cases.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Latch: count N → <code>countDown()</code> decrements → zero releases all <code>await()</code>ers.</li>
+  <li>Barrier: N parties call <code>await()</code> → last arrival runs action → all released → reset.</li>
+  <li>Semaphore: permits P → <code>acquire()</code> decrements or blocks → <code>release()</code> increments and wakes a waiter.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Wait for services to start
+CountDownLatch ready = new CountDownLatch(services.size());
+services.forEach(s -&gt; exec.submit(() -&gt; { s.start(); ready.countDown(); }));
+if (!ready.await(30, SECONDS)) throw new IllegalStateException(&quot;startup timeout&quot;);
+
+// Phased simulation
+CyclicBarrier step = new CyclicBarrier(4, grid::swapBuffers);
+Runnable worker = () -&gt; { for (int t = 0; t &lt; steps; t++) { computeSlice(); step.await(); } };
+
+// Limit calls to a partner API
+Semaphore permits = new Semaphore(20);
+permits.acquire();
+try { partnerApi.call(); } finally { permits.release(); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>CountDownLatch</th><th>CyclicBarrier</th><th>Semaphore</th></tr></thead>
+<tbody>
+<tr><td>Purpose</td><td>wait for N events</td><td>N threads meet</td><td>limit concurrency</td></tr>
+<tr><td>Reusable</td><td>no</td><td>yes</td><td>yes</td></tr>
+<tr><td>Who waits</td><td>awaiting threads</td><td>all parties</td><td>acquirers</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>countDown()</code> on failure paths (use finally), so await hangs.</li>
+  <li>Using a latch where repeated phases need a barrier.</li>
+  <li>Releasing a semaphore without acquiring it, inflating permits.</li>
+  <li><code>await()</code> without timeouts in production code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A CountDownLatch lets one or more threads wait until a count reaches zero, for example the main thread waiting for five services to start; it's one-shot. A CyclicBarrier makes a fixed number of threads wait for each other before continuing, and it's reusable, which suits phases of a parallel computation. A Semaphore holds permits and limits how many threads use a resource at once, like concurrent calls to a downstream API. Phaser generalises latch and barrier with dynamic parties.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Semaphore with virtual threads?</strong> Create a virtual thread per task and use a Semaphore to cap access to the scarce resource, instead of a small pool.</li>
+  <li><strong>What breaks a CyclicBarrier?</strong> A timeout, interrupt or exception in the action; others get BrokenBarrierException.</li>
+  <li><strong>Can a latch be reset?</strong> No; create a new one or use a barrier/Phaser.</li>
+</ul>
+</article>
+</body>
+</html>

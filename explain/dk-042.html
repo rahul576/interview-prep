@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-042 · How do BuildKit cache mounts and build secrets work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-042" data-topic="Docker">
+<h1>How do BuildKit cache mounts and build secrets work?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>BuildKit's <strong><code>RUN --mount=type=cache</code></strong> keeps package caches (Maven, npm, pip, Go) <strong>between builds without putting them in the image</strong>, and <strong><code>RUN --mount=type=secret</code></strong> exposes a secret <strong>only during that one step</strong>, passed with <strong><code>docker build --secret</code></strong>, never stored in layers or history.</p>
+
+<h2>Detailed explanation</h2>
+<p>Classic Dockerfiles had two pains. Dependency installs re-downloaded everything whenever the layer cache was invalidated, for example after a single change in <code>pom.xml</code>. And private dependencies needed credentials, which people passed with <code>ARG</code> or <code>COPY</code> and then deleted, but the secret remained in an earlier <strong>layer</strong> or the <strong>image history</strong>.</p>
+<p><strong>BuildKit</strong>, the default builder in current Docker, adds <strong>mounts</strong> for individual <code>RUN</code> instructions. A <strong>cache mount</strong> attaches a persistent directory managed by the builder: <code>RUN --mount=type=cache,target=/root/.m2 mvn package</code> lets Maven reuse its local repository across builds even when the layer itself must be rebuilt. The cache is <strong>not part of the image</strong>, so it adds no size. The same works for <code>/root/.npm</code>, <code>/root/.cache/pip</code>, <code>/go/pkg/mod</code> or apt caches (with <code>sharing=locked</code>). Cache mounts are <strong>local to the builder</strong>, so a fresh CI runner starts empty unless you persist the builder state.</p>
+<p>A <strong>secret mount</strong> makes a file (default <code>/run/secrets/&lt;id&gt;</code>) or, in newer versions, an environment variable available <strong>only while that RUN executes</strong>. It is not written to any layer, not visible in <code>docker history</code>, and not part of the cache key. You provide it at build time with <code>--secret id=npmrc,src=$HOME/.npmrc</code> or <code>--secret id=token,env=GH_TOKEN</code>. For Git over SSH there is a similar <strong><code>--mount=type=ssh</code></strong> with <code>--ssh default</code>, which forwards your SSH agent.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The Dockerfile declares the mount on a RUN instruction.</li>
+  <li>BuildKit attaches the cache directory or secret file for that step only.</li>
+  <li>The command runs and may populate the cache.</li>
+  <li>The resulting layer is snapshotted without the mount contents.</li>
+  <li>Next build, the cache mount is reattached with its previous contents.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM node:22-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    npm ci --omit=dev
+
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,target=/root/.m2 mvn -q package -DskipTests</code></pre>
+<pre><code class="language-bash">docker build --secret id=npmrc,src=$HOME/.npmrc -t web:1.0 .</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Passing tokens with <code>ARG</code>, which leak into history.</li>
+  <li>Expecting cache mounts to survive on ephemeral CI runners.</li>
+  <li>Pointing the cache mount at a different directory than the tool actually uses.</li>
+  <li>Copying the secret into the image in a later step &quot;for convenience&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;BuildKit adds special mounts to RUN. RUN --mount=type=cache,target=/root/.m2 mvn package keeps the Maven repository in a persistent builder cache between builds without putting it into the image, so dependencies aren't downloaded again; the same works for npm, pip or Go modules. RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci makes a secret available only during that step, and it's never written to a layer or the history. I pass it with docker build --secret id=npmrc,src=... This replaces unsafe patterns like copying credentials in and deleting them later.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you use BuildKit cache in fresh CI runners?</strong> Export layer cache to a registry or GHA cache, or keep a persistent builder.</li>
+  <li><strong>What about SSH keys for private Git?</strong> <code>RUN --mount=type=ssh</code> with <code>docker build --ssh default</code>.</li>
+  <li><strong>Is the secret part of the cache key?</strong> No, so changing it does not invalidate the cache.</li>
+</ul>
+</article>
+</body>
+</html>

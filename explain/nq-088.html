@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-088 · What is CompletableFuture, and how does it support asynchronous programming?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-088" data-topic="Concurrency">
+<h1>What is CompletableFuture, and how does it support asynchronous programming?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>CompletableFuture</code></strong> (Java 8) is a <strong><code>Future</code> you can complete and compose</strong>: start work with <strong><code>supplyAsync</code>/<code>runAsync</code></strong>, chain <strong>non-blocking callbacks</strong> (<code>thenApply</code>, <code>thenCompose</code>, <code>thenCombine</code>, <code>thenAccept</code>), handle errors with <strong><code>exceptionally</code>/<code>handle</code>/<code>whenComplete</code></strong>, and coordinate with <strong><code>allOf</code>/<code>anyOf</code></strong> and <strong>timeouts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A plain <code>Future</code> only lets you block with <code>get()</code>. <code>CompletableFuture</code> implements both <code>Future</code> and <strong><code>CompletionStage</code></strong>, which turns asynchronous results into a <strong>pipeline</strong>: you describe what should happen when a value arrives, and threads are not blocked waiting.</p>
+<p><strong>Starting work</strong>: <code>supplyAsync(supplier)</code> returns a value; <code>runAsync(runnable)</code> does not. Without an executor argument they use the <strong><code>ForkJoinPool.commonPool()</code></strong>, which is sized for CPU work and shared JVM-wide, so for blocking I/O you should <strong>pass your own executor</strong>. You can also create an incomplete future and finish it yourself with <code>complete(value)</code> or <code>completeExceptionally(ex)</code>, which is handy for bridging callback-based APIs.</p>
+<p><strong>Composing</strong>:</p>
+<ul>
+  <li><code>thenApply(fn)</code>: transform the result (like <code>map</code>).</li>
+  <li><code>thenAccept(consumer)</code> / <code>thenRun</code>: consume it, end of chain.</li>
+  <li><code>thenCompose(fn)</code>: chain another async call returning a <code>CompletableFuture</code> (like <code>flatMap</code>), avoiding nested futures.</li>
+  <li><code>thenCombine(other, bifn)</code>: merge two independent results.</li>
+  <li><code>allOf(...)</code> / <code>anyOf(...)</code>: wait for all or the first of many.</li>
+</ul>
+<p>Each has an <code>...Async</code> variant that runs the callback on an executor rather than the completing thread.</p>
+<p><strong>Errors</strong> propagate down the chain, skipping normal stages, until handled with <code>exceptionally</code> (recover), <code>handle</code> (always runs, sees value or exception) or <code>whenComplete</code> (observe, e.g. log). <strong>Timeouts</strong> came in Java 9: <code>orTimeout</code> fails with <code>TimeoutException</code>, <code>completeOnTimeout</code> supplies a default.</p>
+<p>The result is that you can call several services <strong>in parallel</strong> and combine the results with very little thread usage. Note: with virtual threads (Java 21+), simple blocking code is often an easier alternative for request/response fan-out.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>supplyAsync</code> submits the supplier to an executor; returns an incomplete future immediately.</li>
+  <li>You register dependent stages; each returns a new future.</li>
+  <li>When the supplier finishes, the future completes and triggers dependent stages.</li>
+  <li>Exceptions complete the future exceptionally and propagate to handlers.</li>
+  <li>At the boundary, <code>join()</code> or return the future to a framework that supports it (Spring MVC accepts <code>CompletableFuture</code> return values).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService io = Executors.newFixedThreadPool(20);
+
+CompletableFuture&lt;Customer&gt; customer = CompletableFuture.supplyAsync(() -&gt; crm.find(id), io);
+CompletableFuture&lt;BigDecimal&gt; balance = CompletableFuture.supplyAsync(() -&gt; ledger.balance(id), io);
+
+CompletableFuture&lt;Statement&gt; statement = customer
+        .thenCombine(balance, Statement::new)                    // merge independent results
+        .thenCompose(s -&gt; pdfService.renderAsync(s))             // another async call
+        .orTimeout(3, TimeUnit.SECONDS)
+        .exceptionally(ex -&gt; Statement.unavailable(id, ex))      // fallback
+        .whenComplete((s, ex) -&gt; metrics.record(&quot;statement&quot;, ex == null));
+
+return statement;          // e.g. returned from a Spring MVC controller</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the common pool for blocking I/O.</li>
+  <li>Calling <code>get()</code>/<code>join()</code> right after <code>supplyAsync</code>, making it synchronous.</li>
+  <li>Using <code>thenApply</code> with a function returning a future, giving <code>CompletableFuture&lt;CompletableFuture&lt;T&gt;&gt;</code> (use <code>thenCompose</code>).</li>
+  <li>Forgetting to handle exceptions, so failures disappear.</li>
+  <li>Expecting <code>cancel(true)</code> to interrupt the running task (it does not).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CompletableFuture, from Java 8, is a Future I can complete manually and, more importantly, compose. supplyAsync and runAsync start work on the common ForkJoinPool or on an executor I pass, which I always do for I/O. Instead of blocking with get, I attach callbacks: thenApply to transform, thenAccept to consume, thenCompose to chain another async call, thenCombine to merge two results, and allOf or anyOf to coordinate many. Errors flow down the chain and I handle them with exceptionally, handle or whenComplete, and Java 9 added orTimeout. This lets me call several services in parallel and combine the results without blocking threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should you pass your own executor for I/O tasks?</strong> The common pool is small (cores minus one) and shared; blocking it starves parallel streams and other async work.</li>
+  <li><strong>thenApply vs thenCompose?</strong> thenApply maps a value; thenCompose flattens a function that itself returns a CompletableFuture.</li>
+  <li><strong>Does cancel() stop the task?</strong> It completes the future with CancellationException but does not interrupt the underlying computation.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-084 · How do you collect metrics from containers and the Docker host?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-084" data-topic="Docker">
+<h1>How do you collect metrics from containers and the Docker host?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Container metrics come from <strong>cgroups</strong>: <strong>cAdvisor</strong> (built into the kubelet in Kubernetes) exposes per-container CPU, memory (including <strong>working set</strong>), network and filesystem metrics, <strong>node_exporter</strong> adds host metrics, the Docker daemon exposes <strong>engine metrics</strong>, <strong>Prometheus</strong> scrapes them with <strong>Grafana</strong> dashboards and alerts, and applications add their own metrics via <strong>Micrometer or OpenTelemetry</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Linux kernel accounts resource usage per <strong>cgroup</strong>, and every container has its own cgroup. <strong>cAdvisor</strong> reads these counters and publishes them in Prometheus format: <code>container_cpu_usage_seconds_total</code>, <code>container_cpu_cfs_throttled_periods_total</code> (CPU throttling against limits), <code>container_memory_working_set_bytes</code>, <code>container_memory_rss</code>, network bytes and errors, and filesystem usage. On a plain Docker host you run cAdvisor as a container; in Kubernetes it is embedded in the kubelet and scraped through <code>/metrics/cadvisor</code>.</p>
+<p>Containers don't tell you everything about the host, so <strong>node_exporter</strong> adds disk space and I/O, load, memory and <strong>pressure stall information (PSI)</strong>, network and filesystem metrics. The Docker daemon can expose its own <strong>engine metrics</strong> via the <code>metrics-addr</code> setting in <code>daemon.json</code> (container actions, builder and daemon health). In Kubernetes, <strong>kube-state-metrics</strong> adds object state such as restarts, desired versus available replicas and OOMKilled reasons.</p>
+<p><strong>Prometheus</strong> scrapes all of these; <strong>Grafana</strong> builds dashboards; <strong>Alertmanager</strong> routes alerts such as memory working set above 90% of the limit, high CPU throttling, restart loops or a disk filling up.</p>
+<p>Infrastructure metrics only show symptoms. <strong>Application metrics</strong> (request rate, errors, latency per endpoint, queue depth, pool saturation) come from the app itself via <strong>Micrometer</strong> in Spring Boot or the <strong>OpenTelemetry</strong> SDKs. Use consistent labels such as <code>service</code>, <code>version</code> and <code>env</code> so you can correlate a latency jump with a new version.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Kernel cgroups record CPU, memory, I/O per container.</li>
+  <li>cAdvisor/kubelet export them; node_exporter exports host data.</li>
+  <li>Prometheus scrapes targets every 15-30 s and stores time series.</li>
+  <li>Grafana dashboards: per container, per service, per node.</li>
+  <li>Alert rules fire on SLO symptoms and saturation; apps add RED/USE metrics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">services:
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    volumes: [ &quot;/:/rootfs:ro&quot;, &quot;/var/run:/var/run:ro&quot;, &quot;/sys:/sys:ro&quot;, &quot;/var/lib/docker/:/var/lib/docker:ro&quot; ]
+    ports: [ &quot;8080:8080&quot; ]
+  node-exporter:
+    image: prom/node-exporter
+    pid: host
+    volumes: [ &quot;/:/host:ro,rslave&quot; ]
+    command: [ &quot;--path.rootfs=/host&quot; ]</code></pre>
+<pre><code class="language-promql">container_memory_working_set_bytes{container!=&quot;&quot;}
+  / on(namespace,pod,container) kube_pod_container_resource_limits{resource=&quot;memory&quot;} &gt; 0.9</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Alerting on <code>container_memory_usage_bytes</code>, which includes reclaimable page cache and looks scary.</li>
+  <li>Ignoring CPU throttling, a common hidden cause of latency.</li>
+  <li>High-cardinality labels (user IDs, full URLs) that overload Prometheus.</li>
+  <li>Only infrastructure metrics, no application-level RED metrics.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Container metrics come from cgroups. cAdvisor, which is built into the kubelet on Kubernetes, exposes per-container CPU, throttling, memory including working set, network and filesystem metrics in Prometheus format. node_exporter adds host metrics like disk space and memory pressure, and the Docker daemon can expose engine metrics with <code>metrics-addr</code>. Prometheus scrapes them, Grafana shows dashboards, and Alertmanager fires on things like memory near the limit, throttling, restart loops or a filling disk. But infrastructure metrics aren't enough, so services expose request rate, errors and latency through Micrometer or OpenTelemetry, with consistent labels like service and version.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which memory metric predicts an OOM kill?</strong> <code>container_memory_working_set_bytes</code> against the limit; that is what the kubelet uses for eviction decisions.</li>
+  <li><strong>How do you spot CPU throttling?</strong> Ratio of <code>container_cpu_cfs_throttled_periods_total</code> to <code>container_cpu_cfs_periods_total</code>.</li>
+  <li><strong>Pull vs push metrics?</strong> Prometheus pulls; short-lived jobs can push via Pushgateway or OTLP to a collector.</li>
+</ul>
+</article>
+</body>
+</html>

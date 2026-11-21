@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-242 · What happens if an exception is thrown inside a static initializer?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-242" data-topic="Exceptions">
+<h1>What happens if an exception is thrown inside a static initializer?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>If a <strong>static initialiser throws</strong>, the JVM wraps it in <strong>ExceptionInInitializerError</strong> on first use, marks the class <strong>erroneous</strong>, and every later use throws <strong>NoClassDefFoundError</strong>, so keep static init free of risky work.</p>
+
+<h2>Detailed explanation</h2>
+<p>Class initialisation (running static field initialisers and <code>static {}</code> blocks) happens once, on the first active use of a class. The JVM spec says that if initialisation completes abruptly with an exception, the class is put into an <strong>erroneous state</strong> permanently for that class loader. There is no retry.</p>
+<p>What you see:</p>
+<ol>
+  <li><strong>First access</strong>: the original exception (say a <code>NullPointerException</code> or <code>IllegalStateException</code> from parsing a config file) is wrapped in <strong><code>ExceptionInInitializerError</code></strong>, whose <code>getCause()</code> holds the real problem. If the original was already an <code>Error</code>, it is rethrown as is.</li>
+  <li><strong>Every later access</strong> from any thread: <strong><code>NoClassDefFoundError: Could not initialize class com.shop.Config</code></strong>. Since <strong>JDK 17</strong> (JDK-8048190), this error's cause includes an <code>ExceptionInInitializerError</code> describing the original failure, which helps; on older JDKs the cause was missing.</li>
+</ol>
+<p>This is confusing in production: the jar is clearly on the classpath, yet the log full of <code>NoClassDefFoundError</code> comes from requests minutes after the real failure. You have to scroll back to the <strong>first</strong> error. A checked exception cannot even be thrown directly from a static block, which tempts people to wrap and rethrow as runtime exceptions.</p>
+<p>Because a broken class can't recover until the JVM (or class loader) is restarted, avoid risky work in static initialisation: reading files, network calls, connecting to databases, parsing environment variables without defaults. Prefer <strong>lazy initialisation</strong> (holder idiom, memoised supplier), <strong>dependency injection</strong> of configuration, or explicit startup code that fails fast with a clear message.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread triggers class initialisation; the JVM takes the class's init lock.</li>
+  <li>Static initialisers run in textual order.</li>
+  <li>An exception is thrown; the JVM records the class as erroneous.</li>
+  <li>The first caller gets <code>ExceptionInInitializerError</code>.</li>
+  <li>Later callers get <code>NoClassDefFoundError</code> without re-running the initialiser.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Config {
+    static final int TIMEOUT = Integer.parseInt(System.getenv(&quot;TIMEOUT_MS&quot;)); // NPE/NFE if unset
+}
+
+try { System.out.println(Config.TIMEOUT); }
+catch (ExceptionInInitializerError e) { System.out.println(&quot;1st: &quot; + e.getCause()); }
+try { System.out.println(Config.TIMEOUT); }
+catch (NoClassDefFoundError e) { System.out.println(&quot;2nd: &quot; + e.getMessage()); }
+// 1st: java.lang.NumberFormatException: Cannot parse null string: null
+// 2nd: Could not initialize class Config</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Debugging the <code>NoClassDefFoundError</code> as a classpath problem.</li>
+  <li>Catching <code>ExceptionInInitializerError</code> and continuing to use the class.</li>
+  <li>Placing database or HTTP clients in static fields initialised eagerly.</li>
+  <li>Swallowing the original exception inside the static block.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;If a static initialiser throws, the JVM wraps the exception in ExceptionInInitializerError on that first use and marks the class as erroneous for the life of the class loader. Every later attempt to use the class throws NoClassDefFoundError 'Could not initialize class', which is confusing because the class file is there; the real cause is the first error in the logs. Newer JDKs attach that original cause. So I keep static initialisation trivial, and for anything that can fail, like reading config or connecting to services, I use lazy initialisation or dependency injection and fail fast at startup with a clear message.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does NoClassDefFoundError appear for a class that is clearly on the classpath?</strong> Its earlier static initialisation failed, leaving it unusable.</li>
+  <li><strong>Can a static block throw a checked exception?</strong> Not directly; it must be caught or wrapped.</li>
+  <li><strong>How do you recover?</strong> Fix the cause and restart the JVM or reload the class loader.</li>
+</ul>
+</article>
+</body>
+</html>

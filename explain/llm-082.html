@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-082 · How do you secure a self-hosted LLM inference endpoint?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-082" data-topic="LLMOps &amp; RAG">
+<h1>How do you secure a self-hosted LLM inference endpoint?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Secure inference endpoints with <strong>authentication and per-model authorisation</strong> for every caller (via a <strong>gateway</strong>), <strong>private network access only</strong> (including <strong>metrics and admin endpoints</strong>), <strong>rate limits and quotas per client</strong>, <strong>input and output size limits</strong>, <strong>privacy-aware logging</strong>, <strong>trusted model sources in safe formats</strong> like <strong>safetensors</strong>, and <strong>regular patching</strong> of serving software, drivers and images.</p>
+
+<h2>Detailed explanation</h2>
+<p>Self-hosted inference servers (vLLM, TGI, Triton, Ollama, SGLang) are often deployed quickly for experiments and then stay, sometimes with <strong>no authentication</strong> and exposed ports. That invites free GPU usage, data exposure and denial of service.</p>
+<p><strong>Authentication and authorisation.</strong> Put an <strong>API gateway</strong> in front (Kong, Envoy, a cloud gateway, LiteLLM proxy) that authenticates callers with service identities (mTLS, OAuth client credentials, workload identity) or tokens, and authorises access per model. Built-in API key options in serving engines are a minimum, not a full solution.</p>
+<p><strong>Network.</strong> Private subnets only, Kubernetes <strong>NetworkPolicies</strong> allowing traffic just from approved services, no public load balancer. Engines also expose <strong>metrics, health and sometimes management</strong> endpoints (model loading, LoRA adapter loading); these must be protected too, since dynamic loading endpoints can be abused.</p>
+<p><strong>Resource abuse.</strong> <strong>Rate limits and token quotas per client</strong> stop one service from monopolising GPUs. <strong>Input size limits</strong> (max prompt tokens, max output tokens, max request body, max images) prevent denial of service by huge or endless requests. Set request timeouts and concurrency caps.</p>
+<p><strong>Logging and privacy.</strong> Log usage metadata per client (model, tokens, latency, status). Log prompt and response <strong>content only where permitted</strong>, with redaction, strict access control and retention limits, because prompts frequently contain personal or confidential data.</p>
+<p><strong>Model supply chain.</strong> Download models only from <strong>trusted, verified sources</strong>; verify checksums or signatures; prefer <strong>safetensors</strong>, which stores only tensors, over <strong>pickle</strong>-based formats that can execute code when loaded; disable <strong><code>trust_remote_code</code></strong>, which runs Python code shipped in model repositories, unless that code has been reviewed and pinned.</p>
+<p><strong>Patching.</strong> Inference servers, Python dependencies, CUDA drivers and base images have had security vulnerabilities, including remote code execution issues. Scan images, track advisories, and update regularly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client -&gt; gateway (authN, authZ, quotas, size limits) over mTLS.</li>
+  <li>Gateway -&gt; private inference service (NetworkPolicy-restricted).</li>
+  <li>Inference pods run non-root with read-only model volumes.</li>
+  <li>Metrics/admin endpoints internal only.</li>
+  <li>Logs: metadata always; content redacted and access-controlled.</li>
+  <li>CI scans images; models verified before deployment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: vllm-ingress, namespace: inference }
+spec:
+  podSelector: { matchLabels: { app: vllm } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { name: llm-gateway } }
+      ports: [{ port: 8000, protocol: TCP }]</code></pre>
+<p>vLLM args: <code>--max-model-len 16384</code>, <code>--api-key</code> from a secret, no <code>--trust-remote-code</code>.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Inference ports exposed publicly without auth.</li>
+  <li>Unprotected metrics or adapter-loading endpoints.</li>
+  <li>No max token limits, enabling resource exhaustion.</li>
+  <li>Loading pickle checkpoints or remote code from unverified repositories.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Inference endpoints are expensive and powerful, so they must not be open. Every caller authenticates through a gateway with service identities and is authorised for specific models. The endpoint sits on a private network with network policies, and the engine's metrics and management endpoints are protected too. Rate limits and quotas per client stop one service exhausting GPUs, and limits on prompt and output tokens prevent denial of service. I log usage per client, but content only where allowed, with redaction. Models come from verified sources in safetensors format with remote code disabled, and the serving stack, drivers and images are patched regularly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why disable remote code?</strong> It executes arbitrary Python from the model repository at load time.</li>
+  <li><strong>Multi-tenant GPUs?</strong> Separate quotas, namespaces and possibly separate deployments for sensitive tenants.</li>
+  <li><strong>Prompt injection relevance?</strong> The endpoint is raw; application-level guardrails still apply.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-076 · What is the difference between Runnable and Callable?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-076" data-topic="Concurrency">
+<h1>What is the difference between Runnable and Callable?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>Runnable.run()</code></strong> returns <strong><code>void</code></strong> and cannot throw checked exceptions; <strong><code>Callable&lt;V&gt;.call()</code></strong> <strong>returns a value</strong> and <strong>may throw checked exceptions</strong>. Callables are submitted to an <strong><code>ExecutorService</code></strong>, which returns a <strong><code>Future&lt;V&gt;</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>Runnable</code></strong> has existed since Java 1.0: <code>public void run()</code>. It is designed for &quot;do this work&quot;, with no way to return a result and no <code>throws</code> clause, so any checked exception like <code>IOException</code> must be caught inside. It can be passed directly to <code>new Thread(...)</code>.</p>
+<p><strong><code>Callable&lt;V&gt;</code></strong> arrived with <code>java.util.concurrent</code> in Java 5: <code>V call() throws Exception</code>. It is designed for &quot;compute this and give me the answer&quot;, and it may throw any exception. <code>Thread</code> does not accept a Callable; you hand it to an <strong><code>ExecutorService.submit(callable)</code></strong>, or to <code>invokeAll</code>/<code>invokeAny</code>, and receive a <strong><code>Future&lt;V&gt;</code></strong>.</p>
+<p>The Future is how the result and failures come back. <strong><code>future.get()</code></strong> blocks until the task finishes and returns its value; if <code>call()</code> threw, <code>get()</code> throws <strong><code>ExecutionException</code></strong> whose <code>getCause()</code> is the original exception. <code>get(timeout, unit)</code> avoids waiting forever, and <code>cancel(true)</code> interrupts the task.</p>
+<p><code>submit</code> also accepts a Runnable; then the Future's result is <code>null</code> (or a fixed value via <code>submit(runnable, result)</code>). <code>Executors.callable(runnable)</code> adapts a Runnable into a Callable. Both are <strong>functional interfaces</strong>, so lambdas work, and the compiler picks Callable when the lambda returns a value.</p>
+<p>Use <strong>Callable</strong> for tasks that compute something, like fetching a price or querying a service. Use <strong>Runnable</strong> for fire-and-forget side effects, like sending a notification. In modern code, <code>CompletableFuture.supplyAsync(Supplier)</code> is often used instead of Callable when you want to compose results.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the task: <code>Runnable r = () -&gt; log(&quot;hi&quot;);</code> or <code>Callable&lt;Integer&gt; c = () -&gt; compute();</code>.</li>
+  <li>Submit: <code>pool.submit(c)</code> returns <code>Future&lt;Integer&gt;</code>.</li>
+  <li>A worker thread runs <code>call()</code> and stores the result or exception in the Future.</li>
+  <li>The caller calls <code>get()</code> (ideally with timeout) to retrieve it.</li>
+  <li>Exceptions arrive wrapped in <code>ExecutionException</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService pool = Executors.newFixedThreadPool(4);
+
+Runnable notify = () -&gt; System.out.println(&quot;Sending email&quot;);      // no result
+new Thread(notify).start();
+
+Callable&lt;BigDecimal&gt; priceTask = () -&gt; {
+    if (offline()) throw new IOException(&quot;pricing service down&quot;);   // checked OK
+    return pricingClient.priceFor(&quot;SKU-42&quot;);
+};
+Future&lt;BigDecimal&gt; future = pool.submit(priceTask);
+
+try {
+    BigDecimal price = future.get(2, TimeUnit.SECONDS);
+} catch (ExecutionException e) {
+    log.warn(&quot;Pricing failed&quot;, e.getCause());                      // the IOException
+} catch (TimeoutException e) {
+    future.cancel(true);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Runnable</th><th>Callable</th></tr></thead>
+<tbody>
+<tr><td>Method</td><td><code>void run()</code></td><td><code>V call() throws Exception</code></td></tr>
+<tr><td>Returns value</td><td>No</td><td>Yes</td></tr>
+<tr><td>Checked exceptions</td><td>Must catch inside</td><td>Can throw</td></tr>
+<tr><td>Use with Thread</td><td>Yes</td><td>No</td></tr>
+<tr><td>Use with ExecutorService</td><td><code>execute</code> or <code>submit</code></td><td><code>submit</code>, <code>invokeAll</code></td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trying to pass a Callable to <code>new Thread(...)</code>.</li>
+  <li>Calling <code>get()</code> without a timeout on a task that may hang.</li>
+  <li>Logging the <code>ExecutionException</code> instead of its cause.</li>
+  <li>Submitting and never checking the Future, losing failures.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Runnable has void run, so it can't return a result or throw checked exceptions. Callable has V call throws Exception, so it returns a value and can throw checked exceptions. I can pass a Runnable straight to a Thread, but a Callable goes to an ExecutorService, which returns a Future; future.get waits for the result and wraps any exception from call in an ExecutionException. submit also accepts Runnables, in which case the result is null. I use Callable for tasks that compute something, like fetching a price, and Runnable for fire-and-forget work.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you get the exception thrown inside a Callable?</strong> Call <code>future.get()</code> and catch ExecutionException; the original is <code>getCause()</code>.</li>
+  <li><strong>How do you convert a Runnable into a Callable?</strong> <code>Executors.callable(runnable)</code> or <code>callable(runnable, result)</code>.</li>
+  <li><strong>What does invokeAny do?</strong> Runs several Callables and returns the result of the first that completes successfully, cancelling the rest.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-069 · How do you implement zero-trust networking inside a Kubernetes cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-069" data-topic="Kubernetes">
+<h1>How do you implement zero-trust networking inside a Kubernetes cluster?</h1>
+<p class="ex-meta">Kubernetes · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Zero trust means <strong>no implicit trust for in-cluster traffic</strong>: <strong>default-deny NetworkPolicies</strong> for ingress and egress, <strong>allow only required flows by labels</strong>, <strong>mTLS with workload identities</strong> via a mesh, <strong>L7 authorization policies</strong>, <strong>egress control</strong> including DNS-aware rules, and <strong>observe flows before enforcing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default every pod can talk to every other pod in a Kubernetes cluster. An attacker who compromises one container can scan and reach databases, internal admin APIs and the cloud metadata endpoint. Zero trust replaces &quot;inside the network = trusted&quot; with explicit, identity-based permission for each flow.</p>
+<p><strong>Layer 3/4 segmentation</strong>: in every namespace, a default-deny <strong>NetworkPolicy</strong> for both ingress and egress, then specific allow policies using pod and namespace <strong>labels</strong> (not IPs, which change constantly). Remember to allow <strong>DNS</strong> egress to CoreDNS, or everything breaks. Enforcement requires a CNI that supports policies (Calico, Cilium, cloud CNIs with a policy engine). The newer <strong>AdminNetworkPolicy</strong> API lets platform teams set cluster-wide rules that namespaces cannot override.</p>
+<p><strong>Identity and encryption</strong>: a service mesh (Istio, including ambient mode, or Linkerd) or Cilium's mutual authentication gives every workload a cryptographic identity, usually <strong>SPIFFE</strong> IDs derived from service accounts, and encrypts service-to-service traffic with <strong>mTLS</strong>. Set mTLS to <strong>STRICT</strong> so plaintext is rejected.</p>
+<p><strong>Authorization</strong>: identity-based policies allow, say, only the <code>orders</code> service account to call <code>payments</code>, and at <strong>L7</strong> only <code>POST /charges</code>. This stays correct even when pods move or IPs are reused.</p>
+<p><strong>Egress</strong>: restrict which external destinations pods may reach, using FQDN-aware policies (Cilium, Calico Enterprise) or an egress gateway, and block the cloud metadata IP for workloads that do not need it.</p>
+<p><strong>Rollout</strong>: observe real traffic first with <strong>Hubble</strong>, Calico flow logs or mesh telemetry, generate policies from it, apply in audit or permissive mode, then enforce namespace by namespace.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Map actual flows with flow logs or mesh telemetry.</li>
+  <li>Apply default-deny ingress and egress per namespace, allowing DNS.</li>
+  <li>Add allow policies by labels for each required flow.</li>
+  <li>Enable mesh mTLS in permissive mode, then STRICT.</li>
+  <li>Add identity-based L7 AuthorizationPolicies for sensitive services.</li>
+  <li>Restrict egress to approved domains and block metadata access.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: payments }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: { name: payments-allow-orders, namespace: payments }
+spec:
+  selector: { matchLabels: { app: payments } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: [&quot;cluster.local/ns/orders/sa/orders&quot;] } }]
+      to: [{ operation: { methods: [&quot;POST&quot;], paths: [&quot;/charges&quot;] } }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default deny without allowing DNS.</li>
+  <li>Using IP blocks for pod-to-pod rules.</li>
+  <li>mTLS left in permissive mode forever.</li>
+  <li>Enforcing before observing, causing outages.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Zero trust means nothing is trusted just because it's inside the cluster. I start with default-deny ingress and egress NetworkPolicies in every namespace and allow only the required flows using labels, including DNS. On top, a mesh like Istio or Linkerd, or Cilium mutual auth, gives each workload a SPIFFE identity and strict mTLS. Authorization policies then allow, for example, only the orders service account to POST to payments. Egress is limited to approved domains. To avoid outages I observe flows with Hubble or mesh telemetry first and enforce gradually.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are IP rules a poor fit?</strong> Pod IPs are ephemeral and reused; labels and identities follow workloads.</li>
+  <li><strong>NetworkPolicy vs mesh policy?</strong> NetworkPolicy is L3/L4 by network; mesh policy is identity-based and can be L7; use both.</li>
+  <li><strong>How to protect the metadata endpoint?</strong> Deny egress to 169.254.169.254 and use workload identity.</li>
+</ul>
+</article>
+</body>
+</html>

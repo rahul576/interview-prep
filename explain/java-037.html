@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-037 · How do you handle a business transaction that spans multiple microservices?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-037" data-topic="Microservices">
+<h1>How do you handle a business transaction that spans multiple microservices?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Avoid <strong>two-phase commit</strong>; model the business transaction as a <strong>saga</strong> of local transactions coordinated by <strong>choreography or orchestration</strong>, undo with <strong>compensating transactions</strong>, publish reliably with the <strong>transactional outbox</strong>, and make every participant <strong>idempotent</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a monolith, &quot;create order, charge card, reserve stock&quot; is one ACID transaction. With a database per service, it spans several databases. <strong>Distributed two-phase commit (XA)</strong> could make it atomic, but it couples services' availability, holds locks while waiting for the coordinator, blocks if the coordinator fails, is slow, and is poorly supported by Kafka, many NoSQL stores and cloud databases. So microservices accept <strong>eventual consistency</strong> instead.</p>
+<p>A <strong>saga</strong> is a sequence of <strong>local transactions</strong>. Each step commits in its own service and then triggers the next with an event or command. Because committed steps cannot be rolled back, failures are handled by <strong>compensating transactions</strong> that semantically undo earlier work: refund the payment, release the reservation, cancel the order. Compensations must themselves be retryable and idempotent, and some actions (sending an email) can only be compensated with another action (an apology email).</p>
+<p>Coordination comes in two styles. <strong>Choreography</strong>: services listen to each other's events (<code>OrderCreated</code> → payment, <code>PaymentCompleted</code> → inventory); good for short flows but the overall process is implicit. <strong>Orchestration</strong>: a central orchestrator, built with a state machine or a workflow engine such as <strong>Temporal</strong>, <strong>Camunda</strong> or <strong>AWS Step Functions</strong>, sends commands and tracks state; clearer for complex flows with timeouts and compensations.</p>
+<p>Reliability details make or break sagas. The <strong>transactional outbox</strong> writes the event into an outbox table in the same local transaction, avoiding dual writes. Delivery is at least once, so participants are <strong>idempotent</strong>. Because there is no isolation between steps, use <strong>semantic locks</strong> (status <code>PENDING</code>), commutative updates or re-reading values to handle anomalies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Order service creates order <code>PENDING</code> + outbox event.</li>
+  <li>Payment service charges the card, emits <code>PaymentCompleted</code> or <code>PaymentFailed</code>.</li>
+  <li>Inventory reserves stock, emits <code>StockReserved</code> or <code>StockUnavailable</code>.</li>
+  <li>On success, order becomes <code>CONFIRMED</code>.</li>
+  <li>On failure, compensations run in reverse: refund, then cancel order.</li>
+  <li>Timeouts trigger compensation if a participant never replies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Orchestrated saga with Temporal (simplified)
+public class OrderSagaImpl implements OrderSaga {
+    private final PaymentActivities payment = Workflow.newActivityStub(PaymentActivities.class, opts);
+    private final InventoryActivities inventory = Workflow.newActivityStub(InventoryActivities.class, opts);
+
+    public void placeOrder(Order order) {
+        Saga saga = new Saga(new Saga.Options.Builder().build());
+        try {
+            String chargeId = payment.charge(order.id(), order.total());
+            saga.addCompensation(payment::refund, chargeId);
+            inventory.reserve(order.id(), order.lines());
+            saga.addCompensation(inventory::release, order.id());
+        } catch (ActivityFailure e) {
+            saga.compensate();       // runs compensations in reverse order
+            throw e;
+        }
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>2PC / XA</th><th>Saga</th></tr></thead>
+<tbody>
+<tr><td>Consistency</td><td>Atomic, strong</td><td>Eventual</td></tr>
+<tr><td>Availability</td><td>All participants must be up</td><td>Steps proceed independently</td></tr>
+<tr><td>Locks</td><td>Held across services</td><td>Local only</td></tr>
+<tr><td>Failure handling</td><td>Rollback</td><td>Compensating transactions</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating compensations as an afterthought or making them non-idempotent.</li>
+  <li>Publishing events with dual writes instead of an outbox.</li>
+  <li>Ignoring the lack of isolation (another request sees intermediate states).</li>
+  <li>Huge choreographed flows nobody can follow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I avoid distributed two-phase commit because it couples availability, holds locks across services and is poorly supported by brokers. Instead I use a saga: a sequence of local transactions where each step publishes an event or command that triggers the next. If a step fails, earlier steps are undone with compensating transactions, like refunding the payment and cancelling the order. For short flows choreography works; for complex ones I prefer an orchestrator, for example Temporal. Events are published through a transactional outbox and every participant is idempotent because delivery is at least once.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you compensate an order-payment-inventory saga?</strong> If stock fails: refund payment, mark order cancelled, notify the customer; all idempotent and retried.</li>
+  <li><strong>What is a pivot transaction?</strong> The step after which the saga can only go forward, so later steps must be retryable.</li>
+  <li><strong>How do you handle a participant that never answers?</strong> A timeout in the orchestrator triggers retries and then compensation.</li>
+</ul>
+</article>
+</body>
+</html>

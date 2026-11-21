@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-044 · What are distroless and scratch images, and when would you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-044" data-topic="Docker">
+<h1>What are distroless and scratch images, and when would you use them?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Distroless</strong> images contain <strong>only the application runtime</strong> (plus CA certificates and timezone data) with <strong>no shell or package manager</strong>; <strong>scratch</strong> is a <strong>completely empty</strong> base suited to <strong>static binaries</strong> such as Go or Rust; both cut the attack surface but make <strong>debugging harder</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Traditional base images carry a whole operating system userland: shell, coreutils, package manager and hundreds of libraries. The application uses only a fraction, but every package is a potential <strong>CVE</strong> to triage and a tool an attacker can use after a compromise.</p>
+<p><strong>Distroless</strong> images, maintained by Google (<code>gcr.io/distroless/...</code>) and similar projects such as Chainguard images, strip this down to what a runtime needs: glibc, <code>ca-certificates</code>, <code>tzdata</code>, <code>/etc/passwd</code> entries for a <code>nonroot</code> user, and optionally a language runtime (Java, Python, Node.js). There is <strong>no shell and no package manager</strong>, so <code>docker exec sh</code> fails, shell-form <code>CMD</code> is impossible, and scanner reports shrink dramatically.</p>
+<p><strong>scratch</strong> is the special empty image; <code>FROM scratch</code> starts with nothing at all. It fits <strong>statically linked binaries</strong>, typically Go built with <code>CGO_ENABLED=0</code> or Rust with musl. The final image is just the binary, often under 20 MB. You must add anything the binary needs yourself: <strong>CA certificates</strong> for HTTPS, <strong>timezone data</strong> if it uses local times, a non-root user entry, and writable directories.</p>
+<p>The trade-off is <strong>debuggability</strong>. Without a shell you cannot inspect files or run <code>curl</code> inside the container. Remedies are the <strong><code>:debug</code> variants</strong> of distroless images (which add BusyBox), running a debug container sharing the target's namespaces (<code>docker run --pid container:x --network container:x</code>), or <strong>Kubernetes ephemeral containers</strong> with <code>kubectl debug</code>. Observability through logs and metrics becomes more important.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build the app in a full SDK stage.</li>
+  <li>Copy the binary or artifact into distroless or scratch.</li>
+  <li>Copy required support files (certificates, tzdata) for scratch.</li>
+  <li>Run as a non-root numeric user with exec-form ENTRYPOINT.</li>
+  <li>Debug through debug variants or ephemeral containers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM golang:1.23 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /app ./cmd/server
+
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=build /app /app
+USER 65532:65532
+ENTRYPOINT [&quot;/app&quot;]</code></pre>
+<pre><code class="language-bash">kubectl debug -it pod/api-7d9 --image=busybox:1.36 --target=api</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting CA certificates in scratch, causing &quot;x509: certificate signed by unknown authority&quot;.</li>
+  <li>Using shell-form CMD or entrypoint scripts with distroless.</li>
+  <li>Building Go with CGO enabled and then failing on scratch due to missing libc.</li>
+  <li>Assuming no shell means no vulnerabilities; runtimes and app dependencies still need scanning.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Distroless images contain only what the application needs at runtime, like a JRE or Python runtime, CA certificates and timezone data, but no shell, package manager or utilities. scratch is the empty image, which works for statically linked binaries such as Go or Rust, so the final image is just the binary. Both give a tiny attack surface and far fewer CVEs, and an attacker has no shell to use. The trade-off is debugging: I can't exec into a shell, so I use the debug variants with BusyBox or Kubernetes ephemeral debug containers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What files might a scratch Go service still need?</strong> CA certificates, tzdata, passwd entry, writable temp dir.</li>
+  <li><strong>Can you run shell scripts in distroless?</strong> No, unless using a debug variant.</li>
+  <li><strong>Distroless vs Alpine?</strong> Alpine has a shell and apk; distroless has neither.</li>
+</ul>
+</article>
+</body>
+</html>

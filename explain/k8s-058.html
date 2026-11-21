@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-058 · Traffic increased but the HPA is not scaling the deployment up. What do you check?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-058" data-topic="Kubernetes">
+<h1>Traffic increased but the HPA is not scaling the deployment up. What do you check?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Start with <strong>kubectl describe hpa</strong>: an <strong>unknown metric</strong> points to metrics-server, an adapter or <strong>missing resource requests</strong>; <strong>ScalingLimited</strong> means <strong>maxReplicas</strong>; scaled-but-<strong>Pending</strong> pods mean <strong>no node capacity</strong>; and a service bottlenecked elsewhere may simply be scaling on the <strong>wrong metric</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The HPA runs a control loop (every 15 seconds by default): it reads metrics, computes <code>desired = ceil(current × currentValue / target)</code>, and updates the Deployment's replicas. Each step can fail, and <code>kubectl describe hpa</code> shows where. Its conditions are <strong>AbleToScale</strong>, <strong>ScalingActive</strong> (are metrics available?) and <strong>ScalingLimited</strong> (are we capped by min or max?).</p>
+<p>If the current metric shows <code>&lt;unknown&gt;</code>, ScalingActive is False. For CPU and memory that means <strong>metrics-server</strong> is down or the APIService is unavailable, or the containers have <strong>no resource requests</strong>, because utilisation targets are a percentage of the request. Every container in the pod needs a request, including sidecars. For custom or external metrics, the <strong>Prometheus Adapter</strong> or <strong>KEDA</strong> may be failing or the query returns nothing.</p>
+<p>If ScalingLimited is True because of <code>maxReplicas</code>, the HPA is doing its job; the ceiling is too low. If replicas increased but new pods are <strong>Pending</strong>, the bottleneck is <strong>node capacity</strong>: check the cluster autoscaler or Karpenter, quotas and node group limits.</p>
+<p>The subtle case is the <strong>wrong metric</strong>. An IO-bound service waiting on a database, or one limited by a thread or connection pool, shows low CPU while its latency soars, so it never crosses a CPU target. Scaling on requests per second, in-flight requests, queue depth or latency via custom metrics is better. Also check <strong>behavior</strong> settings: a long <code>scaleUp.stabilizationWindowSeconds</code> or restrictive policies delay scale-up.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe hpa</code>: current vs target, conditions, events.</li>
+  <li>Unknown metric: check metrics-server/adapter and container requests.</li>
+  <li>At max: raise <code>maxReplicas</code> if downstream capacity allows.</li>
+  <li>Pods Pending: investigate node autoscaling and quotas.</li>
+  <li>Metric does not reflect load: switch to RPS, concurrency or queue metrics.</li>
+  <li>Review the <code>behavior</code> stabilization and policies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe hpa checkout
+#  cpu: &lt;unknown&gt;/70%
+#  ScalingActive  False  FailedGetResourceMetric  missing request for cpu in container istio-proxy</code></pre>
+<pre><code class="language-yaml">apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: checkout }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: checkout }
+  minReplicas: 4
+  maxReplicas: 40
+  metrics:
+    - type: Pods
+      pods:
+        metric: { name: http_requests_in_flight }
+        target: { type: AverageValue, averageValue: &quot;20&quot; }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 0 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Missing CPU requests on sidecar containers.</li>
+  <li>Scaling IO-bound services on CPU.</li>
+  <li>Ignoring that the database cannot handle more replicas.</li>
+  <li><code>maxReplicas</code> set years ago and never revisited.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with kubectl describe hpa, which shows current versus target metrics and the AbleToScale, ScalingActive and ScalingLimited conditions. If the metric is unknown, metrics-server or the adapter isn't working, or a container lacks resource requests, which utilisation targets need. If ScalingLimited is true, we're at maxReplicas. If the HPA scaled but pods are Pending, it's node capacity, so I check the cluster autoscaler or Karpenter. And often the metric is wrong: an IO-bound service shows low CPU under heavy load, so I'd scale on requests in flight or queue depth instead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might scaling up make it worse?</strong> More replicas mean more connections and load on a struggling database or downstream, deepening the outage.</li>
+  <li><strong>How fast can HPA react?</strong> Seconds plus metric delay and pod startup; pre-scale for known peaks.</li>
+  <li><strong>When to use KEDA?</strong> For event-driven scaling on queues, streams or external metrics, including scale to zero.</li>
+</ul>
+</article>
+</body>
+</html>

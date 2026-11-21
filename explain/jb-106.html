@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-106 · What is the difference between submit() and execute()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-106" data-topic="Concurrency">
+<h1>What is the difference between submit() and execute()?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>execute(Runnable)</code></strong> (from <code>Executor</code>) returns nothing; <strong><code>submit(...)</code></strong> (from <code>ExecutorService</code>) accepts a <code>Runnable</code> or <code>Callable</code> and returns a <strong><code>Future</code></strong>. The key practical difference: with <code>submit</code>, <strong>exceptions are captured in the Future</strong> and are <strong>silently lost</strong> if nobody calls <code>get()</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>Executor</code> is the minimal interface with a single method, <code>execute(Runnable)</code>: &quot;run this sometime&quot;. <code>ExecutorService</code> extends it with lifecycle methods and <code>submit</code>, which wraps the task in a <strong><code>FutureTask</code></strong> and returns it as a <code>Future</code>. Through the Future you can wait (<code>get</code>), poll (<code>isDone</code>), <strong>cancel</strong> (<code>cancel(true)</code> interrupts it) or read the result. For a submitted <code>Runnable</code>, <code>get()</code> returns <code>null</code>.</p>
+<p>The more important difference is <strong>exception handling</strong>. With <code>execute</code>, if the task throws, the exception propagates out of the worker thread's <code>run</code>, reaches the thread's <strong><code>UncaughtExceptionHandler</code></strong> (by default printed to <code>System.err</code>), and in a <code>ThreadPoolExecutor</code> the worker thread dies and is replaced. The failure is at least visible.</p>
+<p>With <code>submit</code>, the <code>FutureTask</code> <strong>catches</strong> the exception and stores it. It is only rethrown, wrapped in <strong><code>ExecutionException</code></strong>, when someone calls <code>future.get()</code>. If you fire and forget with <code>submit</code>, a failure leaves no trace: no log, no stack trace. This is a common cause of background jobs that &quot;silently stop working&quot;. The uncaught-exception handler never sees it.</p>
+<p>So: use <code>execute</code> for fire-and-forget work where you want failures to surface via the handler (but still log inside the task), and <code>submit</code> when you need a result, cancellation or to wait, and then always inspect the Future. <code>CompletableFuture</code> with <code>whenComplete</code>/<code>exceptionally</code> is a cleaner alternative for asynchronous error handling.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>execute(task)</code>: the pool runs <code>task.run()</code> directly on a worker.</li>
+  <li>Exception escapes, hits the <code>UncaughtExceptionHandler</code>, worker is replaced.</li>
+  <li><code>submit(task)</code>: the pool wraps it in <code>FutureTask</code> and runs that.</li>
+  <li><code>FutureTask.run()</code> catches any <code>Throwable</code> and stores it as the outcome.</li>
+  <li><code>future.get()</code> throws <code>ExecutionException</code> with the original as <code>getCause()</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService pool = Executors.newFixedThreadPool(2);
+
+pool.execute(() -&gt; { throw new IllegalStateException(&quot;boom-1&quot;); });
+// Stack trace printed by the uncaught exception handler
+
+Future&lt;?&gt; f = pool.submit(() -&gt; { throw new IllegalStateException(&quot;boom-2&quot;); });
+// Nothing printed! The exception is stored in f
+
+try {
+    f.get();
+} catch (ExecutionException e) {
+    log.error(&quot;Task failed&quot;, e.getCause());   // boom-2 surfaces here
+}
+
+// Safer fire-and-forget: log inside the task, or use CompletableFuture
+CompletableFuture.runAsync(this::syncJob, pool)
+    .whenComplete((v, ex) -&gt; { if (ex != null) log.error(&quot;syncJob failed&quot;, ex); });</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th><code>execute</code></th><th><code>submit</code></th></tr></thead>
+<tbody>
+<tr><td>Declared in</td><td><code>Executor</code></td><td><code>ExecutorService</code></td></tr>
+<tr><td>Accepts</td><td><code>Runnable</code></td><td><code>Runnable</code> or <code>Callable</code></td></tr>
+<tr><td>Returns</td><td><code>void</code></td><td><code>Future</code></td></tr>
+<tr><td>Exception</td><td>To uncaught handler</td><td>Stored in Future</td></tr>
+<tr><td>Cancel / result</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>submit</code> and ignoring the Future, losing all errors.</li>
+  <li>Expecting an <code>UncaughtExceptionHandler</code> to catch errors from submitted tasks.</li>
+  <li>Calling <code>get()</code> without a timeout and blocking forever.</li>
+  <li>Forgetting to unwrap <code>ExecutionException.getCause()</code> when logging.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;execute comes from the Executor interface, takes a Runnable and returns nothing. submit comes from ExecutorService, takes a Runnable or Callable and returns a Future I can use to get the result, wait or cancel. The important difference is exceptions: with execute the exception escapes to the thread's uncaught exception handler and gets printed or logged. With submit it's captured inside the Future and only rethrown wrapped in ExecutionException when I call get. If nobody calls get, the failure is silently swallowed, which is a common source of lost errors in background jobs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you make sure exceptions from submitted tasks are always logged?</strong> Wrap tasks with a try/catch that logs, override <code>ThreadPoolExecutor.afterExecute</code> to inspect Futures, or use CompletableFuture with whenComplete.</li>
+  <li><strong>What does cancel(true) do?</strong> Marks the Future cancelled and interrupts the running thread if the task has started.</li>
+  <li><strong>What is invokeAll?</strong> Submits a collection of Callables and waits for all, returning their Futures.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-239 · What is the Java HttpClient, and how does it compare with older approaches?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-239" data-topic="Java 8+ Features">
+<h1>What is the Java HttpClient, and how does it compare with older approaches?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>java.net.http.HttpClient</code></strong> (standard since Java 11) is a modern, immutable, thread-safe client with <strong>HTTP/2</strong>, <strong>WebSocket</strong>, a fluent builder, and both <strong>synchronous <code>send</code></strong> and <strong>asynchronous <code>sendAsync</code></strong> (returning <code>CompletableFuture</code>); it replaces the clumsy <strong><code>HttpURLConnection</code></strong>, and should be <strong>created once and reused</strong> with <strong>timeouts</strong> configured.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before Java 11 the JDK offered <code>HttpURLConnection</code>, a blocking, stateful API designed for HTTP/1.1 in the 1990s: awkward stream handling, poor error handling, no HTTP/2, and confusing connection reuse. Teams usually pulled in Apache HttpClient or OkHttp instead.</p>
+<p>The new client is built from three types: <strong><code>HttpClient</code></strong> (configuration and connection pool), <strong><code>HttpRequest</code></strong> (immutable request built with a builder) and <strong><code>HttpResponse&lt;T&gt;</code></strong> with <strong><code>BodyHandlers</code></strong> (<code>ofString</code>, <code>ofInputStream</code>, <code>ofFile</code>, <code>discarding</code>) and <code>BodyPublishers</code> for request bodies. It negotiates <strong>HTTP/2</strong> by default with fallback to HTTP/1.1, supports <strong>WebSocket</strong>, redirects policy, proxies, authenticators and custom <code>SSLContext</code>. <code>sendAsync</code> returns a <code>CompletableFuture&lt;HttpResponse&lt;T&gt;&gt;</code>, so you can fire many requests concurrently and compose results. Since Java 21 <code>HttpClient</code> implements <code>AutoCloseable</code>.</p>
+<p>Because the client is <strong>immutable and thread-safe</strong> and holds the <strong>connection pool</strong> and selector threads, create <strong>one instance</strong> per configuration and reuse it; a new client per request wastes connections, TLS handshakes and threads. Always set a <strong><code>connectTimeout</code></strong> on the client and a <strong>request <code>timeout</code></strong>; there is no default timeout. In Spring applications, <strong><code>RestClient</code></strong> (Spring 6.1) or <strong><code>WebClient</code></strong> are typical, and RestClient can use <code>JdkClientHttpRequestFactory</code> to run on top of this client. With virtual threads, the simple synchronous <code>send</code> scales well.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build a shared <code>HttpClient</code> with version, timeouts, redirect policy and executor.</li>
+  <li>Build an <code>HttpRequest</code> with URI, headers, method, body publisher and timeout.</li>
+  <li>Call <code>send</code> (blocking) or <code>sendAsync</code> (non-blocking).</li>
+  <li>A <code>BodyHandler</code> converts the response body into the desired type.</li>
+  <li>Check status codes yourself; non-2xx responses are not exceptions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private static final HttpClient CLIENT = HttpClient.newBuilder()
+    .version(HttpClient.Version.HTTP_2)
+    .connectTimeout(Duration.ofSeconds(3))
+    .followRedirects(HttpClient.Redirect.NORMAL)
+    .build();
+
+HttpRequest req = HttpRequest.newBuilder(URI.create(&quot;https://api.example.com/orders/42&quot;))
+    .header(&quot;Accept&quot;, &quot;application/json&quot;)
+    .timeout(Duration.ofSeconds(5))
+    .GET()
+    .build();
+
+HttpResponse&lt;String&gt; resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
+if (resp.statusCode() != 200) throw new IllegalStateException(&quot;HTTP &quot; + resp.statusCode());
+
+CompletableFuture&lt;String&gt; async = CLIENT
+    .sendAsync(req, HttpResponse.BodyHandlers.ofString())
+    .thenApply(HttpResponse::body);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>HttpURLConnection</th><th>java.net.http.HttpClient</th></tr></thead>
+<tbody>
+<tr><td>HTTP/2</td><td>No</td><td>Yes</td></tr>
+<tr><td>Async</td><td>No</td><td>sendAsync + CompletableFuture</td></tr>
+<tr><td>API style</td><td>Mutable, stream juggling</td><td>Immutable builders</td></tr>
+<tr><td>WebSocket</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating a new <code>HttpClient</code> per request.</li>
+  <li>No request timeout, so a slow server hangs threads.</li>
+  <li>Treating 4xx/5xx as exceptions; they're normal responses to check.</li>
+  <li>Reading huge bodies with <code>ofString</code> instead of streaming.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The java.net.http HttpClient, standard since Java 11, replaced HttpURLConnection. It supports HTTP/2 and WebSocket, has fluent builders, and offers a synchronous send and an async sendAsync that returns a CompletableFuture. The client is immutable and thread-safe and holds the connection pool, so I create it once and reuse it, and I always configure connect and request timeouts. In Spring I usually use RestClient or WebClient, and RestClient can run on top of the JDK client.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is creating a new HttpClient per request bad?</strong> It discards pooled connections and threads, forcing new TCP and TLS handshakes.</li>
+  <li><strong>Does it throw on HTTP 500?</strong> No, you inspect <code>statusCode()</code>.</li>
+  <li><strong>How do you add retries?</strong> Wrap calls with a library like Resilience4j or Spring Retry, with backoff and idempotency in mind.</li>
+</ul>
+</article>
+</body>
+</html>

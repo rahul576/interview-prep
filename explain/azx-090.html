@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-090 · How do content filters and Prompt Shields work in Azure AI Content Safety for model deployments?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-090" data-topic="Azure AI &amp; Foundry">
+<h1>How do content filters and Prompt Shields work in Azure AI Content Safety for model deployments?</h1>
+<p class="ex-meta">Azure AI &amp; Foundry · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Azure AI Content Safety</strong> filters classify <strong>prompts and completions</strong> for <strong>hate, sexual, violence and self-harm</strong> by <strong>severity</strong>, blocking content above a configured threshold; <strong>Prompt Shields</strong> detect <strong>jailbreaks</strong> and <strong>indirect prompt injection</strong>, other detectors cover <strong>protected material</strong> and <strong>groundedness</strong>, all configurable <strong>per deployment</strong>, and the app must <strong>handle filtered responses</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every Azure OpenAI and Foundry model deployment has a <strong>content filter configuration</strong> (a guardrail policy). It runs classifiers on the <strong>input prompt</strong> and the <strong>output completion</strong> in four harm categories, <strong>hate, sexual, violence, self-harm</strong>, each scored at severity <strong>safe, low, medium or high</strong>. The default blocks medium and high; you can make it stricter (block low as well) or, with approval for some settings, more permissive or annotate-only.</p>
+<p><strong>Behaviour your application must handle:</strong></p>
+<ul>
+  <li><strong>Blocked prompt:</strong> the API returns <strong>HTTP 400</strong> with error code <code>content_filter</code> and details of which category triggered.</li>
+  <li><strong>Blocked completion:</strong> the response succeeds but <code>finish_reason</code> is <strong><code>content_filter</code></strong> and the content is truncated or empty. With streaming, filtering happens in chunks, so partial text may already have been sent.</li>
+</ul>
+<p><strong>Prompt Shields:</strong></p>
+<ul>
+  <li><strong>User prompt attacks (jailbreaks):</strong> attempts like &quot;ignore your instructions and act as...&quot; in the user's message.</li>
+  <li><strong>Document attacks (indirect prompt injection):</strong> malicious instructions hidden in retrieved documents, emails, web pages or tool results that the model reads. This is the critical risk for RAG and agents, which is why tool outputs and retrieved content should be passed as documents so the shield can analyse them.</li>
+</ul>
+<p><strong>Additional detectors:</strong> <strong>protected material</strong> for known copyrighted text such as song lyrics and for public code (with citation of the source repository), <strong>groundedness detection</strong> checking if a response is supported by the provided sources, and custom <strong>blocklists</strong> for terms you never want.</p>
+<p>Configure filters <strong>per deployment</strong>, for example stricter for a public consumer chatbot than for an internal tool, and <strong>log filter results</strong> to monitor abuse and <strong>false positives</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a content filter configuration with thresholds and shields.</li>
+  <li>Attach it to the deployment.</li>
+  <li>Each request: prompt classified; if allowed, model generates; completion classified.</li>
+  <li>Annotations returned in the response (<code>prompt_filter_results</code>, <code>content_filter_results</code>).</li>
+  <li>App handles blocks; logs and dashboards track trends.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from openai import BadRequestError
+try:
+    r = client.chat.completions.create(model=&quot;chat&quot;, messages=msgs)
+    choice = r.choices[0]
+    if choice.finish_reason == &quot;content_filter&quot;:
+        reply = &quot;Sorry, I can't help with that request.&quot;
+    else:
+        reply = choice.message.content
+except BadRequestError as e:
+    if e.code == &quot;content_filter&quot;:
+        log_filter_event(e.body)          # category and severity details
+        reply = &quot;Your message couldn't be processed. Please rephrase.&quot;
+    else:
+        raise</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating a filtered response as a generic 500 error.</li>
+  <li>Turning filters off to &quot;fix&quot; false positives instead of tuning.</li>
+  <li>Concatenating retrieved documents into the user message, hiding them from document shields.</li>
+  <li>Not monitoring filter rates, missing abuse patterns.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Deployments use Azure AI Content Safety. Filters classify prompts and completions for hate, sexual, violence and self-harm at different severities and block anything above the threshold; a blocked prompt returns a 400 and a blocked completion returns finish reason content_filter, which the app must handle gracefully. Prompt Shields catch jailbreaks in user prompts and indirect prompt injection in documents or tool results. There are also protected material and groundedness detectors. I configure filters per deployment and log results to watch abuse and false positives.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How should the app respond to a filtered completion?</strong> A polite, neutral message, no raw error, optionally offer to rephrase.</li>
+  <li><strong>Does the shield stop all prompt injection?</strong> No; also use least-privilege tools and human approval for risky actions.</li>
+  <li><strong>Streaming effect?</strong> Content may arrive before a later chunk is filtered; handle mid-stream stops.</li>
+</ul>
+</article>
+</body>
+</html>

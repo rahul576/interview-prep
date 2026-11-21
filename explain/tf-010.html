@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-010 · What does known after apply mean, and why do you get the error that count or for_each depends on values that cannot be determined until apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-010" data-topic="Terraform">
+<h1>What does known after apply mean, and why do you get the error that count or for_each depends on values that cannot be determined until apply?</h1>
+<p class="ex-meta">Terraform · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>&quot;Known after apply&quot;</strong> marks attributes, like IDs or assigned IPs, that only exist once the provider creates the object; <strong><code>count</code> and <code>for_each</code> must be known at plan time</strong>, so deriving them from such values fails, and the fix is to use <strong>static keys from configuration</strong> with unknown values only in the map's values.</p>
+
+<h2>Detailed explanation</h2>
+<p>During plan, Terraform evaluates every expression. Some values cannot be known yet: the ID of a subnet that does not exist, the IP a cloud assigns, an ARN with a generated suffix. Terraform represents them as <strong>unknown values</strong> and shows them as <code>(known after apply)</code>. Unknowns propagate: anything computed from an unknown is also unknown. For normal arguments that is fine; the provider receives the real value during apply.</p>
+<p><strong><code>count</code> and <code>for_each</code> are different.</strong> They determine <strong>how many instances</strong> exist and what their <strong>addresses</strong> are (<code>aws_route_table_association.private[&quot;a&quot;]</code>). Terraform must know the full set of instances to build the graph and show you a plan, so these expressions must be fully known at plan time. If you write <code>for_each = toset(aws_subnet.private[*].id)</code> in the same configuration that creates the subnets, the set of keys is unknown, and Terraform stops with &quot;The for_each value depends on resource attributes that cannot be determined until apply&quot;. The same happens with <code>count = length(data.x.items)</code> when the data source is deferred, or with values from a module whose inputs are unknown.</p>
+<p>The clean fix is to use <strong>keys that come from configuration</strong>: a map whose keys are static names (<code>&quot;a&quot;</code>, <code>&quot;b&quot;</code>, <code>&quot;c&quot;</code> or subnet names) and whose <strong>values</strong> may be unknown. Terraform only needs the keys at plan time; the values can be resolved during apply. Alternatively, iterate over the same input map that created the subnets. Workarounds exist: apply once with <code>-target</code> to create the dependency first, or split the configuration into two states. Both add operational friction, so stable keys are preferred.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan evaluates expressions; provider-computed attributes become unknown.</li>
+  <li>Unknowns flow into dependent expressions.</li>
+  <li>For <code>count</code>/<code>for_each</code>, Terraform requires known lengths or keys.</li>
+  <li>If unknown, planning fails with the error.</li>
+  <li>With static keys, instances are planned; unknown values are filled during apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Fails: keys are subnet IDs, unknown at plan time
+resource &quot;aws_route_table_association&quot; &quot;bad&quot; {
+  for_each       = toset(aws_subnet.private[*].id)
+  subnet_id      = each.value
+  route_table_id = aws_route_table.private.id
+}
+
+# Works: keys come from configuration, values may be unknown
+resource &quot;aws_subnet&quot; &quot;private&quot; {
+  for_each   = var.private_subnets          # { a = &quot;10.0.1.0/24&quot;, b = &quot;10.0.2.0/24&quot; }
+  vpc_id     = aws_vpc.main.id
+  cidr_block = each.value
+}
+
+resource &quot;aws_route_table_association&quot; &quot;good&quot; {
+  for_each       = aws_subnet.private          # keys &quot;a&quot;, &quot;b&quot; are known
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using generated IDs, names with random suffixes or ARNs as <code>for_each</code> keys.</li>
+  <li>Using <code>count</code> with lists whose length comes from another resource's output.</li>
+  <li>Making <code>-target</code> two-step applies a permanent workflow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Some attributes, like an ID or an IP the cloud assigns, only exist after the provider creates the object, so the plan shows them as known after apply and treats them as unknown values. That's fine for normal arguments, but count and for_each decide how many instances exist and what their addresses are, so they must be known at plan time. If I build for_each keys from generated IDs in the same configuration that creates them, Terraform can't plan and raises this error. The fix is static keys from configuration, like a map keyed by subnet name with the IDs as values. Two-step applies with -target or splitting the configuration work, but stable keys are cleaner.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a map with static keys and unknown values avoid it?</strong> Only keys determine instance addresses; values can stay unknown until apply.</li>
+  <li><strong>Why prefer for_each over count?</strong> Stable keys avoid shifting indexes and unwanted replacements.</li>
+  <li><strong>Do Stacks help?</strong> Yes, they can defer components with unknown inputs to a later step.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-070 · Your AKS clusters use the managed NGINX ingress from the application routing add-on. What do you need to plan, and what are the options?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-070" data-topic="Azure Kubernetes (AKS)">
+<h1>Your AKS clusters use the managed NGINX ingress from the application routing add-on. What do you need to plan, and what are the options?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The upstream <strong>Ingress NGINX</strong> project was <strong>retired in March 2026</strong> and Microsoft's security patches for the <strong>application routing add-on's NGINX</strong> only run <strong>until November 2026</strong>, so you must <strong>migrate now</strong>, preferably to the add-on's <strong>Gateway API mode (Istio-based Envoy gateways)</strong> or to <strong>Application Gateway for Containers</strong>, running both side by side and shifting traffic gradually.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>application routing add-on</strong> gave AKS a managed NGINX ingress controller, with DNS and Key Vault certificate integration. It was built on the community <strong>Ingress NGINX</strong> project, which the Kubernetes project retired in <strong>March 2026</strong>: no new releases, bug fixes or security patches. Microsoft committed to critical security patches for the add-on's NGINX only <strong>until November 2026</strong>. Since we are at the end of that window, any cluster still on it is effectively running an unsupported, internet-facing component, which is a security and compliance risk.</p>
+<p><strong>Options:</strong></p>
+<ul>
+  <li><strong>Application routing in Gateway API mode</strong> (Microsoft's recommended path): the add-on deploys a managed, <strong>Istio-based control plane</strong> that only manages <strong>Envoy gateways</strong> for <strong>Gateway</strong> and <strong>HTTPRoute</strong> resources (no sidecar mesh required). Newer AKS Automatic clusters use it by default.</li>
+  <li><strong>Application Gateway for Containers</strong>: an Azure-managed layer 7 load balancer driven by Gateway API or Ingress, with WAF.</li>
+  <li>Another <strong>Gateway API implementation</strong> such as Envoy Gateway, Traefik or a vendor controller, which you then operate yourself.</li>
+</ul>
+<p>The hard part is not the controller but the <strong>NGINX-specific annotations</strong>: rewrites, regex paths, <code>configuration-snippet</code>, auth-url, rate limiting, CORS, session affinity and custom timeouts. Gateway API covers many of these natively (path rewrites, header modification, weighted backends), but snippets and Lua-based tricks need redesign or policy resources.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><strong>Inventory</strong>: list all Ingress objects, ingress classes and annotations across clusters.</li>
+  <li><strong>Choose the target</strong> and enable it alongside NGINX.</li>
+  <li><strong>Convert</strong> Ingresses to Gateway/HTTPRoute, using tools like <code>ingress2gateway</code> as a starting point, and review manually.</li>
+  <li><strong>Test</strong> each route in staging: TLS, headers, redirects, timeouts, large uploads, WebSockets.</li>
+  <li><strong>Shift DNS</strong> or traffic gradually per host, watching errors and latency.</li>
+  <li><strong>Remove</strong> NGINX and its annotations once traffic is fully moved.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Find NGINX-specific annotations to plan the conversion
+kubectl get ingress -A -o json | jq -r '.items[] | .metadata.namespace + &quot;/&quot; + .metadata.name + &quot; &quot; +
+  ((.metadata.annotations // {}) | keys | map(select(startswith(&quot;nginx.ingress&quot;))) | join(&quot;,&quot;))'</code></pre>
+<pre><code class="language-yaml">apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: shop, namespace: shop }
+spec:
+  parentRefs: [{ name: public-gw, namespace: gateways }]
+  hostnames: [&quot;shop.contoso.com&quot;]
+  rules:
+  - matches: [{ path: { type: PathPrefix, value: /api } }]
+    filters:
+    - type: URLRewrite
+      urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: / } }
+    backendRefs: [{ name: shop-api, port: 80 }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming &quot;managed add-on&quot; means Microsoft will keep it supported forever.</li>
+  <li>Converting manifests automatically without testing annotation behaviour.</li>
+  <li>Big-bang cutover of all hosts at once.</li>
+  <li>Forgetting TLS certificates, DNS automation and WAF rules tied to the old controller.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ingress NGINX upstream was retired in March 2026, and Microsoft only patches the add-on's NGINX until November 2026, so I'd treat this as an urgent migration. The recommended path is the application routing add-on in Gateway API mode, which runs an Istio-based control plane managing Envoy gateways; Application Gateway for Containers is the other main option. I'd inventory every Ingress and its NGINX annotations, convert them to HTTPRoutes with tooling plus manual review, run both controllers side by side, shift DNS host by host, and finally remove NGINX.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Hardest annotations?</strong> <code>configuration-snippet</code>, <code>server-snippet</code>, regex rewrites, external auth and custom rate limiting.</li>
+  <li><strong>Does Istio mode need a sidecar mesh?</strong> No, it manages gateways only.</li>
+  <li><strong>How do you roll back?</strong> Keep NGINX running and switch DNS back until the cutover is confirmed.</li>
+</ul>
+</article>
+</body>
+</html>

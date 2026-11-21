@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-099 · What is the difference between Kustomize overlays and Helm values, and how do you combine them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-099" data-topic="Kubernetes">
+<h1>What is the difference between Kustomize overlays and Helm values, and how do you combine them?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Helm</strong> is a <strong>templating package manager</strong> with values and versioned releases; <strong>Kustomize</strong> <strong>patches plain YAML</strong> with overlays and has no templating; many teams <strong>render Helm charts and patch the output with Kustomize</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>Helm chart</strong> contains templates written in Go templating with conditionals, loops and helpers, plus a <code>values.yaml</code> of defaults. You install it as a <strong>release</strong> with your own values, and Helm records the release history so you can <strong>upgrade and roll back</strong>. Charts are versioned and distributed through repositories or OCI registries, which makes Helm the standard way to ship third-party software like ingress controllers, cert-manager or databases.</p>
+<p><strong>Kustomize</strong> is built into kubectl (<code>kubectl apply -k</code>). You keep ordinary YAML in a <strong>base</strong> and create <strong>overlays</strong> per environment that apply strategic-merge or JSON patches, change image tags and replica counts, add labels and namespaces, and generate ConfigMaps and Secrets with hash suffixes. There is no logic; what you see is what gets applied, which makes reviews easy. The limitation is that you can only change what you can patch, and there is no release concept.</p>
+<p>They combine well. Use Helm for vendor charts and Kustomize for the last mile: settings the chart's values do not expose, such as an extra annotation or a sidecar. You can do this with Kustomize's <code>helmCharts</code> field (with <code>--enable-helm</code>), with a <strong>Helm post-renderer</strong> that pipes rendered manifests through Kustomize, or in Argo CD and Flux, which support both. For in-house applications, Kustomize overlays or one simple shared internal chart is usually enough.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Helm: chart templates + values → rendered manifests → tracked release.</li>
+  <li>Kustomize: base YAML + overlay patches → final manifests.</li>
+  <li>Combined: Helm renders the chart, Kustomize patches the result.</li>
+  <li>GitOps tool applies the output to the cluster.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># overlays/prod/kustomization.yaml
+helmCharts:
+  - name: ingress-nginx
+    repo: https://kubernetes.github.io/ingress-nginx
+    version: 4.11.3
+    releaseName: ingress
+    namespace: ingress
+    valuesFile: values-prod.yaml
+patches:
+  - target: { kind: Deployment, name: ingress-ingress-nginx-controller }
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations/example.com~1team
+        value: platform</code></pre>
+<pre><code class="language-bash">kubectl kustomize --enable-helm overlays/prod | kubectl apply -f -</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Helm</th><th>Kustomize</th></tr></thead>
+<tbody>
+<tr><td>Model</td><td>Templates + values</td><td>Base + patches</td></tr>
+<tr><td>Logic</td><td>Conditionals, loops</td><td>None</td></tr>
+<tr><td>Releases/rollback</td><td>Yes</td><td>No (use Git/GitOps)</td></tr>
+<tr><td>Best for</td><td>Distributing software</td><td>Environment variants</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Turning an in-house chart into a maze of <code>if</code> blocks for every possible option.</li>
+  <li>Forking a vendor chart instead of patching its output.</li>
+  <li>Duplicating whole manifests per environment instead of overlays.</li>
+  <li>Forgetting that Kustomize's Helm support needs <code>--enable-helm</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Helm is a package manager: a chart has Go templates and default values, you install it as a versioned release with your own values, and Helm tracks upgrades and rollbacks, which makes it ideal for distributing software. Kustomize has no templating; you keep plain YAML in a base and overlays apply patches, image tags, replicas and labels per environment, which is very readable. I combine them by using Helm for third-party charts and patching the rendered output with Kustomize, through the helmCharts field or a post-renderer, while our own apps use Kustomize overlays or one simple internal chart.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What makes a Helm chart hard to maintain?</strong> Excessive conditionals and values, deep helper nesting, and no tests or schema for values.</li>
+  <li><strong>Does Argo CD keep Helm release history?</strong> No; it renders with helm template and applies, so rollback goes through Git.</li>
+  <li><strong>How do you validate values?</strong> A values.schema.json in the chart.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-034 · Explain the transaction isolation levels and the anomalies each one prevents.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-034" data-topic="Databases &amp; SQL">
+<h1>Explain the transaction isolation levels and the anomalies each one prevents.</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The SQL standard levels, from weakest to strongest: <strong>Read Uncommitted</strong> (allows dirty reads), <strong>Read Committed</strong> (prevents dirty reads), <strong>Repeatable Read</strong> (also prevents non-repeatable reads) and <strong>Serializable</strong> (prevents phantoms and all anomalies, as if transactions ran one by one); real databases implement them differently, mostly with <strong>MVCC</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Isolation controls what concurrent transactions can see of each other's work. Stronger isolation means fewer anomalies but more blocking, aborts and retries.</p>
+<p><strong>Anomalies:</strong></p>
+<ul>
+  <li><strong>Dirty read</strong>: reading another transaction's uncommitted change, which may roll back.</li>
+  <li><strong>Non-repeatable read</strong>: reading the same row twice and getting different values because another transaction committed an update in between.</li>
+  <li><strong>Phantom read</strong>: re-running a range query and getting new or missing rows because another transaction inserted or deleted matching rows.</li>
+  <li><strong>Lost update</strong>: two transactions read the same value, both modify and write, and one write overwrites the other.</li>
+  <li><strong>Write skew</strong>: two transactions read overlapping data and write different rows based on it, together violating a constraint (classic: two doctors both going off call).</li>
+</ul>
+<p><strong>Levels:</strong></p>
+<ul>
+  <li><strong>Read Uncommitted</strong>: dirty reads possible. PostgreSQL treats it as Read Committed.</li>
+  <li><strong>Read Committed</strong>: each statement sees only committed data as of the statement's start. Default in <strong>PostgreSQL, Oracle and SQL Server</strong>.</li>
+  <li><strong>Repeatable Read</strong>: rows you've read don't change. The standard still permits phantoms, but <strong>PostgreSQL</strong> implements it as <strong>snapshot isolation</strong> (one snapshot for the whole transaction, no phantoms, and concurrent updates of the same row abort with a serialization error). <strong>MySQL InnoDB</strong> defaults to Repeatable Read, using a consistent snapshot for plain reads and <strong>next-key (gap) locks</strong> for locking reads and writes, which prevents most phantoms.</li>
+  <li><strong>Serializable</strong>: the result equals some serial order. PostgreSQL uses <strong>Serializable Snapshot Isolation</strong> (SSI), aborting conflicting transactions; others use stricter locking. Applications <strong>must retry</strong> on serialization failures (SQLSTATE 40001).</li>
+</ul>
+<p><strong>Lost updates</strong> are often handled without raising the level: <strong>optimistic locking</strong> with a version column (JPA <code>@Version</code>, which throws <code>OptimisticLockException</code> when the version changed), <strong>pessimistic locking</strong> with <code>SELECT ... FOR UPDATE</code>, or atomic updates (<code>UPDATE ... SET stock = stock - 1 WHERE stock &gt; 0</code>).</p>
+<p>In Spring: <code>@Transactional(isolation = Isolation.REPEATABLE_READ)</code>; the default uses the database's default.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>With MVCC, each row version records the creating and deleting transaction.</li>
+  <li>A transaction reads from a snapshot: per statement (Read Committed) or per transaction (Repeatable Read/Snapshot).</li>
+  <li>Writers create new versions; readers aren't blocked.</li>
+  <li>Write-write conflicts are resolved with row locks, and at higher levels by aborting one transaction.</li>
+  <li>Serializable additionally tracks read/write dependencies (SSI) or uses range locks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Session A (READ COMMITTED)
+BEGIN;
+SELECT balance FROM account WHERE id = 1;   -- 100
+-- Session B: UPDATE account SET balance = 50 WHERE id = 1; COMMIT;
+SELECT balance FROM account WHERE id = 1;   -- 50  (non-repeatable read)
+COMMIT;</code></pre>
+<pre><code class="language-java">@Entity class Account {
+    @Id Long id;
+    BigDecimal balance;
+    @Version long version;        // optimistic locking prevents lost updates
+}
+
+@Transactional(isolation = Isolation.SERIALIZABLE)
+@Retryable(retryFor = CannotAcquireLockException.class, maxAttempts = 3)
+public void allocateShift(...) { ... }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Level</th><th>Dirty read</th><th>Non-repeatable</th><th>Phantom</th></tr></thead>
+<tbody>
+<tr><td>Read Uncommitted</td><td>Possible</td><td>Possible</td><td>Possible</td></tr>
+<tr><td>Read Committed</td><td>Prevented</td><td>Possible</td><td>Possible</td></tr>
+<tr><td>Repeatable Read</td><td>Prevented</td><td>Prevented</td><td>Possible (standard)</td></tr>
+<tr><td>Serializable</td><td>Prevented</td><td>Prevented</td><td>Prevented</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming every database behaves exactly per the standard table.</li>
+  <li>Using Serializable without retry logic.</li>
+  <li>Believing Read Committed prevents lost updates.</li>
+  <li>Forgetting long transactions at high isolation increase contention and bloat.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Read uncommitted allows dirty reads. Read committed prevents them, but a row read twice can change, a non-repeatable read. Repeatable read guarantees rows I've read don't change, though by the standard new matching rows, phantoms, can still appear. Serializable behaves as if transactions ran one after another, at the cost of locking or serialization failures that must be retried. Defaults differ: PostgreSQL, Oracle and SQL Server use read committed, MySQL InnoDB uses repeatable read with MVCC snapshots and next-key locks. For lost updates I usually use optimistic locking with @Version rather than raising the isolation level.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a lost update, and how do optimistic locking and @Version prevent it?</strong> Two writers overwrite each other; @Version makes the second update fail because the version changed.</li>
+  <li><strong>What is write skew?</strong> Two transactions write different rows based on the same read, breaking an invariant; prevented by Serializable.</li>
+  <li><strong>What is MVCC?</strong> Keeping multiple row versions so readers see a snapshot without blocking writers.</li>
+</ul>
+</article>
+</body>
+</html>

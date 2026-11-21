@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-108 · Some workloads must run only on GPU nodes, and other pods must stay off those expensive nodes. How do you control scheduling?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-108" data-topic="Kubernetes">
+<h1>Some workloads must run only on GPU nodes, and other pods must stay off those expensive nodes. How do you control scheduling?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Attract</strong> GPU workloads with <strong>nodeSelector or node affinity</strong>, <strong>repel</strong> everything else with <strong>taints</strong>, give GPU pods <strong>tolerations</strong> (which allow but do not force placement), combine both for <strong>dedicated nodes</strong>, and request <strong><code>nvidia.com/gpu</code></strong> so capacity is checked.</p>
+
+<h2>Detailed explanation</h2>
+<p>Two controls work in opposite directions. <strong>Attraction</strong> is set on the pod: a <code>nodeSelector</code> matches simple labels such as <code>accelerator=nvidia-l4</code>, while <strong>node affinity</strong> supports operators and two strengths. <code>requiredDuringSchedulingIgnoredDuringExecution</code> must be satisfied; <code>preferredDuringSchedulingIgnoredDuringExecution</code> is a weighted preference, useful for soft choices like a preferred zone or instance family.</p>
+<p><strong>Repulsion</strong> is set on the node: a <strong>taint</strong> such as <code>nvidia.com/gpu=present:NoSchedule</code> keeps away every pod without a matching <strong>toleration</strong>. <code>NoSchedule</code> blocks new pods, <code>PreferNoSchedule</code> is a soft version, and <code>NoExecute</code> also evicts running pods that do not tolerate it. Some platforms, such as GKE, add this GPU taint automatically, and the ExtendedResourceToleration admission plugin can add tolerations to pods that request GPUs.</p>
+<p>The common misunderstanding: a <strong>toleration does not attract</strong> a pod. It only permits the pod onto a tainted node; the scheduler may still put it on a cheap general node. So dedicated nodes need <strong>both</strong>: a taint so only GPU workloads can land there, and affinity or a selector so GPU workloads land only there. The <strong>resource request</strong> <code>nvidia.com/gpu: 1</code>, advertised by the NVIDIA device plugin or GPU operator, makes the scheduler count GPUs, preventing two jobs being placed on one GPU.</p>
+<p>For <strong>spreading</strong> replicas across nodes or zones use <strong>pod anti-affinity</strong> or <strong>topology spread constraints</strong>. On cloud clusters, a separate <strong>node pool or Karpenter NodePool</strong> per workload type, with its own labels and taints, keeps this manageable and lets GPU nodes scale to zero when idle.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Label GPU nodes and taint them with NoSchedule.</li>
+  <li>Install the NVIDIA device plugin or GPU operator.</li>
+  <li>GPU pods add a toleration plus node affinity or selector.</li>
+  <li>GPU pods request <code>nvidia.com/gpu</code>.</li>
+  <li>Non-GPU pods, lacking the toleration, are kept off.</li>
+  <li>Use topology spread for replicas; autoscale the GPU pool.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl label node gpu-1 accelerator=nvidia-l4
+kubectl taint node gpu-1 nvidia.com/gpu=present:NoSchedule</code></pre>
+<pre><code class="language-yaml">spec:
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - { key: accelerator, operator: In, values: [&quot;nvidia-l4&quot;] }
+  containers:
+    - name: trainer
+      image: registry.example.com/trainer:2.3
+      resources:
+        limits: { nvidia.com/gpu: 1 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using only a toleration and expecting pods to go to GPU nodes.</li>
+  <li>Using only affinity, so random pods still fill expensive GPU nodes.</li>
+  <li>Forgetting the GPU resource request, so jobs share or oversubscribe GPUs.</li>
+  <li>Using NoExecute without realising it evicts running pods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are two directions. To attract pods I label nodes and use a nodeSelector or node affinity, required for hard rules and preferred for soft ones. To keep others off I taint the GPU nodes, for example nvidia.com/gpu NoSchedule, which repels any pod without a toleration. The usual misunderstanding is that a toleration forces placement; it only allows it. So for dedicated nodes I combine a taint with affinity, and GPU pods request nvidia.com/gpu so the scheduler checks capacity. For spreading I use anti-affinity or topology spread, and a separate node pool or Karpenter NodePool makes it manageable.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>NoSchedule, PreferNoSchedule and NoExecute?</strong> Hard block for new pods, soft avoidance, and block plus eviction of running pods.</li>
+  <li><strong>How do you share one GPU between small workloads?</strong> Time-slicing or MIG via the NVIDIA GPU operator.</li>
+  <li><strong>Why IgnoredDuringExecution?</strong> Label changes after scheduling do not evict already running pods.</li>
+</ul>
+</article>
+</body>
+</html>

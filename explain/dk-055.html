@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-055 · How do you run a database in Docker for local development safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-055" data-topic="Docker">
+<h1>How do you run a database in Docker for local development safely?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use the <strong>official image pinned to production's major version</strong>, a <strong>named volume</strong> for data, <strong>init scripts</strong> in <code>/docker-entrypoint-initdb.d</code> for seed data, credentials from an <strong>uncommitted env file</strong>, publish the port <strong>only on 127.0.0.1</strong>, and use <strong>Testcontainers</strong> for automated tests.</p>
+
+<h2>Detailed explanation</h2>
+<p>Running a database in a container is the easiest way to give every developer the same environment, but a few habits keep it reliable and safe.</p>
+<p><strong>Version</strong>: use the official image pinned to the <strong>same major version as production</strong>, for example <code>postgres:16</code> or <code>mysql:8.4</code>. Running a newer major locally hides incompatibilities; data directories are also not compatible across Postgres majors, so upgrading needs a dump and restore.</p>
+<p><strong>Persistence</strong>: mount a <strong>named volume</strong> at the data directory (<code>/var/lib/postgresql/data</code>). Without it, data lives in the writable layer and disappears when the container is recreated. Bind mounts to the host work but can cause permission and performance problems on macOS and Windows.</p>
+<p><strong>Initialisation</strong>: the official Postgres, MySQL and MariaDB images run <code><em>.sql</code>, <code></em>.sql.gz</code> and <code>*.sh</code> files from <strong><code>/docker-entrypoint-initdb.d</code></strong> on <strong>first start only</strong>, when the data directory is empty. That is good for creating databases, roles and seed data. Real <strong>schema changes</strong> should come from migration tools like <strong>Flyway</strong> or <strong>Liquibase</strong>, the same ones used in production, so local and production schemas never drift.</p>
+<p><strong>Security</strong>: read credentials from an <code>.env</code> file that is <strong>not committed</strong>, or a secrets file. Publish the port as <strong><code>127.0.0.1:5432:5432</code></strong>, because <code>-p 5432:5432</code> listens on all interfaces, and Docker's iptables rules can bypass host firewalls, exposing a weak dev password to the network.</p>
+<p><strong>Tests</strong>: for automated tests, <strong>Testcontainers</strong> (Java, Go, Node, Python, .NET) starts a fresh, throwaway database per test run with a random port and cleans up afterwards, avoiding shared state and order-dependent tests.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compose starts the pinned database image.</li>
+  <li>On first start, the entrypoint initialises the data volume and runs init scripts.</li>
+  <li>Migrations run from the app or a migrate service.</li>
+  <li>Developers connect through localhost only.</li>
+  <li>Tests spin up isolated containers via Testcontainers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">services:
+  db:
+    image: postgres:16
+    env_file: .env.db                 # not committed
+    ports: [&quot;127.0.0.1:5432:5432&quot;]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [&quot;CMD-SHELL&quot;, &quot;pg_isready -U $${POSTGRES_USER}&quot;]
+      interval: 5s
+volumes:
+  pgdata:</code></pre>
+<pre><code class="language-java">@Container
+static PostgreSQLContainer&lt;?&gt; pg = new PostgreSQLContainer&lt;&gt;(&quot;postgres:16&quot;);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>latest</code> and getting a new major version unexpectedly.</li>
+  <li>Expecting init scripts to re-run after the volume already exists.</li>
+  <li>Publishing the database on all interfaces with a trivial password.</li>
+  <li>Running <code>docker compose down -v</code> and losing local data unintentionally.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use the official image pinned to the same major version as production, like postgres:16, with a named volume for the data directory so data survives recreation, and credentials from an env file that isn't committed. The official images run SQL or shell scripts in /docker-entrypoint-initdb.d on first start, handy for roles and seed data, but schema changes come from Flyway or Liquibase. I publish the port only on 127.0.0.1 so it isn't exposed on the network. For automated tests I use Testcontainers to start a fresh throwaway database per run.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would you run production databases in Docker?</strong> Possible with careful storage and operations, but managed services or operators are usually safer.</li>
+  <li><strong>Why don't my init scripts run?</strong> The volume already contains a data directory.</li>
+  <li><strong>How do you reset local data?</strong> Remove the named volume deliberately and restart.</li>
+</ul>
+</article>
+</body>
+</html>

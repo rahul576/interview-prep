@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-042 · How do templates work in Azure Pipelines, and how do extends templates enforce governance?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-042" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do templates work in Azure Pipelines, and how do extends templates enforce governance?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Templates</strong> package reusable <strong>steps, jobs, stages and variables</strong> with <strong>typed parameters</strong>, are <strong>expanded at compile time</strong> using <code>${{ }}</code> expressions, and usually live in a <strong>central repo</strong> referenced as a <strong>repository resource</strong>; an <strong>extends template</strong> controls the <strong>whole pipeline structure</strong>, and a <strong>required template check</strong> on production resources guarantees only compliant pipelines deploy.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without templates, every team copies YAML and drifts. Templates fix that:</p>
+<ul>
+  <li><strong>Step templates</strong> (a list of steps, e.g. &quot;build and test .NET&quot;), <strong>job templates</strong>, <strong>stage templates</strong>, and <strong>variable templates</strong> (shared values).</li>
+  <li><strong>Parameters</strong> are typed: <code>string</code>, <code>number</code>, <code>boolean</code>, <code>object</code>, <code>step</code>, <code>stepList</code>, <code>job</code>, <code>stage</code> and more, with <strong>defaults</strong> and <strong>allowed <code>values</code></strong>. That's safer than variables because invalid input fails at compile time.</li>
+  <li>Central templates are referenced via <code>resources.repositories</code> and pinned to a <strong>ref</strong> (a tag or branch), so a platform team can release new versions deliberately: <code>- template: dotnet/build.yml@templates</code>.</li>
+</ul>
+<p><strong>Compile time:</strong> before the run starts, Azure DevOps expands all templates into one final YAML. Template expressions <code>${{ }}</code> (with <code>if</code>, <code>each</code>, <code>else</code>) can include or exclude whole sections, loop over parameter lists, and insert values. Runtime variables do not exist yet at this point.</p>
+<p><strong>Extends templates</strong> invert control. The team's pipeline contains only <code>extends: template: secure-pipeline.yml@templates</code> plus parameters (for example the build steps as a <code>stepList</code>). The central template defines stages and always injects <strong>mandatory steps</strong>: credential scanning, SBOM generation, dependency scanning, artifact signing. It can also <strong>inspect and reject</strong> the steps passed in, for example failing if a step is an inline <code>script</code> in the deploy stage, or allowing only approved task types.</p>
+<p><strong>Enforcement:</strong> on the production <strong>environment</strong>, <strong>service connection</strong> or <strong>agent pool</strong>, add a <strong>Required template</strong> check pointing to <code>secure-pipeline.yml@templates</code> at a specific ref. Any pipeline not extending it cannot use the resource, so governance does not depend on goodwill.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform team publishes templates in a <code>pipeline-templates</code> repo with versions.</li>
+  <li>Teams reference the repo as a resource with a pinned ref.</li>
+  <li>Team pipeline extends the secure template and passes parameters.</li>
+  <li>Compile time expands templates and evaluates <code>${{ }}</code> logic.</li>
+  <li>Required template check validates extension before using protected resources.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># team pipeline
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: Platform/pipeline-templates
+    ref: refs/tags/v3.2
+extends:
+  template: secure-pipeline.yml@templates
+  parameters:
+    buildSteps:
+    - task: DotNetCoreCLI@2
+      inputs: { command: build, arguments: '-c Release' }</code></pre>
+<pre><code class="language-yaml"># secure-pipeline.yml (excerpt)
+parameters:
+- name: buildSteps
+  type: stepList
+  default: []
+stages:
+- stage: Build
+  jobs:
+  - job: build
+    steps:
+    - ${{ each step in parameters.buildSteps }}:
+      - ${{ each pair in step }}:
+          ${{ if eq(pair.key, 'script') }}:
+            'Inline scripts are not allowed': error     # fails compilation
+          ${{ else }}:
+            ${{ pair.key }}: ${{ pair.value }}
+    - task: MicrosoftSecurityDevOps@1   # always injected scanning</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Referencing templates from a moving branch with no version pinning.</li>
+  <li>Using runtime variables inside <code>${{ if }}</code> and wondering why they are empty.</li>
+  <li>Extends template that teams can bypass because no required template check exists.</li>
+  <li>Overly generic templates with dozens of parameters nobody understands.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Templates let me define reusable steps, jobs, stages and variables in a central repo, referenced as a repository resource pinned to a tag. They take typed parameters with defaults and allowed values, and they're expanded at compile time, so <code>${{ }}</code> expressions can include or exclude whole sections. An extends template goes further: the team pipeline only extends a central template and passes parameters, while the template controls the structure and always injects security scanning, and can reject things like inline scripts. With a required template check on production environments and service connections, only pipelines built on that template can deploy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Template vs macro vs runtime expressions?</strong> <code>${{ }}</code> at compile time, <code>$( )</code> before a task runs, <code>$[ ]</code> at runtime for conditions and variables.</li>
+  <li><strong>Why pin template versions?</strong> So template changes don't break every pipeline at once.</li>
+  <li><strong>Can teams override injected steps?</strong> Not if the extends template controls structure and the check enforces it.</li>
+</ul>
+</article>
+</body>
+</html>

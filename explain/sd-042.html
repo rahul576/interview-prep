@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-042 · Design a top-K trending topics system, such as trending hashtags in the last hour.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-042" data-topic="Classic Design Problems">
+<h1>Design a top-K trending topics system, such as trending hashtags in the last hour.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Stream hashtag events through <strong>Kafka</strong>, count them in <strong>time windows</strong> per partition (exact or <strong>Count-Min Sketch</strong>), keep a <strong>min-heap of top K</strong> per partition, <strong>merge</strong> into a global top K, score by <strong>growth vs baseline</strong>, and <strong>cache</strong> the precomputed result.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Trending&quot; is about what's spiking now, not what's always popular. Volume alone would show #love forever, so scoring compares the current window with a baseline (e.g. same hour last week, or a moving average).</p>
+<p>Counting: partition the stream by hashtag so each processor owns a subset and counts exactly in memory for the window, using <strong>tumbling 1-minute windows</strong> combined into a <strong>sliding 1-hour</strong> total. With extreme cardinality, a <strong>Count-Min Sketch</strong> gives approximate counts in fixed memory (it may overestimate, never underestimates). Each partition maintains a <strong>min-heap</strong> of size K of its top candidates; an aggregator merges partition heaps into the global top K. Because each hashtag lives in one partition, merging is exact for candidates.</p>
+<p>Results are recomputed every minute per region/language and stored in a cache; reads (very frequent) are just lookups. Spam defence: count unique users rather than posts, weight by account reputation, ignore coordinated bursts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Post service → <code>HashtagUsed(tag, user, region, ts)</code> → Kafka (key = tag).</li>
+  <li>Stream job: windowed counts per tag; compute trend score.</li>
+  <li>Per-partition top-K heap → aggregator → global top K per region.</li>
+  <li>Store in Redis; API returns cached list.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import heapq
+heap = []                      # (score, tag), size K
+for tag, score in scores.items():
+    if len(heap) &lt; K: heapq.heappush(heap, (score, tag))
+    elif score &gt; heap[0][0]: heapq.heapreplace(heap, (score, tag))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ranking by raw volume only.</li>
+  <li>Global single counter (bottleneck).</li>
+  <li>Computing trends on read.</li>
+  <li>Counting posts instead of distinct users (easy to spam).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Hashtag events go into Kafka keyed by tag. Stream processors keep windowed counts per tag, exact or with Count-Min Sketch at huge cardinality, and compute a trend score versus a baseline. Each partition keeps a top-K heap and an aggregator merges them into a global list per region every minute, which is cached so reads are trivial. Counting distinct users and reputation weighting limits spam.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why Count-Min Sketch?</strong> Fixed memory for high-cardinality frequency estimates.</li>
+  <li><strong>Personalised trends?</strong> Combine global trends with the user's graph and interests.</li>
+  <li><strong>Exact daily ranking?</strong> Batch job on archived events.</li>
+</ul>
+</article>
+</body>
+</html>

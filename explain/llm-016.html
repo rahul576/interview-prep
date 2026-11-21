@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-016 · Self-hosted LLM pods take ten minutes to become ready after scaling up. How do you reduce startup time?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-016" data-topic="LLMOps &amp; RAG">
+<h1>Self-hosted LLM pods take ten minutes to become ready after scaling up. How do you reduce startup time?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>First <strong>measure each phase</strong>: node provisioning, image pull, weight download, loading into GPU memory and engine warmup; then <strong>cache weights outside the image</strong> on node-local NVMe or shared volumes in <strong>safetensors</strong>, <strong>pre-pull or stream images</strong>, keep <strong>warm GPU nodes</strong>, and <strong>cache compilation artefacts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Ten minutes is common for a naive deployment, and it makes autoscaling nearly useless. The time usually splits into:</p>
+<ol>
+  <li><strong>Node provisioning</strong> (2 to 5 minutes or more for a GPU VM, plus driver and device plugin setup), only if no free node exists.</li>
+  <li><strong>Image pull</strong>: CUDA-based serving images are often 8 to 20 GB.</li>
+  <li><strong>Weight download</strong>: 16 to 150 GB from Hugging Face Hub or object storage, often single-threaded.</li>
+  <li><strong>Loading</strong> weights from disk into GPU memory.</li>
+  <li><strong>Warmup</strong>: CUDA graph capture, <code>torch.compile</code>, kernel autotuning, KV cache profiling.</li>
+</ol>
+<p>Measure with pod events and timestamps in engine logs, then attack the biggest phases.</p>
+<p><strong>Weights.</strong> Never bake them into the image and never download from a public hub on every start. Options: a <strong>node-local NVMe cache</strong> filled by a DaemonSet or init job; a shared high-throughput volume (FSx for Lustre, Filestore, Azure Managed Lustre, or a fast NFS); <strong>OCI image volumes</strong> or model-as-artefact approaches; or object storage with <strong>parallel, multi-connection downloads</strong> (for example the Hugging Face transfer accelerator or <code>s5cmd</code>). Store weights in <strong>safetensors</strong>, which supports fast, zero-copy memory mapping; engines can also use loaders that stream tensors directly to GPU.</p>
+<p><strong>Images.</strong> Slim images, shared base layers, pre-pull on GPU nodes (DaemonSet or node image baking), or <strong>lazy image streaming</strong> such as GKE image streaming, SOCI on AWS, or Artifact Streaming on AKS.</p>
+<p><strong>Nodes.</strong> Keep a <strong>buffer of warm GPU nodes</strong>, for example low-priority placeholder pods that are preempted when real pods need the node, or a minimum node count during business hours.</p>
+<p><strong>Warmup.</strong> Cache compiled artefacts between runs (vLLM's compile cache directory on a persistent volume), reduce captured CUDA graph sizes, or disable graph capture where latency allows.</p>
+<p>Finally, <strong>readiness probes</strong> should pass only when the model can serve, a <strong>startupProbe</strong> should allow the real loading time, and autoscaling should start earlier.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Instrument startup phases.</li>
+  <li>Pre-stage weights on nodes or shared fast storage.</li>
+  <li>Pre-pull or stream images.</li>
+  <li>Keep warm node buffer.</li>
+  <li>Cache compile artefacts; set probes; re-measure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:&lt;pinned-version&gt;
+      args: [&quot;--model&quot;, &quot;/models/llama-3.1-70b-fp8&quot;, &quot;--tensor-parallel-size&quot;, &quot;4&quot;]
+      env: [ { name: VLLM_CACHE_ROOT, value: /models/.vllm-cache } ]
+      volumeMounts: [ { name: models, mountPath: /models, readOnly: false } ]
+      startupProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 10, failureThreshold: 60 }
+      readinessProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 5 }
+  volumes:
+    - name: models
+      hostPath: { path: /mnt/nvme/models, type: Directory }   # filled by a cache DaemonSet</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Baking 140 GB of weights into the container image.</li>
+  <li>Downloading from a public hub on every pod start (also a supply-chain risk).</li>
+  <li>Readiness passing before weights are loaded.</li>
+  <li>Scaling to zero GPUs for interactive workloads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure where the ten minutes go: GPU node provisioning, pulling a huge image, downloading weights, loading them into GPU memory and engine warmup like CUDA graph capture. Then I fix the biggest parts. Weights stay out of the image and are cached on node-local NVMe or a fast shared volume, in safetensors format, downloaded in parallel. Images are slimmed and pre-pulled or streamed. I keep a small buffer of warm GPU nodes so provisioning is not on the critical path, cache compile artefacts, make readiness reflect real serving ability, and scale earlier.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Cost of warm GPUs vs startup?</strong> Compare idle cost with the cost of missed SLOs; use placeholders only at peak hours.</li>
+  <li><strong>Why safetensors?</strong> Memory-mappable, fast, and no arbitrary code execution like pickle.</li>
+  <li><strong>What about model updates?</strong> Version weight directories and roll pods gradually.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-078 · How do you do blue-green and canary deployments on AWS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-078" data-topic="Cloud (AWS)">
+<h1>How do you do blue-green and canary deployments on AWS?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>Blue/green</strong> runs a new <strong>green</strong> environment alongside <strong>blue</strong> and switches traffic once green is healthy, keeping blue for instant rollback; a <strong>canary</strong> shifts a small share first and increases gradually; on AWS use <strong>ALB weighted target groups</strong>, <strong>Route 53 weighted records</strong> or <strong>CodeDeploy</strong> for ECS and Lambda with <strong>alarm-based rollback</strong>, and keep <strong>database changes backward compatible</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Blue/green</strong> isolates the release: green is deployed and tested (smoke tests, synthetic checks) without user traffic, then traffic moves over at once or gradually. Blue stays running for a defined period so rollback is just switching back. <strong>Canary</strong> releases send, for example, 5 or 10 percent of traffic to the new version, watch error rate and latency, then proceed. <strong>Linear</strong> shifts in equal steps over time. All of these reduce blast radius compared with in-place updates.</p>
+<p><strong>Mechanisms on AWS</strong>: an <strong>ALB listener rule</strong> forwarding to two <strong>weighted target groups</strong> switches traffic instantly and precisely, because the ALB controls every request. <strong>Route 53 weighted records</strong> work across load balancers or regions, but clients cache DNS for the TTL, so shifts and rollbacks are slow and imprecise. <strong>Elastic Beanstalk</strong> offers CNAME swaps. <strong>API Gateway</strong> stages support canary settings, and <strong>Lambda aliases</strong> support weighted versions.</p>
+<p><strong>CodeDeploy</strong> automates this for <strong>ECS</strong> (blue and green task sets behind two target groups, with a test listener) and <strong>Lambda</strong> (alias weight shifting), with predefined configurations like <strong>Canary10Percent5Minutes</strong> or <strong>Linear10PercentEvery1Minute</strong>, <strong>lifecycle hooks</strong> for validation tests, and <strong>automatic rollback</strong> when CloudWatch alarms fire. ECS also now supports native blue/green deployments in the service itself. On EKS, <strong>Argo Rollouts</strong> or Flagger provide similar progressive delivery with the AWS Load Balancer Controller.</p>
+<p><strong>The database is shared</strong>, so schema changes must work with both versions: the <strong>expand and contract</strong> pattern adds new columns or tables first, deploys code that writes both or reads either, migrates data, and removes old structures only after blue is gone. Also consider sessions, caches, queue message formats and feature flags.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deploy green next to blue; run tests via a test listener.</li>
+  <li>Shift a canary percentage of traffic to green.</li>
+  <li>Watch alarms on errors, latency and business metrics.</li>
+  <li>Continue shifting, or roll back automatically on alarm.</li>
+  <li>After full shift and bake time, retire blue.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># appspec.yaml for ECS blue/green via CodeDeploy
+version: 0.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: &lt;TASK_DEFINITION&gt;
+        LoadBalancerInfo:
+          ContainerName: web
+          ContainerPort: 8080
+Hooks:
+  - AfterAllowTestTraffic: arn:aws:lambda:eu-west-1:111122223333:function:smoke-tests</code></pre>
+<pre><code class="language-bash">aws deploy create-deployment-group --application-name web \
+  --deployment-group-name prod \
+  --deployment-config-name CodeDeployDefault.ECSCanary10Percent5Minutes \
+  --alarm-configuration enabled=true,alarms=[{name=web-5xx-rate},{name=web-p99-latency}] \
+  --auto-rollback-configuration enabled=true,events=DEPLOYMENT_FAILURE,DEPLOYMENT_STOP_ON_ALARM \
+  --service-role-arn arn:aws:iam::111122223333:role/codedeploy-ecs --ecs-services clusterName=prod,serviceName=web \
+  --deployment-style deploymentType=BLUE_GREEN,deploymentOption=WITH_TRAFFIC_CONTROL \
+  --blue-green-deployment-configuration file://bg.json \
+  --load-balancer-info file://lb.json</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Breaking schema changes that make rollback impossible.</li>
+  <li>No rollback alarms, so canaries proceed regardless of errors.</li>
+  <li>Relying on DNS switching and expecting instant rollback.</li>
+  <li>Destroying blue immediately after the switch.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In blue/green, a new green environment runs beside blue; once it passes tests, traffic switches and blue stays ready for instant rollback. On AWS the switch can be ALB weighted target groups, Route 53 weighted records or a Beanstalk swap. A canary sends a small share first, say 10 percent, then increases. CodeDeploy automates both for ECS and Lambda with canary and linear configs, validation hooks and automatic rollback on CloudWatch alarms. Because the database is shared, schema changes must be backward compatible using expand and contract.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is DNS-based blue/green slower to roll back than ALB-based?</strong> Resolvers and clients cache records for the TTL, while ALB weights apply immediately.</li>
+  <li><strong>What metrics gate a canary?</strong> Error rate, p99 latency and a key business metric, compared with the baseline.</li>
+  <li><strong>How handle long-lived connections?</strong> Deregistration delay and graceful draining, plus client reconnect logic.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-033 · What is HashiCorp Packer, and how does it fit with Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-033" data-topic="Infrastructure as Code">
+<h1>What is HashiCorp Packer, and how does it fit with Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Packer</strong> builds <strong>machine images</strong> from <strong>HCL templates</strong>: <strong>sources/builders</strong> for AMIs, Azure, GCP, VMware or Docker, <strong>provisioners</strong> (shell, Ansible) to configure, producing versioned <strong>golden images</strong> that <strong>Terraform deploys</strong>, enabling <strong>immutable infrastructure</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Configuring servers after they boot is slow and fragile: package mirrors are down, versions differ between instances, and auto scaling has to wait minutes for configuration to finish. <strong>Packer</strong> moves that work earlier, into an <strong>image build</strong>.</p>
+<p>A Packer template (HCL2, <code>*.pkr.hcl</code>) has:</p>
+<ul>
+  <li><strong>packer { required_plugins }</strong>: plugins such as <code>amazon</code>, <code>azure</code>, <code>googlecompute</code>, <code>vsphere</code>, <code>docker</code>, installed with <code>packer init</code>.</li>
+  <li><strong>source</strong> blocks (builders): where to build. For example <code>amazon-ebs</code> launches a temporary EC2 instance from a base AMI.</li>
+  <li>A <strong>build</strong> block: which sources to use and the <strong>provisioners</strong> that configure the machine: <code>shell</code> scripts, <code>file</code> uploads, <code>ansible</code> playbooks, or PowerShell for Windows. Typical steps are patching the OS, installing runtimes and agents, CIS hardening and cleanup.</li>
+  <li><strong>post-processors</strong>: manifests, compression, uploading or pushing metadata.</li>
+</ul>
+<p>Packer then snapshots the machine into an image, such as an AMI named <code>web-2026-11-21-1530</code>, and terminates the temporary instance. One template can build for several platforms in parallel.</p>
+<p><strong>Terraform</strong> consumes the result: an <code>aws_launch_template</code> or VM resource references the image, usually found with a <strong>data source</strong> filtering by name, tags and owner, or through <strong>HCP Packer</strong> channels that track approved versions. Releasing a change means building a new image and <strong>rolling instances</strong>, for example via an auto scaling group instance refresh, rather than mutating running servers.</p>
+<p>The benefits of this <strong>immutable infrastructure</strong> approach are fast, consistent boots, images that can be scanned and tested before use, easy rollback to the previous image, and far less drift. Runtime-specific settings like secrets and environment configuration still come at boot via user data or a secret manager.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>packer init</code> installs plugins.</li>
+  <li><code>packer validate</code> and <code>packer build</code> start a temporary machine from a base image.</li>
+  <li>Provisioners configure it.</li>
+  <li>Packer captures an image and tags it.</li>
+  <li>Terraform looks up the image and rolls instances onto it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">packer {
+  required_plugins {
+    amazon  = { source = &quot;github.com/hashicorp/amazon&quot;, version = &quot;&gt;= 1.3.0&quot; }
+    ansible = { source = &quot;github.com/hashicorp/ansible&quot;, version = &quot;&gt;= 1.1.0&quot; }
+  }
+}
+
+source &quot;amazon-ebs&quot; &quot;web&quot; {
+  region        = &quot;eu-west-1&quot;
+  instance_type = &quot;t3.small&quot;
+  ssh_username  = &quot;ubuntu&quot;
+  ami_name      = &quot;web-${formatdate(&quot;YYYYMMDDhhmm&quot;, timestamp())}&quot;
+  source_ami_filter {
+    filters = { name = &quot;ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*&quot; }
+    owners      = [&quot;099720109477&quot;]
+    most_recent = true
+  }
+  tags = { Role = &quot;web&quot;, Approved = &quot;false&quot; }
+}
+
+build {
+  sources = [&quot;source.amazon-ebs.web&quot;]
+  provisioner &quot;shell&quot;   { inline = [&quot;sudo apt-get update&quot;, &quot;sudo apt-get -y upgrade&quot;] }
+  provisioner &quot;ansible&quot; { playbook_file = &quot;./ansible/web.yml&quot; }
+}</code></pre>
+<pre><code class="language-hcl">data &quot;aws_ami&quot; &quot;web&quot; {
+  owners      = [&quot;self&quot;]
+  most_recent = true
+  filter {
+    name   = &quot;tag:Role&quot;
+    values = [&quot;web&quot;]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Baking secrets or environment-specific config into images.</li>
+  <li><code>most_recent = true</code> without an approval tag, deploying untested images.</li>
+  <li>Never rebuilding images, so they fall behind on patches.</li>
+  <li>Large manual steps after boot, defeating the purpose.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Packer builds machine images from an HCL template. A source defines the platform, like an Amazon AMI, Azure image, VMware template or Docker image. Provisioners configure the temporary machine with shell scripts or Ansible, installing packages, hardening and adding agents, and Packer captures the result as a versioned golden image. Terraform then deploys instances or auto scaling groups from those images, usually looking up the latest approved image with a data source. Together that's immutable infrastructure: instead of configuring servers after boot, we bake new images and replace instances, which gives faster and more consistent boots.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you automate Packer builds and testing?</strong> A scheduled and on-change CI pipeline: validate, build, test (Goss/InSpec), scan, tag as approved, then roll out.</li>
+  <li><strong>Packer vs Dockerfile?</strong> Dockerfiles build container images; Packer focuses on VM images across clouds.</li>
+  <li><strong>How do you roll out a new AMI?</strong> Update the launch template and run an ASG instance refresh.</li>
+</ul>
+</article>
+</body>
+</html>

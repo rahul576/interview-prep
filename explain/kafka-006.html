@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-006 · What does exactly-once in Kafka really guarantee, and where does it stop?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-006" data-topic="Kafka">
+<h1>What does exactly-once in Kafka really guarantee, and where does it stop?</h1>
+<p class="ex-meta">Kafka · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Kafka <strong>exactly-once semantics (EOS)</strong> combines the <strong>idempotent producer</strong> and <strong>transactions</strong> so a <strong>consume-transform-produce</strong> loop writes outputs and input offsets atomically for <strong>read_committed</strong> consumers; it <strong>stops at Kafka's boundary</strong>, so external side effects need <strong>outbox or idempotent writes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>There are three building blocks. The <strong>idempotent producer</strong> gets a <strong>producer ID (PID)</strong> and attaches a <strong>sequence number</strong> per partition to each batch; the broker discards duplicates caused by retries. This gives exactly-once <em>writes</em> per partition per producer session.</p>
+<p><strong>Transactions</strong> extend this across partitions. A producer configured with a stable <strong>transactional.id</strong> calls <code>beginTransaction</code>, sends records to several topics, adds the consumer's offsets with <code>sendOffsetsToTransaction</code>, then <code>commitTransaction</code>. A <strong>transaction coordinator</strong> writes commit or abort markers. The transactional.id also enables <strong>zombie fencing</strong>: when a restarted instance initialises with the same ID, the epoch increases and the old instance's writes are rejected.</p>
+<p>Consumers must set <strong>isolation.level=read_committed</strong> to skip aborted records and records from open transactions. <strong>Kafka Streams</strong> packages all of this with <code>processing.guarantee=exactly_once_v2</code>.</p>
+<p>The boundary matters. If your consumer charges a card, sends an email or updates PostgreSQL, that action is not part of the Kafka transaction. A crash after the external call but before the commit leads to reprocessing and a second charge. For those cases, make the external effect <strong>idempotent</strong> (unique event ID as a key, <code>INSERT ... ON CONFLICT DO NOTHING</code>, payment API idempotency keys), or use the <strong>transactional outbox</strong> pattern to write the database change and the event together. EOS also does not protect against data loss from poor durability settings: you still need acks=all and min ISR.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer <code>initTransactions()</code> registers transactional.id and fences zombies.</li>
+  <li>Consumer polls input records.</li>
+  <li><code>beginTransaction()</code>, process, send outputs.</li>
+  <li><code>sendOffsetsToTransaction(offsets, groupMetadata)</code>.</li>
+  <li><code>commitTransaction()</code>; on error, <code>abortTransaction()</code> and reprocess.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">producer.initTransactions();
+while (true) {
+  var records = consumer.poll(Duration.ofMillis(500));
+  producer.beginTransaction();
+  for (var r : records) producer.send(new ProducerRecord&lt;&gt;(&quot;enriched&quot;, r.key(), enrich(r.value())));
+  producer.sendOffsetsToTransaction(offsets(records), consumer.groupMetadata());
+  producer.commitTransaction();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing EOS covers database writes or HTTP calls inside the consumer.</li>
+  <li>Forgetting read_committed on downstream consumers.</li>
+  <li>Using a random transactional.id per start, which disables fencing.</li>
+  <li>Relying on EOS while running acks=1.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Exactly-once in Kafka has two parts. The idempotent producer uses a producer ID and sequence numbers so the broker drops retried duplicates. Transactions with a transactional.id let a consume-transform-produce app commit its output records and its input offsets atomically, and read_committed consumers only see committed data; Kafka Streams wraps this as exactly_once_v2. But it stops at Kafka: if my consumer writes to a database or calls a payment API, I need idempotent writes keyed by an event ID or the outbox pattern.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Write landed on one replica that died?</strong> EOS does not help; durability comes from acks=all and min ISR.</li>
+  <li><strong>What is zombie fencing?</strong> Epoch bump on the transactional.id rejects writes from an old instance.</li>
+  <li><strong>Cost of transactions?</strong> Extra latency per commit; batch more records per transaction.</li>
+</ul>
+</article>
+</body>
+</html>

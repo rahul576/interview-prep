@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-010 · What does set -euo pipefail do in a Bash script, and what other practices make scripts robust?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-010" data-topic="Scripting">
+<h1>What does set -euo pipefail do in a Bash script, and what other practices make scripts robust?</h1>
+<p class="ex-meta">Scripting · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><code>set -e</code> <strong>exits on errors</strong>, <code>set -u</code> <strong>fails on unset variables</strong> and <code>set -o pipefail</code> makes a <strong>pipeline fail if any part fails</strong>; combine them with <strong>quoting, ShellCheck, trap cleanup and clear logging</strong> for robust scripts.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default Bash happily continues after a failed command, treats unset variables as empty strings and reports only the last command's status in a pipeline. All three hide failures, and hidden failures in deployment scripts are dangerous.</p>
+<p><strong><code>set -e</code> (errexit)</strong> exits when a simple command returns non-zero. <strong><code>set -u</code> (nounset)</strong> makes referencing an unset variable an error, which catches typos: with <code>rm -rf &quot;$BUILD_DIR/&quot;*</code> and a misspelt variable, <code>-u</code> stops the script instead of deleting from <code>/</code>. <strong><code>set -o pipefail</code></strong> makes a pipeline return the status of the last command that failed, so <code>curl ... | jq .</code> fails when <code>curl</code> fails, not only when <code>jq</code> does.</p>
+<p><code>set -e</code> has well-known <strong>exceptions</strong>: it is ignored for commands in <code>if</code>, <code>while</code> and <code>until</code> conditions, in <code>&amp;&amp;</code>/<code>||</code> lists except the last command, and in commands negated with <code>!</code>; it is also disabled inside functions called from those contexts. <code>local var=$(cmd)</code> hides the failure because <code>local</code> succeeds. So <code>-e</code> is a safety net, not a substitute for checking important commands.</p>
+<p>Other practices: <strong>quote variables</strong> (<code>&quot;$var&quot;</code>) to avoid word splitting and globbing; lint with <strong>ShellCheck</strong> in CI; use <strong><code>trap ... EXIT</code></strong> to remove temporary files and release locks; use <code>local</code> in functions; <code>mktemp</code> for temp files; log with timestamps to stderr; make scripts <strong>idempotent</strong>; and switch to Python once logic, data structures or error handling grow complex.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start with <code>#!/usr/bin/env bash</code> and <code>set -euo pipefail</code>.</li>
+  <li>Default optional variables with <code>${VAR:-default}</code>.</li>
+  <li>Create temp files with <code>mktemp</code> and clean them in <code>trap</code>.</li>
+  <li>Quote every expansion; check important commands explicitly.</li>
+  <li>Run ShellCheck in CI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">#!/usr/bin/env bash
+set -euo pipefail
+
+ENVIRONMENT=&quot;${1:?usage: deploy.sh &lt;env&gt;}&quot;
+TMP=&quot;$(mktemp -d)&quot;
+trap 'rm -rf &quot;$TMP&quot;' EXIT
+
+log() { printf '%s %s\n' &quot;$(date -Is)&quot; &quot;$*&quot; &gt;&amp;2; }
+
+log &quot;Fetching release manifest for $ENVIRONMENT&quot;
+curl -fsS &quot;https://releases.example.com/$ENVIRONMENT.json&quot; | jq -r '.version' &gt; &quot;$TMP/version&quot;
+log &quot;Deploying version $(cat &quot;$TMP/version&quot;)&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>set -e</code> catches failures inside <code>if</code> conditions or <code>&amp;&amp;</code> chains.</li>
+  <li><code>local out=$(cmd)</code> masking the command's exit code.</li>
+  <li>Unquoted variables breaking on spaces.</li>
+  <li>Using <code>curl</code> without <code>-f</code>, so HTTP errors look like success.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;set -e makes the script exit as soon as a command fails instead of carrying on. -u treats unset variables as errors, which catches typos before something like rm -rf runs on an empty path. pipefail makes a pipeline fail if any command in it fails, not just the last. Together they make failures loud. I also quote all variables, lint with ShellCheck, use trap to clean up temp files on exit, use local variables in functions and log clearly. I know set -e has exceptions, like in if conditions, so important commands still get explicit checks, and complex logic moves to Python.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where does set -e not behave as expected?</strong> In if/while conditions, &amp;&amp; and || lists, negated commands and <code>local var=$(cmd)</code>.</li>
+  <li><strong>How do you debug a script?</strong> set -x, optionally with a PS4 showing line numbers.</li>
+  <li><strong>What does <code>${VAR:?msg}</code> do?</strong> Exits with the message if VAR is unset or empty.</li>
+</ul>
+</article>
+</body>
+</html>

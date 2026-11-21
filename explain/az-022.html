@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-022 · How would you deploy a containerised app to AKS with Azure DevOps across dev, test and prod?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-022" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How would you deploy a containerised app to AKS with Azure DevOps across dev, test and prod?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>CI</strong> builds, tests, scans and pushes an image to <strong>ACR</strong> with an <strong>immutable tag</strong>; a <strong>multi-stage YAML pipeline</strong> promotes <strong>the same image</strong> through <strong>dev, test and prod environments</strong> with <strong>approvals and checks</strong>, deploying via <strong>Helm</strong> or, preferably, <strong>GitOps (Flux or Argo CD)</strong>, with <strong>smoke tests</strong> after each stage.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Build once, deploy many</strong> is the core principle. The CI stage compiles and runs unit tests, builds the Docker image, runs <strong>image scanning</strong> (for example Microsoft Defender for Containers, Trivy) and pushes it to <strong>Azure Container Registry</strong> tagged with the <strong>commit SHA or build ID</strong>, never <code>latest</code>. Optionally the image is <strong>signed</strong> (Notation) and an SBOM is produced. This exact image is promoted to every environment, so what you tested is what reaches production.</p>
+<p><strong>CD stages</strong> are deployment jobs targeting <strong>Azure DevOps environments</strong> (dev, test, prod). Each environment can have <strong>approvals and checks</strong>: automatic for dev, test gated on integration tests, prod gated on manual approval, business hours and branch control (only <code>main</code>). Environments record deployment history per image.</p>
+<p><strong>Deployment mechanics:</strong></p>
+<ul>
+  <li><strong>Push-based:</strong> the pipeline uses <code>helm upgrade --install</code> (or the HelmDeploy/KubernetesManifest tasks) with <strong>per-environment values files</strong>, authenticating to AKS through a <strong>workload identity federation</strong> service connection and Entra-integrated kubeconfig.</li>
+  <li><strong>GitOps (pull-based, my preference):</strong> the pipeline only updates the image tag in a <strong>config repository</strong> (or opens a PR for prod). <strong>Flux</strong> (available as the AKS GitOps extension) or <strong>Argo CD</strong> in the cluster syncs the desired state. This gives an audit trail in Git, drift correction, easy rollback by reverting a commit, and no cluster credentials in the pipeline.</li>
+</ul>
+<p><strong>Configuration</strong> differs per environment (replicas, resource limits, endpoints, feature flags) through values files or Kustomize overlays, while <strong>secrets</strong> come from Key Vault via the CSI driver and workload identity. <strong>Smoke tests</strong> and health checks run after each deployment; Kubernetes rolling updates with readiness probes, or progressive delivery (Argo Rollouts, Flagger), limit the blast radius.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR validation: build and unit tests.</li>
+  <li>Main branch: build image, scan, push to ACR with SHA tag.</li>
+  <li>Deploy to dev automatically; run smoke tests.</li>
+  <li>Deploy to test after integration tests pass.</li>
+  <li>Prod approval, then deploy the same image.</li>
+  <li>Verify health; roll back by redeploying the previous tag or reverting Git.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">stages:
+  - stage: Build
+    jobs:
+      - job: image
+        pool: { vmImage: ubuntu-latest }
+        steps:
+          - task: Docker@2
+            inputs:
+              containerRegistry: sc-acr
+              repository: shop/orders-api
+              command: buildAndPush
+              tags: $(Build.SourceVersion)
+  - stage: Prod
+    dependsOn: Build
+    jobs:
+      - deployment: helm
+        environment: orders-prod
+        pool: { vmImage: ubuntu-latest }
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: HelmDeploy@1
+                  inputs:
+                    connectionType: Azure Resource Manager
+                    azureSubscriptionEndpoint: sc-aks-prod-wif
+                    azureResourceGroup: rg-aks-prod
+                    kubernetesCluster: aks-prod
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: charts/orders-api
+                    releaseName: orders-api
+                    namespace: orders
+                    valueFile: charts/orders-api/values-prod.yaml
+                    arguments: --set image.tag=$(Build.SourceVersion) --atomic --wait</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rebuilding the image per environment.</li>
+  <li>Using <code>latest</code> or mutable tags.</li>
+  <li>Secrets in values files.</li>
+  <li>No approval or branch control for production.</li>
+  <li>Not running post-deployment checks, so failures are found by users.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The CI stage builds and tests the code, builds the Docker image, scans it, and pushes it to Azure Container Registry tagged with the commit SHA. A multi-stage YAML pipeline then deploys the same image to dev, test and prod, each an Azure DevOps environment with checks, and manual approval plus branch control before prod. Deployment uses Helm with per-environment values files, or preferably GitOps: the pipeline updates the image tag in a config repo and Flux, available as an AKS extension, or Argo CD syncs it. The same artifact is promoted and never rebuilt, secrets come from Key Vault via workload identity, and smoke tests run after each deployment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you add automated rollback if health checks fail?</strong> <code>helm --atomic</code>, or progressive delivery with Argo Rollouts or Flagger analysing metrics.</li>
+  <li><strong>Why GitOps over push deployments?</strong> Git audit trail, drift correction and no cluster credentials in CI.</li>
+  <li><strong>How do you handle database migrations?</strong> A separate, backward-compatible migration job before rollout.</li>
+</ul>
+</article>
+</body>
+</html>

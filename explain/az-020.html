@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-020 · How do you expose applications from AKS, and what ingress options exist?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-020" data-topic="Azure Kubernetes (AKS)">
+<h1>How do you expose applications from AKS, and what ingress options exist?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Expose AKS apps with a <strong>Service of type LoadBalancer</strong> (public or <strong>internal</strong> Azure Load Balancer) for layer 4, and for HTTP use an <strong>ingress or Gateway API controller</strong>: the <strong>application routing add-on</strong> (managed NGINX) or <strong>Application Gateway for Containers</strong> with <strong>WAF</strong>; optionally put <strong>Front Door</strong> in front, and manage TLS with <strong>cert-manager or Key Vault</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Service type LoadBalancer:</strong> the Azure cloud provider creates a rule on the cluster's <strong>Azure Load Balancer</strong> (Standard SKU) with a public IP, or an <strong>internal load balancer</strong> with a private IP when you add the annotation <code>service.beta.kubernetes.io/azure-load-balancer-internal: &quot;true&quot;</code>. This is layer 4, one IP per service, suitable for TCP/UDP or simple exposure. <code>ClusterIP</code> services remain internal to the cluster.</p>
+<p><strong>Ingress controllers</strong> provide layer 7 routing (host and path), TLS termination and a single entry point for many services:</p>
+<ul>
+  <li>The <strong>application routing add-on</strong> is a Microsoft-managed <strong>NGINX</strong> ingress controller integrated with Azure DNS and Key Vault certificates. Note that the upstream community ingress-nginx project announced its retirement, so check the add-on's current support status and roadmap, which moves towards Gateway API.</li>
+  <li><strong>Application Gateway for Containers (AGC)</strong> is the successor to <strong>AGIC</strong>. It is an Azure-managed layer 7 load balancer outside the cluster, configured from Kubernetes using the <strong>Gateway API</strong> or Ingress resources, with traffic splitting, header routing and <strong>WAF</strong> integration.</li>
+  <li>Self-managed controllers such as Traefik, Envoy Gateway or Istio's gateway are also options.</li>
+</ul>
+<p>The <strong>Gateway API</strong> (Gateway, HTTPRoute resources) is the modern Kubernetes standard, more expressive than Ingress and role-oriented.</p>
+<p>For <strong>global traffic</strong>, <strong>Azure Front Door</strong> can sit in front of regional ingress, adding WAF, caching and multi-region failover, ideally using Private Link to an internal load balancer.</p>
+<p><strong>TLS:</strong> use <strong>cert-manager</strong> with Let's Encrypt or an internal CA, or certificates stored in <strong>Key Vault</strong> and synced via the add-on or the Secrets Store CSI driver.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deploy the app with a ClusterIP Service.</li>
+  <li>Install or enable an ingress or Gateway API controller.</li>
+  <li>Controller receives a public or internal IP from Azure.</li>
+  <li>Define Ingress or HTTPRoute rules for hosts and paths.</li>
+  <li>Attach TLS certificates from cert-manager or Key Vault.</li>
+  <li>Optionally front with Front Door and WAF; restrict origin access.</li>
+</ol>
+
+<h2>Example</h2>
+<p>Internal-only service and an HTTPRoute via Gateway API:</p>
+<pre><code class="language-yaml">apiVersion: v1
+kind: Service
+metadata:
+  name: internal-api
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: &quot;true&quot;
+spec:
+  type: LoadBalancer
+  selector: { app: internal-api }
+  ports: [{ port: 443, targetPort: 8443 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: shop, namespace: shop }
+spec:
+  parentRefs: [{ name: public-gateway, namespace: infra }]
+  hostnames: [&quot;shop.example.com&quot;]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: /api } }]
+      backendRefs: [{ name: shop-api, port: 80 }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One public LoadBalancer service per microservice, wasting IPs and lacking WAF.</li>
+  <li>Exposing internal APIs publicly instead of using internal load balancers.</li>
+  <li>Manually managed certificates that expire.</li>
+  <li>Not locking origins so traffic can bypass Front Door.</li>
+  <li>Ignoring the lifecycle status of the chosen ingress controller.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Service of type LoadBalancer creates a rule on the Azure Load Balancer, public by default or internal with an annotation for private apps. For HTTP traffic I use an ingress or Gateway API controller: the managed application routing add-on based on NGINX, or Application Gateway for Containers, the successor to AGIC, which adds layer 7 routing and WAF and supports the Gateway API, which I see as the future direction. For global apps, Front Door sits in front with WAF and failover, connected privately to the cluster. TLS certificates come from cert-manager with Let's Encrypt or from Key Vault through the add-on integration.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you restrict an internal API to only the corporate network?</strong> Internal load balancer or private ingress, reachable over ExpressRoute or VPN, plus NSGs.</li>
+  <li><strong>Ingress versus Gateway API?</strong> Gateway API is more expressive and role-oriented; Ingress is simpler and older.</li>
+  <li><strong>How do you do canary releases at the ingress?</strong> Weighted backends in HTTPRoute or a service mesh.</li>
+</ul>
+</article>
+</body>
+</html>

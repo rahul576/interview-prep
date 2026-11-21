@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-253 · When would you use sharding in a large-scale application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-253" data-topic="Databases &amp; SQL">
+<h1>When would you use sharding in a large-scale application?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use sharding as a <strong>last resort</strong>, when a single primary <strong>cannot handle the data size or write throughput</strong> even after <strong>query tuning, indexing, caching, read replicas, vertical scaling, archiving and partitioning</strong>, and when a <strong>natural shard key</strong> such as tenant, customer or region exists that most queries include.</p>
+
+<h2>Detailed explanation</h2>
+<p>Sharding permanently increases complexity: routing, cross-shard reporting, distributed transactions, rebalancing, per-shard migrations and more operational surface. So the first question is whether simpler options are exhausted:</p>
+<ul>
+  <li><strong>Query and index tuning</strong>, removing N+1 queries.</li>
+  <li><strong>Caching</strong> hot reads in Redis or a CDN.</li>
+  <li><strong>Read replicas</strong> for read-heavy traffic.</li>
+  <li><strong>Vertical scaling</strong>: one well-tuned PostgreSQL or MySQL primary can handle tens of terabytes and many thousands of transactions per second.</li>
+  <li><strong>Archiving</strong> cold data and <strong>partitioning</strong> for retention.</li>
+  <li><strong>Functional split</strong>: moving a separate domain (audit logs, events) to its own database is often enough.</li>
+</ul>
+<p>Signals that sharding is warranted:</p>
+<ul>
+  <li><strong>Write throughput</strong> exceeds a single primary even after batching and tuning, for example sustained tens of thousands of writes per second.</li>
+  <li><strong>Data volume</strong> is growing towards limits where backups, restores, index builds and vacuum take too long on one node.</li>
+  <li><strong>Multi-tenant SaaS</strong> with large tenants, where isolating tenants also limits blast radius and enables per-tenant placement.</li>
+  <li><strong>Data residency</strong>: EU customers' data must stay in the EU, India's in India, so sharding by region is a legal requirement.</li>
+</ul>
+<p>The shard key must appear in the large majority of queries and spread load evenly. I would also seriously consider <strong>databases that shard natively</strong>, such as DynamoDB, Cassandra, MongoDB, CockroachDB, YugabyteDB, Spanner, or Citus and Vitess on top of PostgreSQL and MySQL, rather than hand-rolling shard routing in application code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: CPU, I/O, write rate, data growth and projected limits.</li>
+  <li>Apply cheaper optimisations and re-measure.</li>
+  <li>Analyse queries to choose a shard key and check its distribution.</li>
+  <li>Choose technology: native distributed DB vs proxy vs application routing.</li>
+  <li>Migrate incrementally: dual writes or CDC, backfill, verify, cut over shard by shard.</li>
+  <li>Build cross-shard reporting through a data warehouse or lakehouse.</li>
+</ol>
+
+<h2>Example</h2>
+<p>A B2B SaaS platform with 4,000 tenants:</p>
+<pre><code class="language-text">Problem:   single Postgres primary at 85% CPU on writes, 18 TB, restore takes 14 hours
+Tried:     indexes, caching, 3 read replicas, archived old events, partitioned by month
+Decision:  shard by tenant_id using Citus (hash distribution, 128 logical shards)
+           tenant-scoped tables co-located; reference tables (plans, currencies) replicated
+           two largest tenants moved to dedicated nodes
+Reporting: CDC (Debezium) -&gt; warehouse for cross-tenant analytics</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sharding because &quot;we might be big one day&quot;.</li>
+  <li>Picking a key most queries lack, forcing scatter-gather everywhere.</li>
+  <li>Ignoring how cross-shard reports, global uniqueness and schema migrations will work.</li>
+  <li>Building custom routing when a managed distributed database would fit.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Sharding is a last resort because it adds lasting complexity. First I'd optimise queries and indexes, add caching, use read replicas for reads, scale vertically, archive old data and partition large tables. Sharding becomes the right choice when data volume or write throughput really exceeds one primary, like billions of fast-growing rows or tens of thousands of writes per second, and there's a natural shard key that most queries include, such as tenant id in a multi-tenant SaaS, customer id or region, which can also satisfy data residency rules. I'd also prefer databases that shard natively, like DynamoDB, Cassandra, CockroachDB or Citus, over building sharding into the application.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you handle a report across all shards?</strong> Scatter-gather for small queries, otherwise stream data into a warehouse via CDC.</li>
+  <li><strong>How do you migrate to shards without downtime?</strong> CDC or dual writes, backfill, verify, then cut over tenant by tenant.</li>
+  <li><strong>What about a tenant too large for one shard?</strong> Give it a dedicated shard or sub-shard by a secondary key.</li>
+</ul>
+</article>
+</body>
+</html>

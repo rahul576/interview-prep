@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-323 · Compare offset pagination and cursor (keyset) pagination.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-323" data-topic="REST &amp; API Design">
+<h1>Compare offset pagination and cursor (keyset) pagination.</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Offset pagination</strong> (<code>LIMIT/OFFSET</code>, page numbers) is simple and allows <strong>jumping to any page</strong>, but is <strong>slow for deep pages</strong> and <strong>unstable under inserts</strong>; <strong>cursor/keyset pagination</strong> (<code>WHERE (sort_key, id) &gt; last_seen</code>) is <strong>fast at any depth and stable</strong>, but allows <strong>no random page jumps</strong> and needs a <strong>unique, indexed sort key</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Offset pagination.</strong> The client asks for <code>?page=500&amp;size=20</code>, which becomes <code>ORDER BY created_at DESC LIMIT 20 OFFSET 10000</code>. Easy to implement (Spring Data <code>Pageable</code> does it), and UIs can show &quot;page 1 2 3 ... 50&quot;. Problems:</p>
+<ul>
+  <li><strong>Performance</strong>: the database must produce and discard the first 10,000 rows. Deep pages become slower and slower.</li>
+  <li><strong>Consistency</strong>: if a new row is inserted at the top while a user moves from page 1 to page 2, everything shifts by one, so an item appears twice; a deletion causes one to be skipped.</li>
+  <li><strong>Total count</strong> queries (<code>COUNT(*)</code>) for &quot;page X of Y&quot; are expensive on big tables.</li>
+</ul>
+<p><strong>Keyset (cursor) pagination.</strong> Instead of a position, remember the <strong>last row seen</strong>. The next page query is: <code>WHERE (created_at, id) &lt; (:lastCreatedAt, :lastId) ORDER BY created_at DESC, id DESC LIMIT 20</code>. With an index on <code>(created_at, id)</code>, the database <strong>seeks</strong> directly to the position, so page 1 and page 10,000 cost the same. New inserts do not shift results, so there are <strong>no duplicates or gaps</strong>. The API returns an opaque <strong>cursor</strong> (often Base64 of the sort values, optionally signed) and the client passes it back: <code>?after=eyJjIjoi...</code>.</p>
+<p>Trade-offs: you cannot jump to page 37; navigation is next/previous. The sort must be on columns with a <strong>unique tie-breaker</strong> (<code>id</code>), otherwise rows with equal timestamps can be lost. Changing sort order means a different cursor type. Spring Data supports this with <strong><code>ScrollPosition</code>/<code>Window</code></strong> (Spring Data 3.1+).</p>
+<p><strong>When to use which.</strong> Offset for small datasets and admin screens needing page numbers; keyset for <strong>feeds, infinite scroll, public APIs, large tables and data exports</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Offset: compute OFFSET = page × size; DB skips rows.</li>
+  <li>Keyset: client sends cursor = last row's sort values.</li>
+  <li>Query uses a range condition on an index.</li>
+  <li>Response includes next cursor; absent cursor means last page.</li>
+</ol>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Offset</th><th>Keyset/cursor</th></tr></thead>
+<tbody>
+<tr><td>Deep page cost</td><td>Grows with offset</td><td>Constant</td></tr>
+<tr><td>Stable under inserts</td><td>No</td><td>Yes</td></tr>
+<tr><td>Jump to page N</td><td>Yes</td><td>No</td></tr>
+<tr><td>Total count</td><td>Often included</td><td>Usually omitted</td></tr>
+<tr><td>Needs</td><td>Any order</td><td>Unique indexed sort key</td></tr>
+</tbody>
+</table>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- offset
+SELECT * FROM orders ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET 10000;
+
+-- keyset
+SELECT * FROM orders
+WHERE (created_at, id) &lt; ('2026-11-01 10:15:00', 98231)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+-- index: CREATE INDEX ix_orders_created_id ON orders (created_at DESC, id DESC);</code></pre>
+<pre><code class="language-json">{ &quot;items&quot;: [ ... ], &quot;nextCursor&quot;: &quot;eyJjcmVhdGVkQXQiOiIyMDI2LTExLTAxVDEwOjE1OjAwWiIsImlkIjo5ODIzMX0&quot; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keyset on a non-unique column without a tie-breaker.</li>
+  <li>Missing composite index, so keyset is still slow.</li>
+  <li>Exposing raw, tamperable cursors where that matters.</li>
+  <li>Running COUNT(*) on every request of a huge table.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Offset pagination turns a page number into LIMIT and OFFSET. It's simple and lets you jump to any page, but the database still has to walk past all the skipped rows, so deep pages are slow, and inserts between requests cause duplicates or skipped items. Keyset or cursor pagination remembers the last seen sort key and queries WHERE created_at and id are less than the cursor, using a composite index, so it's fast at any depth and stable under inserts, but you can't jump to an arbitrary page. It needs a unique tie-breaker like id. I use cursors for feeds and large public APIs, offsets for small admin lists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you encode a cursor so clients cannot tamper with it?</strong> Base64 the sort values and sign them with an HMAC, or encrypt them.</li>
+  <li><strong>How do you support previous page with keyset?</strong> Reverse the comparison and order, then reverse the results.</li>
+  <li><strong>How does Spring Data support keyset?</strong> <code>ScrollPosition.keyset()</code> with <code>Window&lt;T&gt;</code> results.</li>
+</ul>
+</article>
+</body>
+</html>

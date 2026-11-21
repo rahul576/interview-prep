@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-249 · What is a Kafka rebalance, and when does it happen?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-249" data-topic="Kafka">
+<h1>What is a Kafka rebalance, and when does it happen?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>rebalance</strong> is the group coordinator <strong>reassigning partitions</strong> among consumers in a group; it happens when members <strong>join, leave, crash, exceed <code>max.poll.interval.ms</code></strong>, or when subscribed <strong>partitions change</strong>, and it pauses consumption unless you use <strong>cooperative or the new consumer protocol</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a consumer group each partition is owned by exactly one member. The <strong>group coordinator</strong> (a broker) tracks membership through <strong>heartbeats</strong>. When membership or the set of partitions changes, ownership must be redistributed: that is a rebalance.</p>
+<p><strong>Triggers</strong>:</p>
+<ul>
+  <li>A consumer <strong>joins</strong>: scaling out, a new pod in a rolling deploy.</li>
+  <li>A consumer <strong>leaves</strong> gracefully (calls <code>close</code>) or <strong>crashes</strong> and misses heartbeats for <code>session.timeout.ms</code> (45 s default).</li>
+  <li>A consumer stops calling <code>poll</code> for longer than <strong><code>max.poll.interval.ms</code></strong> (5 min default) because processing is slow; it is considered stuck and kicked out.</li>
+  <li><strong>Partitions are added</strong> to a subscribed topic, or a new topic matches a pattern subscription.</li>
+</ul>
+<p>With the classic <strong>eager</strong> protocol, every member revokes <strong>all</strong> partitions, the group synchronises, and a new assignment is handed out: a stop-the-world pause for the whole group. <strong>Cooperative incremental rebalancing</strong> (<code>CooperativeStickyAssignor</code>) only moves the partitions that need to move, so other consumers keep working. <strong>Static membership</strong> (<code>group.instance.id</code>) lets a restarted pod reclaim its partitions without a rebalance if it returns within the session timeout, ideal for rolling restarts. Kafka 4.0 made the <strong>new consumer group protocol</strong> (KIP-848, <code>group.protocol=consumer</code>) generally available, which moves assignment to the broker and makes rebalances incremental and far less disruptive.</p>
+<p>To avoid duplicates, commit processed offsets in <strong><code>onPartitionsRevoked</code></strong> of a <code>ConsumerRebalanceListener</code> (Spring Kafka does this for you with its container), and clean up per-partition state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A member joins, leaves or times out; the coordinator starts a rebalance.</li>
+  <li>Members revoke partitions (all for eager, only moved ones for cooperative).</li>
+  <li><code>onPartitionsRevoked</code> runs: commit offsets, flush state.</li>
+  <li>A new assignment is computed (by the group leader or, in the new protocol, the broker).</li>
+  <li><code>onPartitionsAssigned</code> runs; consumers resume from committed offsets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties">partition.assignment.strategy=org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+group.instance.id=${HOSTNAME}          # static membership per pod
+session.timeout.ms=45000
+max.poll.interval.ms=300000
+max.poll.records=200
+# Kafka 4.0+ clients and brokers: group.protocol=consumer</code></pre>
+<pre><code class="language-java">consumer.subscribe(List.of(&quot;orders&quot;), new ConsumerRebalanceListener() {
+    public void onPartitionsRevoked(Collection&lt;TopicPartition&gt; parts) {
+        consumer.commitSync(currentOffsets);   // don't lose progress
+    }
+    public void onPartitionsAssigned(Collection&lt;TopicPartition&gt; parts) { }
+});</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Slow processing inside the poll loop, causing repeated rebalances.</li>
+  <li>Not committing on revoke, leading to reprocessing.</li>
+  <li>Ignoring rebalance metrics during deployments.</li>
+  <li>Running more consumers than partitions and expecting more throughput.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A rebalance is when the group coordinator redistributes partitions among a consumer group's members. It happens when a consumer joins, leaves or crashes and stops heartbeating, when it exceeds <code>max.poll.interval.ms</code> because processing is too slow, or when partitions are added. With the old eager protocol everyone stops and gives up all partitions, which pauses the whole group. I use the cooperative sticky assignor or, on Kafka 4, the new consumer protocol so only affected partitions move, static membership to survive rolling restarts, and I commit offsets in <code>onPartitionsRevoked</code> to avoid reprocessing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do deployments cause rebalance storms?</strong> Each pod leaving and joining triggers a rebalance; static membership and cooperative assignment reduce it.</li>
+  <li><strong>session.timeout.ms vs max.poll.interval.ms?</strong> Heartbeat liveness from a background thread versus progress of the poll loop.</li>
+  <li><strong>Can more consumers than partitions help?</strong> No, extra consumers stay idle.</li>
+</ul>
+</article>
+</body>
+</html>

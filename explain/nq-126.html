@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-126 · How does ConcurrentHashMap support concurrent updates?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-126" data-topic="Collections">
+<h1>How does ConcurrentHashMap support concurrent updates?</h1>
+<p class="ex-meta">Collections · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Since Java 8, <strong>ConcurrentHashMap</strong> does <strong>lock-free volatile reads</strong>, inserts into empty bins with <strong>CAS</strong>, locks only the <strong>head node of one bin</strong> for other writes, <strong>resizes cooperatively</strong> with helper threads, offers <strong>atomic compute/merge</strong> methods, forbids <strong>nulls</strong>, and tracks size with <strong>striped counters</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The map is a <code>volatile Node[] table</code> of bins. Each node's <code>val</code> and <code>next</code> are volatile, so a reader always sees a fully published node.</p>
+<p><strong>Reads.</strong> <code>get</code> computes the hash, reads the bin with a volatile array read (<code>tabAt</code>), and walks the chain or tree. No lock is taken, so reads never block, even while another thread writes to the same bin.</p>
+<p><strong>Writes to an empty bin.</strong> <code>putVal</code> tries <code>casTabAt(table, i, null, newNode)</code>. If the CAS succeeds, the insert is done without any lock. If it fails, another thread got there first and the loop retries.</p>
+<p><strong>Writes to an occupied bin.</strong> The writer does <code>synchronized (firstNode)</code> and then appends, replaces or removes within that bin only. Threads writing to <strong>different bins</strong> proceed in parallel; with a good hash and many bins, contention is low. Like HashMap, long bins are converted into <strong>TreeBins</strong> (red-black trees).</p>
+<p><strong>Resizing.</strong> When the table needs to grow, a new table is allocated and bins are transferred in strides. A moved bin is marked with a <strong>ForwardingNode</strong>; readers follow it to the new table, and other writing threads that encounter it <strong>help transfer</strong> remaining bins, so resizing is spread across threads instead of stopping the world.</p>
+<p><strong>Atomic compound operations.</strong> <code>putIfAbsent</code>, <code>computeIfAbsent</code>, <code>computeIfPresent</code>, <code>compute</code>, <code>merge</code> and <code>replace(k, old, new)</code> run atomically per key, removing check-then-act races.</p>
+<p><strong>Size.</strong> Counts are kept in a <code>baseCount</code> plus <code>CounterCell[]</code> (LongAdder style) to avoid a single contended counter, so <code>size()</code> and <code>mappingCount()</code> are <strong>estimates</strong> during concurrent updates. <strong>Null keys and values are forbidden</strong> to keep <code>get</code> unambiguous.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Hash → bin index.</li>
+  <li>Bin empty → CAS insert.</li>
+  <li>Bin is ForwardingNode → help resize, retry.</li>
+  <li>Otherwise synchronized on head node → update chain/tree.</li>
+  <li>Add to striped counter; maybe start a resize.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ConcurrentHashMap&lt;String, LongAdder&gt; views = new ConcurrentHashMap&lt;&gt;();
+views.computeIfAbsent(url, k -&gt; new LongAdder()).increment();
+
+ConcurrentHashMap&lt;String, Integer&gt; stock = new ConcurrentHashMap&lt;&gt;();
+stock.merge(&quot;SKU-1&quot;, -1, Integer::sum);                 // atomic decrement
+stock.computeIfPresent(&quot;SKU-1&quot;, (k, v) -&gt; v &lt;= 0 ? null : v); // remove at zero
+
+long approx = stock.mappingCount();                     // estimate under load</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>get</code> then <code>put</code> instead of <code>merge</code>/<code>compute</code>.</li>
+  <li>Treating <code>size()</code> as exact during concurrent writes.</li>
+  <li>Long-running or re-entrant functions inside <code>compute</code>.</li>
+  <li>Trying to store null to mean &quot;unknown&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since Java 8 ConcurrentHashMap is a table of bins. Reads take no locks and rely on volatile reads, so they never block. A write to an empty bin uses compare-and-swap; a write to a non-empty bin synchronises only on that bin's first node, so threads updating different bins run in parallel. Long chains become trees. Resizing is incremental and other writers help move bins. Compound actions are atomic through putIfAbsent, computeIfAbsent, compute and merge, so I avoid check-then-act races. It forbids nulls, and size uses striped counters, so it's an estimate under concurrency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why no null values?</strong> <code>get</code> returning null must mean absent; otherwise you'd need a non-atomic containsKey.</li>
+  <li><strong>Are iterators fail-fast?</strong> No, weakly consistent.</li>
+  <li><strong>What are the bulk operations?</strong> <code>forEach</code>, <code>search</code>, <code>reduce</code> with a parallelism threshold.</li>
+</ul>
+</article>
+</body>
+</html>

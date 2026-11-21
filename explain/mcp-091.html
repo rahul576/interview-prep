@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-091 · An analytics agent calls list_tables and describe_table before every query, adding seconds of latency. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-091" data-topic="MCP Servers">
+<h1>An analytics agent calls list_tables and describe_table before every query, adding seconds of latency. How do you fix it?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Schemas <strong>rarely change</strong>, so stop rediscovering them: put <strong><code>ttlMs</code> caching hints</strong> on <code>list_tables</code> and <code>describe_table</code>, expose the <strong>schema as a resource</strong> loaded once, put <strong>key table hints in the query tool description</strong>, return <strong>correct columns in errors</strong>, <strong>cache metadata server-side</strong>, and tell the agent to <strong>reuse known schema</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The agent is behaving rationally: it has no reliable signal that the schema it saw two questions ago is still valid, so it re-checks before every query. Each discovery call costs a tool round trip plus a <strong>model round trip</strong>, which together often add one to three seconds per call. Several complementary fixes remove most of that.</p>
+<p><strong>Protocol caching hints.</strong> Newer MCP revisions let servers attach caching hints, such as a <strong><code>ttlMs</code></strong>, to results. Marking <code>list_tables</code> and <code>describe_table</code> results as valid for, say, an hour lets supporting clients reuse them instead of calling again. Where supported, a scope hint can mark them as shareable or private.</p>
+<p><strong>Schema as a resource.</strong> Expose <code>schema://analytics/main</code> as a <strong>resource</strong>. Hosts can load it into context at the start of a session, so the model already knows the tables before the first question.</p>
+<p><strong>Smarter descriptions.</strong> The <code>run_query</code> tool description can name the key tables and their purpose (&quot;orders: one row per order; order_items: line items; customers: …&quot;) and state that schema information does not need refreshing within a session.</p>
+<p><strong>Error-driven discovery.</strong> When a query references an unknown table or column, the error returns the <strong>correct columns</strong> or closest matches: &quot;Column <code>customer_name</code> not found in orders; available: order_id, customer_id, …&quot;. The agent only looks up schema when it actually needs it.</p>
+<p><strong>Server-side caching.</strong> Cache <code>information_schema</code> queries in the server, invalidated on migrations, so even repeated calls take milliseconds.</p>
+<p><strong>Agent instructions.</strong> The system prompt can say: reuse schema already in context; describe a table only if it is unknown or a query fails.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Session starts; host loads the schema resource (or the first <code>list_tables</code> result is cached by <code>ttlMs</code>).</li>
+  <li>User asks a question; model writes SQL directly using known tables.</li>
+  <li>Query runs; on schema error, the server returns corrected column lists.</li>
+  <li>Repeated <code>describe_table</code> calls hit the server cache.</li>
+  <li>Migration event invalidates the server cache and bumps the schema resource.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;content&quot;: [{ &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;tables: orders(order_id, customer_id, created_at, total, status), order_items(...), customers(...)&quot; }],
+  &quot;structuredContent&quot;: { &quot;tables&quot;: [&quot;orders&quot;, &quot;order_items&quot;, &quot;customers&quot;] },
+  &quot;_meta&quot;: { &quot;cache&quot;: { &quot;ttlMs&quot;: 3600000 } }
+}</code></pre>
+<pre><code class="language-text">run_query description:
+&quot;Run a read-only SQL query on the analytics warehouse. Main tables: orders, order_items,
+customers, products. Schema is stable during a session; only call describe_table for
+tables you have not seen.&quot;</code></pre>
+<p>The exact field names for caching hints depend on the protocol revision your SDK implements; check it before relying on them.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Caching so long that a migration leaves the agent writing invalid SQL.</li>
+  <li>Dumping the entire warehouse schema (thousands of tables) into context.</li>
+  <li>Generic errors like &quot;query failed&quot; that force rediscovery.</li>
+  <li>Fixing only the prompt, which works inconsistently.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Schemas rarely change, but the agent doesn't know its view is still valid, so it rediscovers every time. I'd combine fixes. On the protocol side, list_tables and describe_table results carry caching hints with a ttlMs of maybe an hour, so supporting clients skip repeat calls. Exposing the schema as a resource lets the host load it once at session start. The query tool description names the key tables and says schema doesn't need refreshing within a session, and when a query hits an unknown column the error returns the right columns, so the agent only looks up schema when needed. On the server, metadata queries are cached. Finally, agent instructions tell it to reuse known schema.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of aggressive caching?</strong> Stale schema after migrations; invalidate on deploy and keep TTLs moderate.</li>
+  <li><strong>Huge warehouses?</strong> Expose a curated subset or a schema search tool, not everything.</li>
+  <li><strong>Semantic layer?</strong> Even better: expose metrics and dimensions instead of raw tables.</li>
+</ul>
+</article>
+</body>
+</html>

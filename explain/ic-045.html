@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-045 · Which Terraform functions and expressions do you use most?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-045" data-topic="Infrastructure as Code">
+<h1>Which Terraform functions and expressions do you use most?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Most used: <strong>conditional expressions</strong> (<code>cond ? a : b</code>), <strong>for expressions</strong> to reshape collections, <strong>merge</strong>, <strong>lookup</strong>, <strong>try</strong>, <strong>coalesce</strong>, string functions (<strong>format</strong>, <strong>join</strong>, <strong>split</strong>, <strong>templatefile</strong>), and <strong>cidrsubnet</strong> for network planning.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform has no user-defined functions in core (provider-defined functions exist since 1.8), so fluency with built-in functions and expressions keeps configurations concise.</p>
+<p><strong>Conditional expressions</strong>: <code>var.env == &quot;prod&quot; ? 3 : 1</code> sets values per environment; both branches must have compatible types. Combined with <code>count</code>, they enable optional resources.</p>
+<p><strong>for expressions</strong> transform collections: <code>[for s in var.subnets : s.id]</code> builds a list, <code>{ for s in var.services : s.name =&gt; s }</code> builds a map, often to feed <code>for_each</code>, and an <code>if</code> clause filters: <code>{ for k, v in var.users : k =&gt; v if v.admin }</code>. Splat expressions <code>aws_instance.web[*].id</code> are shorthand for simple lists.</p>
+<p><strong>Map and collection helpers</strong>: <code>merge(local.common_tags, var.extra_tags)</code> combines maps, later maps winning; <code>lookup(var.sizes, var.env, &quot;t3.small&quot;)</code> reads a key with a default; <code>try(var.config.logging.bucket, null)</code> returns the first expression that evaluates without error, ideal for optional nested attributes; <code>coalesce(var.name, local.default_name)</code> picks the first non-null, non-empty value; <code>flatten</code>, <code>distinct</code>, <code>keys</code>, <code>values</code>, <code>contains</code>, <code>length</code>, <code>toset</code>, <code>zipmap</code> are everyday tools. <code>can()</code> turns an expression into a boolean for validations.</p>
+<p><strong>Strings</strong>: <code>format(&quot;%s-%s&quot;, var.project, var.env)</code>, <code>join(&quot;,&quot;, var.cidrs)</code>, <code>split(&quot;,&quot;, var.list)</code>, <code>replace</code>, <code>lower</code>, <code>trimspace</code>, and <strong>templatefile(&quot;${path.module}/user_data.sh.tftpl&quot;, { port = 8080 })</strong>, which renders user data, cloud-init or policy documents from template files. For JSON policies, <code>jsonencode</code> or the <code>aws_iam_policy_document</code> data source is safer than templated strings.</p>
+<p><strong>Networking</strong>: <code>cidrsubnet(prefix, newbits, netnum)</code> carves subnets from a VPC range, e.g. <code>cidrsubnet(&quot;10.0.0.0/16&quot;, 4, 0)</code> = <code>10.0.0.0/20</code>; <code>cidrhost</code> gets a host address. This replaces hand-maintained address lists and avoids overlaps.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Expressions are evaluated during plan where values are known.</li>
+  <li>Unknown values propagate as &quot;known after apply&quot;.</li>
+  <li>Functions are pure: same inputs, same output (except things like timestamp()).</li>
+  <li>Test them interactively in <code>terraform console</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">locals {
+  instance_count = var.env == &quot;prod&quot; ? 3 : 1
+  tags           = merge(local.common_tags, var.extra_tags)
+  services_map   = { for s in var.services : s.name =&gt; s if s.enabled }
+  log_bucket     = try(var.config.logging.bucket, null)
+  azs            = [&quot;eu-west-1a&quot;, &quot;eu-west-1b&quot;, &quot;eu-west-1c&quot;]
+  private_subnets = {
+    for i, az in local.azs : az =&gt; cidrsubnet(var.vpc_cidr, 4, i)
+  }
+}
+
+resource &quot;aws_instance&quot; &quot;app&quot; {
+  count         = local.instance_count
+  instance_type = lookup(var.instance_types, var.env, &quot;t3.small&quot;)
+  user_data     = templatefile(&quot;${path.module}/user_data.sh.tftpl&quot;, { port = var.port })
+  tags          = local.tags
+}</code></pre>
+<pre><code class="language-text">&gt; cidrsubnet(&quot;10.0.0.0/16&quot;, 4, 0)   &quot;10.0.0.0/20&quot;
+&gt; cidrsubnet(&quot;10.0.0.0/16&quot;, 4, 1)   &quot;10.0.16.0/20&quot;
+&gt; cidrsubnet(&quot;10.0.0.0/16&quot;, 4, 2)   &quot;10.0.32.0/20&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Overusing <code>try</code> and hiding real errors.</li>
+  <li>Building JSON with string templates instead of <code>jsonencode</code>.</li>
+  <li>Conditional branches with mismatched types.</li>
+  <li>Calculating CIDRs by hand and creating overlaps.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Conditional expressions, like env equals prod ? 3 : 1, for per-environment values. for expressions to transform collections, for example building a map from a list keyed by name to feed for_each, with an if clause to filter. merge for combining default and resource-specific tags, lookup with a default, try for optional nested attributes, and coalesce for the first non-empty value. For strings, format, join, split and templatefile for user data or policy templates. And cidrsubnet to calculate subnets from the VPC CIDR instead of maintaining address lists by hand.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you compute three /20 subnets from a /16 VPC CIDR?</strong> <code>[for i in range(3) : cidrsubnet(var.vpc_cidr, 4, i)]</code>.</li>
+  <li><strong>try vs can?</strong> try returns a fallback value; can returns true/false, mainly for validations.</li>
+  <li><strong>Can you write your own functions?</strong> Not in HCL itself; provider-defined functions are available from 1.8.</li>
+</ul>
+</article>
+</body>
+</html>

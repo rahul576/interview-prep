@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-077 · How do you prevent accidental destructive infrastructure changes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-077" data-topic="Infrastructure as Code">
+<h1>How do you prevent accidental destructive infrastructure changes?</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Layer defences: <strong>highlight destroy/replace in plans</strong> with <strong>extra approval</strong> in production, <strong>policy checks</strong> that block deletes of protected types, <strong><code>prevent_destroy</code></strong> plus <strong>cloud deletion protection and locks</strong>, <strong>separate stricter states</strong> for high-risk resources, and <strong>backups with tested restores</strong> as the last line.</p>
+
+<h2>Detailed explanation</h2>
+<p>Destructive accidents happen in ordinary ways: a refactor without <code>moved</code> blocks, a changed <code>count</code>, a provider upgrade, a reviewer skimming a 900-line plan, or someone running <code>terraform destroy</code> in the wrong directory. No single control catches all of these, so you stack several.</p>
+<p><strong>Visible plans.</strong> The pipeline parses <code>terraform show -json</code> and summarises <code>resource_changes</code> by action: create, update, <strong>delete</strong>, <strong>replace</strong> (delete plus create). Deletes and replaces are shown at the top of the PR comment, and if any exist in production the pipeline requires an additional approval from the owning team or a senior engineer.</p>
+<p><strong>Policy as code.</strong> OPA/Conftest or Sentinel rules on the plan deny deletion or replacement of protected types, such as databases, KMS keys and key vaults, DNS zones, stateful buckets and IAM identity providers, unless an explicit exception (a label on the PR or an allow-list entry) is present.</p>
+<p><strong>In code and in the cloud.</strong> <code>lifecycle { prevent_destroy = true }</code> makes Terraform error on any plan destroying that resource, but only while the block exists in code. Cloud-side protection guards independently: RDS and DynamoDB <strong>deletion protection</strong>, EC2 <strong>termination protection</strong>, S3 <strong>Object Lock</strong> or MFA delete, <strong>Azure resource locks</strong> (<code>CanNotDelete</code>), GCP <code>deletion_protection</code> fields. Removing them is a visible, separate change.</p>
+<p><strong>Isolation.</strong> Rarely changed, high-impact resources (core network, DNS, data stores, KMS) live in separate states with stricter apply roles and approvers, so a busy application stack cannot touch them.</p>
+<p><strong>Recovery.</strong> Backups, point-in-time recovery, bucket versioning and <strong>tested restores</strong> bound the damage if everything else fails.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan saved and converted to JSON.</li>
+  <li>Summary job counts deletes/replaces; posts them prominently.</li>
+  <li>Policy evaluates protected types; denies unless exception.</li>
+  <li>Production apply with deletes requires a second approval.</li>
+  <li>Cloud protections block anything that slips through.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-rego">package terraform.protect
+
+protected := {&quot;aws_db_instance&quot;, &quot;aws_kms_key&quot;, &quot;aws_route53_zone&quot;, &quot;aws_s3_bucket&quot;}
+
+deny contains msg if {
+  rc := input.resource_changes[_]
+  protected[rc.type]
+  &quot;delete&quot; in rc.change.actions
+  msg := sprintf(&quot;%s would be deleted or replaced; requires exception&quot;, [rc.address])
+}</code></pre>
+<pre><code class="language-bash">DELETES=$(jq '[.resource_changes[] | select(.change.actions | index(&quot;delete&quot;))] | length' plan.json)
+[ &quot;$DELETES&quot; -gt 0 ] &amp;&amp; echo &quot;needs-destructive-approval=true&quot; &gt;&gt; &quot;$GITHUB_OUTPUT&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying only on <code>prevent_destroy</code>, which vanishes if the resource block is deleted.</li>
+  <li>Approving plans by reading only the summary line.</li>
+  <li>Database, network and app in one state with one role.</li>
+  <li>Backups that have never been restored.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I layer it. The pipeline highlights destroy and replace actions from the plan JSON and requires an extra approval when there are any in production. Policy as code on the plan blocks deleting or replacing protected types like databases, key vaults, DNS zones and stateful buckets unless there's an explicit exception. In code I use prevent_destroy, and in the cloud deletion protection, termination protection and resource locks, which still work if someone removes the code. High-risk resources live in separate states with stricter permissions. And backups with tested restores limit the damage if something still goes wrong.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you design an approval rule only for destructive changes?</strong> Parse the plan JSON for delete actions and route to a protected environment requiring approval.</li>
+  <li><strong>Does <code>prevent_destroy</code> protect against a deleted resource block?</strong> No; cloud-side protection does.</li>
+  <li><strong>What about <code>terraform destroy</code> by hand?</strong> No human write credentials to production; only pipeline roles.</li>
+</ul>
+</article>
+</body>
+</html>

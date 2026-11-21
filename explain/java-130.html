@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-130 · What does Spring Boot Actuator provide, and how do you secure it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-130" data-topic="Spring Boot">
+<h1>What does Spring Boot Actuator provide, and how do you secure it?</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Actuator</strong> adds production endpoints such as <strong>health</strong> (with <strong>liveness/readiness groups</strong> for Kubernetes), <strong>metrics</strong> and a <strong>Prometheus</strong> endpoint via Micrometer, <strong>info</strong>, <strong>loggers</strong> and more; secure it by <strong>exposing only what is needed</strong>, using a <strong>separate management port</strong>, <strong>Spring Security</strong>, and <strong>never exposing env, heapdump or similar publicly</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Adding <code>spring-boot-starter-actuator</code> provides operational endpoints under <code>/actuator</code>. Important ones:</p>
+<ul>
+  <li><strong>health</strong>: aggregated status from indicators for the database, disk space, Redis, Kafka, mail and custom checks.</li>
+  <li><strong>Health groups</strong>: <code>liveness</code> and <code>readiness</code> are enabled automatically on Kubernetes and map to <code>/actuator/health/liveness</code> and <code>/actuator/health/readiness</code> for probes.</li>
+  <li><strong>metrics</strong> and <strong>prometheus</strong>: Micrometer meters (JVM, HTTP server requests, Hikari pool, custom) exposed for scraping with <code>micrometer-registry-prometheus</code>.</li>
+  <li><strong>info</strong>: build and Git information, <strong>loggers</strong> (change log levels at runtime), <strong>threaddump</strong>, <strong>heapdump</strong>, <strong>env</strong>, <strong>configprops</strong>, <strong>beans</strong>, <strong>mappings</strong>, <strong>conditions</strong>, <strong>startup</strong>, <strong>scheduledtasks</strong>.</li>
+</ul>
+<p>By default only <code>health</code> is exposed over HTTP (Boot 2.5+ hides others). Several endpoints are dangerous: <strong>heapdump</strong> contains every secret in memory, <strong>env</strong> and <strong>configprops</strong> show configuration (Boot 3 masks values by default, controlled with <code>show-values</code>), and <strong>loggers</strong> POST or <strong>shutdown</strong> change behaviour.</p>
+<p>Securing it:</p>
+<ol>
+  <li><strong>Expose minimally</strong>: <code>management.endpoints.web.exposure.include=health,info,prometheus</code>.</li>
+  <li><strong>Separate port</strong>: <code>management.server.port=8081</code>, reachable only inside the cluster, not through ingress.</li>
+  <li><strong>Spring Security</strong>: a dedicated filter chain with <code>EndpointRequest</code> matchers, allowing health probes and requiring an ops role for the rest.</li>
+  <li><strong>Health details</strong>: <code>show-details: when-authorized</code> so anonymous callers see only UP/DOWN.</li>
+  <li>Keep sensitive endpoints disabled in production unless required, and audit their use.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Actuator auto-configures endpoints and health indicators from the classpath.</li>
+  <li>Exposure settings decide which endpoints are reachable over HTTP or JMX.</li>
+  <li>Kubernetes probes call the liveness and readiness groups.</li>
+  <li>Prometheus scrapes the metrics endpoint.</li>
+  <li>Security rules guard everything except what probes and scrapers need.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db,redis</code></pre>
+<pre><code class="language-java">@Bean
+@Order(1)
+SecurityFilterChain actuator(HttpSecurity http) throws Exception {
+    http.securityMatcher(EndpointRequest.toAnyEndpoint())
+        .authorizeHttpRequests(a -&gt; a
+            .requestMatchers(EndpointRequest.to(HealthEndpoint.class, InfoEndpoint.class)).permitAll()
+            .anyRequest().hasRole(&quot;OPS&quot;))
+        .httpBasic(Customizer.withDefaults());
+    return http.build();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>exposure.include: &quot;*&quot;</code> in production behind a public ingress.</li>
+  <li>Including the database in the liveness probe, so a DB outage restarts all pods.</li>
+  <li>Leaving heapdump reachable.</li>
+  <li>Showing full health details to anonymous users.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Actuator adds production endpoints: health with indicators for the database and other dependencies, liveness and readiness groups that map to Kubernetes probes, metrics and a Prometheus endpoint through Micrometer, info, loggers to change log levels at runtime, thread dumps and more. To secure it I expose only what's needed, typically health, info and prometheus, put management on a separate port that isn't routed from the internet, protect anything else with Spring Security and an ops role, and show health details only when authorised. I never expose env or heapdump publicly because they leak secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which health indicators belong in readiness but not liveness?</strong> External dependencies like the DB or broker; liveness should only reflect the app itself.</li>
+  <li><strong>How do you add a custom health check?</strong> Implement <code>HealthIndicator</code> and add it to a group.</li>
+  <li><strong>Can you change log levels at runtime?</strong> Yes, POST to <code>/actuator/loggers/{name}</code>, secured.</li>
+</ul>
+</article>
+</body>
+</html>

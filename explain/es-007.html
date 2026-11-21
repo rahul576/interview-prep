@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-007 · Your Elasticsearch cluster is in red status. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-007" data-topic="Elasticsearch">
+<h1>Your Elasticsearch cluster is in red status. What do you do?</h1>
+<p class="ex-meta">Elasticsearch · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Red</strong> means at least <strong>one primary shard is unassigned</strong> (some data is unavailable). <strong>Yellow</strong> means only <strong>replicas</strong> are unassigned. Find the shard with <code>_cat/shards</code>, ask <strong><code>_cluster/allocation/explain</code></strong> why, fix the cause (<strong>lost node, disk watermark, allocation rules, corruption</strong>), and <strong>restore from a snapshot</strong> if the primary data is gone. Then add alerts.</p>
+
+<h2>Detailed explanation</h2>
+<p>Cluster health is the worst state of any index:</p>
+<ul>
+  <li><strong>Green:</strong> all primaries and replicas are assigned.</li>
+  <li><strong>Yellow:</strong> all primaries are assigned, but some replicas aren't. Data is fully available, but redundancy is reduced.</li>
+  <li><strong>Red:</strong> at least one primary is unassigned. Searches on that index return partial results, and writes to the affected shard fail.</li>
+</ul>
+<p><strong>Diagnose systematically:</strong></p>
+<ol>
+  <li><code>GET _cluster/health?level=indices</code> shows which indices are red.</li>
+  <li><code>GET _cat/shards?v&amp;h=index,shard,prirep,state,unassigned.reason,node</code> lists the unassigned shards and their reasons.</li>
+  <li><code>GET _cluster/allocation/explain</code> (optionally for a specific shard) gives the <strong>exact reason</strong> each node refused allocation.</li>
+  <li>Check <code>_cat/nodes</code> (did a node leave?) and <code>_cat/allocation</code> (disk usage).</li>
+</ol>
+<p><strong>Common causes and fixes:</strong></p>
+<ul>
+  <li><strong>A node left</strong> (crash, OOM, network, restart) holding the only copy, with replicas set to 0 or also lost. Bring the node back. Its on-disk shard data is then reused.</li>
+  <li><strong>Disk watermarks:</strong> at the <strong>low</strong> watermark (85% by default) no new shards are allocated to the node. At <strong>high</strong> (90%) shards are moved away. At <strong>flood stage</strong> (95%) indices get a <code>read_only_allow_delete</code> block (released automatically in recent versions once usage drops). Free space, add nodes, or delete old indices.</li>
+  <li><strong>Allocation filtering or awareness rules</strong>, or <code>cluster.routing.allocation.enable</code> left as <code>none</code> after maintenance. Fix the settings.</li>
+  <li><strong>Too many retries:</strong> after 5 failed allocations, Elasticsearch stops trying. Fix the cause, then <code>POST _cluster/reroute?retry_failed=true</code>.</li>
+  <li><strong>Corrupted shard or lost data.</strong> <strong>Restore</strong> the index from a <strong>snapshot</strong>. As a last resort, <code>allocate_stale_primary</code> (accepting possible data loss) or <code>allocate_empty_primary</code> (losing all data in that shard) via the reroute API. Use these only deliberately.</li>
+</ul>
+<p>Afterwards, run a post-mortem and add prevention: replicas of at least 1, alerts on disk, node count and health, regular snapshots via SLM, and capacity headroom.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find the red indices and the unassigned primaries.</li>
+  <li>Run allocation explain to get the reason.</li>
+  <li>Fix the infrastructure (node, disk, settings).</li>
+  <li>Retry the allocation, and watch recovery with <code>_cat/recovery</code>.</li>
+  <li>If the data is unrecoverable, restore from a snapshot.</li>
+  <li>Add alerts and fix the root cause.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">GET _cluster/health?level=indices
+GET _cat/shards?v&amp;h=index,shard,prirep,state,unassigned.reason&amp;s=state
+GET _cluster/allocation/explain
+{ &quot;index&quot;: &quot;orders-2026.11&quot;, &quot;shard&quot;: 0, &quot;primary&quot;: true }
+GET _cat/allocation?v
+PUT _cluster/settings { &quot;persistent&quot;: { &quot;cluster.routing.allocation.enable&quot;: &quot;all&quot; } }
+POST _cluster/reroute?retry_failed=true
+POST _snapshot/s3_repo/nightly-2026.11.20/_restore { &quot;indices&quot;: &quot;orders-2026.11&quot; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Jumping to <code>allocate_empty_primary</code> and losing data unnecessarily.</li>
+  <li>Treating yellow and red as equally urgent.</li>
+  <li>Running production with zero replicas.</li>
+  <li>Having no snapshots, or never testing restores.</li>
+  <li>Ignoring disk usage until flood stage blocks writes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Red means at least one primary shard is unassigned, so some data is unavailable. Yellow only means replicas are missing. I'd check cluster health to find the red index, use cat shards to see which shards are unassigned and why, and then the allocation explain API for the exact reason. Typical causes are a node that left the cluster holding the only copy, disks above the watermark, allocation settings left disabled after maintenance, or a corrupted shard. I'd bring the node back or free disk space and retry the allocation. If the primary data is really lost, I'd restore that index from a snapshot. Afterwards I'd make sure replicas, snapshots and disk alerts are in place.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Disk watermarks?</strong> Low (85%) stops new allocation, high (90%) moves shards away, flood stage (95%) makes indices read-only.</li>
+  <li><strong>Why is a single-node cluster yellow?</strong> Replicas can't share a node with their primary.</li>
+  <li><strong>Unassigned after a rolling restart?</strong> Allocation was left disabled. Re-enable it with <code>cluster.routing.allocation.enable: all</code>.</li>
+</ul>
+</article>
+</body>
+</html>

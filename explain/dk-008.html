@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-008 · How do you clean up unused containers, images, volumes and networks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-008" data-topic="Docker">
+<h1>How do you clean up unused containers, images, volumes and networks?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Remove specific items with <strong><code>docker rm</code></strong> / <strong><code>docker rmi</code></strong>, clean in bulk with <strong><code>docker container|image|volume|network|builder prune</code></strong> or <strong><code>docker system prune</code></strong> (add <strong><code>-a</code></strong> for all unused images, <strong><code>--volumes</code></strong> for volumes), check usage first with <strong><code>docker system df</code></strong>, and be careful: <strong>pruned volumes mean deleted data</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker hosts and CI agents accumulate junk quickly: exited containers, <strong>dangling images</strong> (untagged layers left behind when a tag moves to a new build), old tagged images, unused networks, orphaned volumes and, often the biggest, <strong>BuildKit build cache</strong>.</p>
+<p><strong>Targeted removal:</strong></p>
+<ul>
+  <li><code>docker rm name</code> removes a stopped container (<code>-f</code> stops and removes a running one; <code>-v</code> also removes its anonymous volumes).</li>
+  <li><code>docker rmi image:tag</code> (or <code>docker image rm</code>) removes an image; it fails if a container still uses it.</li>
+  <li><code>docker volume rm name</code>, <code>docker network rm name</code>.</li>
+</ul>
+<p><strong>Prune commands</strong> remove everything <em>unused</em> of one type:</p>
+<ul>
+  <li><code>docker container prune</code>: all stopped containers.</li>
+  <li><code>docker image prune</code>: dangling images only; <strong><code>-a</code></strong> removes every image not used by at least one container.</li>
+  <li><code>docker volume prune</code>: unused volumes; in recent Docker versions only <strong>anonymous</strong> ones by default, with <strong><code>-a</code></strong> to include unused <strong>named</strong> volumes.</li>
+  <li><code>docker network prune</code>, <code>docker builder prune</code> (build cache).</li>
+  <li><strong><code>docker system prune</code></strong>: stopped containers, unused networks, dangling images and dangling build cache in one go; <code>-a</code> extends to all unused images and cache; <code>--volumes</code> adds volumes.</li>
+</ul>
+<p>Most accept <strong><code>--filter &quot;until=24h&quot;</code></strong> or label filters, and <code>-f</code> to skip the confirmation prompt.</p>
+<p><strong><code>docker system df</code></strong> (and <code>-v</code> for detail) shows how much space images, containers, volumes and build cache use, and how much is reclaimable, so you know what to target.</p>
+<p><strong>Volumes deserve caution</strong>: they hold database files, uploads and state. A volume &quot;unused&quot; because its container is currently stopped will be deleted by prune, permanently. Back up first and prefer explicit <code>docker volume rm</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>docker system df</code> → see where space goes.</li>
+  <li>Remove stopped containers so their images become unused.</li>
+  <li>Prune images (dangling, or all unused with <code>-a</code>) and build cache.</li>
+  <li>Review volumes explicitly before deleting.</li>
+  <li>Automate safe pruning with age filters.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker system df
+docker container prune -f
+docker image prune -a -f --filter &quot;until=168h&quot;     # unused images older than 7 days
+docker builder prune -f --keep-storage 20GB
+docker volume ls -f dangling=true                  # review before deleting
+docker system prune -f                             # safe default: no volumes</code></pre>
+<p>CI agent cron job:</p>
+<pre><code class="language-bash">0 3 * * * docker system prune -af --filter &quot;until=48h&quot; &amp;&amp; docker builder prune -af --filter &quot;until=48h&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running <code>docker system prune -a --volumes -f</code> on a server with stopped database containers.</li>
+  <li>Pruning only images while the build cache holds most of the space.</li>
+  <li>Never cleaning CI agents until builds fail with &quot;no space left on device&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For individual items I use docker rm for containers and docker rmi for images. For bulk cleanup there are prune commands: container prune for stopped containers, image prune for dangling images, or with -a every image not used by a container, plus volume, network and builder prune. docker system prune does containers, networks, dangling images and build cache in one go; -a widens it to all unused images and --volumes includes volumes. I check docker system df first to see where space goes. I'm careful with volumes, because they hold data and pruning is permanent. On CI agents I schedule prune with an age filter.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Automate cleanup on CI agents?</strong> Scheduled prune with <code>until</code> filters, build cache limits, or ephemeral agents.</li>
+  <li><strong>What is a dangling image?</strong> An untagged image, usually left after rebuilding a tag.</li>
+  <li><strong>Why can't I remove an image?</strong> A container, even a stopped one, still references it.</li>
+</ul>
+</article>
+</body>
+</html>

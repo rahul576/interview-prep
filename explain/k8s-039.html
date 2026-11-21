@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-039 · What is Istio ambient mode, and how does it differ from the sidecar model?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-039" data-topic="Kubernetes">
+<h1>What is Istio ambient mode, and how does it differ from the sidecar model?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Ambient mode</strong> is Istio's <strong>sidecar-less</strong> data plane: a per-node <strong>ztunnel</strong> provides L4 mTLS, identity and authorization for every pod, and optional <strong>waypoint proxies</strong> (Envoy) are added only where <strong>L7</strong> features are needed.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the classic <strong>sidecar model</strong>, an Envoy proxy is injected into every pod. All traffic passes through it, giving mTLS, retries, timeouts, traffic splitting, header-based authorization and rich telemetry. The costs are real: every pod pays CPU and memory for its proxy, every hop crosses two proxies, upgrading Istio means <strong>restarting every workload</strong>, and sidecars complicate Jobs (the proxy keeps the pod alive) and startup ordering.</p>
+<p><strong>Ambient mode</strong>, generally available since Istio 1.24, splits the mesh into two layers. The <strong>secure overlay</strong> is provided by <strong>ztunnel</strong>, a lightweight Rust proxy running as a DaemonSet on each node. Traffic from pods in an ambient-enabled namespace is redirected into ztunnel, which wraps it in <strong>mTLS</strong> using the workload's SPIFFE identity (tunnelled over HBONE, HTTP CONNECT on port 15008) and enforces L4 authorization policies. Enrolling a namespace is just a label, and pods do <strong>not</strong> need to restart.</p>
+<p>For <strong>L7</strong> features (HTTP routing, retries, fault injection, JWT checks, path-based authorization) you deploy a <strong>waypoint proxy</strong>, an Envoy deployment per namespace or per service, defined with the Gateway API. Traffic for services that use a waypoint is routed through it. So you pay the Envoy cost only for services that need L7, and scale waypoints independently of the application.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install Istio with the <code>ambient</code> profile (istiod, istio-cni, ztunnel).</li>
+  <li>Label a namespace <code>istio.io/dataplane-mode=ambient</code>; existing pods join with no restart.</li>
+  <li>istio-cni redirects pod traffic to the node's ztunnel.</li>
+  <li>ztunnels establish mTLS tunnels between nodes and enforce L4 <code>AuthorizationPolicy</code>.</li>
+  <li>Where L7 is needed, create a waypoint and label the namespace or service to use it.</li>
+  <li>Waypoints apply HTTP routes, retries and L7 policy before forwarding.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">istioctl install --set profile=ambient
+kubectl label namespace shop istio.io/dataplane-mode=ambient
+istioctl waypoint apply -n shop --enroll-namespace</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Sidecar</th><th>Ambient</th></tr></thead>
+<tbody>
+<tr><td>Proxy location</td><td>One Envoy per pod</td><td>ztunnel per node, waypoint where needed</td></tr>
+<tr><td>Joining the mesh</td><td>Pod restart</td><td>Namespace label, no restart</td></tr>
+<tr><td>L7 features</td><td>Always available</td><td>Only via waypoint</td></tr>
+<tr><td>Overhead</td><td>Highest</td><td>Much lower for L4-only</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming ztunnel does HTTP routing; it is L4 only.</li>
+  <li>Forgetting a waypoint and wondering why L7 policies are not enforced.</li>
+  <li>Thinking ambient means no Envoy at all.</li>
+  <li>Mixing sidecar and ambient pods without checking interoperability for your Istio version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In the sidecar model every pod gets an Envoy proxy, which gives full L7 features but costs resources per pod and needs pod restarts to inject or upgrade. Ambient removes sidecars: a ztunnel on each node transparently provides mTLS identity, encryption and L4 authorization for all pods in labelled namespaces, with no restarts. When a service needs HTTP routing, retries or L7 authorization, I add a waypoint proxy just for that namespace or service. So I get zero-trust mTLS everywhere cheaply and pay for L7 only where it's needed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which workloads stay on sidecars?</strong> Ones needing per-pod L7 behaviour or features not yet supported in ambient, or VMs and multi-cluster setups depending on version.</li>
+  <li><strong>Is ztunnel a single point of failure?</strong> It is per node, so its failure affects only that node's pods; it is run and upgraded as a DaemonSet.</li>
+  <li><strong>How is identity provided?</strong> SPIFFE identities from service accounts, certificates issued by istiod.</li>
+</ul>
+</article>
+</body>
+</html>

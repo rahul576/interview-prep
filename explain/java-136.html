@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-136 · How do you make an API safe against duplicate requests, for example in payments?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-136" data-topic="REST &amp; API Design">
+<h1>How do you make an API safe against duplicate requests, for example in payments?</h1>
+<p class="ex-meta">REST &amp; API Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Require clients to send an <strong>Idempotency-Key</strong> per logical operation; the server <strong>atomically records the key</strong> (unique constraint or Redis <code>SET NX</code>) <strong>before processing</strong>, <strong>stores the response</strong>, returns <strong>that same response</strong> for repeats, handles <strong>concurrent in-flight duplicates</strong>, <strong>scopes keys per client</strong> and <strong>expires</strong> them after a TTL.</p>
+
+<h2>Detailed explanation</h2>
+<p>Duplicate requests are normal: a mobile app times out and retries, a user double-clicks Pay, a gateway retries on 502. For a payment, processing twice means charging twice. Since POST is not idempotent, we make it idempotent at the application level.</p>
+<p><strong>Client side.</strong> The client generates a unique key (UUID) for each logical operation, such as &quot;pay order 123&quot;, and reuses the <strong>same key for every retry</strong>. It sends it in a header, commonly <code>Idempotency-Key</code> (an IETF draft standardises this header; Stripe popularised it).</p>
+<p><strong>Server side.</strong></p>
+<ol>
+  <li><strong>Claim the key atomically</strong> before doing work: insert a row <code>(client_id, key, request_hash, status=IN_PROGRESS)</code> with a <strong>unique constraint</strong>, or <code>SET key value NX EX 86400</code> in Redis. Only one request can win.</li>
+  <li>If the insert succeeds, process the payment, then store the <strong>status code and response body</strong> with the key and mark it COMPLETED.</li>
+  <li>If the key already exists and is <strong>COMPLETED</strong>, return the stored response without processing.</li>
+  <li>If it is <strong>IN_PROGRESS</strong> (a concurrent duplicate), return <strong>409 Conflict</strong> (or 425/429 with Retry-After), or wait briefly and then return the result.</li>
+  <li>If the same key arrives with a <strong>different request body</strong> (hash mismatch), reject with <strong>422</strong> or 409: it is a client bug.</li>
+</ol>
+<p><strong>Scope and expiry.</strong> Keys are unique per client or merchant, not globally, and expire after e.g. <strong>24 hours</strong>. For crash safety, an IN_PROGRESS record older than a timeout can be retried or reconciled.</p>
+<p><strong>Downstream.</strong> Pass an idempotency key to the payment provider too, so a retry after a timeout towards the provider does not charge twice. Inside the system, a <strong>unique constraint</strong> on business identifiers (one payment per order) is a second line of defence, and consumers of events dedupe by event id.</p>
+<p>For ten instances, the key store must be <strong>shared</strong>: the database (simplest and transactional with the payment) or Redis.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request with key arrives.</li>
+  <li>Atomic insert/claim; losers read existing record.</li>
+  <li>Winner processes and stores the response.</li>
+  <li>Repeats get the stored response; in-flight repeats get 409.</li>
+  <li>Keys expire after TTL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE idempotency_keys (
+  client_id    VARCHAR(64),
+  idem_key     VARCHAR(64),
+  request_hash CHAR(64) NOT NULL,
+  status       VARCHAR(16) NOT NULL,
+  response     JSONB,
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (client_id, idem_key)
+);</code></pre>
+<pre><code class="language-java">@PostMapping(&quot;/payments&quot;)
+ResponseEntity&lt;?&gt; pay(@RequestHeader(&quot;Idempotency-Key&quot;) String key, @RequestBody PayRequest req) {
+    String hash = sha256(req);
+    Optional&lt;IdemRecord&gt; existing = store.tryClaim(clientId(), key, hash); // INSERT ... ON CONFLICT DO NOTHING
+    if (existing.isPresent()) {
+        IdemRecord r = existing.get();
+        if (!r.hash().equals(hash)) return ResponseEntity.unprocessableEntity().build();
+        if (r.inProgress()) return ResponseEntity.status(409).build();
+        return r.toResponse();
+    }
+    PaymentResult result = payments.charge(req, key);      // provider idempotency key too
+    store.complete(clientId(), key, 201, result);
+    return ResponseEntity.status(201).body(result);
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Check-then-insert without atomicity (race between instances).</li>
+  <li>Storing keys in local memory with multiple instances.</li>
+  <li>Not storing the response, so repeats behave differently.</li>
+  <li>Ignoring a different body reusing the same key.</li>
+  <li>No expiry, so the table grows forever.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Clients send an idempotency key header, unique per logical operation and reused on retries. The server claims the key atomically before processing, with a unique constraint in the database or SET NX in Redis, so with ten instances only one request wins. After processing it stores the status and response with the key, and any repeat gets exactly that stored response instead of a second charge. If a duplicate arrives while the first is still running, I return 409 or make it wait. Keys are scoped per client, tied to a hash of the request body, and expire after something like 24 hours. I also pass an idempotency key to the payment provider and keep a unique constraint per order.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where would you store idempotency keys for a service with ten instances?</strong> In a shared store: the database, ideally in the same transaction as the payment, or Redis.</li>
+  <li><strong>What if the server crashes mid-processing?</strong> The IN_PROGRESS record times out and is reconciled with the provider before retrying.</li>
+  <li><strong>Who generates the key?</strong> The client, so retries carry the same key.</li>
+</ul>
+</article>
+</body>
+</html>

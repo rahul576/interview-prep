@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-012 · What are Pod Security Standards, and how does Pod Security Admission enforce them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-012" data-topic="Kubernetes">
+<h1>What are Pod Security Standards, and how does Pod Security Admission enforce them?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Pod Security Standards</strong> define three profiles, <strong>privileged</strong>, <strong>baseline</strong> and <strong>restricted</strong>; the built-in <strong>Pod Security Admission</strong> controller, which <strong>replaced PodSecurityPolicy</strong> (removed in 1.25), enforces them through <strong>namespace labels</strong> in three modes: <strong>enforce</strong>, <strong>audit</strong> and <strong>warn</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pod specs can request dangerous powers: privileged mode, host namespaces, hostPath mounts, extra Linux capabilities, running as root. PodSecurityPolicy tried to control this but was confusing (policies chosen via RBAC, mutating defaults) and was removed in 1.25. Its replacement is deliberately simple: three fixed profiles, chosen per namespace.</p>
+<ul>
+  <li><strong>Privileged:</strong> no restrictions; for system components such as CNI agents, CSI drivers and node exporters.</li>
+  <li><strong>Baseline:</strong> blocks known privilege escalations while staying compatible with most apps: no privileged containers, no <code>hostNetwork</code>, <code>hostPID</code>, <code>hostIPC</code>, no <code>hostPath</code> volumes, no host ports, only a default set of capabilities, no unsafe sysctls.</li>
+  <li><strong>Restricted:</strong> baseline plus hardening: <code>runAsNonRoot: true</code>, <code>allowPrivilegeEscalation: false</code>, <code>capabilities.drop: [ALL]</code> (only <code>NET_BIND_SERVICE</code> may be added), a <code>seccompProfile</code> of <code>RuntimeDefault</code> or <code>Localhost</code>, and limited volume types.</li>
+</ul>
+<p><strong>Pod Security Admission (PSA)</strong> reads labels on the namespace:</p>
+<ul>
+  <li><code>pod-security.kubernetes.io/enforce=&lt;level&gt;</code> rejects violating pods.</li>
+  <li><code>.../audit=&lt;level&gt;</code> records violations in the API audit log.</li>
+  <li><code>.../warn=&lt;level&gt;</code> returns warnings to the client (kubectl shows them).</li>
+</ul>
+<p>Each can be pinned with <code>...-version</code> labels. Checks apply to pods and also warn on workload templates such as Deployments, so you see problems at apply time rather than when pods fail to be created.</p>
+<p>PSA cannot express custom rules (allowed registries, required labels, resource limits) and cannot mutate. For that you add <strong>ValidatingAdmissionPolicy</strong>, <strong>Kyverno</strong> or <strong>OPA Gatekeeper</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Label all namespaces <code>warn=restricted</code> and <code>audit=restricted</code>.</li>
+  <li>Collect warnings and audit events; fix workloads' securityContext.</li>
+  <li>Set <code>enforce=baseline</code> everywhere, then <code>enforce=restricted</code> where ready.</li>
+  <li>Keep <code>privileged</code> only for system namespaces, documented.</li>
+  <li>Cluster-wide defaults and exemptions via the AdmissionConfiguration file.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl label ns shop pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/warn=restricted --overwrite
+kubectl label --dry-run=server --overwrite ns --all pod-security.kubernetes.io/enforce=baseline</code></pre>
+<pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities: { drop: [ALL] }
+  seccompProfile: { type: RuntimeDefault }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Switching straight to enforce and breaking deployments.</li>
+  <li>Labelling <code>kube-system</code> restricted and breaking CNI or CSI pods.</li>
+  <li>Expecting PSA to mutate pods into compliance.</li>
+  <li>Leaving namespaces without any labels (cluster default often privileged).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pod Security Standards define three profiles: privileged with no restrictions, baseline that blocks known escalations like privileged containers, hostNetwork and hostPath, and restricted that also requires non-root, no privilege escalation, dropping all capabilities and a seccomp profile. Pod Security Admission is the built-in controller that replaced PodSecurityPolicy, configured with namespace labels in three modes: enforce rejects, audit logs and warn shows warnings. I roll out with warn and audit first, fix workloads, then enforce, keeping privileged only for system namespaces.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Rules PSA can't express?</strong> Use ValidatingAdmissionPolicy, Kyverno or Gatekeeper.</li>
+  <li><strong>How do you find violations before enforcing?</strong> Server-side dry-run labelling shows warnings for existing pods.</li>
+  <li><strong>Why did PSP get removed?</strong> Confusing authorisation model, mutation surprises and hard-to-predict policy selection.</li>
+</ul>
+</article>
+</body>
+</html>

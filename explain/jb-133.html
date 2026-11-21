@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-133 · How would you troubleshoot frequent Full GC events?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-133" data-topic="JVM &amp; Performance">
+<h1>How would you troubleshoot frequent Full GC events?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Start with the <strong>GC logs</strong>: how often full GCs happen, how long they pause and, above all, <strong>old-generation occupancy after each GC</strong>; a <strong>rising baseline means a leak</strong> (analyse a <strong>heap dump</strong> in <strong>MAT</strong>), a stable baseline that refills fast means an <strong>undersized heap or premature promotion</strong>; also check <strong>humongous allocations, <code>System.gc()</code> calls and Metaspace</strong>, then fix code before tuning.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Read the evidence.</strong> Unified GC logs record the cause of each pause (<code>G1 Compaction Pause</code>, <code>System.gc()</code>, <code>Metadata GC Threshold</code>, <code>G1 Humongous Allocation</code>, &quot;To-space exhausted&quot;). Tools like GCeasy or JDK Mission Control summarise frequency, pause distribution, allocation and promotion rates. The single most useful number is <strong>heap used after full GC</strong>, the live set.</p>
+<p><strong>Pattern 1: baseline keeps climbing.</strong> Each full GC frees less, until the service dies. That is a <strong>memory leak</strong>. Take a heap dump (<code>jcmd GC.heap_dump</code>) at high usage, open it in <strong>Eclipse MAT</strong>, look at the <strong>dominator tree</strong> by <strong>retained size</strong> and the leak suspects report, and follow <strong>paths to GC roots</strong>. Typical owners: unbounded caches or static maps, <code>ThreadLocal</code> values in pooled threads, listener lists, growing queues, session stores.</p>
+<p><strong>Pattern 2: baseline is stable but the heap refills quickly.</strong> The live set is simply large relative to the heap, or allocation and promotion rates are so high that concurrent collection cannot keep up. Options: increase the heap (with container headroom), reduce allocation, or check <strong>premature promotion</strong> where medium-lived objects overflow survivor spaces into old regions.</p>
+<p><strong>Pattern 3: specific triggers.</strong></p>
+<ul>
+  <li><strong>Humongous allocations</strong> in G1: large arrays (big byte buffers, huge JSON strings, large collections) of half a region or more fill old regions directly and can cause evacuation failures. Fix by chunking data or raising <code>G1HeapRegionSize</code>.</li>
+  <li><strong>Explicit <code>System.gc()</code></strong>: cause shows <code>System.gc()</code>; find the caller, or use <code>-XX:+ExplicitGCInvokesConcurrent</code>.</li>
+  <li><strong>Metaspace</strong>: cause <code>Metadata GC Threshold</code>; check class loading and loader leaks.</li>
+  <li><strong>Heap dumps</strong> or <code>jmap -histo:live</code> run by monitoring tools also force full GCs.</li>
+</ul>
+<p><strong>Fix and verify.</strong> Bound caches (Caffeine with size and expiry), remove leaks, stream large data instead of materialising it, then tune: heap size, <code>InitiatingHeapOccupancyPercent</code> to start marking earlier, or switch to ZGC if pauses remain the problem. Confirm with logs that full GCs disappear.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Collect GC logs and plot old-gen after GC over time.</li>
+  <li>Classify: rising baseline, fast refill, or specific cause.</li>
+  <li>Leak: heap dump and MAT analysis.</li>
+  <li>Pressure: heap sizing, allocation reduction, promotion tuning.</li>
+  <li>Specific triggers: humongous, explicit GC, Metaspace.</li>
+  <li>Deploy the fix; verify full GCs stop.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">[5402s] GC(812) Pause Young (Normal) (G1 Evacuation Pause) (To-space exhausted) 7900M-&gt;7600M(8192M) 310ms
+[5403s] GC(813) Pause Full (G1 Compaction Pause) 8100M-&gt;6900M(8192M) 4200ms
+[7210s] GC(950) Pause Full (G1 Compaction Pause) 8150M-&gt;7350M(8192M) 4500ms</code></pre>
+<p>Live set after full GC rose from 6.9 GB to 7.35 GB: a leak.</p>
+<pre><code class="language-bash">jcmd &lt;pid&gt; GC.class_histogram | head -10
+jcmd &lt;pid&gt; GC.heap_dump /dumps/svc.hprof
+grep -c &quot;Humongous&quot; gc.log</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Increasing heap size without knowing whether there is a leak.</li>
+  <li>Looking only at pause times, not occupancy after GC.</li>
+  <li>Missing monitoring agents that trigger heap histograms or dumps.</li>
+  <li>Tuning many flags at once.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I read the GC logs, or feed them to GCeasy, to see how often full GCs happen, how long they pause and, most importantly, how much old generation remains after each one. If occupancy after GC keeps rising, it's a leak: I take a heap dump and use Eclipse MAT's dominator tree and paths to GC roots, often finding an unbounded cache, a static map or a ThreadLocal. If occupancy drops but refills quickly, the heap is undersized for the allocation rate or objects are promoted too early. In G1 I also check humongous allocations, explicit System.gc calls and Metaspace. Then I fix the code, bound caches, and only then tune heap size or the collector.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a humongous allocation in G1, and why does it matter?</strong> An object at least half a region in size, allocated straight into old regions; frequent ones waste space and trigger marking or full GCs.</li>
+  <li><strong>What does &quot;to-space exhausted&quot; mean?</strong> G1 had no free regions to copy survivors into, leading to evacuation failure.</li>
+  <li><strong>When would you switch to ZGC?</strong> When the live set is healthy but pause times still violate latency goals.</li>
+</ul>
+</article>
+</body>
+</html>

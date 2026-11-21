@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-069 · Apply fails with Provider produced inconsistent final plan or inconsistent result after apply. What does it mean, and what do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-069" data-topic="Terraform">
+<h1>Apply fails with Provider produced inconsistent final plan or inconsistent result after apply. What does it mean, and what do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Both errors mean the <strong>provider broke Terraform's contract</strong>: a value at apply differed from what the <strong>plan promised</strong>, or the result after apply did not match the configuration; it is almost always a <strong>provider bug</strong>, often due to <strong>unknown values</strong> or <strong>API normalisation</strong>, so <strong>re-run</strong>, check <strong>known issues and upgrade</strong>, work around it, and <strong>report it</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform's core relies on a promise: during plan, the provider says what each attribute will become (a concrete value or &quot;unknown&quot;). During apply, it re-plans with now-known values and then creates or updates the object. Terraform checks two things.</p>
+<p><strong>&quot;Provider produced inconsistent final plan&quot;</strong>: when re-planning at apply time, a value differs from the original plan. Typically an attribute that was known in the plan changed because some upstream value that was unknown is now known, and the provider did not mark it unknown correctly.</p>
+<p><strong>&quot;Provider produced inconsistent result after apply&quot;</strong>: after the API call, the value the provider returns differs from the planned value. Common causes: the API <strong>normalises</strong> input (lower-cases a name, reorders a list, adds a trailing dot to DNS names, expands a short JSON policy), or applies a <strong>default</strong> the provider schema did not declare as computed.</p>
+<p>In both cases Terraform <strong>stops</strong> and refuses to record misleading state, because silently accepting the value would break the guarantee that applies do what plans show. The resource may actually exist; often state still records it, and the error message says the issue should be reported to the provider developers.</p>
+<p>Practical response: <strong>re-run plan and apply</strong>, which often succeeds because the values are now known and stored. Check the provider's <strong>changelog and GitHub issues</strong> for the resource; <strong>upgrade</strong> if a fix exists. Otherwise <strong>work around</strong>: set the value explicitly in the normalised form the API returns, avoid passing unknown values into that argument, or split the apply. Then <strong>report</strong> with a minimal reproduction and <code>TF_LOG=DEBUG</code> logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plan records predicted values; apply re-plans with known values.</li>
+  <li>Terraform compares the final plan with the original, then the result with the plan.</li>
+  <li>Mismatch: Terraform raises the error and stops.</li>
+  <li>Re-run; check state and the real resource.</li>
+  <li>Search issues, upgrade or apply a workaround.</li>
+  <li>Report the bug with a reproduction.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Error: Provider produced inconsistent result after apply
+
+When applying changes to aws_iam_policy.app, provider &quot;registry.terraform.io/hashicorp/aws&quot;
+produced an unexpected new value: .policy: was &quot;{...}&quot;, but now &quot;{...}&quot;.
+
+This is a bug in the provider, which should be reported in the provider's own issue tracker.</code></pre>
+<pre><code class="language-hcl"># Workaround: give the API the normalised form it returns
+policy = jsonencode(local.policy_document)   # instead of a hand-written JSON string</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Editing state to &quot;fix&quot; the value.</li>
+  <li>Assuming your own code is wrong and rewriting large parts.</li>
+  <li>Not checking whether the resource was actually created before retrying.</li>
+  <li>Ignoring the error because the second apply worked, so it returns in every new environment.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;These errors mean the provider broke Terraform's contract: at apply time a value differed from what the plan promised, or after apply the provider returned something different from the configuration. Terraform stops rather than record incorrect state. They're almost always provider bugs, often from values unknown during plan, or the API normalising values like casing or list order. I re-run plan and apply, which often works, check the changelog and issues and upgrade if fixed, otherwise work around it by setting the value explicitly, and report it with a minimal reproduction.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why refuse to save state?</strong> Saving would make state disagree with the reviewed plan, breaking trust in plans.</li>
+  <li><strong>How do you collect evidence?</strong> <code>TF_LOG=DEBUG</code> with sensitive data removed, plus versions and a minimal config.</li>
+  <li><strong>Are these ever user errors?</strong> Rarely; sometimes configuration feeds values the API rewrites.</li>
+</ul>
+</article>
+</body>
+</html>

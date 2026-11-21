@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-040 · After terraform apply creates an IAM role, the next resource that uses it fails with an access denied or principal not found error. Why, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-040" data-topic="Terraform">
+<h1>After terraform apply creates an IAM role, the next resource that uses it fails with an access denied or principal not found error. Why, and how do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>AWS IAM</strong> and <strong>Microsoft Entra ID</strong> are <strong>eventually consistent</strong>, so a newly created role or service principal may not be visible to other services for seconds or minutes; rely on <strong>provider retries</strong>, re-run apply, add a <strong><code>time_sleep</code></strong> for persistent cases, and <strong>create identities in an earlier stage</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The create call for an IAM role or an Entra service principal returns success as soon as the identity service accepts it. Replication to other regions and to consuming services (Lambda, EKS, Azure Resource Manager role assignments, Key Vault) takes time. If Terraform immediately creates a Lambda function that assumes the role, or an <code>azurerm_role_assignment</code> for a just-created managed identity, the consumer may answer <strong>&quot;The role defined for the function cannot be assumed&quot;</strong> or <strong>&quot;PrincipalNotFound&quot;</strong>. The identity is fine; it just has not propagated.</p>
+<p>Providers know this. The AWS and AzureRM providers retry many of these specific errors for a period, which is why the problem is intermittent. A simple re-run of apply usually succeeds because the identity now exists everywhere. That is acceptable occasionally, but flaky pipelines erode trust, so for recurring cases you add a deliberate wait.</p>
+<p>The <strong><code>time_sleep</code></strong> resource from the <code>hashicorp/time</code> provider sits between the identity and its consumer with a <code>create_duration</code>, for example 30 seconds. Because it only waits on create (or when its triggers change), it does not slow later runs. For Azure role assignments, setting <strong><code>principal_type = &quot;ServicePrincipal&quot;</code></strong> or <strong><code>skip_service_principal_aad_check = true</code></strong> avoids the lookup in Entra that fails for brand-new principals. The cleanest structural fix is to create long-lived identities in an <strong>earlier stage or state</strong>, so by the time workloads use them they have fully propagated.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform creates the identity; the API returns success.</li>
+  <li>Terraform creates the consumer immediately because the dependency is satisfied.</li>
+  <li>The consumer's service has not seen the identity yet and returns an error.</li>
+  <li>The provider retries some errors; otherwise apply fails.</li>
+  <li>A <code>time_sleep</code> or stage split gives propagation time before the consumer is created.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_user_assigned_identity&quot; &quot;app&quot; {
+  name                = &quot;id-orders-api&quot;
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+}
+
+resource &quot;time_sleep&quot; &quot;wait_for_identity&quot; {
+  depends_on      = [azurerm_user_assigned_identity.app]
+  create_duration = &quot;30s&quot;
+}
+
+resource &quot;azurerm_role_assignment&quot; &quot;kv_reader&quot; {
+  depends_on           = [time_sleep.wait_for_identity]
+  scope                = azurerm_key_vault.kv.id
+  role_definition_name = &quot;Key Vault Secrets User&quot;
+  principal_id         = azurerm_user_assigned_identity.app.principal_id
+  principal_type       = &quot;ServicePrincipal&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding sleeps everywhere instead of only where propagation actually bites.</li>
+  <li>Treating the error as a permissions bug and granting broader access.</li>
+  <li>Long sleeps that slow every create without solving the root cause.</li>
+  <li>Ignoring that role assignment propagation itself can take minutes before access works.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;This is eventual consistency. IAM or Entra ID accepted the role, but it has not propagated to the service using it, so I get access denied or principal not found. Providers retry many of these errors and a re-run usually works. If it keeps happening, I add a time_sleep resource between the identity and its consumer, triggered on create, and on Azure I set principal_type on role assignments so the provider skips the directory lookup. Structurally, I prefer creating identities in an earlier stage so they are ready before workloads use them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a fixed sleep not perfect?</strong> Propagation time varies; it can still be too short, or waste time.</li>
+  <li><strong>Does the sleep run on every apply?</strong> No, only on create or when its <code>triggers</code> change.</li>
+  <li><strong>What else is eventually consistent?</strong> DNS, RBAC assignments, S3 bucket policies and some quota changes.</li>
+</ul>
+</article>
+</body>
+</html>

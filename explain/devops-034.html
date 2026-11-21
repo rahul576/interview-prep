@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-034 · Explain the components of an AWS VPC and the difference between security groups and NACLs.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-034" data-topic="Cloud (AWS)">
+<h1>Explain the components of an AWS VPC and the difference between security groups and NACLs.</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>VPC</strong> is your isolated network in a region, split into <strong>public and private subnets per AZ</strong>, wired together by <strong>route tables</strong>, an <strong>internet gateway</strong> and <strong>NAT gateways</strong>; <strong>security groups</strong> are <strong>stateful, allow-only</strong> firewalls on ENIs, while <strong>NACLs</strong> are <strong>stateless, ordered allow/deny</strong> rules on subnets.</p>
+
+<h2>Detailed explanation</h2>
+<p>A VPC gets one or more <strong>CIDR blocks</strong> (for example <code>10.20.0.0/16</code>) and lives in one region. You carve it into <strong>subnets</strong>, and each subnet sits in exactly one <strong>availability zone</strong>, so a resilient layout has a public and a private subnet in each of two or three AZs.</p>
+<p>What makes a subnet &quot;public&quot; is not a checkbox but its <strong>route table</strong>: a route <code>0.0.0.0/0 → igw-…</code> to an <strong>internet gateway</strong>. A <strong>private subnet</strong> has no such route; for outbound access (patches, external APIs) it routes <code>0.0.0.0/0</code> to a <strong>NAT gateway</strong> that lives in a public subnet, ideally one per AZ so an AZ failure does not cut egress everywhere.</p>
+<p><strong>Security groups</strong> attach to network interfaces (EC2, RDS, Lambda in a VPC, load balancers). They contain only <strong>allow</strong> rules, are <strong>stateful</strong> (return traffic is allowed automatically), and can reference other security groups, e.g. &quot;allow 5432 from the app SG&quot;, which is cleaner than IP ranges. <strong>Network ACLs</strong> apply to a whole subnet, are <strong>stateless</strong>, and rules are evaluated in <strong>number order, first match wins</strong>, with both allow and deny. Because they are stateless, you must also allow return traffic on <strong>ephemeral ports (1024-65535)</strong>. Custom NACLs deny everything until you add rules.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the VPC with a non-overlapping CIDR.</li>
+  <li>Create public and private subnets in each AZ.</li>
+  <li>Attach an internet gateway; give public subnets a route to it.</li>
+  <li>Place NAT gateways in public subnets; point private route tables at them.</li>
+  <li>Apply security groups per tier (ALB → app → DB) and, if needed, NACLs as a coarse subnet-level guard, for example to block a known bad CIDR.</li>
+  <li>Add VPC endpoints for AWS services and enable <strong>VPC Flow Logs</strong> for troubleshooting.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_security_group_rule&quot; &quot;db_from_app&quot; {
+  type                     = &quot;ingress&quot;
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = &quot;tcp&quot;
+  security_group_id        = aws_security_group.db.id
+  source_security_group_id = aws_security_group.app.id
+}
+
+resource &quot;aws_network_acl_rule&quot; &quot;deny_bad_range&quot; {
+  network_acl_id = aws_network_acl.public.id
+  rule_number    = 90
+  egress         = false
+  protocol       = &quot;-1&quot;
+  rule_action    = &quot;deny&quot;
+  cidr_block     = &quot;203.0.113.0/24&quot;
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Security group</th><th>NACL</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>ENI / instance</td><td>Subnet</td></tr>
+<tr><td>State</td><td>Stateful</td><td>Stateless</td></tr>
+<tr><td>Rules</td><td>Allow only</td><td>Allow and deny, numbered</td></tr>
+<tr><td>Return traffic</td><td>Automatic</td><td>Must be allowed explicitly</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A single NAT gateway for all AZs, which is a hidden single point of failure and adds cross-AZ data charges.</li>
+  <li>Custom NACLs that forget ephemeral return ports, breaking connections mysteriously.</li>
+  <li>Opening security groups to <code>0.0.0.0/0</code> on SSH or database ports.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A VPC is an isolated network with its own CIDR, split into public and private subnets in each availability zone. Public subnets route to an internet gateway; private ones send outbound traffic through a NAT gateway, one per AZ. Route tables decide where each subnet's traffic goes, including peering, Transit Gateway and VPC endpoints. Security groups are stateful allow-only firewalls on the network interface, and I chain them by referencing other groups. NACLs are stateless, numbered allow and deny rules at the subnet boundary, so return traffic on ephemeral ports must be allowed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a private instance reach S3 without the NAT gateway?</strong> A <strong>gateway VPC endpoint</strong> for S3 added to the private route table, free and private.</li>
+  <li><strong>Can a security group deny traffic?</strong> No; it only allows, so explicit blocks need a NACL or a network firewall.</li>
+  <li><strong>How do you debug blocked traffic?</strong> VPC Flow Logs (ACCEPT/REJECT) and Reachability Analyzer.</li>
+</ul>
+</article>
+</body>
+</html>

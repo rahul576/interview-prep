@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-077 · What is ExecutorService, and why is it used?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-077" data-topic="Concurrency">
+<h1>What is ExecutorService, and why is it used?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>ExecutorService</code></strong> (in <code>java.util.concurrent</code>) <strong>decouples submitting tasks from running them</strong>: it manages a <strong>pool of worker threads and a task queue</strong>, reuses threads, <strong>bounds concurrency</strong>, returns <strong><code>Future</code>s</strong>, and must be <strong>shut down</strong> when no longer needed.</p>
+
+<h2>Detailed explanation</h2>
+<p>Creating a raw <code>Thread</code> per task has three problems: thread creation is relatively expensive, nothing limits how many threads exist (a traffic burst can create thousands and exhaust memory or CPU), and there is no standard way to get results, cancel tasks or stop everything cleanly.</p>
+<p><code>ExecutorService</code> solves this. You <strong>submit</strong> a <code>Runnable</code> or <code>Callable</code>; the service puts it in a <strong>queue</strong> and one of its <strong>worker threads</strong> picks it up. Threads are <strong>reused</strong>, so creation cost is paid once, and the pool size caps concurrency. You get back a <strong><code>Future</code></strong> to wait for the result (<code>get</code>), check completion or <code>cancel</code>. Bulk methods <code>invokeAll</code> (wait for all) and <code>invokeAny</code> (first successful result) handle groups of tasks. Lifecycle methods <code>shutdown</code>, <code>shutdownNow</code> and <code>awaitTermination</code> stop it cleanly.</p>
+<p>The <code>Executors</code> class offers factory methods: <code>newFixedThreadPool(n)</code>, <code>newCachedThreadPool()</code>, <code>newSingleThreadExecutor()</code>, <code>newScheduledThreadPool(n)</code> for delayed and periodic tasks, <code>newWorkStealingPool()</code> (a <code>ForkJoinPool</code>), and since Java 21 <code>newVirtualThreadPerTaskExecutor()</code>. Several of these use unbounded queues or unbounded threads, so for production services you usually construct a <strong><code>ThreadPoolExecutor</code></strong> directly with a bounded queue, named threads and a rejection policy. In Spring Boot you typically inject a managed <code>ThreadPoolTaskExecutor</code>.</p>
+<p>Executor threads are non-daemon by default, so an executor that is never shut down can keep the JVM running. Since <strong>Java 19</strong> <code>ExecutorService</code> implements <code>AutoCloseable</code>, so try-with-resources shuts it down and waits for tasks automatically.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the executor (factory or <code>ThreadPoolExecutor</code>).</li>
+  <li><code>submit(task)</code> puts the task in the work queue (or hands it to an idle thread).</li>
+  <li>A worker thread takes the task, runs it, stores the result in the Future.</li>
+  <li>The caller retrieves results with <code>Future.get()</code> or <code>invokeAll</code>.</li>
+  <li>Call <code>shutdown()</code> and <code>awaitTermination()</code> (or <code>close()</code>) at the end.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">try (ExecutorService pool = Executors.newFixedThreadPool(4)) {     // Java 19+ AutoCloseable
+    List&lt;Callable&lt;Integer&gt;&gt; jobs = List.of(
+            () -&gt; countRows(&quot;orders&quot;),
+            () -&gt; countRows(&quot;customers&quot;),
+            () -&gt; countRows(&quot;invoices&quot;));
+
+    for (Future&lt;Integer&gt; f : pool.invokeAll(jobs, 10, TimeUnit.SECONDS)) {
+        System.out.println(f.get());
+    }
+}   // close() = shutdown + wait
+
+ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+scheduler.scheduleAtFixedRate(this::refreshCache, 0, 5, TimeUnit.MINUTES);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Factory</th><th>Threads</th><th>Queue</th><th>Good for</th></tr></thead>
+<tbody>
+<tr><td><code>newFixedThreadPool(n)</code></td><td>n</td><td>Unbounded</td><td>Steady, CPU-bound</td></tr>
+<tr><td><code>newCachedThreadPool()</code></td><td>Unbounded</td><td>Direct hand-off</td><td>Short bursty tasks</td></tr>
+<tr><td><code>newSingleThreadExecutor()</code></td><td>1</td><td>Unbounded</td><td>Ordered tasks</td></tr>
+<tr><td><code>newScheduledThreadPool(n)</code></td><td>n</td><td>Delay queue</td><td>Timers, periodic jobs</td></tr>
+<tr><td><code>newVirtualThreadPerTaskExecutor()</code></td><td>1 virtual per task</td><td>None</td><td>Blocking I/O</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Never shutting down the executor.</li>
+  <li>Creating a new executor per request instead of sharing one.</li>
+  <li>Using unbounded factories in production without understanding the risks.</li>
+  <li>Submitting tasks and ignoring the Futures, losing exceptions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ExecutorService decouples submitting tasks from running them. It manages a pool of worker threads and a task queue: I submit Runnables or Callables and get Futures back, and the executor reuses threads instead of creating one per task, which saves creation cost and limits how many run at once, so a burst of work doesn't exhaust memory or CPU. Executors provides factories like fixed, cached, scheduled and, since Java 21, virtual-thread-per-task, but in production I prefer a ThreadPoolExecutor with a bounded queue and rejection policy. And I always shut it down, with shutdown and awaitTermination or try-with-resources.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is an unbounded queue in a fixed thread pool risky?</strong> Under overload tasks accumulate without limit, latency grows and memory can run out, with no backpressure.</li>
+  <li><strong>Executor vs ExecutorService?</strong> Executor only has execute(Runnable); ExecutorService adds submit, Futures, bulk invocation and lifecycle.</li>
+  <li><strong>What does ScheduledExecutorService add?</strong> schedule, scheduleAtFixedRate and scheduleWithFixedDelay for delayed and periodic tasks.</li>
+</ul>
+</article>
+</body>
+</html>

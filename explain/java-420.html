@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-420 · Design an elevator control system for a building with several elevators.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-420" data-topic="Low-Level Design">
+<h1>Design an elevator control system for a building with several elevators.</h1>
+<p class="ex-meta">Low-Level Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Model an <strong>ElevatorController</strong>, several <strong>Elevators</strong> with <strong>state and direction</strong>, <strong>Floors</strong> and <strong>Requests</strong> (hall calls vs car calls); use a <strong>dispatching strategy</strong> to assign hall calls and <strong>SCAN/LOOK</strong> within each car, the <strong>State pattern</strong> for elevator behaviour, and a <strong>single event loop</strong> for concurrency.</p>
+
+<h2>Detailed explanation</h2>
+<p>Clarify first: number of floors and cars, capacity, whether destination-dispatch panels exist, emergency and maintenance modes, and the optimisation goal (wait time, travel time, energy).</p>
+<p><strong>Requests</strong> come in two kinds: <strong>hall calls</strong> (floor + direction, pressed outside) and <strong>car calls</strong> (destination pressed inside a specific car). Hall calls must be <strong>assigned</strong> to a car by the controller; car calls belong to their car.</p>
+<p><strong>Elevator</strong> holds current floor, direction, state, load, and two sorted sets of stops: <code>upStops</code> and <code>downStops</code> (<code>TreeSet</code>). Its <strong>state</strong> (Idle, MovingUp, MovingDown, DoorsOpen, OutOfService) can be modelled with the <strong>State pattern</strong>, so behaviour such as &quot;what to do on a new request&quot; or &quot;on arriving at a floor&quot; lives in each state class instead of large switch statements.</p>
+<p><strong>Scheduling within a car:</strong> <strong>SCAN</strong> (elevator algorithm) travels in one direction serving stops until the end, then reverses; <strong>LOOK</strong> reverses as soon as there are no further stops in the current direction, which is more efficient and realistic.</p>
+<p><strong>Dispatching across cars</strong> is a <strong>Strategy</strong>: a common heuristic is a cost function, preferring a car already moving towards the floor in the same direction, then an idle car closest to the floor, penalising load and number of stops. Swappable strategies allow peak-time modes (up-peak in mornings).</p>
+<p><strong>Concurrency:</strong> button presses and sensor events arrive concurrently. Rather than locking each object everywhere, events go into a <code>BlockingQueue</code> processed by the controller's <strong>single event loop</strong>, or each elevator has its own thread-confined loop receiving commands.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Hall button pressed -&gt; <code>HallCall(floor 7, UP)</code> event queued.</li>
+  <li>Controller computes cost per car with the dispatch strategy, assigns to the best one.</li>
+  <li>Elevator adds floor 7 to <code>upStops</code>; state machine starts moving if idle.</li>
+  <li>On each floor sensor event, the elevator checks whether to stop.</li>
+  <li>At a stop: DoorsOpen, timer, then continue per LOOK.</li>
+  <li>Faults move the car to OutOfService; its hall calls are reassigned.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">enum Direction { UP, DOWN, IDLE }
+sealed interface Request permits HallCall, CarCall {}
+record HallCall(int floor, Direction dir) implements Request {}
+record CarCall(int elevatorId, int floor) implements Request {}
+
+interface DispatchStrategy { Elevator choose(List&lt;Elevator&gt; cars, HallCall call); }
+
+final class NearestCarStrategy implements DispatchStrategy {
+    public Elevator choose(List&lt;Elevator&gt; cars, HallCall c) {
+        return cars.stream().filter(Elevator::inService)
+            .min(Comparator.comparingInt(e -&gt; e.costTo(c))).orElseThrow();
+    }
+}
+
+final class Elevator {
+    private final NavigableSet&lt;Integer&gt; upStops = new TreeSet&lt;&gt;(), downStops = new TreeSet&lt;&gt;();
+    private int floor; private Direction dir = Direction.IDLE; private ElevatorState state = new Idle();
+    int costTo(HallCall c) {
+        boolean onTheWay = (dir == Direction.UP &amp;&amp; c.dir() == Direction.UP &amp;&amp; c.floor() &gt;= floor)
+                        || (dir == Direction.DOWN &amp;&amp; c.dir() == Direction.DOWN &amp;&amp; c.floor() &lt;= floor);
+        return Math.abs(c.floor() - floor) + (onTheWay || dir == Direction.IDLE ? 0 : 20);
+    }
+    boolean inService() { return !(state instanceof OutOfService); }
+    // nextStop() implements LOOK using upStops.ceiling(floor) / downStops.floor(floor)
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating hall and car calls the same way.</li>
+  <li>A single FIFO queue of requests (serves floors in press order, not efficiently).</li>
+  <li>Giant switch statements on state instead of the State pattern.</li>
+  <li>Locks sprinkled everywhere, risking deadlock.</li>
+  <li>Forgetting out-of-service and capacity handling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd model an ElevatorController, Elevators, Floors and Requests, distinguishing hall calls with a direction from car calls with a destination. Each elevator has a state, idle, moving up, moving down, doors open, out of service, modelled with the State pattern, and sorted sets of up and down stops. A dispatching strategy assigns hall calls, for example to the car moving towards the floor in the same direction, otherwise the nearest idle car. Each car serves stops with LOOK. All button and sensor events go through a queue into an event loop, so concurrency is handled in one place.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Car goes out of service mid-trip?</strong> Stop at nearest floor, open doors, mark out of service, reassign its hall calls.</li>
+  <li><strong>Morning rush?</strong> Up-peak strategy parks idle cars at the lobby.</li>
+  <li><strong>Destination dispatch?</strong> Passengers enter destinations in the lobby; group same-destination riders.</li>
+</ul>
+</article>
+</body>
+</html>

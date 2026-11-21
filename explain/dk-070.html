@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-070 · What are the trade-offs of running stateful services such as databases in containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-070" data-topic="Docker">
+<h1>What are the trade-offs of running stateful services such as databases in containers?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>You can run databases in containers, but the container gives you packaging, not <strong>durability</strong>: data must live on <strong>persistent volumes</strong>, <strong>storage I/O and fsync</strong> performance matter, <strong>backups, upgrades, replication and failover</strong> are still your job, and <strong>resource limits</strong> must match the database config, which is why production often uses <strong>managed services or Kubernetes operators</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers were designed for <strong>stateless, disposable</strong> processes. A database is the opposite: its whole value is the data it keeps. Anything written to the container's writable layer disappears when the container is removed, so data must live on a <strong>volume</strong> or a <strong>PersistentVolume</strong> backed by durable storage.</p>
+<p><strong>Storage</strong> is the biggest trade-off. Databases call <code>fsync</code> constantly; local NVMe is fast, while network storage (NFS, some cloud disks) adds latency and may not honour fsync semantics correctly, risking corruption. Placement matters too: if the scheduler moves the container to another node, the storage must follow it.</p>
+<p>Containers add no database operations for you. <strong>Backups and point-in-time recovery</strong>, <strong>major version upgrades</strong>, <strong>replication and failover</strong>, connection pooling and monitoring all still need designing. <strong>Resource limits</strong> are a classic trap: if PostgreSQL <code>shared_buffers</code> and work memory, or a JVM-based database heap, exceed the container memory limit, the kernel's <strong>OOM killer</strong> stops the database under load.</p>
+<p>The sweet spot is clear. For <strong>local development, CI tests and ephemeral environments</strong>, containerised databases are perfect: fast, disposable and identical for everyone. In <strong>production</strong>, many teams choose <strong>managed services</strong> (Amazon RDS/Aurora, Azure Database for PostgreSQL, Cloud SQL), or run on Kubernetes with an <strong>operator</strong> such as CloudNativePG or the Percona and Strimzi operators that automate replication, failover and backups.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Store data on a volume or PersistentVolume with a suitable StorageClass (SSD, correct fsync behaviour).</li>
+  <li>Use a StatefulSet for stable identities and per-replica volumes.</li>
+  <li>Set memory limits above the database's configured memory plus overhead; avoid aggressive CPU throttling.</li>
+  <li>Automate backups to object storage and test restores regularly.</li>
+  <li>Use replication with automated failover, usually via an operator.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: orders-db }
+spec:
+  instances: 3
+  storage: { size: 100Gi, storageClass: premium-ssd }
+  resources:
+    requests: { memory: 4Gi, cpu: &quot;2&quot; }
+    limits: { memory: 4Gi }
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://backups/orders-db</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Ops effort</th><th>Control</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>Container + volume</td><td>High</td><td>Full</td><td>Dev, test</td></tr>
+<tr><td>Kubernetes operator</td><td>Medium</td><td>High</td><td>Platform teams</td></tr>
+<tr><td>Managed service</td><td>Low</td><td>Limited</td><td>Most production</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping data in the container layer or an <code>emptyDir</code>.</li>
+  <li>Running a database on NFS without checking locking and fsync behaviour.</li>
+  <li>Memory limits smaller than the configured buffers.</li>
+  <li>Assuming &quot;it's in Kubernetes&quot; means it's highly available and backed up.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Containers are great for packaging, but they don't make a database durable or highly available. The data has to sit on persistent volumes with storage that performs well and honours fsync, and you still have to handle backups, point-in-time recovery, upgrades, replication and failover. Memory limits have to fit the database's own memory settings, or the OOM killer takes it down. I use containerised databases happily for development and CI. In production I'd prefer a managed service like RDS, or, if we run it ourselves on Kubernetes, an operator like CloudNativePG that automates replication, failover and backups.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does an operator add over a StatefulSet?</strong> Domain knowledge: failover, replica management, backups, upgrades and config tuning as automated controllers.</li>
+  <li><strong>Why is NFS risky for databases?</strong> Latency, weaker locking and fsync semantics, and risk of corruption.</li>
+  <li><strong>When is self-hosting worth it?</strong> When you need versions, extensions or cost/control the managed service can't offer, and have the skills to operate it.</li>
+</ul>
+</article>
+</body>
+</html>

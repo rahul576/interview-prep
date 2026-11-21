@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-081 · How do Kubernetes events help troubleshooting, and what are their limits?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-081" data-topic="Kubernetes">
+<h1>How do Kubernetes events help troubleshooting, and what are their limits?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Events</strong> are short records from the scheduler, kubelet and controllers (<strong>FailedScheduling, Pulling, Unhealthy, BackOff, OOMKilling</strong>, scaling) with a <strong>type (Normal or Warning)</strong>, <strong>reason</strong> and <strong>message</strong>; read them via <code>kubectl describe</code> or <code>kubectl get events --sort-by</code>, but they <strong>expire after about one hour</strong>, so <strong>export them</strong> for history and alerting.</p>
+
+<h2>Detailed explanation</h2>
+<p>Events are Kubernetes objects (<code>events.k8s.io/v1</code>) attached to an involved object. Components write them when something notable happens: the <strong>scheduler</strong> records <code>FailedScheduling</code> with the exact reason (<code>0/12 nodes are available: 3 Insufficient memory, 9 node(s) had untolerated taint</code>); the <strong>kubelet</strong> records <code>Pulling</code>, <code>Failed</code> (image pull), <code>Unhealthy</code> (probe failure), <code>BackOff</code> (crash loop), <code>Killing</code>; controllers record <code>ScalingReplicaSet</code>, <code>SuccessfulCreate</code> or <code>FailedCreate</code> (for example quota exceeded); the HPA records rescale decisions; storage controllers record <code>FailedMount</code> and <code>FailedAttachVolume</code>.</p>
+<p>They are the fastest way to answer &quot;why is this object not doing what I expect?&quot; <code>kubectl describe pod</code> shows the events for that pod at the bottom. <code>kubectl get events -n ns --sort-by=.lastTimestamp</code> gives a timeline, <code>--field-selector type=Warning</code> filters noise, and <code>kubectl events --for pod/x</code> is a newer convenience command. Repeated events are aggregated with a count rather than duplicated.</p>
+<p>Limits: events are <strong>ephemeral</strong>. The API server's <code>--event-ttl</code> defaults to <strong>one hour</strong>, to protect etcd, so after an overnight incident they are gone. They are <strong>best effort</strong>: under heavy load some may be dropped or rate-limited. They are not an audit trail (no user identity in the sense of audit logs) and they do not replace logs or metrics.</p>
+<p>For history, export them: <strong>kubernetes-event-exporter</strong>, the <strong>OpenTelemetry Collector</strong> <code>k8sobjects</code> or <code>k8s_events</code> receiver, or managed integrations ship events to the logging platform, where you can search and alert on important Warning reasons.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A component emits an event about an object.</li>
+  <li>The API server stores it in etcd with a TTL.</li>
+  <li>Repeats increment a count instead of creating new objects.</li>
+  <li><code>kubectl describe</code> and <code>kubectl get events</code> read them.</li>
+  <li>An exporter streams them to logging for retention and alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get events -n shop --field-selector type=Warning --sort-by=.lastTimestamp | tail
+kubectl events -n shop --for pod/checkout-7d9f-x2k8q</code></pre>
+<pre><code class="language-yaml"># OpenTelemetry Collector receiver for events
+receivers:
+  k8sobjects:
+    objects:
+      - name: events
+        mode: watch
+        group: events.k8s.io</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Investigating hours later and assuming &quot;no events&quot; means no problem.</li>
+  <li>Alerting on every Warning event.</li>
+  <li>Using events as an audit log.</li>
+  <li>Raising event TTL massively and bloating etcd.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Events are short records components write about objects: the scheduler reports FailedScheduling with the reason, the kubelet reports image pulls, probe failures, back-off restarts and OOM kills, and controllers report scaling or failed creates. Each has a type, Normal or Warning, a reason and a message. I read them with kubectl describe or kubectl get events sorted by timestamp and filtered on Warning. The limit is retention: by default they expire after about an hour, and they're best effort. So I export them to the logging platform with an event exporter or the OpenTelemetry collector and alert on key reasons like FailedMount or repeated BackOff.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which reasons to alert on?</strong> Sustained BackOff, FailedMount/FailedAttachVolume, FailedScheduling for long periods, FailedCreate from quota, Evicted.</li>
+  <li><strong>Why the short TTL?</strong> Events are high volume and stored in etcd.</li>
+  <li><strong>Events vs audit logs?</strong> Events describe what happened to objects; audit logs record who called the API.</li>
+</ul>
+</article>
+</body>
+</html>

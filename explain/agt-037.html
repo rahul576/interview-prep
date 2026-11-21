@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-037 · An assistant with long-term memory revealed one user preference to another user. What went wrong and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-037" data-topic="AI Agents &amp; AIOps">
+<h1>An assistant with long-term memory revealed one user preference to another user. What went wrong and how do you fix it?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Treat it as a <strong>privacy incident</strong>; the cause is almost always <strong>memory not scoped per user or tenant</strong>, such as a <strong>shared vector index without filters</strong>, a <strong>cache keyed without user scope</strong> or <strong>shared agent state</strong>; fix by <strong>enforcing isolation in storage and retrieval code</strong> using the <strong>authenticated identity</strong>, adding <strong>cross-user leakage tests</strong>, and giving users <strong>controls to view and delete memories</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Incident response first</strong>: contain the issue, for example by disabling memory retrieval, determine which data leaked to whom from logs and traces, and follow the organisation's <strong>privacy incident and notification process</strong>, which may involve the data protection officer and regulators under GDPR or similar laws.</p>
+<p><strong>Typical technical causes</strong>:</p>
+<ul>
+  <li>Memories stored in a <strong>shared vector index</strong> retrieved by <strong>similarity alone</strong>, without filtering on user or tenant ID, so a similar memory from another user ranked highly.</li>
+  <li>A <strong>response or semantic cache</strong> keyed only on the question text, returning another user's personalised answer.</li>
+  <li>A <strong>shared agent instance or session object</strong> kept state between requests, for example a singleton with conversation history.</li>
+  <li>The user or tenant filter was taken from <strong>model output or a request parameter</strong> rather than the authenticated session.</li>
+  <li>Background memory extraction jobs mixing conversations from several users.</li>
+</ul>
+<p><strong>Fix: enforce isolation in code.</strong> Every memory record carries <strong>owner user ID and tenant ID</strong>. Every read path filters on the <strong>authenticated identity from the session token</strong>, applied by the data access layer, never by the model. Ideally storage is <strong>partitioned per tenant</strong>: separate namespaces, collections or indexes, or row-level security in the database. <strong>Caches include user and tenant scope</strong> in keys, and personalised responses are not cached globally. Agent instances are stateless per request, with state loaded by session ID.</p>
+<p><strong>Prevention</strong>: automated <strong>cross-user leakage tests</strong> that create memories for user A and try to retrieve them as user B through every path, run in CI; periodic audits sampling retrievals. <strong>User controls</strong> let people view, correct and delete what the assistant remembers, and <strong>sensitive categories</strong> (health, finances, credentials) are not stored at all or require explicit consent.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Contain: disable memory or affected path; preserve logs.</li>
+  <li>Assess scope of exposure; trigger privacy incident process.</li>
+  <li>Find the faulty path: index, cache, shared state or filter source.</li>
+  <li>Add mandatory identity filters in the data layer; partition storage.</li>
+  <li>Scope cache keys; make agent instances stateless.</li>
+  <li>Add leakage tests in CI; release user memory controls.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">class MemoryRepository:
+    &quot;&quot;&quot;All access goes through here; identity comes from the verified session only.&quot;&quot;&quot;
+    def __init__(self, vector_store):
+        self.vs = vector_store
+
+    def search(self, session, query, k=5):
+        namespace = f&quot;tenant:{session.tenant_id}&quot;            # per-tenant partition
+        return self.vs.query(
+            namespace=namespace,
+            vector=embed(query),
+            top_k=k,
+            filter={&quot;user_id&quot;: {&quot;$eq&quot;: session.user_id}},    # mandatory filter
+        )
+
+def test_no_cross_user_leak(repo, make_session):
+    a, b = make_session(&quot;acme&quot;, &quot;alice&quot;), make_session(&quot;acme&quot;, &quot;bob&quot;)
+    repo.save(a, &quot;Alice prefers aisle seats and is vegetarian&quot;)
+    assert repo.search(b, &quot;seat preference vegetarian&quot;) == []</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating it as a minor bug rather than a privacy incident.</li>
+  <li>Relying on the model to &quot;only use this user's memories&quot;.</li>
+  <li>Filters built from request parameters that callers can change.</li>
+  <li>Global semantic caches for personalised answers.</li>
+  <li>No automated tests for isolation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First, this is a privacy incident: contain it, assess what leaked to whom and follow the notification process. Technically, the cause is almost always that memory wasn't properly scoped: memories in a shared vector index retrieved by similarity without a user or tenant filter, a cache keyed only on the question, or a shared agent instance keeping state. The fix is to enforce isolation in code: every memory has an owner user and tenant, every read filters on the authenticated identity from the session, never from model output, and ideally storage is partitioned per tenant. Cache keys include user scope. I'd add automated tests that try to read one user's memories as another. And users get controls to view and delete memories, with sensitive categories not stored.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What should an assistant never store as memory?</strong> Credentials, payment data, and sensitive personal categories without explicit consent.</li>
+  <li><strong>Namespace per tenant or metadata filter?</strong> Namespaces give stronger isolation; filters are fine if enforced centrally and tested.</li>
+  <li><strong>How do you detect leaks in production?</strong> Audit sampling of retrievals for owner mismatches and alerts on any mismatch.</li>
+</ul>
+</article>
+</body>
+</html>

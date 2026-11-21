@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-309 · What does Spring Cloud provide for microservices, and which parts are still relevant on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-309" data-topic="Spring Boot">
+<h1>What does Spring Cloud provide for microservices, and which parts are still relevant on Kubernetes?</h1>
+<p class="ex-meta">Spring Boot · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Spring Cloud offers <strong>Config Server</strong>, <strong>Gateway</strong>, <strong>OpenFeign</strong>, a <strong>Circuit Breaker</strong> abstraction over <strong>Resilience4j</strong>, <strong>Eureka</strong> discovery, <strong>LoadBalancer</strong>, <strong>Stream</strong> and <strong>Bus</strong>; on <strong>Kubernetes</strong>, <strong>Services/DNS replace Eureka</strong> and <strong>ConfigMaps/Secrets</strong> often replace Config Server, while <strong>Gateway, HTTP clients and Resilience4j</strong> stay relevant.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spring Cloud was born in the Netflix OSS era when teams ran microservices on VMs and had to build service discovery, client-side load balancing and central config themselves. Its main projects:</p>
+<ul>
+  <li><strong>Spring Cloud Config</strong>: a Config Server serving properties from Git or Vault, with refresh via <code>@RefreshScope</code> and <strong>Spring Cloud Bus</strong>.</li>
+  <li><strong>Spring Cloud Netflix Eureka</strong>: service registry and discovery. (Hystrix, Ribbon and Zuul are gone; replaced by Resilience4j, Spring Cloud LoadBalancer and Gateway.)</li>
+  <li><strong>Spring Cloud Gateway</strong>: reactive (and now also MVC-based) API gateway with routes, predicates and filters: rate limiting, token relay, rewriting.</li>
+  <li><strong>Spring Cloud OpenFeign</strong>: declarative HTTP clients (now feature-complete; Spring's own HTTP interfaces are the suggested future path).</li>
+  <li><strong>Spring Cloud Circuit Breaker</strong>: abstraction with Resilience4j as the main implementation.</li>
+  <li><strong>Spring Cloud LoadBalancer</strong>: client-side load balancing.</li>
+  <li><strong>Spring Cloud Stream</strong>: binder-based messaging over Kafka or RabbitMQ.</li>
+  <li><strong>Spring Cloud Kubernetes</strong>: discovery and config from the Kubernetes API.</li>
+</ul>
+<p><strong>On Kubernetes, the platform covers several concerns:</strong></p>
+<ul>
+  <li><strong>Discovery</strong>: a Kubernetes <strong>Service</strong> gives a stable DNS name and load balances across pods, so Eureka and client-side balancing are usually redundant. Running Eureka would duplicate state and health information the platform already has.</li>
+  <li><strong>Configuration</strong>: <strong>ConfigMaps and Secrets</strong> mounted as files or env vars, often managed by GitOps, plus External Secrets for vaults. Config Server is still useful for shared, frequently changed config across many apps or non-Kubernetes environments.</li>
+  <li><strong>Gateway and resilience</strong>: an <strong>Ingress controller or Gateway API</strong>, and a <strong>service mesh</strong> like Istio, can handle routing, retries, timeouts, mTLS and outlier detection.</li>
+</ul>
+<p>Still widely used: <strong>Spring Cloud Gateway</strong> for application-aware routing, BFF and token relay; <strong>Resilience4j</strong> for in-code circuit breakers with fallbacks; <strong>declarative clients</strong>; <strong>Stream</strong> for messaging.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide which concerns the platform owns: discovery, config, traffic, mTLS.</li>
+  <li>Remove overlapping Spring Cloud components (Eureka, Ribbon-era load balancing).</li>
+  <li>Keep app-level concerns in code: fallbacks, business routing, token relay.</li>
+  <li>Use Spring Cloud Kubernetes or plain env/config trees for config.</li>
+  <li>Avoid configuring the same retry both in the mesh and in code.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Feign or HTTP interface calls a Kubernetes Service by DNS, no Eureka
+spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          inventory:
+            url: http://inventory.shop.svc.cluster.local:8080
+            connect-timeout: 1000
+            read-timeout: 2000
+resilience4j:
+  circuitbreaker:
+    instances:
+      inventory:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Concern</th><th>Spring Cloud</th><th>Kubernetes / platform</th></tr></thead>
+<tbody>
+<tr><td>Discovery</td><td>Eureka + LoadBalancer</td><td>Services + DNS</td></tr>
+<tr><td>Config</td><td>Config Server</td><td>ConfigMaps, Secrets, GitOps</td></tr>
+<tr><td>Edge routing</td><td>Gateway</td><td>Ingress / Gateway API</td></tr>
+<tr><td>Resilience</td><td>Resilience4j</td><td>Mesh retries, outlier detection</td></tr>
+<tr><td>mTLS</td><td>Not provided</td><td>Service mesh</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running Eureka on Kubernetes out of habit.</li>
+  <li>Duplicate retries in mesh, gateway and client causing retry storms.</li>
+  <li>Mixing incompatible Spring Cloud and Boot versions; use the release train BOM.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring Cloud gives Config Server for central configuration, Spring Cloud Gateway as an API gateway, OpenFeign for declarative clients, a circuit breaker abstraction backed by Resilience4j, Eureka for discovery, LoadBalancer and Stream for messaging. On Kubernetes several parts are replaced by the platform: Services and DNS replace Eureka, ConfigMaps and Secrets often replace Config Server, and ingress or a service mesh can take over routing, retries and mTLS. What remains widely used is Gateway for application-aware routing and token relay, Feign or HTTP interfaces, Resilience4j for fallbacks, and Stream.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would you run Eureka on Kubernetes?</strong> Usually not; it duplicates Services and adds a component to operate, unless hybrid VM and Kubernetes discovery is needed.</li>
+  <li><strong>Mesh or Resilience4j?</strong> Mesh for uniform policies; Resilience4j when you need fallbacks and business-aware behaviour.</li>
+  <li><strong>How to keep versions aligned?</strong> Import the <code>spring-cloud-dependencies</code> BOM matching the Boot version.</li>
+</ul>
+</article>
+</body>
+</html>

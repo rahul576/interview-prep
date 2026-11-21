@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-018 · What is in-place pod resize, and how does it change vertical scaling with the VPA?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-018" data-topic="Kubernetes">
+<h1>What is in-place pod resize, and how does it change vertical scaling with the VPA?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>In-place pod resize</strong> makes a running pod's <strong>CPU and memory requests and limits mutable</strong> through the <strong><code>resize</code> subresource</strong>, without recreating the pod; it is <strong>GA in Kubernetes 1.35</strong>. Each container's <strong>resizePolicy</strong> says whether a change needs a <strong>restart</strong>, and the <strong>VPA</strong> can now apply recommendations <strong>in place</strong> instead of evicting pods.</p>
+
+<h2>Detailed explanation</h2>
+<p>Historically, resources in a pod spec were immutable. Changing them meant a new pod: the VPA evicted pods to apply recommendations, which caused restarts, cold caches and disruption for stateful or slow-starting workloads. In-place resize (KEP-1287), alpha in 1.27, beta in 1.33 and stable in 1.35, changes that.</p>
+<p>How it works:</p>
+<ul>
+  <li>You patch the pod's <strong><code>resize</code> subresource</strong> (<code>kubectl patch --subresource resize</code>), not the main spec. The desired values go in <code>spec.containers[].resources</code>; the <strong>actually applied</strong> values appear in <code>status.containerStatuses[].resources</code>.</li>
+  <li>The kubelet checks whether the node has room. If yes, it updates the container's <strong>cgroup</strong> limits through the runtime. If not right now, the resize is <strong>deferred</strong>; if it can never fit (larger than the node), it is <strong>infeasible</strong>. These states appear as pod conditions (<code>PodResizePending</code>, <code>PodResizeInProgress</code>), and the kubelet never evicts other pods to make room.</li>
+  <li><strong>resizePolicy</strong> per resource: <code>NotRequired</code> (default) changes values live; <code>RestartContainer</code> restarts just that container, sensible for memory in runtimes such as the JVM or Node.js that size heaps at start-up.</li>
+  <li>QoS class cannot change through a resize, and decreasing memory limits is handled cautiously because the kernel cannot reclaim memory the process still uses.</li>
+</ul>
+<p>For the <strong>Vertical Pod Autoscaler</strong>, this enables an in-place update mode (<code>InPlaceOrRecreate</code>) that tries a live resize first and falls back to eviction only when necessary. That makes vertical scaling practical for databases, caches and JVM services, and enables patterns like boosting CPU during start-up and lowering it afterwards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Patch the pod's resize subresource with new requests/limits.</li>
+  <li>API server validates (no QoS change, within LimitRange and quota).</li>
+  <li>Kubelet checks node allocatable.</li>
+  <li>Fits → runtime updates cgroups, or restarts the container per resizePolicy.</li>
+  <li>Doesn't fit → deferred or infeasible condition; retried later.</li>
+  <li>Status shows the applied resources.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">containers:
+- name: api
+  image: registry.example.com/api:5.1
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: &quot;1&quot;,  memory: 1Gi }
+  resizePolicy:
+  - { resourceName: cpu, restartPolicy: NotRequired }
+  - { resourceName: memory, restartPolicy: RestartContainer }</code></pre>
+<pre><code class="language-bash">kubectl patch pod api-7c9d --subresource resize --type merge \
+  -p '{&quot;spec&quot;:{&quot;containers&quot;:[{&quot;name&quot;:&quot;api&quot;,&quot;resources&quot;:{&quot;requests&quot;:{&quot;cpu&quot;:&quot;1&quot;},&quot;limits&quot;:{&quot;cpu&quot;:&quot;2&quot;}}}]}}'
+kubectl get pod api-7c9d -o jsonpath='{.status.containerStatuses[0].resources}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Patching the pod spec directly instead of the resize subresource.</li>
+  <li>Expecting a resize to evict neighbours to make room.</li>
+  <li>Resizing memory live for apps whose heap is fixed at start-up.</li>
+  <li>Forgetting the Deployment template still holds the old values for new pods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In-place pod resize lets you change CPU and memory requests and limits of a running pod without recreating it. It's stable since 1.35 and works through the resize subresource. Each container has a resizePolicy: NotRequired changes cgroup values live, while RestartContainer restarts only that container, which suits memory for JVMs. If the node lacks capacity the resize is marked deferred or infeasible instead of evicting anything. That makes the VPA much more useful, because it can apply recommendations in place rather than evicting pods, which matters for stateful and slow-warming workloads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not run VPA and a CPU-based HPA together?</strong> They react to the same signal and fight; combine VPA on memory with HPA on a custom metric.</li>
+  <li><strong>Does a resize change the Deployment?</strong> No, only that pod; new pods use the template.</li>
+  <li><strong>Can QoS class change?</strong> No, resizes that would change QoS are rejected.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-087 · A pod cannot start because of a Multi-Attach error for its volume. What does it mean and how do you resolve it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-087" data-topic="Kubernetes">
+<h1>A pod cannot start because of a Multi-Attach error for its volume. What does it mean and how do you resolve it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Multi-Attach error</strong> means a <strong>ReadWriteOnce</strong> block disk is <strong>still attached to another node</strong>, and it can attach to only one; it happens when the <strong>old pod or a dead node still holds it</strong>, typically in <strong>rolling updates of single-replica Deployments</strong> or after node failure. Use <strong>Recreate</strong> or a <strong>StatefulSet</strong>, wait for detach, or fix a stuck <strong>VolumeAttachment</strong> (out-of-service taint for dead nodes).</p>
+
+<h2>Detailed explanation</h2>
+<p>Cloud block volumes (EBS, Azure Disk, Persistent Disk) can only be attached to one VM at a time, which Kubernetes models as <strong>ReadWriteOnce</strong> (more precisely, one node; <strong>ReadWriteOncePod</strong> restricts it to a single pod). The <strong>attach/detach controller</strong> tracks attachments through <strong>VolumeAttachment</strong> objects and the CSI driver. Before attaching a volume to a new node, it must be detached from the old one. If the new pod is scheduled to a different node while the old attachment exists, the kubelet reports <code>Multi-Attach error for volume ... Volume is already used by pod(s) ...</code> or <code>already exclusively attached to one node</code>.</p>
+<p>Two classic causes. <strong>Rolling updates</strong>: a Deployment with one replica and a RWO PVC uses <code>RollingUpdate</code> by default, so it starts the new pod (maxSurge) before stopping the old one. If the new pod lands on another node, it cannot attach until the old pod terminates and the disk detaches. Depending on timing it either resolves after a delay or deadlocks when the old pod only stops once the new one is ready. <strong>Node failure</strong>: the old node is NotReady, so nobody can confirm the volume was unmounted; the controller waits (a force-detach timeout of around six minutes in many setups) before detaching, or longer for safety.</p>
+<p>Fixes: for single-replica workloads with RWO volumes, use <code>strategy: Recreate</code> so the old pod stops first, or a <strong>StatefulSet</strong>, which replaces pods one at a time by identity. For dead nodes, confirm the node is off and apply the <code>node.kubernetes.io/out-of-service</code> taint, which force-detaches. Check <code>kubectl get volumeattachment</code> for the stale attachment and the cloud console for the disk's state; if a CSI driver is stuck, its controller logs explain why.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe pod</code>: Multi-Attach event naming the volume and old pod.</li>
+  <li><code>kubectl get volumeattachment</code> to find which node holds it.</li>
+  <li>Check the old pod and node status.</li>
+  <li>Healthy node: wait for the old pod to stop and detach.</li>
+  <li>Dead node: fence it and apply the out-of-service taint.</li>
+  <li>Prevent: Recreate strategy or StatefulSet for RWO workloads.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get volumeattachment | grep pvc-3a9c
+#  csi-7f...  ebs.csi.aws.com  pvc-3a9c  ip-10-0-2-44  true
+kubectl get node ip-10-0-2-44                # NotReady?</code></pre>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata: { name: grafana }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # old pod releases the RWO disk before the new one starts</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>RollingUpdate for single-replica apps with RWO volumes.</li>
+  <li>Deleting VolumeAttachments while the old node may still write.</li>
+  <li>Expecting RWO to allow several replicas on different nodes.</li>
+  <li>Using RWX file shares for databases to &quot;fix&quot; it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Multi-Attach error means the volume, usually a ReadWriteOnce cloud disk, is still attached to another node, and block disks can attach to only one node at a time. It happens when the old pod or its node still holds the attachment: a node died and the controller is waiting before force-detaching, or a single-replica Deployment with RollingUpdate starts the new pod on another node before the old one releases the disk. I check VolumeAttachments and the old pod and node. Fixes: wait for the detach, use the out-of-service taint for dead nodes, and use Recreate or a StatefulSet for RWO workloads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When choose ReadWriteMany?</strong> Shared content across pods (uploads, ML datasets); costs are lower performance, higher price, and locking semantics unsuitable for databases.</li>
+  <li><strong>What is ReadWriteOncePod?</strong> Guarantees a single pod, not just a single node, has the volume.</li>
+  <li><strong>Why not delete the VolumeAttachment?</strong> The old node may still be writing, risking corruption.</li>
+</ul>
+</article>
+</body>
+</html>

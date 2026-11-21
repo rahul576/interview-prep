@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-009 · What is a NAT gateway, and why is it needed?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-009" data-topic="Cloud (AWS)">
+<h1>What is a NAT gateway, and why is it needed?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>NAT gateway</strong> lets instances in <strong>private subnets</strong> make <strong>outbound</strong> internet connections while <strong>blocking inbound</strong> ones; it sits in a <strong>public subnet with an Elastic IP</strong>, should be deployed <strong>one per AZ</strong> for availability, and is billed <strong>per hour and per GB</strong>, so AWS service traffic should use <strong>VPC endpoints</strong> instead.</p>
+
+<h2>Detailed explanation</h2>
+<p>Private-subnet instances have only private IPs, yet they often need to download patches, pull public images or call third-party APIs. The NAT gateway replaces the private source IP with its own Elastic IP, tracks the connection and returns replies to the right instance. Because it only translates connections that started inside, nobody on the internet can open a connection to the private instances.</p>
+<p>The classic NAT gateway lives in a <strong>public subnet</strong> and is <strong>zonal</strong>: if its AZ fails, subnets routed to it lose internet access. The resilient design is <strong>one NAT gateway per AZ</strong>, each private subnet using its local gateway, which also avoids cross-AZ data charges (AWS has since added a regional availability mode; check current docs). It scales automatically and needs no patching, unlike a self-managed <strong>NAT instance</strong>.</p>
+<p><strong>Cost</strong> is the classic surprise: you pay an hourly charge per gateway plus a <strong>per-GB data processing</strong> charge on everything that passes through it. Pulling large container images from ECR, sending logs to CloudWatch or moving data to S3 via NAT can cost more than the workload itself. <strong>Gateway endpoints</strong> for S3 and DynamoDB are free, and <strong>interface endpoints</strong> for ECR, CloudWatch, STS and others are usually cheaper than NAT processing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocate an Elastic IP and create the NAT gateway in a public subnet.</li>
+  <li>Route private subnets' <code>0.0.0.0/0</code> to it.</li>
+  <li>An instance opens a connection; the gateway rewrites source IP and port.</li>
+  <li>Replies return to the gateway and are translated back.</li>
+  <li>Unsolicited inbound traffic is dropped.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ec2 allocate-address --domain vpc
+aws ec2 create-nat-gateway --subnet-id subnet-public-a \
+  --allocation-id eipalloc-0abc --tag-specifications \
+  'ResourceType=natgateway,Tags=[{Key=Name,Value=nat-a}]'
+aws ec2 create-route --route-table-id rtb-private-a \
+  --destination-cidr-block 0.0.0.0/0 --nat-gateway-id nat-0123</code></pre>
+<p>An EKS cluster pulled several TB of images per month from ECR through NAT; adding ECR interface endpoints and an S3 gateway endpoint cut the NAT bill by most of its value.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One NAT gateway for all AZs (single point of failure, cross-AZ charges).</li>
+  <li>Sending S3, ECR and CloudWatch traffic through NAT.</li>
+  <li>Expecting NAT to allow inbound connections.</li>
+  <li>Forgetting idle NAT gateways in test VPCs still bill hourly.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A NAT gateway lets instances in private subnets make outbound connections, for updates or external APIs, while nobody on the internet can start connections to them. It sits in a public subnet with an Elastic IP, and the private route tables send 0.0.0.0/0 to it. It's zonal, so for high availability I create one per AZ and route each private subnet to its local gateway. It's billed per hour and per GB processed, which can get expensive, so traffic to AWS services like S3, ECR or CloudWatch should go through VPC endpoints instead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can NAT charges grow unexpectedly?</strong> Image pulls, log shipping or S3 transfers through NAT are charged per GB.</li>
+  <li><strong>NAT gateway vs NAT instance?</strong> The gateway is managed and scales; an instance is cheaper but you patch and scale it yourself.</li>
+  <li><strong>How do partners allow-list your outbound IP?</strong> Give them the NAT gateway's Elastic IPs.</li>
+</ul>
+</article>
+</body>
+</html>

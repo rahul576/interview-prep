@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-078 · Design the Terraform for a production AKS cluster with workload identity, private networking and GitOps bootstrap.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-078" data-topic="Terraform">
+<h1>Design the Terraform for a production AKS cluster with workload identity, private networking and GitOps bootstrap.</h1>
+<p class="ex-meta">Terraform · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>separate states</strong> for <strong>network, cluster and platform add-ons</strong>; make the cluster <strong>private or API-server-VNet-integrated</strong> with restricted access, use <strong>Entra ID with Azure RBAC</strong> and <strong>local accounts disabled</strong>, enable the <strong>OIDC issuer and workload identity</strong> with <strong>federated credentials per app</strong>, run <strong>zonal autoscaling node pools</strong> with a separate <strong>system pool</strong>, and <strong>bootstrap Flux or Argo CD</strong> for everything inside the cluster.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>State layout.</strong> The <strong>network spoke</strong> (VNet, subnets, route tables to the hub firewall, private DNS links). The <strong>cluster</strong> state holds AKS, node pools, identities and role assignments. <strong>Platform add-ons</strong> (GitOps bootstrap, monitoring wiring) are separate so a broken add-on does not block cluster changes and plans stay fast.</p>
+<p><strong>Network and access.</strong> Either a <strong>private cluster</strong> (API server reachable only through a private endpoint) or <strong>API Server VNet Integration</strong>, which projects the API server into a delegated subnet. Access comes only from build agents in the VNet and admins via VPN or Bastion, or through <strong>authorised IP ranges</strong> if a public endpoint remains. Egress goes through the hub firewall with <code>outbound_type = &quot;userDefinedRouting&quot;</code>.</p>
+<p><strong>Authentication.</strong> <strong>Entra ID integration</strong> with <strong>Azure RBAC for Kubernetes authorisation</strong>, admin groups instead of individuals, and <strong><code>local_account_disabled = true</code></strong> so nobody can use static cluster-admin certificates.</p>
+<p><strong>Workload identity.</strong> Enable <code>oidc_issuer_enabled</code> and <code>workload_identity_enabled</code>. For each application, Terraform creates a <strong>user-assigned managed identity</strong>, a <strong>federated identity credential</strong> whose subject is <code>system:serviceaccount:&lt;namespace&gt;:&lt;serviceaccount&gt;</code> and whose issuer is the cluster's OIDC URL, and the <strong>role assignments</strong> it needs (for example Key Vault Secrets User). Pods get Azure tokens without secrets.</p>
+<p><strong>Node pools.</strong> A small <strong>system pool</strong> (with <code>only_critical_addons_enabled</code>) for system pods, and <strong>user pools</strong> for workloads across <strong>three availability zones</strong> with autoscaling and <code>ignore_changes</code> on node counts.</p>
+<p><strong>GitOps bootstrap.</strong> Terraform installs the <strong>Flux extension</strong> with a <code>flux_configuration</code> pointing at the platform repo, or installs Argo CD and a root application. From then on, everything inside the cluster is managed by GitOps.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Network state: spoke, subnets, routes, DNS links.</li>
+  <li>Cluster state: AKS with private access, Entra ID RBAC, local accounts disabled.</li>
+  <li>Enable OIDC issuer and workload identity.</li>
+  <li>Node pools: system pool plus zonal autoscaling user pools.</li>
+  <li>Per app: managed identity, federated credential, role assignments.</li>
+  <li>Add-ons state: Flux extension and configuration pointing at Git.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_kubernetes_cluster&quot; &quot;main&quot; {
+  name                      = &quot;aks-orders-prod&quot;
+  location                  = var.location
+  resource_group_name       = var.rg_name
+  dns_prefix                = &quot;aks-orders-prod&quot;
+  private_cluster_enabled   = true
+  local_account_disabled    = true
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
+
+  azure_active_directory_role_based_access_control {
+    azure_rbac_enabled     = true
+    admin_group_object_ids = [var.aks_admin_group_id]
+  }
+  default_node_pool {
+    name                         = &quot;system&quot;
+    vm_size                      = &quot;Standard_D4s_v5&quot;
+    zones                        = [&quot;1&quot;, &quot;2&quot;, &quot;3&quot;]
+    vnet_subnet_id               = var.nodes_subnet_id
+    only_critical_addons_enabled = true
+    auto_scaling_enabled         = true
+    min_count                    = 3
+    max_count                    = 5
+  }
+  network_profile {
+    network_plugin      = &quot;azure&quot;
+    network_plugin_mode = &quot;overlay&quot;
+    outbound_type       = &quot;userDefinedRouting&quot;
+  }
+  identity { type = &quot;SystemAssigned&quot; }
+}
+
+resource &quot;azurerm_federated_identity_credential&quot; &quot;orders_api&quot; {
+  name                = &quot;orders-api&quot;
+  resource_group_name = var.rg_name
+  parent_id           = azurerm_user_assigned_identity.orders_api.id
+  issuer              = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject             = &quot;system:serviceaccount:orders:orders-api&quot;
+  audience            = [&quot;api://AzureADTokenExchange&quot;]
+}
+
+resource &quot;azurerm_kubernetes_cluster_extension&quot; &quot;flux&quot; {
+  name           = &quot;flux&quot;
+  cluster_id     = azurerm_kubernetes_cluster.main.id
+  extension_type = &quot;microsoft.flux&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving local accounts enabled, bypassing Entra ID.</li>
+  <li>One shared identity for all workloads.</li>
+  <li>Deploying every application with Terraform instead of GitOps.</li>
+  <li>No <code>ignore_changes</code> on autoscaled node counts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I split it into network, cluster and add-on states. The cluster is private or uses API server VNet integration, reachable only from build agents and admins. Authentication is Entra ID with Azure RBAC, local accounts disabled. I enable the OIDC issuer and workload identity, and each app gets a user-assigned identity with a federated credential bound to its namespace and service account, plus role assignments, all in Terraform. Node pools are a system pool and zonal autoscaling user pools. Finally Terraform installs the Flux extension or bootstraps Argo CD, so everything inside the cluster is GitOps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why stop Terraform at the GitOps bootstrap?</strong> In-cluster objects change often and are reconciled better by GitOps; Terraform plans stay small.</li>
+  <li><strong>How do CI agents reach a private API server?</strong> Self-hosted agents in the VNet or <code>az aks command invoke</code>.</li>
+  <li><strong>How are upgrades handled?</strong> Upgrade channel plus maintenance windows, or blue-green clusters for big jumps.</li>
+</ul>
+</article>
+</body>
+</html>

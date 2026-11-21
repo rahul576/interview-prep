@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-006 · What is the difference between docker exec and docker attach?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-006" data-topic="Docker">
+<h1>What is the difference between docker exec and docker attach?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>docker exec</code></strong> starts a <strong>new, additional process</strong> inside a running container (e.g. <code>docker exec -it web sh</code>), leaving the main process untouched; <strong><code>docker attach</code></strong> connects your terminal to the <strong>main process (PID 1)</strong> streams, where <strong>Ctrl+C can stop the container</strong> and <strong>Ctrl+P Ctrl+Q</strong> detaches safely.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>docker exec</code></strong> asks the runtime to launch another process in the <strong>same namespaces and cgroups</strong> as the running container: same filesystem, network, environment (plus anything you add with <code>-e</code>) and user (override with <code>-u</code>). Typical uses are a debugging shell (<code>docker exec -it web sh</code>) or a one-off client command (<code>docker exec db psql -U app</code>). When the exec'd process ends, nothing happens to the container; the main process keeps running. You can only exec into a <strong>running</strong> container.</p>
+<p><strong><code>docker attach</code></strong> does not create anything. It connects your terminal's stdin, stdout and stderr to the container's <strong>main process</strong>, the one started by <code>docker run</code>. You see exactly what that process prints and your keystrokes go to it. That matters: pressing <strong>Ctrl+C</strong> sends SIGINT to PID 1 (with the default signal proxying), and if it exits, the <strong>container stops</strong>. To leave without stopping, use the detach sequence <strong>Ctrl+P, Ctrl+Q</strong>, which works when the container was started with <code>-it</code> (customisable with <code>--detach-keys</code>).</p>
+<p>For debugging, <strong>exec is almost always what you want</strong>; attach is mainly useful for interactive programs started as the main process, like a REPL or a console-based app.</p>
+<p><strong>Minimal images</strong> (distroless, scratch) contain no shell, so <code>docker exec … sh</code> fails. Alternatives: <code>docker debug</code> in recent Docker Desktop versions, running a tools container that shares the target's namespaces (<code>docker run --pid container:web --network container:web nicolaka/netshoot</code>), or <code>kubectl debug</code> with an ephemeral container in Kubernetes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>exec</code>: runtime spawns process → joins container namespaces → runs → exits independently.</li>
+  <li><code>attach</code>: client connects to existing PID 1 streams via the daemon.</li>
+  <li>Detach keys disconnect the client without signalling the process.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name web nginx:1.27
+docker exec -it web sh              # new shell; exit leaves nginx running
+docker exec web nginx -t            # validate config
+docker exec -e DEBUG=1 -u 0 web env | grep DEBUG
+docker attach web                   # see nginx's stdout; Ctrl+C would stop it
+docker run --rm -it --network container:web --pid container:web nicolaka/netshoot</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th><code>docker exec</code></th><th><code>docker attach</code></th></tr></thead>
+<tbody>
+<tr><td>Process</td><td>New one</td><td>Existing main process</td></tr>
+<tr><td>Exit effect</td><td>Container keeps running</td><td>Ctrl+C may stop container</td></tr>
+<tr><td>Typical use</td><td>Debugging, admin commands</td><td>Interactive main process</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using attach to &quot;get a shell&quot; and killing the service with Ctrl+C.</li>
+  <li>Making manual fixes via exec in production that disappear on the next deploy.</li>
+  <li>Expecting exec to work on a stopped container.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;docker exec starts a new process inside an already running container, like docker exec -it web sh for a shell or docker exec db psql to run a client; when I leave, the container keeps running. docker attach doesn't start anything; it connects my terminal to the container's main process, PID 1. Ctrl+C there goes to the main process and may stop the container, while Ctrl+P then Ctrl+Q detaches safely if it was started with a terminal. For debugging I almost always use exec, and for images without a shell I use a debug container that shares the target's namespaces.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>No shell in the image?</strong> <code>docker debug</code>, a sidecar tools container sharing namespaces, or <code>kubectl debug</code>.</li>
+  <li><strong>Run exec as root?</strong> <code>docker exec -u 0</code>, if the runtime allows it.</li>
+  <li><strong>Can you exec into a stopped container?</strong> No; start it or <code>docker cp</code> files out.</li>
+</ul>
+</article>
+</body>
+</html>

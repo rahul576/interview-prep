@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-045 · Which securityContext settings do you apply to a typical application container, and why?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-045" data-topic="Kubernetes">
+<h1>Which securityContext settings do you apply to a typical application container, and why?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run as <strong>non-root</strong> with an explicit UID, set <strong>allowPrivilegeEscalation: false</strong>, <strong>readOnlyRootFilesystem: true</strong> (with <strong>emptyDir</strong> for writable paths), <strong>drop ALL capabilities</strong>, use <strong>seccompProfile: RuntimeDefault</strong>, and enforce the <strong>restricted Pod Security Standard</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A container is just a process on a shared kernel. If an attacker exploits the application, the securityContext decides how much they can do next. Each setting removes one capability an attacker would use.</p>
+<p><strong>runAsNonRoot: true</strong> with <strong>runAsUser/runAsGroup</strong> (for example 10001) ensures the process is not UID 0, so a container escape bug or a mounted host path is far less dangerous, and the kubelet refuses to start an image that would run as root. <strong>allowPrivilegeEscalation: false</strong> sets the <code>no_new_privs</code> flag, so setuid binaries like <code>su</code> cannot gain privileges. <strong>readOnlyRootFilesystem: true</strong> stops an attacker from dropping tools or modifying application files; apps that need scratch space get an <strong>emptyDir</strong> mounted at <code>/tmp</code> or a cache directory.</p>
+<p>Linux <strong>capabilities</strong> split root's power into pieces. Container runtimes grant a default set (such as <code>CHOWN</code>, <code>SETUID</code>, <code>NET_RAW</code>); <strong>drop: [ALL]</strong> removes them, and you add back only what is truly needed, like <code>NET_BIND_SERVICE</code> for ports under 1024, which is rarely needed because a container can listen on 8080 behind a Service on 80. <strong>seccompProfile: RuntimeDefault</strong> blocks dangerous syscalls. Never use <code>privileged: true</code>, <code>hostNetwork</code>, <code>hostPID</code> or <code>hostPath</code> for normal apps.</p>
+<p>These settings match the <strong>restricted</strong> level of <strong>Pod Security Standards</strong>. Labelling namespaces with <code>pod-security.kubernetes.io/enforce: restricted</code> makes Pod Security Admission reject regressions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build images with a non-root <code>USER</code> and files owned correctly.</li>
+  <li>Set pod-level <code>runAsNonRoot</code>, <code>runAsUser</code>, <code>fsGroup</code> and seccomp.</li>
+  <li>Set container-level privilege escalation, read-only root and capability drops.</li>
+  <li>Mount emptyDir volumes for paths the app writes.</li>
+  <li>Enforce <code>restricted</code> via namespace labels; use <code>warn</code>/<code>audit</code> first.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: api
+      image: registry.example.com/api@sha256:3f1c...
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [&quot;ALL&quot;] }
+      volumeMounts:
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: tmp
+      emptyDir: { sizeLimit: 256Mi }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting <code>runAsNonRoot</code> on an image whose user is root, causing CreateContainerConfigError.</li>
+  <li>Disabling read-only root instead of finding the write path.</li>
+  <li>Adding <code>SYS_ADMIN</code> &quot;to make it work&quot;.</li>
+  <li>Not enforcing Pod Security, so settings drift back.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For a normal service I run as non-root with an explicit UID and group, set allowPrivilegeEscalation false so setuid binaries can't elevate, and make the root filesystem read-only with an emptyDir for /tmp or caches. I drop all capabilities and add back only what's needed, which is almost never anything since the app can listen on a high port. I use the RuntimeDefault seccomp profile and never privileged or host namespaces. That matches the restricted Pod Security Standard, so I enforce it per namespace to catch regressions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>App fails with readOnlyRootFilesystem?</strong> Find the write path from logs or <code>strace</code>, mount an emptyDir there, or configure the app to write elsewhere.</li>
+  <li><strong>Pod-level vs container-level?</strong> Pod-level sets defaults; container-level overrides and holds capabilities and read-only root.</li>
+  <li><strong>What about user namespaces?</strong> <code>hostUsers: false</code> maps container root to an unprivileged host UID for extra isolation where supported.</li>
+</ul>
+</article>
+</body>
+</html>

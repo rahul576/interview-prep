@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-422 · Design a chat application like WhatsApp for one-to-one and group messaging.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-422" data-topic="System Design">
+<h1>Design a chat application like WhatsApp for one-to-one and group messaging.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A WhatsApp-style chat keeps <strong>persistent WebSocket connections</strong> to <strong>gateway servers</strong>, tracks <strong>presence</strong> (which gateway holds which user), assigns <strong>per-conversation sequence numbers</strong>, stores messages in a <strong>write-optimised store partitioned by conversation</strong>, routes via a <strong>broker</strong>, and handles <strong>offline delivery, push notifications, receipts and idempotent sends</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Connections:</strong> each client keeps a long-lived <strong>WebSocket</strong> (or MQTT, which WhatsApp historically used a variant of) to a <strong>gateway/connection server</strong>. A single tuned server can hold hundreds of thousands of connections, so the fleet holds millions. A <strong>presence/session service</strong> (Redis) maps <code>userId -&gt; gatewayId</code> and tracks last seen.</p>
+<p><strong>Sending:</strong> the client sends a message with a <strong>client-generated message ID</strong>. The chat service checks membership, assigns a <strong>monotonic sequence number per conversation</strong> (ordering is only needed within a conversation, not globally), persists it, and <strong>acks to the sender</strong> (single tick). Persist before ack so nothing acknowledged is lost.</p>
+<p><strong>Storage:</strong> a write-heavy, append-mostly workload suits <strong>Cassandra/ScyllaDB</strong> or HBase, with <strong>partition key = conversation ID</strong> and <strong>clustering by sequence</strong>, so fetching recent messages of a chat is one partition scan. Large group partitions may be bucketed by time.</p>
+<p><strong>Routing:</strong> the service publishes to a broker (Kafka, or a direct gateway-to-gateway RPC using the presence map). The recipient's gateway pushes the message over its socket. If the recipient is <strong>offline</strong>, the message waits in storage (per-user inbox of undelivered message IDs) and a <strong>push notification</strong> goes through <strong>APNs/FCM</strong>; on reconnect, the client syncs from its last received sequence number.</p>
+<p><strong>Receipts:</strong> delivered and read receipts are small messages flowing back the same path. <strong>Groups</strong> fan out per member (small groups) with a members list cached. <strong>Media</strong> is uploaded to object storage via presigned URLs, and only a reference is sent. With <strong>end-to-end encryption</strong> (Signal protocol), the server only stores ciphertext.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client connects via WebSocket, authenticates, presence registers its gateway.</li>
+  <li>Sender submits <code>{clientMsgId, convId, body}</code>.</li>
+  <li>Service dedupes on clientMsgId, assigns <code>seq</code>, writes to Cassandra, acks the sender.</li>
+  <li>Lookup recipient gateways; deliver, or enqueue offline and send push.</li>
+  <li>Recipient acks delivery -&gt; delivered receipt to sender; later read receipt.</li>
+  <li>On reconnect, client requests messages with <code>seq &gt; lastSeen</code> per conversation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE messages (
+  conversation_id uuid,
+  bucket          int,          -- e.g. month, keeps partitions bounded
+  seq             bigint,
+  message_id      uuid,         -- client-generated, for idempotency
+  sender_id       uuid,
+  body            blob,         -- ciphertext if E2E encrypted
+  sent_at         timestamp,
+  PRIMARY KEY ((conversation_id, bucket), seq)
+) WITH CLUSTERING ORDER BY (seq DESC);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using HTTP polling instead of persistent connections.</li>
+  <li>Global ordering with timestamps from client clocks.</li>
+  <li>Acking the sender before the message is durably stored.</li>
+  <li>No client message ID, so retries create duplicates.</li>
+  <li>Sending media bytes through the chat servers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Clients keep WebSocket connections to gateway servers, and a presence service in Redis records which gateway each user is on. When a message arrives, the chat service dedupes on the client message ID, assigns a sequence number per conversation, stores it in Cassandra partitioned by conversation, and acks the sender. It's routed via a broker to the recipient's gateway; if they're offline it waits in storage and we send a push through APNs or FCM, and the client syncs from its last sequence on reconnect. Receipts flow back the same way, groups fan out per member, and media goes to object storage.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>End-to-end encryption?</strong> Signal protocol: keys on devices, server stores ciphertext and distributes public key bundles; groups use sender keys.</li>
+  <li><strong>Multi-device?</strong> Each device has its own connection and encryption session; fan out per device.</li>
+  <li><strong>Large groups of 1,000?</strong> Fan out asynchronously, cache membership, or use fan-out-on-read for very large channels.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-002 · What is the KV cache, and why does it limit how many concurrent requests a GPU can serve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-002" data-topic="LLMOps &amp; RAG">
+<h1>What is the KV cache, and why does it limit how many concurrent requests a GPU can serve?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>KV cache</strong> stores each previous token's <strong>attention keys and values</strong> so decode does not recompute them; it <strong>grows with sequence length, layers and batch size</strong> and shares GPU memory with the weights, so it <strong>caps concurrency</strong>; mitigations are <strong>paged allocation, FP8 KV, prefix sharing and offloading</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In self-attention, each new token's query is compared with the <strong>keys</strong> of all earlier tokens and combines their <strong>values</strong>. Without a cache, generating token 1,000 would mean recomputing keys and values for the 999 tokens before it at every layer, making generation quadratic. The <strong>KV cache</strong> keeps them in GPU memory; each decode step computes keys and values only for the new token and appends them.</p>
+<p>The cost is memory. Per token, the cache holds <code>2 (K and V) x layers x KV heads x head dimension x bytes</code>. For a Llama-3-style 70B model (80 layers, 8 KV heads thanks to <strong>grouped-query attention</strong>, head dim 128, BF16) that is about <strong>320 KB per token</strong>. A single 32K-token conversation needs about <strong>10 GB</strong>; 64 such conversations would need 640 GB.</p>
+<p>On an 80 GB GPU (or a group of GPUs), the weights take a fixed chunk; <strong>what is left is the KV budget</strong>, and that budget, measured in tokens, decides how many sequences can run at once. Concurrency is therefore not &quot;requests&quot; but &quot;total cached tokens&quot;: a few long-context users can consume as much cache as dozens of short chats. When the cache is full, engines <strong>queue</strong> new requests or <strong>preempt</strong> running ones (swapping or recomputing), and throughput and latency degrade.</p>
+<p>Mitigations:</p>
+<ul>
+  <li><strong>PagedAttention</strong> allocates the cache in small blocks on demand, avoiding fragmentation and over-reservation.</li>
+  <li><strong>Quantised KV cache</strong> (FP8, sometimes INT4) roughly halves memory.</li>
+  <li><strong>Prefix caching/sharing</strong> stores a common system prompt once for many requests.</li>
+  <li><strong>Offloading</strong> cold blocks to CPU memory or SSD tiers (for example LMCache).</li>
+  <li>Architectural choices like <strong>GQA/MQA</strong>, multi-head latent attention, and sliding-window attention reduce cache size per token.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Prefill writes K and V for every prompt token in every layer.</li>
+  <li>Each decode step computes K and V for one new token and appends them.</li>
+  <li>Attention reads the whole cache for that sequence.</li>
+  <li>The scheduler admits requests only while cache blocks are free.</li>
+  <li>When a sequence ends, its blocks are freed or kept for prefix reuse.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve meta-llama/Llama-3.1-70B-Instruct \
+  --tensor-parallel-size 4 \
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 32768 \
+  --kv-cache-dtype fp8 \
+  --enable-prefix-caching
+# Startup log reports the KV cache size in tokens and the max concurrency at max-model-len</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sizing GPUs from weight size only.</li>
+  <li>Allowing 128K context on a deployment sized for short chats.</li>
+  <li>Thinking concurrency is a fixed number of requests rather than tokens.</li>
+  <li>Ignoring preemption metrics when latency spikes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The KV cache stores the attention keys and values of all previous tokens so each decode step only computes them for the new token instead of recomputing the whole sequence. Its size grows linearly with sequence length, number of layers and KV heads, and the number of sequences in the batch, so long prompts can take gigabytes each. It shares GPU memory with the weights, so whatever is left after loading the model decides how many tokens, and therefore requests, can run concurrently. Engines mitigate it with paged allocation, FP8 KV caches, prefix sharing and CPU offload.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might longer prompts collapse throughput?</strong> Each request takes more cache, so fewer fit, and preemption starts.</li>
+  <li><strong>What is GQA?</strong> Several query heads share one key/value head, shrinking the cache.</li>
+  <li><strong>Does prefix caching save memory?</strong> Yes, shared prefix blocks are stored once and reused.</li>
+</ul>
+</article>
+</body>
+</html>

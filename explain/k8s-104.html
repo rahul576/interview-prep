@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-104 · Some replicas of a Deployment keep failing their health checks and restarting while others are fine. How do you find the root cause and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-104" data-topic="Kubernetes">
+<h1>Some replicas of a Deployment keep failing their health checks and restarting while others are fine. How do you find the root cause and fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>When only <strong>some replicas</strong> fail health checks, compare <strong>failing versus healthy pods</strong>: read <strong>probe failure events and restart reasons</strong>, check <strong>previous logs</strong>, verify <strong>probe configuration</strong>, look for <strong>CPU throttling or OOMKills</strong>, and look for a common <strong>node, version or dependency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>If all replicas failed, I would suspect the code or configuration. Partial failure points to something that <strong>differs between pods</strong>, so the investigation is a comparison.</p>
+<p><code>kubectl get pods -o wide</code> shows restart counts and nodes; if failing pods cluster on one node, suspect that node (network, disk, noisy neighbour). <code>kubectl describe pod</code> shows events like <code>Liveness probe failed: Get &quot;http://10.2.3.4:8080/healthz&quot;: context deadline exceeded</code> or <code>HTTP probe failed with statuscode: 500</code>, and <strong>Last State: Terminated, Reason: OOMKilled or Error, Exit Code 137</strong>. <code>kubectl logs --previous</code> shows what the crashed container said before dying.</p>
+<p><strong>Probe configuration</strong>: right path and port, <code>timeoutSeconds</code> not too short (default 1 second), sensible <code>failureThreshold</code> and <code>periodSeconds</code>. Slow starters like JVM services need a <strong>startup probe</strong>, otherwise liveness kills them mid-start, especially on busier nodes where startup is slower.</p>
+<p><strong>Resources</strong>: pods on busy nodes, or with tight <strong>CPU limits</strong>, get <strong>CFS throttling</strong>, respond slowly and fail probes; those over their <strong>memory limit</strong> are OOMKilled. Compare image tags too: during a stuck rollout, half the pods may run a new, broken version. Check configuration and <strong>dependencies</strong>: if liveness calls a slow database, pods restart for a problem that restarting cannot fix, which is why liveness should not check dependencies. If a recent rollout caused it, <code>kubectl rollout undo</code> is the quick escape while you investigate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List pods with nodes, restarts and image versions.</li>
+  <li>Describe failing pods: probe events and last termination reason.</li>
+  <li>Read current and previous logs.</li>
+  <li>Verify probe settings and add a startup probe where needed.</li>
+  <li>Check throttling and memory metrics per pod.</li>
+  <li>Compare nodes, versions, config and dependencies; fix or roll back.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get pods -l app=search -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName,RESTARTS:.status.containerStatuses[0].restartCount,IMAGE:.spec.containers[0].image
+kubectl describe pod search-5f7c-xk2 | grep -E &quot;Last State|Reason|Exit Code|probe failed&quot;
+kubectl logs search-5f7c-xk2 --previous | tail -50
+kubectl rollout undo deploy/search   # if a recent rollout is the common factor</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Increasing timeouts blindly without finding why responses are slow.</li>
+  <li>Reading only current logs and missing the crash in <code>--previous</code>.</li>
+  <li>Liveness probes that check databases or other services.</li>
+  <li>Ignoring that failing pods share a node or image version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Because only some replicas fail, I look for what differs. kubectl get pods -o wide shows restarts and nodes, describe shows the probe failure events and last termination reason, such as a timeout, a 500 or OOMKilled, and logs --previous shows what the crashed container said. I check the probe configuration, path, port, timeouts and thresholds, and add a startup probe for slow starters. Then resources: CPU throttling makes pods slow to answer probes and memory limits cause OOMKills. I compare node, image version, config and dependencies, and if a recent rollout is the cause I roll back first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should liveness not check downstream dependencies?</strong> Restarting your pod cannot fix the database, and it restarts every replica at once.</li>
+  <li><strong>What does exit code 137 mean?</strong> The process got SIGKILL, often from the OOM killer.</li>
+  <li><strong>How do you spot CPU throttling?</strong> container_cpu_cfs_throttled_periods_total relative to total periods.</li>
+</ul>
+</article>
+</body>
+</html>

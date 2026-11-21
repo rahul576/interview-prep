@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-108 · How do you manage many applications and environments in Argo CD?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-108" data-topic="GitOps &amp; Helm">
+<h1>How do you manage many applications and environments in Argo CD?</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In Argo CD each deployable unit is an <strong>Application</strong> (source repo path/chart → destination cluster/namespace); at scale you generate them with the <strong>app-of-apps</strong> pattern or, better, <strong>ApplicationSets</strong> with generators (cluster, Git directory, list, matrix), isolate teams with <strong>AppProjects and RBAC</strong>, use <strong>automated sync with prune and self-heal</strong>, and order resources with <strong>sync waves and hooks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>Application</strong> CRD says: render this <strong>source</strong> (plain YAML, Kustomize overlay or Helm chart with values) and keep it in sync with this <strong>destination</strong> (cluster plus namespace). Writing hundreds of Applications by hand doesn't scale.</p>
+<p><strong>App of apps:</strong> a root Application points to a directory containing other Application manifests, so syncing one root creates the rest. It is simple but still means writing each child.</p>
+<p><strong>ApplicationSet</strong> is the modern answer: a controller that <strong>templates Applications from generators</strong>:</p>
+<ul>
+  <li><strong>Cluster generator:</strong> one Application per registered cluster matching labels (for example <code>env=prod</code>).</li>
+  <li><strong>Git directory/file generator:</strong> one per folder like <code>apps/*/overlays/prod</code> or per config file.</li>
+  <li><strong>List</strong>, <strong>matrix</strong> (combine services × clusters) and <strong>pull request</strong> generators (preview environments).</li>
+</ul>
+<p>Adding a new service becomes &quot;add a folder&quot;, adding a cluster becomes &quot;register it with a label&quot;.</p>
+<p><strong>AppProjects</strong> are the guardrails: which source repos, destination clusters and namespaces, and which resource kinds a team may use, plus <strong>RBAC roles</strong> and <strong>sync windows</strong> (for example no prod syncs on Friday evenings). Combined with SSO groups, team A cannot deploy into team B's namespace.</p>
+<p><strong>Sync policy:</strong> <code>automated</code> syncs on every Git change; <code>prune</code> deletes resources removed from Git; <code>selfHeal</code> reverts manual drift. <strong>Sync waves</strong> (<code>argocd.argoproj.io/sync-wave</code> annotation) order resources, and <strong>hooks</strong> (PreSync, Sync, PostSync, SyncFail) run Jobs such as <strong>database migrations before the Deployment</strong> or smoke tests afterwards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Repo layout: <code>apps/&lt;service&gt;/base</code> plus <code>overlays/&lt;env&gt;</code>, or Helm values per env.</li>
+  <li>One ApplicationSet per pattern generates Applications for every service/env/cluster.</li>
+  <li>Each generated Application belongs to a team AppProject.</li>
+  <li>Argo CD syncs automatically with prune and self-heal.</li>
+  <li>Waves and hooks order CRDs, config, migrations and workloads.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: { name: payments-services, namespace: argocd }
+spec:
+  goTemplate: true
+  generators:
+    - matrix:
+        generators:
+          - git:
+              repoURL: https://github.com/acme/deploy-config
+              revision: main
+              directories: [ { path: &quot;apps/payments/*&quot; } ]
+          - clusters: { selector: { matchLabels: { env: prod } } }
+  template:
+    metadata: { name: &quot;{{.path.basename}}-{{.name}}&quot; }
+    spec:
+      project: payments
+      source:
+        repoURL: https://github.com/acme/deploy-config
+        targetRevision: main
+        path: &quot;{{.path.path}}/overlays/prod&quot;
+      destination: { server: &quot;{{.server}}&quot;, namespace: payments }
+      syncPolicy: { automated: { prune: true, selfHeal: true } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Everyone in the <code>default</code> project with no restrictions.</li>
+  <li>One giant Application containing every service.</li>
+  <li>Enabling prune without understanding it deletes resources removed from Git.</li>
+  <li>Using hooks for long-running work without timeouts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each deployable unit is an Argo CD Application pointing to a repo path, Kustomize overlay or Helm chart and a destination cluster and namespace. To manage many I use ApplicationSets: for example a Git directory generator combined with a cluster generator creates one Application per service per production cluster automatically, so onboarding is adding a folder. AppProjects restrict which repos, clusters and namespaces each team can use, with RBAC tied to SSO groups and sync windows. Applications sync automatically with prune and self-heal, and sync waves and hooks handle ordering, like running a migration job before the deployment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you promote staging to prod?</strong> A PR that copies the image tag or chart version from the staging overlay to prod, possibly automated with Kargo or a pipeline.</li>
+  <li><strong>App of apps vs ApplicationSet?</strong> App of apps is manual composition; ApplicationSet generates Applications from data.</li>
+  <li><strong>How do you prevent risky syncs at peak times?</strong> Sync windows on the AppProject.</li>
+</ul>
+</article>
+</body>
+</html>

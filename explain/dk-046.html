@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-046 · What are best practices for a Node.js or Python Dockerfile?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-046" data-topic="Docker">
+<h1>What are best practices for a Node.js or Python Dockerfile?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Copy <strong>dependency manifests and lock files first</strong> for layer caching, install reproducibly with <strong><code>npm ci</code></strong> or <strong><code>pip install --no-cache-dir</code></strong>, ship <strong>production dependencies only</strong> via <strong>multi-stage builds</strong>, use a <strong>slim base and non-root user</strong>, set <strong><code>NODE_ENV=production</code></strong> or <strong><code>PYTHONUNBUFFERED=1</code></strong>, and run in <strong>exec form</strong> so signals work.</p>
+
+<h2>Detailed explanation</h2>
+<p>The single most important optimisation for interpreted languages is <strong>layer ordering</strong>. Dependencies change rarely while source code changes constantly, so copy only <code>package.json</code> and <code>package-lock.json</code> (or <code>requirements.txt</code>, <code>poetry.lock</code>, <code>uv.lock</code>) first, install, and only then <code>COPY</code> the source. A code change reuses the cached dependency layer and a rebuild takes seconds.</p>
+<p>Installs must be <strong>reproducible from the lock file</strong>. For Node, <code>npm ci</code> installs exactly what the lock file says and fails if it is out of sync; <code>npm ci --omit=dev</code> skips dev dependencies. For Python, install pinned requirements with <code>pip install --no-cache-dir</code> (no pip cache in the layer), or use Poetry/uv to export locked requirements. Packages with native extensions need a compiler, so use a <strong>multi-stage build</strong>: build wheels or <code>node_modules</code> in a full image and copy them into a <strong>slim</strong> runtime. A <strong><code>.dockerignore</code></strong> must exclude local <code>node_modules</code>, <code>.venv</code>, <code>__pycache__</code> and <code>.git</code>; laptop-built native modules may be for another OS or CPU and break the container.</p>
+<p>Runtime settings matter. <strong><code>NODE_ENV=production</code></strong> makes many frameworks enable production optimisations. <strong><code>PYTHONUNBUFFERED=1</code></strong> sends logs to stdout immediately instead of buffering, and <strong><code>PYTHONDONTWRITEBYTECODE=1</code></strong> avoids writing <code>.pyc</code> files. Run as a <strong>non-root user</strong> (the Node image provides <code>node</code>). Start the process in <strong>exec form</strong>, directly (<code>node server.js</code>, <code>gunicorn</code>) rather than via <code>npm start</code>, which adds an extra process that may not forward signals, or use <code>--init</code>/tini.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Copy manifest and lock file.</li>
+  <li>Install dependencies in a cached layer (optionally with a BuildKit cache mount).</li>
+  <li>Copy source and build assets.</li>
+  <li>Copy runtime pieces into a slim final stage.</li>
+  <li>Set environment, user and exec-form CMD.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM node:22-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+FROM node:22-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node . .
+USER node
+CMD [&quot;node&quot;, &quot;server.js&quot;]</code></pre>
+<pre><code class="language-dockerfile">FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+RUN useradd --system --uid 10001 app
+USER 10001
+CMD [&quot;gunicorn&quot;, &quot;-b&quot;, &quot;0.0.0.0:8000&quot;, &quot;app:app&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>COPY . .</code> before installing dependencies, invalidating the cache on each change.</li>
+  <li><code>npm install</code> instead of <code>npm ci</code>, giving non-reproducible builds.</li>
+  <li>Copying local <code>node_modules</code> into the image.</li>
+  <li><code>CMD npm start</code>, leaving signals unhandled.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For both I copy only the manifest and lock file first, install dependencies, then copy the source, so code changes reuse the cached dependency layer. Installs are reproducible from the lock file, npm ci for Node and pip install --no-cache-dir for Python, with production dependencies only, often in a multi-stage build. I use a slim base and a non-root user. Node gets NODE_ENV=production, Python PYTHONUNBUFFERED=1 so logs appear immediately, and I run the process directly in exec form or with an init so signals work, not through npm start.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why never copy local node_modules?</strong> They may be built for another OS or architecture and break reproducibility.</li>
+  <li><strong>Why avoid npm start as CMD?</strong> npm adds a process that may not forward SIGTERM.</li>
+  <li><strong>How do you handle native extensions?</strong> Build them in a full stage, copy results into slim.</li>
+</ul>
+</article>
+</body>
+</html>

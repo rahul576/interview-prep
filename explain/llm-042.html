@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-042 · Your RAG endpoint takes eight seconds per answer. How do you bring latency down?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-042" data-topic="LLMOps &amp; RAG">
+<h1>Your RAG endpoint takes eight seconds per answer. How do you bring latency down?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Measure each stage</strong> (rewrite, embed, search, rerank, prompt build, time to first token, generation), then fix the biggest: <strong>stream</strong> output, use <strong>smaller models</strong> for auxiliary steps, <strong>send fewer, better chunks</strong>, <strong>prompt caching</strong>, <strong>parallel and cached retrieval</strong>, tuned <strong>index and reranker</strong>, and <strong>co-located, warm</strong> endpoints.</p>
+
+<h2>Detailed explanation</h2>
+<p>Eight seconds is an average of several stages, and without tracing you will optimise the wrong one. Instrument a request with spans (OpenTelemetry works well) and look at p50 and p95 per stage.</p>
+<p>Usually <strong>generation dominates</strong>: time to first token (driven by prompt length, model size and provider load) plus output tokens divided by tokens per second. The second offender is <strong>extra LLM calls before retrieval</strong>, such as query rewriting, classification or HyDE, each adding a full round trip.</p>
+<p>Fixes by stage:</p>
+<ul>
+  <li><strong>Perceived latency:</strong> <strong>stream</strong> tokens so users see text within about a second; show sources early.</li>
+  <li><strong>Pre-retrieval calls:</strong> use a small, fast model for rewriting, skip rewriting for first-turn standalone questions, or merge classification and rewriting into one call.</li>
+  <li><strong>Context size:</strong> 20 chunks of 800 tokens is 16k tokens of prefill; after reranking, 5 good chunks often answer better and faster.</li>
+  <li><strong>Prompt caching:</strong> put the stable system prompt and tool definitions first so the provider can cache the prefix.</li>
+  <li><strong>Output length:</strong> concise answer instructions and a sensible max token limit.</li>
+  <li><strong>Retrieval:</strong> run vector, keyword and other sources <strong>in parallel</strong>; cache query embeddings and results for frequent questions; tune ANN parameters (for HNSW, <code>ef_search</code>) for the recall/latency balance.</li>
+  <li><strong>Reranking:</strong> limit to 20-50 candidates or use a smaller cross-encoder.</li>
+  <li><strong>Infrastructure:</strong> same region for app, search and model; keep connections and self-hosted endpoints warm.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Trace and build a per-stage latency breakdown.</li>
+  <li>Fix perceived latency with streaming.</li>
+  <li>Remove or shrink pre-retrieval LLM calls.</li>
+  <li>Trim context and output; enable prompt caching.</li>
+  <li>Parallelise and cache retrieval; tune index and reranker.</li>
+  <li>Re-measure and check quality did not drop.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Before (p50)                      After
+rewrite (large model)   1.4 s  -&gt; small model / skipped  0.3 s
+embed + search          0.6 s  -&gt; parallel, cached       0.3 s
+rerank 100 chunks       0.9 s  -&gt; 30 chunks              0.3 s
+TTFT (16k ctx)          2.1 s  -&gt; 5k ctx + cache         0.8 s
+generation (600 tok)    3.0 s  -&gt; 300 tok, streamed      1.5 s (first text at ~1.7 s)
+total                   8.0 s  -&gt; 3.2 s</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising the vector database when generation is 70% of the time.</li>
+  <li>Sending every retrieved chunk &quot;just in case&quot;.</li>
+  <li>Variable content at the start of the prompt, breaking prompt caching.</li>
+  <li>Measuring averages only, not p95.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd trace a request and measure every stage: rewrite, embedding, search, rerank, prompt build, time to first token and generation. Usually generation dominates, followed by LLM calls before retrieval. So I'd stream the answer, use a small model for query rewriting or skip it when not needed, send fewer, better chunks after reranking, put stable content first for prompt caching, and limit output length. On retrieval I'd parallelise sources, cache embeddings for frequent queries, tune index parameters and limit reranking candidates. Then I'd verify that quality held, because latency gains that hurt answers aren't gains.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Latency budget per stage?</strong> For example rewrite 300 ms, retrieval 300 ms, rerank 300 ms, TTFT under 1 s.</li>
+  <li><strong>Speculative retrieval?</strong> Start retrieving with the raw query while rewriting runs in parallel.</li>
+  <li><strong>Self-hosted?</strong> Continuous batching, KV cache sizing, quantisation, speculative decoding.</li>
+</ul>
+</article>
+</body>
+</html>

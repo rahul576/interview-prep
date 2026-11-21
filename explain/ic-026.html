@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-026 · How do loops and conditionals work in Ansible tasks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-026" data-topic="Configuration Management">
+<h1>How do loops and conditionals work in Ansible tasks?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>loop</strong> runs a task once per item (<code>item</code>), with <strong>dict2items</strong> and <strong>loop_control</strong> for structures and labels; <strong>when</strong> adds conditions on variables, facts or registered results; <strong>until/retries/delay</strong> retries a task until a condition holds.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Loops.</strong> <code>loop:</code> takes a list and runs the task for each element, available as <code>{{ item }}</code>. To iterate over a dictionary, convert it with <code>{{ users | dict2items }}</code>, which yields <code>item.key</code> and <code>item.value</code>. Nested data can be flattened with filters like <code>subelements</code> or <code>product</code>. <code>loop_control</code> adjusts behaviour: <code>loop_var</code> renames <code>item</code> (essential when including tasks that loop themselves), <code>label</code> shortens noisy output, <code>index_var</code> gives the index, and <code>pause</code> waits between iterations. The older <code>with_items</code> style still works but <code>loop</code> is the modern form.</p>
+<p><strong>Conditionals.</strong> <code>when:</code> takes a raw Jinja2 expression (no <code>{{ }}</code>) and skips the task if false. Conditions can use variables, facts (<code>ansible_facts['os_family'] == 'Debian'</code>), registered results (<code>result.rc != 0</code>, <code>result is changed</code>), or tests like <code>is defined</code>. A list under <code>when</code> means all conditions must be true. When combined with a loop, <code>when</code> is evaluated <strong>per item</strong>, so you can act only on matching elements, such as creating only users with <code>active: true</code>.</p>
+<p><strong>Retries.</strong> <code>until:</code> with <code>retries</code> and <code>delay</code> repeats a task until the condition becomes true, which is the standard way to wait for something like an HTTP health endpoint or a cluster to become ready.</p>
+<p>Performance note: many modules such as <code>apt</code>, <code>dnf</code> and <code>package</code> accept a <strong>list</strong> in <code>name</code>. Passing the list directly installs everything in <strong>one transaction</strong>, which is much faster than looping one package at a time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ansible evaluates the loop expression to a list.</li>
+  <li>For each item it evaluates <code>when</code>.</li>
+  <li>If true, it runs the module with that item.</li>
+  <li>Results are collected in <code>result.results</code> if registered.</li>
+  <li>With <code>until</code>, the task repeats until the condition passes or retries are exhausted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- name: Install packages on Debian family (single transaction)
+  ansible.builtin.apt:
+    name: [nginx, curl, jq]
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Create active users only
+  ansible.builtin.user:
+    name: &quot;{{ item.key }}&quot;
+    shell: &quot;{{ item.value.shell | default('/bin/bash') }}&quot;
+  loop: &quot;{{ users | dict2items }}&quot;
+  loop_control:
+    label: &quot;{{ item.key }}&quot;
+  when: item.value.active
+
+- name: Wait until the app is healthy
+  ansible.builtin.uri:
+    url: http://localhost:8080/health
+  register: health
+  until: health.status == 200
+  retries: 10
+  delay: 5</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Wrapping <code>when</code> expressions in <code>{{ }}</code>.</li>
+  <li>Looping over packages instead of passing a list.</li>
+  <li>Nested includes both using <code>item</code>, overwriting each other (use <code>loop_var</code>).</li>
+  <li><code>until</code> without <code>register</code>, so the condition has nothing to test.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;loop runs a task once per element, with the current element as item; dictionaries are iterated with dict2items, and loop_control lets me rename the loop variable or set a label for cleaner output. when adds conditions based on variables, facts or registered results, like os_family equals Debian, so one playbook covers several platforms, and with a loop it's evaluated per item, so I can create only active users. until with retries and delay repeats a task until, say, a health endpoint responds. And for packages I pass the list directly to the module, which is one transaction instead of many.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is passing a list of packages to apt faster than looping?</strong> One dependency resolution and transaction instead of one per package.</li>
+  <li><strong>How do you loop over nested lists?</strong> Filters like <code>subelements</code>, <code>product</code> or <code>flatten</code>.</li>
+  <li><strong>How do you check whether a registered task changed?</strong> <code>when: result is changed</code>.</li>
+</ul>
+</article>
+</body>
+</html>

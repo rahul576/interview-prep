@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-106 · What is a multi-stage Docker build, and why use it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-106" data-topic="Docker">
+<h1>What is a multi-stage Docker build, and why use it?</h1>
+<p class="ex-meta">Docker · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>multi-stage build</strong> uses <strong>several <code>FROM</code> stages</strong> in one Dockerfile: early stages contain the <strong>SDK, compilers and build tools</strong>, and the final stage starts from a <strong>small runtime image</strong> (JRE, slim, distroless) and uses <strong><code>COPY --from</code></strong> to take only the built artifact, giving <strong>smaller, faster, more secure images</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before multi-stage builds, teams either shipped the whole JDK, Maven, source code and caches in production images (hundreds of megabytes and many CVEs) or maintained separate &quot;builder&quot; Dockerfiles and shell scripts to copy artifacts between them. Multi-stage builds solve this inside one Dockerfile.</p>
+<p>Each <code>FROM</code> starts a new <strong>stage</strong>, optionally named with <code>AS</code>. A build stage can use a heavy image such as <code>maven:3.9-eclipse-temurin-21</code> to compile code and run <code>mvn package</code>. The final stage starts fresh from a minimal image like <code>eclipse-temurin:21-jre</code>, an Alpine image or a <strong>distroless</strong> image, and copies only what's needed with <strong><code>COPY --from=build /src/target/app.jar /app/app.jar</code></strong>. Everything else (compilers, source code, test tools, dependency caches) stays in the discarded stages and <strong>never reaches the final image</strong>.</p>
+<p>Benefits:</p>
+<ul>
+  <li><strong>Size:</strong> a Java service can drop from 700+ MB to under 200 MB; a Go binary on <code>scratch</code> or <code>distroless/static</code> can be a few megabytes. Smaller images pull and start faster.</li>
+  <li><strong>Security:</strong> fewer packages means a smaller <strong>attack surface</strong> and fewer CVEs to patch; no build tools for an attacker to use.</li>
+  <li><strong>Simplicity:</strong> one Dockerfile, reproducible builds in CI and locally.</li>
+</ul>
+<p>With <strong>BuildKit</strong>, stages the final target does not depend on are <strong>skipped</strong>, and independent stages run <strong>in parallel</strong>. You can build a specific stage with <strong><code>--target</code></strong>, for example a <code>test</code> stage in CI that runs unit tests, without producing the runtime image.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stage <code>build</code>: full SDK, copy dependency manifest, download dependencies, copy source, compile.</li>
+  <li>Optional stage <code>test</code>: run tests from the build stage.</li>
+  <li>Final stage: minimal runtime base, non-root user.</li>
+  <li><code>COPY --from=build</code> brings in only the artifact.</li>
+  <li>Only the final stage's layers are in the pushed image.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+RUN mvn -q dependency:go-offline
+COPY src ./src
+RUN mvn -q package -DskipTests
+
+FROM build AS test
+RUN mvn -q test
+
+FROM gcr.io/distroless/java21-debian12:nonroot
+COPY --from=build /src/target/app.jar /app/app.jar
+EXPOSE 8080
+ENTRYPOINT [&quot;java&quot;, &quot;-jar&quot;, &quot;/app/app.jar&quot;]</code></pre>
+<pre><code class="language-bash">docker build --target test .         # CI: run tests
+docker build -t orders:1.4.2 .       # final runtime image</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying the whole build directory instead of only the artifact.</li>
+  <li>Using the SDK image as the final stage &quot;temporarily&quot;.</li>
+  <li>Forgetting runtime dependencies (CA certificates, timezone data, shared libraries) in very minimal bases.</li>
+  <li>Not naming stages, making <code>COPY --from=0</code> fragile.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A multi-stage build uses several FROM stages in one Dockerfile. The first stage has everything needed to build, for example Maven and a JDK to run <code>mvn package</code>. The final stage starts from a small runtime image, like a JRE or distroless image, and uses <code>COPY --from=build</code> to take only the jar. Compilers, source, caches and test tools never reach the final image, so it's much smaller, pulls and starts faster, and has a smaller attack surface with fewer CVEs. With BuildKit, independent stages run in parallel, and I can target an intermediate stage with <code>--target test</code> to run tests in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What are distroless images?</strong> Images with only the app runtime and its libraries, no shell or package manager; secure but harder to debug.</li>
+  <li><strong>How do you debug a distroless container?</strong> Use a <code>:debug</code> variant in test, or attach a debug container sharing its namespaces, or <code>kubectl debug</code>.</li>
+  <li><strong>Can you copy from an external image?</strong> Yes, <code>COPY --from=nginx:1.27 /etc/nginx/nginx.conf /tmp/</code>.</li>
+</ul>
+</article>
+</body>
+</html>

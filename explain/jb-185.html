@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-185 · What is the difference between EntityManager and Session?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-185" data-topic="Spring Data &amp; JPA">
+<h1>What is the difference between EntityManager and Session?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Both represent a <strong>persistence context / unit of work</strong>: <strong>EntityManager</strong> is the <strong>standard JPA interface</strong>, <strong>Session</strong> is <strong>Hibernate's native API</strong>, which since Hibernate 5.2 <strong>extends EntityManager</strong> and adds extra features; in Spring you inject the EntityManager and <strong><code>unwrap(Session.class)</code></strong> when you need Hibernate specifics.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>EntityManager</strong> (JPA) and a <strong>Session</strong> (Hibernate) are the same concept: a short-lived object, usually one per transaction, that holds the <strong>persistence context</strong> (first-level cache of managed entities), tracks changes through dirty checking, and <strong>flushes</strong> them to the database. Both are created by a factory: <code>EntityManagerFactory</code> and Hibernate's <code>SessionFactory</code> (which extends <code>EntityManagerFactory</code>).</p>
+<p><strong>EntityManager</strong> is the <strong>portable</strong> API defined by Jakarta Persistence: <code>persist</code>, <code>merge</code>, <code>find</code>, <code>getReference</code>, <code>remove</code>, <code>flush</code>, <code>clear</code>, <code>detach</code>, <code>refresh</code>, <code>lock</code>, <code>createQuery</code>/<code>createNamedQuery</code>/<code>createNativeQuery</code>, <code>getCriteriaBuilder</code> and entity graphs. Code written against it works with any provider.</p>
+<p><strong>Session</strong> predates JPA. In modern Hibernate, <code>Session</code> <strong>extends <code>EntityManager</code></strong>, so everything above is available, plus Hibernate-specific capabilities: natural-id loading (<code>bySimpleNaturalId</code>), <strong>filters</strong> (<code>enableFilter</code>), multi-load by ids (<code>byMultipleIds</code>), fine-grained <code>FlushMode</code> and <code>CacheMode</code>, <code>setJdbcBatchSize</code>, <code>doWork</code> for raw JDBC access, and fetch profiles. Legacy methods like <code>save</code>, <code>update</code> and <code>saveOrUpdate</code> were deprecated in Hibernate 6 and removed in 7 in favour of the JPA-style <code>persist</code> and <code>merge</code>. For bulk processing, Hibernate also provides <code>StatelessSession</code>, which has no persistence context.</p>
+<p>In a <strong>Spring</strong> application you normally inject the <code>EntityManager</code> with constructor injection or <code>@PersistenceContext</code>. What you receive is a <strong>shared, thread-safe proxy</strong>: the actual EntityManager is <strong>not thread-safe</strong>, but the proxy delegates each call to the EntityManager bound to the <strong>current transaction and thread</strong>. When you need a Hibernate feature, call <code>entityManager.unwrap(Session.class)</code> inside a transaction. Avoid opening sessions manually from the <code>SessionFactory</code>, which bypasses Spring's transaction management.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring Boot creates an <code>EntityManagerFactory</code> backed by Hibernate's <code>SessionFactory</code>.</li>
+  <li>Beans receive a shared EntityManager proxy.</li>
+  <li>A transaction begins; a real Session/EntityManager is bound to the thread.</li>
+  <li>Proxy calls go to that instance; <code>unwrap</code> returns the underlying Session.</li>
+  <li>Commit flushes and closes it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Repository
+class BookDao {
+    private final EntityManager em;              // shared, thread-safe proxy
+    BookDao(EntityManager em) { this.em = em; }
+
+    @Transactional(readOnly = true)
+    public Book byIsbn(String isbn) {
+        Session session = em.unwrap(Session.class);   // Hibernate-specific API
+        return session.bySimpleNaturalId(Book.class).load(isbn);
+    }
+
+    @Transactional
+    public void archiveOld(Instant cutoff) {
+        em.createQuery(&quot;update Book b set b.archived = true where b.published &lt; :c&quot;)
+          .setParameter(&quot;c&quot;, cutoff)
+          .executeUpdate();                       // portable JPA
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>EntityManager</th><th>Session</th></tr></thead>
+<tbody>
+<tr><td>Defined by</td><td>Jakarta Persistence</td><td>Hibernate</td></tr>
+<tr><td>Portability</td><td>Any provider</td><td>Hibernate only</td></tr>
+<tr><td>Relationship</td><td>Base interface</td><td>Extends EntityManager</td></tr>
+<tr><td>Extras</td><td>Standard operations</td><td>Natural ids, filters, multi-load, flush/cache modes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking they are different persistence mechanisms.</li>
+  <li>Sharing a real EntityManager across threads.</li>
+  <li>Opening Sessions manually and bypassing Spring transactions.</li>
+  <li>Calling <code>unwrap</code> outside a transaction and getting an unbound or new instance.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both represent a persistence context, a unit of work that tracks managed entities in a first-level cache and flushes changes. EntityManager is the standard JPA interface with persist, merge, find, remove and createQuery, so it's portable. Session is Hibernate's native API that predates JPA; in modern Hibernate it extends EntityManager and adds things like natural-id loading, filters and finer control of flush and batching. In Spring I inject the EntityManager and call unwrap(Session.class) only when I need a Hibernate-specific feature.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is EntityManager thread-safe?</strong> No; Spring injects a shared proxy that delegates to the transaction-bound instance.</li>
+  <li><strong>SessionFactory vs EntityManagerFactory?</strong> SessionFactory extends EntityManagerFactory; one per database.</li>
+  <li><strong>StatelessSession?</strong> A Hibernate API without persistence context, for bulk operations.</li>
+</ul>
+</article>
+</body>
+</html>

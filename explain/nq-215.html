@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-215 · How does an API Gateway validate user roles and scopes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-215" data-topic="Security">
+<h1>How does an API Gateway validate user roles and scopes?</h1>
+<p class="ex-meta">Security · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>After validating the token, the gateway <strong>reads its claims</strong> (<code>scope</code>/<code>scp</code>, <code>roles</code>, <code>groups</code>, provider-specific claims), <strong>maps them to authorities</strong>, <strong>compares them with the route's policy</strong>, returns <strong>403</strong> if they are insufficient, and uses <strong>introspection</strong> for opaque tokens.</p>
+
+<h2>Detailed explanation</h2>
+<p>Scopes and roles mean different things. A <strong>scope</strong> describes what the <strong>client application</strong> has been allowed to do on the user's behalf (<code>orders.read</code>), granted through consent or client configuration. A <strong>role</strong> or <strong>group</strong> describes what the <strong>user</strong> is (ADMIN, SUPPORT). Many policies check both: the app must hold <code>orders.delete</code> <strong>and</strong> the user must be ADMIN.</p>
+<p>Where these sit depends on the provider: standard OAuth uses a space-separated <code>scope</code> claim (Entra ID uses <code>scp</code> for delegated scopes and <code>roles</code> for app roles), Keycloak puts realm roles in <code>realm_access.roles</code> and client roles in <code>resource_access.&lt;client&gt;.roles</code>, Okta and Cognito often use <code>groups</code>. So the gateway needs a <strong>claim-to-authority mapping</strong>. In Spring Security, scopes become <code>SCOPE_orders.write</code> by default, and a custom <strong>converter</strong> turns role claims into <code>ROLE_ADMIN</code> authorities.</p>
+<p>Each <strong>route</strong> then has a policy: method plus path mapped to required authorities. The gateway checks them in order and returns <strong>403 Forbidden</strong> when they are missing (401 stays reserved for invalid or missing tokens). Managed gateways do the same declaratively: AWS API Gateway JWT authorizers with authorization scopes per route, Azure API Management's <code>validate-jwt</code> policy with <code>required-claims</code>, Kong's OIDC or JWT plugins.</p>
+<p>For <strong>opaque tokens</strong> the gateway cannot read claims, so it calls the authorization server's <strong>introspection endpoint</strong> (RFC 7662), which returns <code>active</code>, <code>scope</code> and other data; results are cached briefly. Keep scopes <strong>least privilege</strong> and specific, and remember the token reflects permissions at issue time, so short lifetimes limit stale roles.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Validate signature, issuer, audience and expiry (or introspect an opaque token).</li>
+  <li>Extract scopes and role claims.</li>
+  <li>Map them to authorities with a converter.</li>
+  <li>Match the request against route rules in order.</li>
+  <li>Allow and forward, or return 403 and log the denial.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+SecurityWebFilterChain gateway(ServerHttpSecurity http) {
+    return http.authorizeExchange(e -&gt; e
+            .pathMatchers(HttpMethod.DELETE, &quot;/api/orders/**&quot;)
+                .access((auth, ctx) -&gt; auth.map(a -&gt; new AuthorizationDecision(
+                    has(a, &quot;SCOPE_orders.delete&quot;) &amp;&amp; has(a, &quot;ROLE_ADMIN&quot;))))
+            .pathMatchers(HttpMethod.GET, &quot;/api/orders/**&quot;).hasAuthority(&quot;SCOPE_orders.read&quot;)
+            .anyExchange().authenticated())
+        .oauth2ResourceServer(o -&gt; o.jwt(j -&gt; j.jwtAuthenticationConverter(keycloakRoles())))
+        .build();
+}
+
+static boolean has(Authentication a, String authority) {
+    return a.getAuthorities().stream().anyMatch(g -&gt; g.getAuthority().equals(authority));
+}
+
+// Converter: realm_access.roles -&gt; ROLE_*, plus default SCOPE_* authorities
+Converter&lt;Jwt, Mono&lt;AbstractAuthenticationToken&gt;&gt; keycloakRoles() {
+    return jwt -&gt; {
+        Collection&lt;GrantedAuthority&gt; auths = new ArrayList&lt;&gt;(new JwtGrantedAuthoritiesConverter().convert(jwt));
+        Map&lt;String, Object&gt; realm = jwt.getClaimAsMap(&quot;realm_access&quot;);
+        if (realm != null) ((List&lt;String&gt;) realm.get(&quot;roles&quot;))
+            .forEach(r -&gt; auths.add(new SimpleGrantedAuthority(&quot;ROLE_&quot; + r.toUpperCase())));
+        return Mono.just(new JwtAuthenticationToken(jwt, auths));
+    };
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating scopes and roles as interchangeable.</li>
+  <li>Broad scopes like <code>api.all</code> that defeat least privilege.</li>
+  <li>Returning 401 when the token is valid but lacks a scope.</li>
+  <li>Assuming roles in a long-lived token are always current.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Once the token's signature and expiry are validated, the gateway reads its claims: scopes from scope or scp, and roles or groups from provider-specific claims like Keycloak's realm_access.roles. A converter maps those into authorities, for example SCOPE_orders.write and ROLE_ADMIN. Each route has a policy, such as DELETE on orders needing the orders.delete scope and the admin role, and the gateway returns 403 if the token doesn't satisfy it. For opaque tokens it calls the introspection endpoint instead, with caching. I keep scopes narrow, and services still check data-level permissions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Scope vs role?</strong> Scope limits what the client may do for the user; role describes the user's permissions.</li>
+  <li><strong>Why not put every permission in the token?</strong> Tokens grow and go stale; fetch fine-grained permissions in the service or a policy engine.</li>
+  <li><strong>What is OPA?</strong> Open Policy Agent, a policy engine the gateway or service can query for decisions.</li>
+</ul>
+</article>
+</body>
+</html>

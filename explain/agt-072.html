@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-072 · How do you sandbox agents that execute code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-072" data-topic="AI Agents &amp; AIOps">
+<h1>How do you sandbox agents that execute code?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Run agent-generated code in an <strong>isolated, ephemeral sandbox per task</strong>, preferably with <strong>microVM or user-space-kernel isolation</strong> (Firecracker, gVisor) rather than plain containers, with <strong>no secrets inside</strong>, <strong>restricted network egress</strong>, <strong>CPU, memory and time limits</strong>, and <strong>explicit copying of outputs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Code written by a model can be buggy, and after a <strong>prompt injection</strong> it can be deliberately malicious: reading credentials, scanning the internal network, mining cryptocurrency or exfiltrating data. It must never run on a host that has access to anything valuable, such as the agent server itself.</p>
+<p><strong>Isolation level</strong> is the first decision. Standard containers share the host <strong>kernel</strong>; a kernel vulnerability or misconfiguration (privileged mode, mounted Docker socket, host paths) can lead to escape. For untrusted code, stronger boundaries are preferred: <strong>microVMs</strong> such as <strong>Firecracker</strong> or Kata Containers give each sandbox its own kernel, and <strong>gVisor</strong> intercepts system calls in a user-space kernel. Managed sandbox services from cloud and AI providers package this.</p>
+<p><strong>Contents:</strong> the sandbox holds <strong>no secrets or production credentials</strong>; required files are copied in explicitly. <strong>Network:</strong> egress is blocked by default or limited to an allowlist (for example an internal package mirror), preventing exfiltration and malware downloads; no access to cloud metadata endpoints. <strong>Resources:</strong> limits on CPU, memory, disk, processes and <strong>wall-clock time</strong> stop runaway loops and fork bombs. <strong>Lifecycle:</strong> sandboxes are <strong>ephemeral</strong>, created per task and destroyed afterwards; outputs are copied out explicitly and scanned if they go anywhere important. Activity, commands and network attempts, is <strong>logged</strong> for investigation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent requests code execution with code and input files.</li>
+  <li>Orchestrator creates a fresh sandbox from a minimal image.</li>
+  <li>Inputs copied in; network policy and resource limits applied.</li>
+  <li>Code runs as non-root with a timeout.</li>
+  <li>Outputs collected; sandbox destroyed.</li>
+  <li>Logs and outputs checked before further use.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Kubernetes: sandbox pods on gVisor with no egress
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: { name: gvisor }
+handler: runsc
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: sandbox-7f3a, namespace: agent-sandboxes, labels: { role: sandbox } }
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  activeDeadlineSeconds: 300
+  securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+  containers:
+    - name: run
+      image: registry.internal/python-sandbox:3.12
+      resources: { limits: { cpu: &quot;1&quot;, memory: 1Gi, ephemeral-storage: 2Gi } }
+      securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true }
+# plus a NetworkPolicy denying all egress for role=sandbox</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running generated code inside the agent's own container.</li>
+  <li>Mounting the Docker socket or using privileged containers.</li>
+  <li>Leaving cloud metadata endpoints reachable.</li>
+  <li>Reusing sandboxes across tasks or users.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Model-written code can be buggy or, after prompt injection, malicious, so it never runs where anything valuable is reachable. Each task gets its own sandbox, and for untrusted code I prefer microVMs like Firecracker or gVisor over plain containers, which share the host kernel. The sandbox has no secrets, network egress is blocked or allowlisted, and CPU, memory, disk and time are limited. Sandboxes are ephemeral, destroyed after the task, with outputs copied out explicitly and checked, and everything inside is logged.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is Docker not enough?</strong> Shared kernel; escapes and misconfigurations expose the host.</li>
+  <li><strong>Needs package installs?</strong> Use an internal mirror on the egress allowlist.</li>
+  <li><strong>Cold-start cost?</strong> Pre-warmed pools of microVMs.</li>
+</ul>
+</article>
+</body>
+</html>

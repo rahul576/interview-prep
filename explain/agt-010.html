@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-010 · How do you make long-running agents durable so they survive crashes and restarts?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-010" data-topic="AI Agents &amp; AIOps">
+<h1>How do you make long-running agents durable so they survive crashes and restarts?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Make long-running agents durable by <strong>persisting state after every step</strong> (checkpoints), using <strong>durable execution engines</strong> such as <strong>Temporal</strong> or <strong>Azure Durable Functions</strong>, <strong>resuming from the last checkpoint</strong>, making side-effecting tools <strong>idempotent</strong>, running on <strong>queues and workers</strong>, and modelling human or external waits as <strong>persisted pauses with timeouts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An agent investigating an incident, migrating a codebase or onboarding a customer may run for hours or days and wait for human approvals. Processes crash, pods are rescheduled, and deployments restart services. If the agent's state lives only in process memory and the model context, a restart means starting over: repeating expensive model calls and, worse, repeating side effects.</p>
+<p>The foundation is <strong>checkpointing</strong>: after each step, persist the messages, plan, tool calls and results, and intermediate artefacts to a database or object store, keyed by a run or thread ID. <strong>LangGraph</strong> checkpointers (for example Postgres) do this per graph step; other frameworks have similar session stores.</p>
+<p><strong>Durable execution engines</strong> go further. <strong>Temporal</strong>, <strong>Azure Durable Functions</strong>, AWS Step Functions and similar services record each activity's result in an event history; after a crash, the workflow replays deterministically from that history and continues exactly where it stopped. Model calls and tool calls become <strong>activities</strong> with their own retries and timeouts. This turns an agent loop into a resilient workflow.</p>
+<p>Replays and retries mean a step may execute more than once, so tools with side effects must be <strong>idempotent</strong>, typically with an <strong>idempotency key</strong> derived from run ID and step number, so a retried &quot;create invoice&quot; returns the existing invoice.</p>
+<p>Runs should be driven by <strong>queues and stateless workers</strong>, not long-lived in-memory processes, so any worker can pick up a run. Waiting for human approval or a slow external system is a <strong>persisted pause</strong>: the workflow sleeps until a signal or timer, with <strong>timeouts</strong> and escalation, consuming no threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start a run with an ID; store initial state.</li>
+  <li>Each model or tool call is a durable step with retries and timeout.</li>
+  <li>After each step, persist state and results.</li>
+  <li>Side-effecting tools use idempotency keys.</li>
+  <li>Approvals and external waits are signals with timers.</li>
+  <li>On crash, a worker resumes from the last checkpoint or event history.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python"># Temporal workflow (Python SDK) wrapping an agent loop
+@workflow.defn
+class IncidentAgent:
+    def __init__(self):
+        self.approved = None
+
+    @workflow.signal
+    def approve(self, ok: bool):
+        self.approved = ok
+
+    @workflow.run
+    async def run(self, incident_id: str):
+        state = await workflow.execute_activity(load_context, incident_id,
+                    start_to_close_timeout=timedelta(minutes=2))
+        for step in range(30):
+            action = await workflow.execute_activity(call_model, state,
+                        start_to_close_timeout=timedelta(minutes=3))
+            if action.kind == &quot;final&quot;:
+                return action.text
+            if action.needs_approval:
+                await workflow.wait_condition(lambda: self.approved is not None,
+                                              timeout=timedelta(hours=4))
+            state = await workflow.execute_activity(run_tool, action,
+                        start_to_close_timeout=timedelta(minutes=5))  # tool uses idempotency key</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping run state only in memory or only in the model context.</li>
+  <li>Non-idempotent tools that duplicate actions on retry.</li>
+  <li>Blocking threads while waiting hours for approval.</li>
+  <li>No timeouts on human waits, so runs hang forever.</li>
+  <li>Non-deterministic code inside replayed workflow logic.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A long-running agent can't live only in a process's memory. I persist its state after every step, messages, plan, tool results and artefacts, as checkpoints, which frameworks like LangGraph support. For stronger guarantees I run the loop on a durable execution engine like Temporal or Durable Functions, where each model and tool call is an activity and the workflow resumes exactly where it stopped after a crash. Because steps may be retried or replayed, side-effecting tools use idempotency keys. Work runs on queues and workers, and waits for human approval are persisted pauses with timeouts rather than blocked threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What state must never be only in the model context?</strong> Completed side effects, IDs of created resources, approvals and the plan.</li>
+  <li><strong>Why must workflow code be deterministic in Temporal?</strong> Because it is replayed from history; non-deterministic work belongs in activities.</li>
+  <li><strong>How do you resume after a model version change?</strong> Pin the version per run or make the state model-agnostic so a new model can continue.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-003 · Explain Azure Storage redundancy options: LRS, ZRS, GRS, GZRS and the read-access variants.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-003" data-topic="Azure">
+<h1>Explain Azure Storage redundancy options: LRS, ZRS, GRS, GZRS and the read-access variants.</h1>
+<p class="ex-meta">Azure · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>LRS</strong> keeps <strong>three copies in one datacenter</strong>, <strong>ZRS</strong> writes <strong>synchronously across three zones</strong>, <strong>GRS</strong> and <strong>GZRS</strong> add <strong>asynchronous replication to the paired region</strong> (with an RPO of typically under 15 minutes), and the <strong>RA-</strong> variants let you <strong>read from the secondary at any time</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Azure Storage always keeps multiple copies of data; the redundancy option decides <strong>where</strong> they live and therefore which failures you survive.</p>
+<p><strong>LRS (locally redundant storage)</strong> writes three copies <strong>synchronously</strong> within a single datacenter in the primary region. It protects against disk and server failures, but a datacenter-level event (fire, flood, zone outage) can make data unavailable or lose it. It is the cheapest option, fine for easily reproducible data, dev/test, or when data residency requires a single location.</p>
+<p><strong>ZRS (zone-redundant storage)</strong> writes synchronously to <strong>three availability zones</strong>. Data stays readable and writable through a zone outage with no data loss, making it the sensible default for production in zone-enabled regions.</p>
+<p><strong>GRS (geo-redundant storage)</strong> is LRS in the primary region plus <strong>asynchronous</strong> copying to the <strong>secondary (paired) region</strong>, where it is stored with LRS. <strong>GZRS</strong> combines <strong>ZRS in the primary</strong> with geo-replication to the secondary, providing the highest durability. Because geo-replication is asynchronous, recent writes may not have reached the secondary: Microsoft states a typical <strong>RPO of under 15 minutes</strong>, without an SLA on that figure. The <strong>Last Sync Time</strong> property shows how far the secondary lags.</p>
+<p>With plain GRS/GZRS, the secondary is only readable after <strong>failover</strong>. <strong>RA-GRS</strong> and <strong>RA-GZRS</strong> expose a read-only <strong>secondary endpoint</strong> (<code>&lt;account&gt;-secondary.blob.core.windows.net</code>) at all times, letting applications fall back to reads during a primary outage.</p>
+<p><strong>Failover</strong> can be <strong>customer-managed</strong>: an unplanned failover promotes the secondary when the primary is unavailable, accepting data loss after Last Sync Time; afterwards the account is typically locally redundant in the new primary, so you must re-enable geo-redundancy. A <strong>planned failover</strong> option is available for drills without data loss.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Writes hit the primary region and are acknowledged after local or zonal copies succeed.</li>
+  <li>For geo options, data is copied asynchronously to the secondary region.</li>
+  <li>RA variants allow reads from the secondary endpoint.</li>
+  <li>On disaster, Microsoft or the customer initiates failover.</li>
+  <li>DNS for the account points to the former secondary.</li>
+  <li>Reconfigure geo-redundancy after failover.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az storage account create -n stordersprod -g rg-orders --location westeurope \
+  --sku Standard_RAGZRS --kind StorageV2 --min-tls-version TLS1_2
+# How far behind is the secondary?
+az storage account show -n stordersprod --expand geoReplicationStats \
+  --query geoReplicationStats.lastSyncTime</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Copies</th><th>Survives zone loss</th><th>Survives region loss</th><th>Secondary read</th></tr></thead>
+<tbody>
+<tr><td>LRS</td><td>3, one DC</td><td>No</td><td>No</td><td>No</td></tr>
+<tr><td>ZRS</td><td>3, three zones</td><td>Yes</td><td>No</td><td>No</td></tr>
+<tr><td>GRS / RA-GRS</td><td>6</td><td>No (primary)</td><td>Yes</td><td>RA only</td></tr>
+<tr><td>GZRS / RA-GZRS</td><td>6</td><td>Yes</td><td>Yes</td><td>RA only</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using LRS for critical production data.</li>
+  <li>Treating geo-replication as a backup; deletions and corruption replicate too.</li>
+  <li>Assuming zero data loss on geo failover.</li>
+  <li>Using RA endpoints without handling stale reads.</li>
+  <li>Forgetting to re-enable geo-redundancy after failover.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;LRS keeps three synchronous copies in one datacenter; it is cheapest but does not survive a datacenter or zone failure. ZRS writes synchronously across three availability zones, which is my default for production in regions with zones. GRS adds asynchronous replication to the paired region, and GZRS combines ZRS in the primary with geo-replication. Because geo-replication is asynchronous, there is an RPO, typically under 15 minutes, which you can track with the Last Sync Time. RA-GRS and RA-GZRS also let applications read from the secondary endpoint at any time, not just after failover. I choose based on cost, durability and RPO, and still use soft delete and backups, because replication also replicates deletions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What can go wrong if an application writes after a customer-initiated failover?</strong> Writes after Last Sync Time on the old primary are lost, and the new primary starts without geo-redundancy.</li>
+  <li><strong>Can you change redundancy later?</strong> Yes, mostly via conversion or migration, with some restrictions.</li>
+  <li><strong>How do applications use RA endpoints?</strong> SDK retry policies can fall back to the secondary for reads.</li>
+</ul>
+</article>
+</body>
+</html>

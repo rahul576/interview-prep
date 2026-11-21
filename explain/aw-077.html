@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-077 · Design an event-driven order processing system on AWS.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-077" data-topic="Cloud (AWS)">
+<h1>Design an event-driven order processing system on AWS.</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>An order API stores the order and its <strong>OrderPlaced event atomically</strong> (DynamoDB Streams or a <strong>transactional outbox</strong>), <strong>EventBridge</strong> fans the event out to <strong>one SQS queue per consumer</strong>, <strong>idempotent</strong> Lambda or ECS consumers process it with <strong>DLQs</strong>, and a <strong>Step Functions saga</strong> coordinates payment and inventory with compensations, all traced end to end.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Ingestion</strong>: API Gateway (or an ALB) receives the order, a Lambda or ECS service validates it, applies an <strong>idempotency key</strong> from the client so retries do not create duplicates, stores the order with status PENDING and returns 202 Accepted with the order ID.</p>
+<p><strong>Reliable publishing</strong>: writing to the database and then calling PutEvents is a <strong>dual write</strong>; if the second call fails, the event is lost. Instead, use <strong>DynamoDB Streams</strong> on the orders table, with <strong>EventBridge Pipes</strong> turning new items into events, or in RDS an <strong>outbox table</strong> written in the same transaction and relayed by a poller or CDC (for example DMS or Debezium). Delivery is at least once.</p>
+<p><strong>Fan-out</strong>: EventBridge rules route OrderPlaced to separate <strong>SQS queues</strong> for payment, inventory, notifications and analytics. Each queue buffers bursts, scales its consumers independently and has its own <strong>dead-letter queue</strong>, so a broken email service never blocks payments. SNS plus SQS is an alternative for very high throughput.</p>
+<p><strong>Consumers</strong> on Lambda or ECS must be <strong>idempotent</strong>, keyed on order ID and event ID (Powertools idempotency with a DynamoDB table works well), use partial batch responses, and alarm on DLQ depth and queue age.</p>
+<p><strong>Coordination</strong>: payment and inventory must succeed together. A <strong>Step Functions</strong> Standard workflow orchestrates the <strong>saga</strong>: reserve inventory, charge payment, confirm the order; if payment fails, run compensating steps such as releasing stock and cancelling the order, then emit OrderFailed. Choreography with events is possible, but orchestration is easier to observe.</p>
+<p><strong>Observability</strong>: X-Ray or OpenTelemetry tracing across API, EventBridge, SQS and Lambda, structured logs with order ID, business metrics like orders per minute and failure rate, and archive and replay on the bus for recovery.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client POSTs the order with an idempotency key.</li>
+  <li>Order stored; stream or outbox emits OrderPlaced to EventBridge.</li>
+  <li>Rules deliver to per-service SQS queues.</li>
+  <li>A Step Functions saga reserves stock and charges payment.</li>
+  <li>Failures trigger compensations and an OrderFailed event.</li>
+  <li>Notification and analytics consumers react independently.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># SAM snippet: rule to a queue, consumer with DLQ
+InventoryQueue:
+  Type: AWS::SQS::Queue
+  Properties:
+    VisibilityTimeout: 180
+    RedrivePolicy: {deadLetterTargetArn: !GetAtt InventoryDLQ.Arn, maxReceiveCount: 5}
+OrderPlacedRule:
+  Type: AWS::Events::Rule
+  Properties:
+    EventBusName: orders
+    EventPattern: {source: [com.shop.orders], detail-type: [OrderPlaced]}
+    Targets: [{Arn: !GetAtt InventoryQueue.Arn, Id: inventory}]
+InventoryFn:
+  Type: AWS::Serverless::Function
+  Properties:
+    Handler: inventory.handler
+    Runtime: python3.13
+    Events:
+      Q: {Type: SQS, Properties: {Queue: !GetAtt InventoryQueue.Arn,
+          FunctionResponseTypes: [ReportBatchItemFailures]}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Dual writes without an outbox or stream, silently losing events.</li>
+  <li>One shared queue for all consumers, coupling their failures.</li>
+  <li>Non-idempotent consumers charging a card twice on redelivery.</li>
+  <li>No compensation path, leaving stock reserved for failed payments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The order API behind API Gateway validates the request, stores the order and publishes OrderPlaced. To avoid losing events when the write succeeds but publishing fails, I write the order and event atomically, using DynamoDB Streams or an outbox table, and relay to EventBridge. Rules fan out to separate SQS queues for payment, inventory, notifications and analytics, so each scales and fails independently. Consumers are idempotent on the order ID, with DLQs and alarms. Payment and inventory form a saga orchestrated by Step Functions with compensations, and tracing covers the whole flow.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Payment succeeds but inventory fails?</strong> The saga refunds or voids the payment and marks the order failed, or backorders per business rules.</li>
+  <li><strong>Why SQS between EventBridge and consumers?</strong> Buffering, retries, DLQs and controlled concurrency per consumer.</li>
+  <li><strong>How preserve order per customer?</strong> FIFO queues with message group ID per order or customer where needed.</li>
+</ul>
+</article>
+</body>
+</html>

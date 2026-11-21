@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-054 · Design a production release of a web app with Azure Pipelines that supports approvals, smoke tests and fast rollback.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-054" data-topic="Azure DevOps &amp; Pipelines">
+<h1>Design a production release of a web app with Azure Pipelines that supports approvals, smoke tests and fast rollback.</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Build once and promote</strong> the same artifact; production stage targets an <strong>environment with approvals, branch control and business hours</strong>, deploys to a <strong>staging slot</strong>, runs <strong>smoke tests against the slot</strong>, <strong>swaps</strong> into production (with warm-up), watches <strong>Azure Monitor/App Insights</strong> via a post-deployment check, and <strong>rolls back by swapping back</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Build stage:</strong> compile, test and publish one artifact (zip or container image tag). Every later stage downloads that <strong>same artifact</strong>, so production runs exactly what was tested.</p>
+<p><strong>Test/staging stages:</strong> deploy to lower environments with integration and end-to-end tests.</p>
+<p><strong>Production stage:</strong> a deployment job targets the <code>prod</code> <strong>environment</strong> with checks: approval by release managers, <strong>branch control</strong> (main only), <strong>business hours</strong>, <strong>exclusive lock</strong>, and an <strong>Azure Monitor alerts</strong> check that blocks deployment if production is already unhealthy.</p>
+<p><strong>Slots:</strong> App Service <strong>deployment slots</strong> (Standard tier and above) are live apps with their own hostname. Deploy to the <strong>staging</strong> slot, which has production configuration except <strong>slot-specific (&quot;sticky&quot;) settings</strong> such as feature flags pointing at test data. Use <strong>Application Initialization</strong> (<code>applicationInitialization</code> in web.config or the warm-up path) so the slot is warm.</p>
+<p><strong>Smoke tests:</strong> hit the staging slot's URL: <code>/health</code>, key APIs, a synthetic user journey with Playwright. If they fail, the pipeline stops and production is untouched.</p>
+<p><strong>Swap:</strong> <code>AzureAppServiceManage@0</code> swaps staging into production. App Service applies production settings to the staging instances, warms them up, then switches routing, so there's <strong>no downtime</strong>. <strong>Swap with preview</strong> applies settings first so you can validate before completing.</p>
+<p><strong>Post-release verification:</strong> a post-deployment step or check watches Application Insights failure rates, latency and alerts for 10-15 minutes.</p>
+<p><strong>Rollback:</strong> the previous version is now in the staging slot, so rollback is <strong>swapping back</strong>, which takes seconds. Database changes must be <strong>backward compatible</strong> (expand/contract) for this to be safe.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build → artifact.</li>
+  <li>Deploy to test, run tests.</li>
+  <li>Prod checks pass → deploy to staging slot.</li>
+  <li>Smoke tests on slot URL.</li>
+  <li>Swap → monitor.</li>
+  <li>Failure → swap back.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- stage: Prod
+  jobs:
+  - deployment: web
+    environment: shop-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            inputs: { azureSubscription: sc-prod, appName: app-shop, deployToSlotOrASE: true,
+                      resourceGroupName: rg-shop, slotName: staging, package: '$(Pipeline.Workspace)/web/*.zip' }
+          - script: ./smoke.sh https://app-shop-staging.azurewebsites.net
+          - task: AzureAppServiceManage@0
+            inputs: { azureSubscription: sc-prod, Action: 'Swap Slots', WebAppName: app-shop,
+                      ResourceGroupName: rg-shop, SourceSlot: staging }
+        on:
+          failure:
+            steps:
+            - task: AzureAppServiceManage@0
+              inputs: { azureSubscription: sc-prod, Action: 'Swap Slots', WebAppName: app-shop,
+                        ResourceGroupName: rg-shop, SourceSlot: staging }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rebuilding for production instead of promoting the artifact.</li>
+  <li>Breaking database migrations that make swap-back impossible.</li>
+  <li>Sticky settings misconfigured so the slot talks to production queues during tests.</li>
+  <li>No warm-up, causing cold-start errors right after swap.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The build produces one artifact that's promoted unchanged. The production stage targets an environment with approval, branch control and business-hour checks. It deploys to a staging slot with production config, runs smoke tests against the slot URL, and if they pass swaps it into production, which warms instances first so there's no downtime. After the swap, a gate watches Application Insights failure rates and Azure Monitor alerts. Rollback is just swapping back, because the previous version sits in the staging slot, as long as our database changes are backward compatible.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What makes swaps unsafe?</strong> Non-backward-compatible schema changes, sticky settings, cold starts, in-flight sessions.</li>
+  <li><strong>Canary instead?</strong> Slot traffic routing percentages, or Front Door weights.</li>
+  <li><strong>Containers on AKS?</strong> Blue-green with services or canary with a mesh instead of slots.</li>
+</ul>
+</article>
+</body>
+</html>

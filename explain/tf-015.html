@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-015 · Why should a pipeline save the plan with -out and apply that plan file?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-015" data-topic="Terraform">
+<h1>Why should a pipeline save the plan with -out and apply that plan file?</h1>
+<p class="ex-meta">Terraform · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>terraform plan -out=tfplan</code> saves the <strong>exact reviewed changes</strong>, and <code>terraform apply tfplan</code> applies <strong>precisely those</strong>, so the pipeline never applies something different from what was approved; Terraform <strong>refuses a stale plan</strong>, and the file must be <strong>protected because it contains sensitive values</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without a saved plan, <code>terraform apply</code> runs a <strong>new plan</strong> at apply time and applies that. In a pipeline with an approval step, time passes between the plan reviewers saw and the apply: someone may merge another change, a data source may return a new AMI, an object may drift, or a module version range may resolve differently. The apply could then do something nobody reviewed, such as replacing a database. In interactive use, Terraform asks for confirmation, but in CI people use <code>-auto-approve</code>, which removes that protection.</p>
+<p>A <strong>saved plan file</strong> is a binary snapshot of the proposed changes, plus the configuration, variable values and the state version it was computed from. <code>terraform apply tfplan</code> does not ask for approval and does not re-plan; it applies exactly that set of actions. If the state changed after the plan was created, for example because another run applied in between, Terraform reports that the <strong>saved plan is stale</strong> and refuses. That is the desired, safe outcome: you plan again and review again.</p>
+<p>Because the plan file contains variable values and planned attribute values, including <strong>sensitive ones</strong> that are only redacted in the human-readable output, it must be treated as a secret: stored as a <strong>short-lived, access-restricted pipeline artifact</strong>, never committed or posted. The apply job must also run with the <strong>same Terraform version, providers (lock file) and working directory</strong>. A human-readable summary for the pull request comes from <code>terraform show tfplan</code> or <code>terraform show -json tfplan</code> for policy checks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI runs <code>terraform plan -out=tfplan</code>.</li>
+  <li><code>terraform show</code> output is posted to the PR; policy tools scan the JSON.</li>
+  <li>Plan file is uploaded as a protected artifact.</li>
+  <li>A reviewer approves in the pipeline environment.</li>
+  <li>Apply job downloads the artifact and runs <code>terraform apply tfplan</code>.</li>
+  <li>If stale, the pipeline re-plans and requires approval again.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">plan:
+  script:
+    - terraform init -input=false
+    - terraform plan -input=false -out=tfplan
+    - terraform show -no-color tfplan &gt; plan.txt
+  artifacts:
+    paths: [tfplan, plan.txt, .terraform.lock.hcl]
+    expire_in: 1 day
+
+apply:
+  needs: [plan]
+  when: manual
+  environment: production
+  script:
+    - terraform init -input=false
+    - terraform apply -input=false tfplan</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>terraform apply -auto-approve</code> after a separate plan job.</li>
+  <li>Publishing plan files as public artifacts.</li>
+  <li>Different Terraform or provider versions in plan and apply jobs.</li>
+  <li>Keeping approved plans for days and expecting them to apply.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;<code>terraform plan -out</code> saves the exact set of changes, and <code>terraform apply</code> with that file applies precisely that plan without re-planning. In a pipeline it guarantees that what reviewers approved is exactly what gets applied. Without it, apply re-plans and might do something different if code, infrastructure or a data source changed meanwhile. If the state changed after the plan was saved, Terraform detects the plan is stale and refuses, which is safe. The plan file contains sensitive values, so it's a protected, short-lived artifact. The flow is plan, post the summary to the PR, manual approval, then apply the saved plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How long is a saved plan valid?</strong> Until state changes; in practice hours, and re-plan if approval took longer.</li>
+  <li><strong>Can you inspect a plan file?</strong> <code>terraform show tfplan</code> or <code>-json</code> for tools like OPA.</li>
+  <li><strong>Does HCP Terraform do this?</strong> Yes, runs plan, wait for confirmation, and apply the same plan.</li>
+</ul>
+</article>
+</body>
+</html>

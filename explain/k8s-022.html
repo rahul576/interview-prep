@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-022 · What runs on a worker node, and what is the role of the container runtime interface?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-022" data-topic="Kubernetes">
+<h1>What runs on a worker node, and what is the role of the container runtime interface?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A worker node runs the <strong>kubelet</strong> (manages pods, probes, volumes, status), a <strong>container runtime</strong> such as <strong>containerd</strong> or <strong>CRI-O</strong> reached through the <strong>CRI</strong> gRPC API, plus <strong>kube-proxy</strong> (or an eBPF replacement) and the <strong>CNI plugin</strong> for networking; <strong>dockershim</strong> was removed in <strong>1.24</strong>, but Docker-built <strong>OCI images</strong> still run.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>kubelet</strong> is the node agent. It registers the node, sends heartbeats via Lease objects, watches the API for pods bound to its node, and makes them real: pulls images, sets up volumes (with CSI node plugins), starts containers, runs liveness, readiness and startup probes, enforces resource limits via cgroups, performs node-pressure eviction, and reports pod and node status. It also runs <strong>static pods</strong> from a local manifest directory.</p>
+<p>The kubelet does not run containers itself. It talks to a <strong>container runtime</strong> over the <strong>Container Runtime Interface (CRI)</strong>, a gRPC API with two services: <strong>RuntimeService</strong> (create pod sandboxes, start and stop containers, exec, logs) and <strong>ImageService</strong> (pull, list, remove images). <strong>containerd</strong> (via its CRI plugin) and <strong>CRI-O</strong> are the common runtimes; underneath they use a low-level OCI runtime such as <strong>runc</strong> or <strong>crun</strong>, or sandboxed ones like gVisor or Kata Containers selected with a <strong>RuntimeClass</strong>.</p>
+<p>Docker Engine never implemented CRI, so Kubernetes contained an adapter, <strong>dockershim</strong>, which was <strong>removed in 1.24</strong>. Clusters switched to containerd directly. Nothing changed for images: Docker builds standard <strong>OCI images</strong>, which any CRI runtime runs. What changed is node debugging, since there's no <code>docker</code> CLI on nodes.</p>
+<p>Networking: the runtime calls the <strong>CNI plugin</strong> to give each pod an interface and IP; <strong>kube-proxy</strong> programmes Service routing (iptables, IPVS or nftables), unless an eBPF dataplane like Cilium replaces it. Node agents for logs, metrics and security usually run as <strong>DaemonSets</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduler binds a pod to the node.</li>
+  <li>Kubelet sees it, calls CRI to create a pod sandbox.</li>
+  <li>Runtime calls CNI to set up networking.</li>
+  <li>Kubelet pulls images through CRI ImageService.</li>
+  <li>Containers start via runc; kubelet runs probes.</li>
+  <li>Kubelet reports status; kube-proxy routes Service traffic.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># On a node without docker
+crictl ps                       # running containers
+crictl pods                     # pod sandboxes
+crictl logs &lt;container-id&gt;
+crictl inspecti registry.example.com/api:5.1
+journalctl -u kubelet -f
+kubectl get node node-1 -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}'
+# containerd://2.x</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking Docker images stopped working after 1.24.</li>
+  <li>Mounting <code>/var/run/docker.sock</code> in CI pods on containerd nodes.</li>
+  <li>Confusing the kubelet with the container runtime.</li>
+  <li>Forgetting system-reserved resources for kubelet and runtime.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A worker node runs the kubelet, which registers the node, watches for pods assigned to it, starts and stops containers, runs probes, mounts volumes and reports status. It doesn't run containers itself: it talks to a runtime like containerd or CRI-O through the Container Runtime Interface, a gRPC API for sandboxes, containers and images. Docker Engine was supported via dockershim, removed in 1.24, but Docker-built images still work because they're OCI images. Networking comes from the CNI plugin and kube-proxy or an eBPF replacement, and agents like log shippers run as DaemonSets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you debug without docker?</strong> <code>crictl</code> on the node, <code>kubectl debug node/...</code>, and kubelet logs via journalctl.</li>
+  <li><strong>What is a RuntimeClass?</strong> Selects a runtime handler, such as gVisor or Kata, per pod.</li>
+  <li><strong>How do you build images in CI without Docker socket?</strong> BuildKit rootless, Kaniko-style builders or Buildah.</li>
+</ul>
+</article>
+</body>
+</html>

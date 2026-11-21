@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-075 · How do you reference a resource that may or may not exist because it uses count = 0 or 1?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-075" data-topic="Terraform">
+<h1>How do you reference a resource that may or may not exist because it uses count = 0 or 1?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>count</code> turns a resource into a <strong>list</strong>, so <code>resource[0]</code> fails when count is <strong>0</strong>; use <code>one(resource.x[*].attr)</code>, which returns the element or <strong><code>null</code></strong>, or <strong><code>try(resource.x[0].attr, null)</code></strong>, and consider <strong><code>for_each</code></strong> when there may be more than one optional instance.</p>
+
+<h2>Detailed explanation</h2>
+<p>Optional resources are commonly written as <code>count = var.create_public_ip ? 1 : 0</code>. Even when the count is 1, the resource is a <strong>list of instances</strong>, so its address is <code>azurerm_public_ip.this[0]</code>. Referencing <code>azurerm_public_ip.this[0].id</code> works when the resource exists but fails with an <strong>&quot;Invalid index&quot;</strong> error when the count is 0, because the list is empty.</p>
+<p>The cleanest pattern is the <strong>splat expression plus <code>one()</code></strong>. The splat <code>azurerm_public_ip.this[*].id</code> always returns a list: empty when count is 0, one element when it is 1. <strong><code>one()</code></strong> converts that list to a single value: the element if there is exactly one, <strong><code>null</code></strong> if the list is empty, and an <strong>error</strong> if there are two or more, which protects you if someone later changes the count logic.</p>
+<p>Because <strong>null means &quot;omit&quot;</strong> for resource arguments, the result can often be passed straight into an optional argument, such as a NIC's <code>public_ip_address_id</code>, and Terraform will simply not set it when the IP does not exist. The same works for module outputs: an output that is null when the feature is disabled.</p>
+<p><strong><code>try(azurerm_public_ip.this[0].id, null)</code></strong> is an alternative that catches the index error and returns a default. It works but is less precise: it would also silently hide a typo in the attribute name.</p>
+<p>When a feature could have several optional instances, or you want readable addresses, <strong><code>for_each</code></strong> with a map is clearer: an empty map creates nothing, and each instance has a stable key. For a single optional instance, <code>for_each = var.enabled ? { this = true } : {}</code> is also common.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Declare the optional resource with <code>count = condition ? 1 : 0</code>.</li>
+  <li>Reference it with <code>one(resource.name[*].attribute)</code>.</li>
+  <li>Pass the result to optional arguments; null omits them.</li>
+  <li>Expose it in outputs, which are null when disabled.</li>
+  <li>Switch to <code>for_each</code> for multiple or keyed optional instances.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_public_ip&quot; &quot;this&quot; {
+  count               = var.public ? 1 : 0
+  name                = &quot;pip-${var.name}&quot;
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  allocation_method   = &quot;Static&quot;
+  sku                 = &quot;Standard&quot;
+}
+
+resource &quot;azurerm_network_interface&quot; &quot;this&quot; {
+  name                = &quot;nic-${var.name}&quot;
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  ip_configuration {
+    name                          = &quot;primary&quot;
+    subnet_id                     = var.subnet_id
+    private_ip_address_allocation = &quot;Dynamic&quot;
+    public_ip_address_id          = one(azurerm_public_ip.this[*].id)   # null when not public
+  }
+}
+
+output &quot;public_ip&quot; {
+  value = one(azurerm_public_ip.this[*].ip_address)
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>[0]</code> directly and breaking the disabled case.</li>
+  <li>Using <code>try</code> broadly and hiding attribute typos.</li>
+  <li>Using <code>count</code> for collections of named objects, causing index shifts.</li>
+  <li>Forgetting that <code>one()</code> errors when more than one element exists.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With count, the resource becomes a list even with one instance, so you reference index 0, which fails when the count is zero. The cleanest way is one() with the splat expression: one of the resource splat id returns the element when it exists and null when it doesn't, and fails clearly if there are ever more than one. Since null means omit for arguments, I can pass it straight into optional arguments or outputs. try with index 0 and a null default also works. For multiple optional instances I prefer for_each with a map.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is for_each sometimes better?</strong> Stable keys, readable addresses and no index shifting.</li>
+  <li><strong>What does the splat return with count 0?</strong> An empty list.</li>
+  <li><strong>How do you migrate from count to for_each?</strong> <code>moved</code> blocks from <code>[0]</code> to the new key.</li>
+</ul>
+</article>
+</body>
+</html>

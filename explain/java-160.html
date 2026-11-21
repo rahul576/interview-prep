@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-160 · What are the ACID properties of a database transaction?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-160" data-topic="Databases &amp; SQL">
+<h1>What are the ACID properties of a database transaction?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>ACID</strong> is the set of guarantees a database transaction gives: <strong>Atomicity</strong> (all or nothing), <strong>Consistency</strong> (constraints always hold), <strong>Isolation</strong> (concurrent transactions do not corrupt each other) and <strong>Durability</strong> (committed data survives crashes).</p>
+
+<h2>Detailed explanation</h2>
+<p>A transaction groups several statements into one logical unit of work, such as moving money between two accounts. ACID describes what the database promises about that unit.</p>
+<p><strong>Atomicity</strong> means either every statement takes effect or none does. If the credit fails after the debit, the database <strong>rolls back</strong> the debit using its undo information. The application never sees half a transfer.</p>
+<p><strong>Consistency</strong> means a transaction takes the database from one valid state to another. Primary keys, foreign keys, unique, check and not-null constraints are enforced, and a transaction that would break them is rejected. Note that business invariants beyond declared constraints (for example &quot;balance must never go negative&quot; if there is no check constraint) remain the application's responsibility.</p>
+<p><strong>Isolation</strong> means concurrent transactions behave as if they ran in some order. In practice databases offer <strong>isolation levels</strong> (Read Uncommitted, Read Committed, Repeatable Read, Serializable) that trade strictness for concurrency, implemented with locks or <strong>MVCC</strong> snapshots. PostgreSQL and Oracle default to Read Committed; MySQL InnoDB defaults to Repeatable Read.</p>
+<p><strong>Durability</strong> means once <code>COMMIT</code> returns, the change survives a crash or power loss. Databases achieve this with a <strong>write-ahead log (WAL)</strong> or redo log that is flushed (fsync) to disk before the commit is acknowledged; data pages can be written lazily later and rebuilt from the log on recovery.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The client starts a transaction (<code>BEGIN</code>, or Spring's <code>@Transactional</code>).</li>
+  <li>Each change is recorded in the WAL/redo log and in undo/MVCC versions.</li>
+  <li>Locks or row versions keep other transactions from seeing uncommitted data.</li>
+  <li>Constraints are checked per statement or at commit (deferred constraints).</li>
+  <li>On <code>COMMIT</code>, the log is flushed to durable storage, then success is returned.</li>
+  <li>On error or <code>ROLLBACK</code>, undo information restores the previous state; after a crash, recovery replays the log.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">BEGIN;
+UPDATE account SET balance = balance - 500 WHERE id = 1;
+UPDATE account SET balance = balance + 500 WHERE id = 2;
+-- if either fails, ROLLBACK undoes both
+COMMIT;  -- WAL flushed: survives a crash from here on</code></pre>
+<pre><code class="language-java">@Transactional
+public void transfer(long from, long to, BigDecimal amt) {
+    accounts.debit(from, amt);
+    accounts.credit(to, amt);   // exception here rolls back the debit
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Confusing ACID <strong>consistency</strong> (constraints) with CAP <strong>consistency</strong> (latest value on every replica).</li>
+  <li>Assuming every database runs at Serializable by default.</li>
+  <li>Catching an exception inside <code>@Transactional</code> and swallowing it, so the transaction commits a partial result.</li>
+  <li>Forgetting that settings like <code>synchronous_commit = off</code> weaken durability.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ACID is what makes a transaction trustworthy. Atomicity means all or nothing: in a transfer, both the debit and the credit happen or neither does, thanks to rollback. Consistency means constraints such as foreign keys and uniqueness always hold after a commit. Isolation means concurrent transactions don't interfere, and the strength of that is tuned through isolation levels, usually implemented with MVCC. Durability means once commit returns the data survives a crash, because the write-ahead log is flushed to disk first. In Spring I get these through @Transactional, and I'm careful about the isolation level the database actually uses.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do microservices give up ACID across services?</strong> They use local transactions plus sagas, the outbox pattern and idempotent consumers for eventual consistency.</li>
+  <li><strong>What is MVCC?</strong> Readers see a consistent snapshot of row versions, so reads do not block writes.</li>
+  <li><strong>Which anomalies does Read Committed allow?</strong> Non-repeatable reads and phantoms, plus lost updates without explicit locking.</li>
+</ul>
+</article>
+</body>
+</html>

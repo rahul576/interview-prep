@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-074 · What happens to running containers when the Docker daemon is restarted or upgraded?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-074" data-topic="Docker">
+<h1>What happens to running containers when the Docker daemon is restarted or upgraded?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>By default, stopping or upgrading <strong>dockerd stops all its containers</strong>, and those with <strong>restart policies</strong> come back when it restarts; with <strong><code>live-restore</code></strong> enabled, containers keep running because each is supervised by a <strong>containerd shim</strong>, and dockerd reattaches on start. In clusters, <strong>drain the node</strong> before upgrading.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker is not one process. <strong>dockerd</strong> handles the API, networking and images; it delegates container lifecycle to <strong>containerd</strong>, which starts each container through <strong>runc</strong> and leaves a small <strong>containerd-shim</strong> process as its parent. The shim keeps stdio open and reports the exit code, so the container process does not depend on dockerd being alive.</p>
+<p>Without extra configuration, when dockerd stops it shuts down its containers. When it starts again, containers with <code>--restart always</code> or <code>unless-stopped</code> (and <code>on-failure</code> ones in some cases) are restarted; the rest stay stopped. That is a short outage for everything on the host.</p>
+<p>With <strong><code>&quot;live-restore&quot;: true</code></strong> in <code>daemon.json</code>, dockerd leaves containers running while it is stopped, restarted or upgraded, and reconnects to them when it comes back. Limitations matter: while the daemon is down you cannot start, stop or inspect containers, published ports may not work during the gap when the userland proxy is used, logs can fill the buffer and block if the outage is long, and live-restore is <strong>not supported with Swarm mode</strong>, because Swarm manages orchestration and networking state that must stay consistent. Live restore also only supports patch-level upgrades reliably; major upgrades can require container restarts.</p>
+<p>In a <strong>cluster</strong> (Kubernetes with containerd, ECS, Swarm), the safest pattern is: <strong>cordon and drain</strong> the node, let workloads move, upgrade the runtime, verify and uncordon, one node at a time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable live-restore and reload config (<code>systemctl reload docker</code> or SIGHUP).</li>
+  <li>Upgrade or restart dockerd; containers keep running under their shims.</li>
+  <li>dockerd starts, reads its state and reconnects to running containers.</li>
+  <li>Without live-restore: containers stop, then restart policies decide what comes back.</li>
+  <li>In clusters: drain, upgrade, verify, uncordon.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">echo '{ &quot;live-restore&quot;: true }' | sudo tee /etc/docker/daemon.json
+sudo systemctl reload docker
+docker info --format '{{.LiveRestoreEnabled}}'   # true
+ps -ef | grep containerd-shim                    # one shim per container</code></pre>
+<pre><code class="language-bash">kubectl cordon node-7 &amp;&amp; kubectl drain node-7 --ignore-daemonsets --delete-emptydir-data
+# upgrade container runtime, reboot if needed
+kubectl uncordon node-7</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming restart policies mean zero downtime; there is still a gap.</li>
+  <li>Enabling live-restore on Swarm nodes and expecting it to work.</li>
+  <li>Upgrading all nodes in a cluster at once.</li>
+  <li>Forgetting that long daemon outages can block container logging.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default, when the Docker daemon stops, its containers stop too, and when it comes back, containers with restart policies like <code>always</code> or <code>unless-stopped</code> are started again, so you get a brief outage. If you enable <code>live-restore</code> in daemon.json, containers keep running during the restart or upgrade, because each one is parented by a containerd shim rather than dockerd, and dockerd reattaches when it starts. It has limits: no Swarm support, mainly patch upgrades, and you can't manage containers while dockerd is down. In a cluster I wouldn't rely on it; I'd drain the node, upgrade, check and return it to service one node at a time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why no live-restore with Swarm?</strong> Swarm's orchestration and overlay networking state depends on the daemon and cluster coordination.</li>
+  <li><strong>What is the shim's job?</strong> Keep the container running independently of dockerd, hold stdio and report exit status.</li>
+  <li><strong>Does restarting containerd affect containers?</strong> Shims keep running containers alive; containerd reconnects to them on restart.</li>
+</ul>
+</article>
+</body>
+</html>

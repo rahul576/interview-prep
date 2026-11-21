@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-162 · What are Eden and survivor spaces?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-162" data-topic="JVM &amp; Performance">
+<h1>What are Eden and survivor spaces?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Eden</strong> is where almost all new objects are allocated; the two <strong>survivor spaces</strong> (<strong>S0/S1</strong> or <strong>from/to</strong>) hold objects that survived a minor GC, with <strong>one always empty</strong>; each minor GC <strong>copies live objects</strong> from Eden and the occupied survivor into the empty one, <strong>increments their age</strong>, clears the rest, swaps roles, and <strong>promotes</strong> old-enough or overflowing objects to the old generation.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Eden.</strong> Threads allocate new objects in Eden, mostly through <strong>thread-local allocation buffers (TLABs)</strong>: each thread gets a private chunk and allocates by bumping a pointer, which needs no locking and costs a few instructions. When Eden has no room for the next TLAB or object, a minor GC is triggered.</p>
+<p><strong>Survivor spaces.</strong> There are two equal-sized survivor spaces. At any time one (the &quot;from&quot; space) holds survivors of the previous collection, and the other (the &quot;to&quot; space) is empty. During a <strong>minor GC</strong> the collector:</p>
+<ul>
+  <li>traces live objects reachable from GC roots and from old-to-young references;</li>
+  <li><strong>copies</strong> live objects from Eden and from the &quot;from&quot; space into the &quot;to&quot; space, incrementing each object's age (stored in its header);</li>
+  <li><strong>promotes</strong> objects whose age reached the tenuring threshold, or that do not fit in &quot;to&quot;, into the old generation;</li>
+  <li>then considers Eden and &quot;from&quot; entirely empty, without visiting dead objects.</li>
+</ul>
+<p>Finally the two survivor spaces <strong>swap roles</strong>: the filled &quot;to&quot; becomes the next &quot;from&quot;.</p>
+<p><strong>Why copying?</strong> Copying collectors only touch live objects, and since most young objects are dead, little work is needed. Live objects are packed contiguously into the destination, so there is <strong>no fragmentation</strong> and allocation can stay a simple pointer bump. The cost is the reserved empty space, which is why survivors are small (<code>-XX:SurvivorRatio=8</code> makes Eden eight times one survivor space in Parallel GC).</p>
+<p><strong>Overflow and premature promotion.</strong> If survivors are too small for the live young objects, extras are promoted early, filling the old generation with objects that would soon have died. The JVM adjusts the tenuring threshold dynamically to limit this.</p>
+<p>In <strong>G1</strong> the same roles exist but as sets of regions: eden regions and survivor regions, evacuated into new survivor or old regions during young pauses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocate into Eden via TLABs.</li>
+  <li>Eden full: minor GC starts.</li>
+  <li>Copy live objects from Eden and S0 to S1; age +1.</li>
+  <li>Promote aged or overflowing objects to old.</li>
+  <li>Clear Eden and S0; swap S0 and S1 roles.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Before minor GC #8:  Eden [AxxBxxxCx]  S0 [D(age3) E(age1)]  S1 [empty]
+  (x = dead objects; A, B, C, D, E live)
+After minor GC #8:   Eden [empty]      S0 [empty]            S1 [A1 B1 C1 E2]
+                     Old  [... D4 promoted if threshold is 4]</code></pre>
+<pre><code class="language-bash">jstat -gc &lt;pid&gt; 1000
+#  S0C    S1C    S0U    S1U     EC       EU      OC  ...
+# 68M    68M    0.0   21.4M   545M    310.2M   1360M</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking dead objects are individually freed during a minor GC.</li>
+  <li>Believing both survivor spaces are used at the same time.</li>
+  <li>Making survivors too small, causing premature promotion.</li>
+  <li>Forgetting that large objects can bypass Eden.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Eden is the part of the young generation where almost all new objects are allocated, usually through thread-local allocation buffers, so allocation is a cheap pointer bump. There are two survivor spaces, S0 and S1 or from and to, and one is always empty. During a minor GC the collector copies live objects from Eden and the occupied survivor space into the empty one, increasing their age, then treats Eden and the old survivor as completely free, and the two survivor spaces swap roles. Objects whose age reaches the tenuring threshold, or that don't fit, are promoted to the old generation. Copying only touches live objects and compacts them, so there's no fragmentation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does the copying approach avoid fragmentation?</strong> Live objects are packed contiguously into the destination space, leaving the source completely free.</li>
+  <li><strong>Where is an object's age stored?</strong> In its header's mark word, using 4 bits, hence the maximum of 15.</li>
+  <li><strong>What is a TLAB?</strong> A per-thread chunk of Eden that allows allocation without synchronisation.</li>
+</ul>
+</article>
+</body>
+</html>

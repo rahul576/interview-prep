@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-039 · How does Kafka guarantee ordering, and what delivery semantics can you achieve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-039" data-topic="Kafka">
+<h1>How does Kafka guarantee ordering, and what delivery semantics can you achieve?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Kafka guarantees <strong>ordering only within a partition</strong>, so related messages share a <strong>key</strong>; delivery is <strong>at-most-once</strong>, <strong>at-least-once</strong> or <strong>exactly-once</strong> depending on when offsets are committed and whether you use <strong>idempotent producers and transactions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>topic</strong> is split into <strong>partitions</strong>, each an append-only, ordered log. Records get increasing <strong>offsets</strong> within a partition, and consumers read them in that order. There is <strong>no global order across partitions</strong>. To keep related events ordered, such as all events of order 42, the producer sets a <strong>key</strong>; the default partitioner hashes the key so the same key always lands in the same partition (as long as the partition count does not change).</p>
+<p>Within a <strong>consumer group</strong>, each partition is assigned to exactly one consumer, which preserves per-partition order and gives parallelism up to the number of partitions. On the producer side, retries could reorder or duplicate batches; the <strong>idempotent producer</strong> (<code>enable.idempotence=true</code>, the default since Kafka 3.0) uses producer ids and sequence numbers so the broker drops duplicates and keeps order, with up to five in-flight requests.</p>
+<p><strong>Delivery semantics</strong> come from offset handling:</p>
+<ul>
+  <li><strong>At-most-once</strong>: commit offsets before processing; a crash loses messages.</li>
+  <li><strong>At-least-once</strong>: process, then commit; a crash causes redelivery, so processing must be <strong>idempotent</strong>. This is the usual choice.</li>
+  <li><strong>Exactly-once</strong>: inside Kafka, a consume-transform-produce flow uses <strong>transactions</strong> so output records and consumer offsets commit atomically, and downstream consumers use <code>isolation.level=read_committed</code> (Kafka Streams does this with <code>processing.guarantee=exactly_once_v2</code>). For external systems such as a database, you achieve &quot;effectively once&quot; by combining at-least-once with idempotent writes or storing offsets in the same database transaction.</li>
+</ul>
+<p>For durability, producers use <code>acks=all</code> with <code>min.insync.replicas=2</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer sends a record with key <code>orderId</code>.</li>
+  <li>Partitioner hashes the key to a partition; the leader appends it.</li>
+  <li>Followers replicate; with <code>acks=all</code> the producer gets an ack after ISR replication.</li>
+  <li>The group consumer for that partition polls records in offset order.</li>
+  <li>It processes and then commits offsets (at-least-once).</li>
+  <li>On crash, the new owner resumes from the last committed offset.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Producer: same key -&gt; same partition -&gt; ordered per order
+props.put(ProducerConfig.ACKS_CONFIG, &quot;all&quot;);
+props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+producer.send(new ProducerRecord&lt;&gt;(&quot;orders&quot;, order.getId(), event));
+
+// Consumer: at-least-once
+props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+while (true) {
+    var records = consumer.poll(Duration.ofMillis(500));
+    for (var r : records) handleIdempotently(r.value());
+    consumer.commitSync();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Semantics</th><th>How</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td>At-most-once</td><td>Commit before processing</td><td>Lost messages</td></tr>
+<tr><td>At-least-once</td><td>Commit after processing</td><td>Duplicates</td></tr>
+<tr><td>Exactly-once (Kafka-to-Kafka)</td><td>Transactions + read_committed</td><td>Complexity, latency</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting topic-wide ordering.</li>
+  <li>Adding partitions later and breaking key-to-partition mapping.</li>
+  <li>Claiming exactly-once covers database writes or HTTP calls.</li>
+  <li>Auto-commit with asynchronous processing, causing silent message loss.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kafka only guarantees order within a partition, so I key messages by the entity whose events must stay ordered, like the order id, and the same key always goes to the same partition. Within a consumer group, one consumer owns each partition. Delivery semantics depend on offset commits: commit before processing is at-most-once, after processing is at-least-once, which I use with idempotent consumers. Exactly-once is available for Kafka-to-Kafka pipelines using idempotent producers, transactions and read_committed consumers. On the producer I use <code>acks=all</code> and idempotence for durability and to avoid retry duplicates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens during a rebalance?</strong> Partitions move between consumers; uncommitted work may be reprocessed, so commit on revoke and use cooperative rebalancing.</li>
+  <li><strong>Why not one partition for global order?</strong> It limits throughput and parallelism to one consumer.</li>
+  <li><strong>Does idempotent producer give exactly-once end to end?</strong> No, only no duplicates per partition from producer retries.</li>
+</ul>
+</article>
+</body>
+</html>

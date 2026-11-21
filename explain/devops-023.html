@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-023 · A pod is stuck in CrashLoopBackOff. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-023" data-topic="Kubernetes">
+<h1>A pod is stuck in CrashLoopBackOff. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>CrashLoopBackOff</strong> means the container keeps exiting and the kubelet waits longer between restarts; investigate with <strong><code>kubectl describe pod</code></strong> (events, <strong>last state, exit code, reason</strong>), <strong><code>kubectl logs --previous</code></strong>, then check <strong>OOMKilled/137</strong>, <strong>config, secrets and env vars</strong>, <strong>probes</strong>, <strong>image and command</strong>, and <strong>dependencies</strong>, using <strong><code>kubectl debug</code></strong> when needed.</p>
+
+<h2>Detailed explanation</h2>
+<p>CrashLoopBackOff is a <strong>state, not a cause</strong>. The container started, exited (for whatever reason), and with <code>restartPolicy: Always</code> the kubelet restarts it with exponential back-off (10 s, 20 s, 40 s… up to five minutes). The job is to find out <em>why it exits</em>.</p>
+<p><strong>Describe first.</strong> <code>kubectl describe pod</code> shows <strong>events</strong> (image pulls, probe failures, mounts) and the container's <strong>Last State</strong>: <code>Terminated</code> with a <strong>reason</strong> and <strong>exit code</strong>.</p>
+<ul>
+  <li><strong>137 / OOMKilled</strong>: exceeded its memory limit; check limits and actual usage.</li>
+  <li><strong>137 without OOMKilled</strong>: killed by SIGKILL, often after a failed liveness probe or a grace period expiring.</li>
+  <li><strong>1</strong> or other application codes: the app failed; read the logs.</li>
+  <li><strong>126/127</strong>: command not executable or not found, a wrong entrypoint or missing binary.</li>
+</ul>
+<p><strong>Logs of the crashed instance.</strong> <code>kubectl logs POD -c CONTAINER --previous</code> shows output from the last crashed run; the current one may have just started and be empty.</p>
+<p><strong>Common causes.</strong></p>
+<ul>
+  <li>Missing or wrong <strong>ConfigMap, Secret or environment variable</strong> (the app exits on startup validation).</li>
+  <li>A <strong>dependency</strong> unreachable: database, DNS name, credentials, network policy blocking egress.</li>
+  <li>Wrong <strong>command/args</strong> or image tag, architecture mismatch (<code>exec format error</code> for ARM vs x86).</li>
+  <li>A <strong>liveness probe</strong> too aggressive for start-up time.</li>
+</ul>
+<p><strong>Interactive debugging.</strong> <code>kubectl debug</code> can add an <strong>ephemeral container</strong> to the pod or create a copy with a different command (for example <code>sleep</code>) so you can inspect the filesystem, environment and network.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get pod</code> → restarts count and status.</li>
+  <li><code>kubectl describe pod</code> → reason, exit code, events.</li>
+  <li><code>kubectl logs --previous</code> → application error.</li>
+  <li>Check config, secrets, probes, resources, image and command.</li>
+  <li>Reproduce with <code>kubectl debug</code> or a copy that sleeps.</li>
+  <li>Fix, redeploy, watch restarts stop.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pod api-7d9f -n shop | sed -n '/Last State/,/Ready/p'
+kubectl logs api-7d9f -n shop -c api --previous
+kubectl get events -n shop --field-selector involvedObject.name=api-7d9f
+kubectl debug api-7d9f -n shop -it --copy-to=api-debug --container=api -- sh</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading current logs instead of <code>--previous</code>.</li>
+  <li>Raising memory limits without checking for a leak or JVM settings.</li>
+  <li>Ignoring exit code and reason in <code>describe</code>.</li>
+  <li>Deleting the pod repeatedly, hoping it fixes itself.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CrashLoopBackOff means the container keeps exiting and the kubelet is backing off between restarts, so I need to find why it exits. First kubectl describe pod for events, the last state, exit code and reason: 137 with OOMKilled means it hit its memory limit, 1 is usually an application error, 127 a wrong command. Then kubectl logs with previous to see the crashed run's output. Common causes are a missing ConfigMap, Secret or env var, an unreachable dependency, a wrong command or image, or a liveness probe killing a slow starter. If needed I use kubectl debug or a copy that just sleeps to inspect interactively.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Logs empty and exit code 0?</strong> The main process finished: a script or one-shot command, or a daemon forking into the background; it needs a long-running foreground process.</li>
+  <li><strong>What's ImagePullBackOff instead?</strong> The image cannot be pulled: wrong name or tag, missing registry credentials or no network.</li>
+  <li><strong>How do you catch OOMs early?</strong> Monitor working-set memory against limits and alert on OOMKilled events.</li>
+</ul>
+</article>
+</body>
+</html>

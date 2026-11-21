@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-066 · How would you structure Terraform repositories for a large organisation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-066" data-topic="Infrastructure as Code">
+<h1>How would you structure Terraform repositories for a large organisation?</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Separate <strong>reusable, versioned modules</strong> from <strong>live configuration</strong>; organise live code by <strong>account/environment, region and component</strong>, each a small root module with <strong>its own state</strong> calling <strong>pinned module versions</strong>; choose <strong>monorepo vs repo-per-team</strong> by ownership needs and use <strong>CODEOWNERS and path-based pipelines</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Large organisations fail with Terraform in two typical ways: one giant configuration with thousands of resources, slow plans and a huge blast radius, or hundreds of copy-pasted folders that drift apart. The structure that works rests on a few principles.</p>
+<p><strong>Modules versus live code.</strong> <strong>Modules</strong> are libraries: a VPC, an EKS cluster, a service with its database and alarms. They live in their own repositories or a modules monorepo, are tested (static checks, <code>terraform test</code>, integration tests), and are released with <strong>semantic version tags</strong> to a private registry. <strong>Live configuration</strong> is what is actually deployed; it contains almost no logic, just module calls with inputs and pinned versions.</p>
+<p><strong>Small states.</strong> Live code is split by <strong>account or subscription, region and component</strong>: <code>prod/eu-west-1/network</code>, <code>prod/eu-west-1/eks</code>, <code>prod/eu-west-1/payments</code>. Each directory is a root module with its own backend key. That limits blast radius, keeps plans fast and allows different permissions per component. Components share data through outputs read via <code>terraform_remote_state</code> or, more loosely coupled, data sources and parameter store lookups. Tools such as Terragrunt reduce backend and provider boilerplate; Terraform's newer Stacks feature and similar orchestration tools address the same problem.</p>
+<p><strong>Repository layout.</strong> A <strong>live monorepo</strong> gives one place to see everything, makes cross-cutting changes easy, and works well with <strong>CODEOWNERS</strong> per directory and pipelines that detect changed paths and plan only those. <strong>Repository per team</strong> gives cleaner permissions and autonomy but makes estate-wide changes harder. Many organisations use a modules repo (or several), a platform live repo and per-team live repos generated from a template.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform team publishes <code>terraform-aws-vpc</code> v3.2.0 to the private registry.</li>
+  <li>Live repo <code>prod/eu-west-1/network/main.tf</code> calls it with version pinned.</li>
+  <li>PR changes only that directory; the pipeline plans only it.</li>
+  <li>CODEOWNERS requires the network team's approval.</li>
+  <li>Merge triggers apply with that environment's role.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">modules/ (separate repos, semver tags)
+  terraform-aws-vpc   terraform-aws-eks   terraform-aws-service
+live/
+  dev/eu-west-1/{network,eks,payments}/
+  prod/eu-west-1/{network,eks,payments}/
+  prod/us-east-1/{network,eks}/
+CODEOWNERS:  /live/*/*/network/  @org/network-team</code></pre>
+<pre><code class="language-hcl">module &quot;vpc&quot; {
+  source  = &quot;app.terraform.io/acme/vpc/aws&quot;
+  version = &quot;3.2.0&quot;
+  cidr    = &quot;10.20.0.0/16&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One state per environment containing everything.</li>
+  <li>Modules referenced by branch instead of version tag.</li>
+  <li>Business logic duplicated in live directories instead of modules.</li>
+  <li>Deep chains of <code>terraform_remote_state</code> dependencies that are hard to change.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I separate modules from live configuration. Modules are reusable, tested and released with semantic versions to a private registry. Live configuration is organised by account, region and component, like prod/eu-west-1/network, where each directory is a small root module with its own state that just calls pinned module versions. That keeps plans fast and blast radius small. For the live code I usually prefer a monorepo with CODEOWNERS per path and pipelines that plan only changed directories, because it gives visibility and easy cross-cutting changes, though per-team repositories make sense when ownership and permissions need stronger separation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you roll out a module upgrade to 40 environments safely?</strong> Automated PRs per environment, in waves from dev to prod, each with a reviewed plan.</li>
+  <li><strong>How do stacks share values?</strong> Outputs via remote state or published parameters, kept to a minimum.</li>
+  <li><strong>Do you need Terragrunt?</strong> Not required; it helps reduce repetition at large scale.</li>
+</ul>
+</article>
+</body>
+</html>

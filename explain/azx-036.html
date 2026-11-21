@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-036 · An application gets 403 errors when reading a Key Vault secret with its managed identity. What do you check?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-036" data-topic="Azure">
+<h1>An application gets 403 errors when reading a Key Vault secret with its managed identity. What do you check?</h1>
+<p class="ex-meta">Azure · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A 403 means <strong>authenticated but not authorised, or blocked by the network</strong>: check the <strong>right identity</strong> is used (client ID for user-assigned), the <strong>data-plane role</strong> (Key Vault Secrets User) under the <strong>RBAC model</strong> vs <strong>access policies</strong>, the <strong>vault firewall / private endpoint / DNS</strong>, and <strong>role propagation and token caching</strong> delays.</p>
+
+<h2>Detailed explanation</h2>
+<p>Key Vault returns <strong>401</strong> when no valid token was presented and <strong>403</strong> when the caller is known but not allowed, either by permissions or by the <strong>network firewall</strong>. The error body usually says which: <code>ForbiddenByRbac</code>, <code>ForbiddenByPolicy</code> or <code>ForbiddenByFirewall</code> with the client IP.</p>
+<p><strong>1. Identity:</strong> Is the managed identity enabled on the app (and on the right slot)? If the app has <strong>several user-assigned identities</strong>, <code>DefaultAzureCredential</code> may pick the wrong one or none; set <code>ManagedIdentityClientId</code> or <code>AZURE_CLIENT_ID</code>. Locally, <code>DefaultAzureCredential</code> may use a developer account instead, hiding the problem.</p>
+<p><strong>2. Permission model:</strong> A vault uses either the <strong>Azure RBAC</strong> model or legacy <strong>access policies</strong>, not both. With RBAC, the identity needs a <strong>data-plane role</strong> such as <strong>Key Vault Secrets User</strong> on the vault or the individual secret. Roles like <strong>Contributor or Owner are control-plane only</strong> and do <strong>not</strong> grant reading secret values. With access policies, the identity needs <strong>Get</strong> on secrets, and RBAC assignments are ignored.</p>
+<p><strong>3. Network:</strong> If the vault firewall allows only <strong>selected networks or private endpoints</strong>, the app must come through <strong>VNet integration</strong> and resolve the vault name to the <strong>private endpoint IP</strong> via the <code>privatelink.vaultcore.azure.net</code> zone. A missing DNS link makes the app go to the public endpoint and be rejected.</p>
+<p><strong>4. Timing:</strong> New role assignments can take minutes to propagate, and apps cache tokens (and sometimes failures). Restarting the app or waiting usually confirms this.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the full error: RBAC, policy or firewall.</li>
+  <li>Verify the identity's object ID used in the token.</li>
+  <li>Check the vault's permission model and the identity's role or policy.</li>
+  <li>Check firewall settings, private endpoint and DNS resolution from the app.</li>
+  <li>Wait for propagation or restart; retest.</li>
+  <li>Fix in IaC, not by hand.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az keyvault show -n kv-orders-prod --query &quot;{rbac:properties.enableRbacAuthorization, net:properties.networkAcls.defaultAction}&quot;
+az role assignment list --assignee &lt;principal-id&gt; --scope $(az keyvault show -n kv-orders-prod --query id -o tsv) -o table
+# From the app's Kudu console / SSH:
+nslookup kv-orders-prod.vault.azure.net     # should return a 10.x private IP
+# Test as the identity without the app:
+az login --identity --username &lt;client-id&gt;   # on a VM with that identity
+az keyvault secret show --vault-name kv-orders-prod -n SqlPassword</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assigning Contributor and expecting secret access.</li>
+  <li>Adding an access policy to an RBAC-model vault (or vice versa).</li>
+  <li>Ignoring the slot's separate identity.</li>
+  <li>Private endpoint without the DNS zone linked to the app's VNet.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;403 means the request was authenticated but not authorised, or blocked by the vault firewall, and the error text tells you which. I check the identity first: is it enabled, and with several user-assigned identities, is the code passing the right client ID? Then permissions: with the RBAC model it needs a data-plane role like Key Vault Secrets User, Contributor isn't enough; with access policies it needs Get on secrets. Then network: if the vault only allows private endpoints, the app needs VNet integration and correct private DNS. Finally, role assignments take a few minutes to propagate and tokens are cached.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Test permissions without deploying?</strong> Use a VM or Cloud Shell with that identity, or <code>az rest</code> with a token for it.</li>
+  <li><strong>RBAC vs access policies?</strong> RBAC is recommended: central, PIM-capable, per-secret scope.</li>
+  <li><strong>401 vs 403?</strong> 401 is no or invalid token; 403 is valid token, denied.</li>
+</ul>
+</article>
+</body>
+</html>

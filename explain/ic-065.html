@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-065 · What is the difference between push and pull configuration management, and how can Ansible do pull?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-065" data-topic="Configuration Management">
+<h1>What is the difference between push and pull configuration management, and how can Ansible do pull?</h1>
+<p class="ex-meta">Configuration Management · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Push</strong> means a central control node connects out to servers and applies changes (Ansible's default); <strong>pull</strong> means each node fetches and applies its own configuration on a schedule (Puppet, Chef); Ansible does pull with <strong><code>ansible-pull</code></strong> on a <strong>systemd timer or cron</strong>, or via <strong>AWS SSM State Manager</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Push</strong> gives immediate, coordinated changes: you decide when it runs, on which hosts, in which order, with rolling batches and a single place to see results. The costs are that the control node needs network access and credentials for every host, a run across thousands of hosts is limited by forks and SSH connections, and hosts that are offline or just created by an autoscaler are missed until someone runs the playbook again.</p>
+<p><strong>Pull</strong> inverts the direction. Each node runs an agent or timer that fetches the desired configuration and applies it locally. It scales naturally (each host does its own work), works behind NAT and firewalls because connections are outbound, and suits <strong>ephemeral and autoscaled nodes</strong>: a new instance configures itself on boot. The costs are slower and less coordinated changes: you wait for the next interval, ordering across hosts is hard, and you need reporting to know whether every node has converged.</p>
+<p><strong>ansible-pull</strong> clones a Git repository (<code>-U url</code>, <code>-C branch</code>) and runs a playbook (by default <code>local.yml</code>, or one named after the host) against <code>localhost</code>. With <code>-o</code>/<code>--only-if-changed</code> it runs only when the repository has new commits. A <strong>systemd timer</strong> or cron triggers it.</p>
+<p>On AWS, <strong>Systems Manager State Manager</strong> can run the <code>AWS-ApplyAnsiblePlaybooks</code> document on instances selected by tag on a schedule, with compliance reporting in the console, and <strong>Run Command</strong> can trigger it immediately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Base image includes Ansible and a deploy key or token for the repo.</li>
+  <li>A systemd timer or cron job runs <code>ansible-pull</code> every 30 minutes with a random delay.</li>
+  <li>The node clones/updates the repo and applies <code>local.yml</code> to itself.</li>
+  <li>Logs and results go to central logging or a callback plugin.</li>
+  <li>Urgent changes are forced via SSM Run Command or a push run.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># /etc/cron.d/ansible-pull: every 30 minutes, random delay up to 5 minutes
+*/30 * * * * root sleep $((RANDOM % 300)); /usr/bin/ansible-pull \
+  -U https://git.example.com/infra/config.git -C main -o \
+  -i localhost, local.yml &gt;&gt; /var/log/ansible-pull.log 2&gt;&amp;1</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No random delay, so thousands of nodes hit Git at the same second.</li>
+  <li>No central reporting, so failures on individual nodes go unnoticed.</li>
+  <li>Giving every node write access or broad secrets.</li>
+  <li>Assuming pull mode handles urgent, ordered changes well.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In push mode, Ansible's default, a control node SSHes into every host and applies changes, which is immediate and coordinated but needs connectivity to everything and doesn't scale well to thousands of hosts or catch new autoscaled ones. In pull mode each node fetches and applies its own configuration periodically, like Puppet or Chef, which scales, works behind NAT and self-heals drift. Ansible does that with ansible-pull: the node clones a Git repo and runs a playbook locally from a systemd timer. On AWS, SSM State Manager can run playbooks on tagged instances on a schedule.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What are the downsides of pull for urgent changes?</strong> You wait for the interval and lack ordering; trigger immediately with Run Command or a push run.</li>
+  <li><strong>How do you know all nodes converged?</strong> Central logs, callback plugins or State Manager compliance reports.</li>
+  <li><strong>Where does ansible-pull get secrets?</strong> From the node's own identity, such as an instance role reading Secrets Manager.</li>
+</ul>
+</article>
+</body>
+</html>

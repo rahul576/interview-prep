@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-010 · How do you use cron to schedule jobs, and what are common pitfalls?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-010" data-topic="Scripting">
+<h1>How do you use cron to schedule jobs, and what are common pitfalls?</h1>
+<p class="ex-meta">Scripting · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>cron</strong> runs commands on a schedule defined by <strong>five time fields</strong> (minute, hour, day of month, month, day of week) edited with <strong><code>crontab -e</code></strong>; the classic pitfalls are its <strong>minimal environment</strong>, <strong>lost output</strong>, <strong>unnoticed failures</strong>, <strong>overlapping runs</strong> (use <strong>flock</strong>) and time zones, with <strong>systemd timers</strong> or <strong>Kubernetes CronJobs</strong> as modern alternatives.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>cron daemon</strong> checks schedules every minute. Each user has a crontab edited with <strong><code>crontab -e</code></strong> (listed with <code>crontab -l</code>); system jobs live in <code>/etc/crontab</code> and <code>/etc/cron.d/</code>, which have an extra <strong>user</strong> field. A line has five fields followed by the command: <code>minute hour day-of-month month day-of-week</code>. <code><em></code> means every value, <code></em>/15</code> every 15 units, <code>1-5</code> a range and <code>1,15</code> a list. So <code>0 2 * * <em></code> runs at 02:00 daily, <code></em>/10 * * * <em></code> every ten minutes, and <code>30 6 </em> * 1-5</code> at 06:30 on weekdays.</p>
+<p><strong>Pitfalls</strong>: cron runs with a <strong>minimal environment</strong>: a short PATH, no <code>.bashrc</code>, often <code>/bin/sh</code> instead of Bash. Scripts that work interactively fail with &quot;command not found&quot;, so use <strong>full paths</strong>, set <code>PATH</code> and <code>SHELL</code> at the top of the crontab, or load an env file. <strong>Output</strong> is mailed to the user if a mail agent exists, otherwise effectively <strong>lost</strong>, so redirect stdout and stderr to a log. <strong>Failures go unnoticed</strong> unless you monitor: use a dead man's switch (the job pings a monitoring URL such as Healthchecks.io on success) or alert on missing runs. A job that runs longer than its interval <strong>overlaps</strong> the next run, causing duplicate work or corruption; wrap it with <strong><code>flock -n</code></strong> to skip if one is already running. Beware DST transitions in the server's time zone.</p>
+<p><strong>Alternatives</strong>: <strong>systemd timers</strong> give journal logging, dependencies, <code>Persistent=true</code> to catch up missed runs. In Kubernetes use a <strong>CronJob</strong> with <code>concurrencyPolicy: Forbid</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The daemon wakes every minute and reads crontabs.</li>
+  <li>Matching entries are started with a minimal environment.</li>
+  <li>Output is mailed or redirected to logs.</li>
+  <li>flock prevents concurrent runs of the same job.</li>
+  <li>Monitoring checks that each run succeeded.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">crontab -e</code></pre>
+<pre><code class="language-conf">SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+# nightly backup at 02:00, no overlap, logged, monitored
+0 2 * * * /usr/bin/flock -n /tmp/backup.lock /opt/scripts/backup.sh &gt;&gt; /var/log/backup.log 2&gt;&amp;1 &amp;&amp; curl -fsS -m 10 https://hc.example.com/ping/backup &gt;/dev/null</code></pre>
+<pre><code class="language-bash"># systemd alternative: a transient timer with catch-up of missed runs
+sudo systemd-run --unit=backup --on-calendar=&quot;*-*-* 02:00:00&quot; \
+  --timer-property=Persistent=true /opt/scripts/backup.sh
+systemctl list-timers backup.timer</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on PATH and variables from your interactive shell.</li>
+  <li>No output redirection, so errors vanish.</li>
+  <li>No overlap protection for long jobs.</li>
+  <li>Scheduling in the DST transition window.</li>
+  <li>Forgetting to escape <code>%</code> in commands.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;cron runs commands on a schedule. I edit a user's schedule with crontab -e, and each line has five fields, minute, hour, day of month, month and day of week, then the command, so 0 2 * * * runs every day at 2 a.m. The pitfalls: cron has a minimal environment, so I use full paths and set PATH; output is lost unless I redirect it to a log; failures go unnoticed unless I monitor them, for example with a heartbeat ping; and long jobs can overlap, which flock prevents. On modern systems systemd timers give better logging and catch-up, and in Kubernetes I'd use a CronJob.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you get alerted when a nightly job fails?</strong> A dead man's switch ping on success, alerting if no ping arrives, plus logging non-zero exits.</li>
+  <li><strong>How do you test a cron job?</strong> Run it with <code>env -i</code> and the cron PATH to mimic the environment.</li>
+  <li><strong>What does Persistent=true do in a timer?</strong> Runs a missed job at next boot if the machine was off.</li>
+</ul>
+</article>
+</body>
+</html>

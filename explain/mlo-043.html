@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-043 · Design a real-time fraud detection system with a tight latency budget.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-043" data-topic="MLOps">
+<h1>Design a real-time fraud detection system with a tight latency budget.</h1>
+<p class="ex-meta">MLOps · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Split a tight <strong>latency budget</strong> (for example 50 to 100 ms) across <strong>feature lookup, inference and decision</strong>; compute <strong>behavioural features from Kafka events with Flink</strong> into an <strong>online feature store</strong> like Redis; serve a <strong>lightweight model plus a rules engine</strong>; define a <strong>fallback</strong> when components fail; and close the loop with <strong>delayed labels, logging and monitoring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Card authorisation gives the fraud check a small slice of the end-to-end time, so the design starts from the budget. Example: 10 ms for request parsing and enrichment, 15 ms for feature lookups, 15 ms for inference, 10 ms for rules and decision, leaving headroom for p99.</p>
+<p><strong>Features</strong> come from two sources. <strong>Request features</strong> are in the payment itself: amount, merchant category, country, device, channel. <strong>Behavioural features</strong>—spend in the last hour, number of new devices this week, distance from last transaction, merchant risk—are computed <strong>continuously</strong> from transaction events in <strong>Kafka</strong> by a streaming engine such as <strong>Flink</strong>, and written to an <strong>online feature store</strong> (Redis, Aerospike, or a managed feature store) for single-digit-millisecond lookups. The same definitions produce offline training data, avoiding skew.</p>
+<p>The <strong>model</strong> is usually <strong>gradient boosting</strong> (XGBoost, LightGBM) or a compact neural network, served in-process or as a nearby service, perhaps via ONNX Runtime. A <strong>rules engine</strong> sits alongside for hard business rules, regulatory constraints and fast reaction to new attack patterns without retraining. The output is approve, decline or <strong>step-up authentication</strong> (3-D Secure, OTP) or manual review.</p>
+<p><strong>Resilience</strong>: if the model or feature store is down or slow, a timeout triggers a <strong>fallback</strong>—rules only, with an agreed risk appetite—rather than blocking payments.</p>
+<p><strong>Feedback loop</strong>: every decision is logged with features and model version. <strong>Delayed labels</strong> (chargebacks, confirmed fraud, analyst decisions) arrive over weeks and feed retraining. Monitoring covers latency, score distribution, decline rates and fraud loss.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Payment request arrives at the fraud service.</li>
+  <li>Parallel lookup of behavioural features from the online store.</li>
+  <li>Model scores request plus features.</li>
+  <li>Rules engine combines score and rules into a decision.</li>
+  <li>Decision returned; event and features logged to Kafka.</li>
+  <li>Labels joined later for training and monitoring.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Budget: 80 ms p99
+ Payment API ──► Fraud service ─┬─► Redis feature store (MGET, 5 ms) ◄── Flink ◄── Kafka txns
+                                ├─► LightGBM via ONNX Runtime (in-process, 3 ms)
+                                └─► Rules engine (2 ms) ─► approve / decline / step-up
+ Timeout 60 ms -&gt; fallback: rules only
+ Decisions + features ─► Kafka ─► lake ─► labels (chargebacks, 30-90 days) ─► retraining</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No explicit latency budget per component.</li>
+  <li>Computing behavioural features with heavy SQL at request time.</li>
+  <li>No fallback, so a feature store outage blocks payments.</li>
+  <li>Training on features computed differently from serving.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd start with the budget, say 50 to 100 ms, split across feature lookup, inference and decision. Request features come with the payment; behavioural features like spend in the last hour are computed continuously from Kafka by Flink into an online store like Redis. A gradient boosting model served in-process scores it, and a rules engine handles hard rules and new attack patterns. If the model or store is unavailable, a rules-only fallback applies. Decisions and features are logged, delayed chargeback labels feed retraining, and we monitor latency, scores and fraud rates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test a new fraud model safely here?</strong> Shadow scoring in the same service, then a canary with guardrails.</li>
+  <li><strong>Why keep a rules engine?</strong> Instant reaction to new patterns, explainability and regulatory rules.</li>
+  <li><strong>How do you prevent skew?</strong> Same streaming definitions for online and offline features.</li>
+</ul>
+</article>
+</body>
+</html>

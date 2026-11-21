@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-074 · How do you run configuration management at scale for thousands of servers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-074" data-topic="Configuration Management">
+<h1>How do you run configuration management at scale for thousands of servers?</h1>
+<p class="ex-meta">Configuration Management · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>At thousands of servers, <strong>shrink what configuration management must do</strong> by baking <strong>immutable images</strong>, run the rest with <strong>pull/agent-based tools</strong> (ansible-pull, SSM, Puppet) or <strong>centralised execution</strong> (AAP with execution nodes), roll changes out in <strong>batches with canaries and failure thresholds</strong>, and add <strong>reporting, compliance and drift detection</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Fleet-scale configuration management fails in predictable ways: one control node cannot hold thousands of SSH connections, a bad change reaches every server at once, nobody knows which hosts actually converged, and long-lived servers drift into snowflakes.</p>
+<p><strong>Do less at runtime.</strong> Most packages, agents and settings go into <strong>images</strong>, rebuilt and rolled out regularly. Runtime configuration management handles what genuinely changes on running servers: certificates, credential rotation, emergency mitigations, per-host settings, and fleets that cannot be replaced easily (bare metal, legacy VMs).</p>
+<p><strong>Execution model.</strong></p>
+<ul>
+  <li><strong>Pull or agent-based</strong>: <code>ansible-pull</code> on timers, AWS <strong>SSM State Manager</strong> associations, or agent tools like Puppet and Chef. Each node converges itself, so scale is not limited by a central host, and new nodes configure themselves.</li>
+  <li><strong>Centralised execution</strong>: <strong>Ansible Automation Platform</strong> with many execution nodes (automation mesh), close to the hosts, using execution environments and dynamic inventories. Good for coordinated, ordered changes.</li>
+</ul>
+<p>Many organisations combine both: pull for baseline enforcement, central push for orchestrated changes.</p>
+<p><strong>Safe rollout.</strong> Changes go to <strong>canary</strong> hosts first, then growing batches (<code>serial</code>, SSM rate controls with concurrency and error thresholds), with health checks between batches and automatic stop on failure. Inventories group hosts by environment, region and role so waves are meaningful.</p>
+<p><strong>Visibility.</strong> Every run reports results centrally (AAP job history, SSM compliance, Puppet reports) into dashboards: which hosts are compliant, failing or unreachable. Scheduled <strong>check-mode</strong> runs and compliance scans (InSpec, OpenSCAP) detect drift.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Baseline baked into images; rebuilt weekly.</li>
+  <li>Runtime roles applied by pull agents every 30 minutes.</li>
+  <li>Orchestrated changes run from AAP execution nodes in waves.</li>
+  <li>Canary → 5% → 25% → 100%, stopping on error thresholds.</li>
+  <li>Results and drift reports feed a compliance dashboard.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Urgent change via SSM: 10% of tagged hosts at a time, stop at 2% errors
+aws ssm send-command \
+  --document-name &quot;AWS-ApplyAnsiblePlaybooks&quot; \
+  --targets &quot;Key=tag:role,Values=web&quot; \
+  --max-concurrency &quot;10%&quot; --max-errors &quot;2%&quot; \
+  --parameters '{&quot;SourceType&quot;:[&quot;GitHub&quot;],&quot;SourceInfo&quot;:[&quot;{\&quot;owner\&quot;:\&quot;acme\&quot;,\&quot;repository\&quot;:\&quot;config\&quot;,\&quot;getOptions\&quot;:\&quot;branch:main\&quot;}&quot;],&quot;PlaybookFile&quot;:[&quot;hotfix.yml&quot;],&quot;InstallDependencies&quot;:[&quot;True&quot;]}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pushing to the whole fleet from one laptop.</li>
+  <li>No canary stage or error threshold.</li>
+  <li>No reporting, so silent failures accumulate.</li>
+  <li>Using configuration management to install everything on every boot instead of baking images.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd reduce what configuration management has to do: bake most software and settings into immutable images, and use CM only for what really changes at runtime, like certificates, rotations and emergency fixes. For that, a single push host doesn't scale, so I'd use a pull model, such as ansible-pull, SSM State Manager or Puppet, and centralised execution through Ansible Automation Platform with execution nodes for orchestrated changes. Every change rolls out in waves starting with canaries, with failure thresholds that stop it. Results go to dashboards, and scheduled check runs and compliance scans detect drift.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you roll out an urgent security change within an hour?</strong> Pre-tested playbook, SSM Run Command or AAP in fast waves with error thresholds, plus a compliance query to confirm.</li>
+  <li><strong>Pull or push for compliance?</strong> Pull/agents enforce continuously; push is better for ordered changes.</li>
+  <li><strong>How do you handle unreachable hosts?</strong> Report them, retry, and treat persistent ones as candidates for replacement.</li>
+</ul>
+</article>
+</body>
+</html>

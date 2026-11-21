@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-015 · What is configuration drift, and how do you detect it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-015" data-topic="Infrastructure as Code">
+<h1>What is configuration drift, and how do you detect it?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Drift</strong> is when real infrastructure <strong>no longer matches the code</strong>, usually from <strong>manual changes</strong>, hotfixes or other tools; detect it with <strong>terraform plan</strong> / <strong>plan -refresh-only</strong> run <strong>on a schedule</strong>, then fix by updating the code or reapplying, and <strong>restrict manual access</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Drift appears when something other than the pipeline changes infrastructure: an engineer opens a security group port in the console during an incident, a script changes an instance type, another tool adds tags, or an autoscaler changes desired capacity. The code says one thing, reality says another, and the next person to apply may unknowingly <strong>revert an important hotfix</strong> or be surprised by unrelated changes in their plan.</p>
+<p>Terraform detects drift naturally: every plan <strong>refreshes</strong> real attributes from the provider APIs and compares them with the configuration, so drift appears as proposed changes. <code>terraform plan -refresh-only</code> shows only what has changed outside Terraform, without proposing configuration changes, and <code>terraform apply -refresh-only</code> accepts those values into state. Exit codes make automation easy: <code>terraform plan -detailed-exitcode</code> returns <strong>0</strong> for no changes, <strong>2</strong> for changes and <strong>1</strong> for errors.</p>
+<p>Good teams run <strong>scheduled drift detection</strong>, for example nightly pipeline jobs per state, and alert to Slack or create a ticket when the plan is not empty. HCP Terraform and similar platforms offer built-in drift detection. Drift only matters for attributes Terraform manages; resources created entirely outside Terraform are not seen unless you scan the account with other tools such as AWS Config.</p>
+<p>Each detected drift must be resolved deliberately: if the change was intentional, <strong>update the code</strong> (and possibly import resources); if not, <strong>reapply</strong> to revert it. Long term, prevent it by limiting console write access in production, using break-glass roles that are audited, and making the pipeline the normal path for changes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduled job runs <code>terraform plan -detailed-exitcode</code> per state.</li>
+  <li>Exit code 2 → drift or pending changes → alert with the plan.</li>
+  <li>Triage: intentional or accidental?</li>
+  <li>Update code via PR, or reapply to revert.</li>
+  <li>Review who has write access to prevent recurrence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitHub Actions nightly drift check
+on:
+  schedule: [{ cron: &quot;0 3 * * *&quot; }]
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -input=false
+      - run: |
+          set +e
+          terraform plan -refresh-only -detailed-exitcode -input=false
+          code=$?
+          if [ $code -eq 2 ]; then echo &quot;Drift detected&quot;; exit 1; fi
+          exit $code</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Never running plans unless code changes, so drift accumulates silently.</li>
+  <li>Blindly applying and reverting a necessary incident hotfix.</li>
+  <li>Using <code>ignore_changes</code> to hide drift that should be fixed.</li>
+  <li>Leaving broad console admin access in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Drift is when real infrastructure diverges from the code, typically from manual console changes during incidents, scripts or other tools. Terraform shows it on every plan because it refreshes real attributes, and plan -refresh-only shows only the outside changes. I run scheduled plans, nightly in CI with -detailed-exitcode, and alert when the plan isn't empty. Each drift is resolved on purpose: update the code if the change was intentional, or reapply to revert it. And I reduce the cause by restricting manual write access to production and using audited break-glass roles.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle attributes that change legitimately outside Terraform?</strong> <code>lifecycle ignore_changes</code> for those specific attributes, like an autoscaled desired_count.</li>
+  <li><strong>What does apply -refresh-only do?</strong> Updates state to match reality without changing infrastructure.</li>
+  <li><strong>How do you find resources not managed by Terraform at all?</strong> Cloud inventory tools like AWS Config or tag audits.</li>
+</ul>
+</article>
+</body>
+</html>

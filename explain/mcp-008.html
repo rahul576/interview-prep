@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-008 · What is the difference between a protocol error and a tool execution error in MCP, and why does it matter?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-008" data-topic="MCP Servers">
+<h1>What is the difference between a protocol error and a tool execution error in MCP, and why does it matter?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Protocol errors</strong> are JSON-RPC <code>error</code> responses for bad requests (unknown tool, invalid params) and are usually handled by the client; <strong>tool execution errors</strong> are normal results with <strong><code>isError: true</code></strong> that are <strong>shown to the model so it can self-correct</strong>, which only works with helpful, safe error text.</p>
+
+<h2>Detailed explanation</h2>
+<p>MCP distinguishes two failure categories because they need different handling.</p>
+<p><strong>Protocol errors</strong> concern the request itself: an unknown tool name, arguments that fail schema validation, a malformed message or a server crash while processing the protocol. They are returned as standard <strong>JSON-RPC error responses</strong> with codes such as <strong>-32601</strong> (method not found) or <strong>-32602</strong> (invalid params). The client typically handles them: logging, showing a technical error, or treating the server as faulty. They may <strong>never reach the model</strong>, so the model cannot learn from them.</p>
+<p><strong>Tool execution errors</strong> occur when the request was valid and the tool ran, but the operation failed: the downstream API returned 404, a rate limit was hit, a business rule was violated (&quot;cannot cancel a shipped order&quot;), or a date was in the wrong format for the backend. These are returned as a <strong>successful JSON-RPC response</strong> whose result has <strong><code>isError: true</code></strong> and content describing the problem.</p>
+<p>The difference matters because execution errors go <strong>back into the model's context</strong>. A capable model reads &quot;start_date must be YYYY-MM-DD; you sent 20/11/2026&quot; and retries correctly, or reads &quot;customer not found; use search_customers with a partial name&quot; and calls the right tool. That <strong>self-correction</strong> loop makes agents far more robust, but only if the text is <strong>specific and actionable</strong>. Stack traces, SQL statements and internal hostnames waste tokens, rarely help the model, and <strong>leak internal details</strong> that an attacker could exploit via prompt injection.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends <code>tools/call</code>.</li>
+  <li>Server checks tool exists and validates params; if not → JSON-RPC error.</li>
+  <li>Server executes; on domain failure → result with <code>isError: true</code> and a clear message.</li>
+  <li>Host passes execution errors to the model; protocol errors usually stay with the client.</li>
+  <li>Model decides: retry with fixed input, call another tool, or explain to the user.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:3,&quot;error&quot;:{&quot;code&quot;:-32602,&quot;message&quot;:&quot;Invalid params: 'priority' must be one of low, medium, high&quot;}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:4,&quot;result&quot;:{
+  &quot;isError&quot;: true,
+  &quot;content&quot;:[{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;Could not create ticket: project 'PAYMNT' does not exist. Valid projects: PAY, OPS, WEB. Retry with one of these.&quot;}]}}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Protocol error</th><th>Tool execution error</th></tr></thead>
+<tbody>
+<tr><td>Format</td><td>JSON-RPC <code>error</code></td><td><code>result</code> with <code>isError: true</code></td></tr>
+<tr><td>Cause</td><td>Bad request, unknown tool, invalid params</td><td>Operation failed at runtime</td></tr>
+<tr><td>Seen by model</td><td>Usually not</td><td>Yes</td></tr>
+<tr><td>Purpose</td><td>Signal client/server fault</td><td>Enable self-correction</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Throwing exceptions for business failures, turning them into opaque protocol errors.</li>
+  <li>Returning raw stack traces or SQL in error content.</li>
+  <li>Vague messages like &quot;Error occurred&quot; that give the model nothing to act on.</li>
+  <li>Marking failures with <code>isError: false</code> and hiding the problem in prose.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Protocol errors are JSON-RPC error responses for problems with the request itself, like an unknown tool or invalid arguments, and the client usually handles them; the model may never see them. Tool execution errors happen when the tool ran but the operation failed, like not found or a rate limit, and they come back as a normal result with isError true. That matters because execution errors are shown to the model, so it can self-correct: fix a date format or call a search tool first. That only works if the message is specific and actionable, not a stack trace, which would also leak internals.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Good error for a failed create_ticket?</strong> What failed, why, valid values or next step, and whether retrying makes sense.</li>
+  <li><strong>Should schema validation failures be protocol errors?</strong> By the spec typically yes, though some SDKs return them as tool errors so the model can fix arguments.</li>
+  <li><strong>How do you log errors?</strong> Full details in server logs with a correlation id; short safe text to the model.</li>
+</ul>
+</article>
+</body>
+</html>

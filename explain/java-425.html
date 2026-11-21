@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-425 · Design a distributed unique ID generator.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-425" data-topic="System Design">
+<h1>Design a distributed unique ID generator.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A distributed ID generator must be <strong>unique, ideally time-sortable and coordination-free at high throughput</strong>: <strong>UUID v4</strong> is random but hurts index locality, <strong>UUID v7</strong> adds a time prefix and is a good default, <strong>Snowflake</strong> packs <strong>timestamp + machine ID + sequence</strong> into 64 bits, and <strong>ticket servers</strong> hand out <strong>ID ranges</strong>; all time-based schemes must handle <strong>clock skew</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Clarify requirements: global uniqueness, size (64-bit fits a <code>long</code> and indexes better than 128-bit), <strong>roughly time-ordered</strong> (good for B-tree insert locality and pagination), throughput (e.g. 100k IDs/s), no single point of failure, and whether IDs may reveal creation time or volume.</p>
+<p><strong>UUID v4:</strong> 122 random bits, no coordination, practically collision-free. But random keys scatter inserts across a B-tree, causing page splits and poor cache locality, especially as a clustered primary key in <strong>InnoDB</strong>. They are also 16 bytes.</p>
+<p><strong>UUID v7</strong> (RFC 9562, 2024): a 48-bit Unix millisecond timestamp followed by random bits. Still 128 bits and coordination-free, but <strong>time-ordered</strong>, so inserts append to the right side of the index. A strong default today; Java libraries and many databases (e.g. PostgreSQL 18's <code>uuidv7()</code>) support it.</p>
+<p><strong>Snowflake (Twitter):</strong> 64 bits = 1 sign bit + <strong>41-bit millisecond timestamp</strong> (custom epoch, about 69 years) + <strong>10-bit worker ID</strong> (1,024 nodes) + <strong>12-bit sequence</strong> (4,096 IDs per ms per node). Compact and sortable, but needs <strong>unique worker IDs</strong> (assigned via config, ZooKeeper, or Kubernetes StatefulSet ordinal) and careful <strong>clock handling</strong>: if the clock moves backwards, wait or refuse, otherwise duplicates are possible. Variants: Sonyflake, Instagram's DB-based scheme.</p>
+<p><strong>Ticket server / segment allocation:</strong> a database sequence hands out <strong>ranges</strong> (e.g. 1,000 IDs) to each instance, which serves them from memory (Meituan Leaf-segment, Flickr ticket servers). Simple and dense, but depends on the DB for refills (pre-fetch the next segment) and IDs are not strictly time-ordered across instances.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Snowflake node gets a unique worker ID at startup.</li>
+  <li>On each request: read current millis.</li>
+  <li>If same millis as last, increment sequence; on overflow, spin until the next millisecond.</li>
+  <li>If time &lt; last (clock moved back), wait until caught up or throw.</li>
+  <li>Compose <code>(ts - epoch) &lt;&lt; 22 | worker &lt;&lt; 12 | seq</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public final class Snowflake {
+    private static final long EPOCH = 1_704_067_200_000L; // 2024-01-01T00:00:00Z
+    private final long workerId; private long lastTs = -1, seq = 0;
+
+    public Snowflake(long workerId) {
+        if (workerId &lt; 0 || workerId &gt; 1023) throw new IllegalArgumentException();
+        this.workerId = workerId;
+    }
+
+    public synchronized long nextId() {
+        long ts = System.currentTimeMillis();
+        if (ts &lt; lastTs) throw new IllegalStateException(&quot;Clock moved backwards by &quot; + (lastTs - ts) + &quot; ms&quot;);
+        if (ts == lastTs) {
+            seq = (seq + 1) &amp; 4095;
+            if (seq == 0) while ((ts = System.currentTimeMillis()) &lt;= lastTs) Thread.onSpinWait();
+        } else seq = 0;
+        lastTs = ts;
+        return ((ts - EPOCH) &lt;&lt; 22) | (workerId &lt;&lt; 12) | seq;
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Random UUID v4 as a clustered primary key on a huge table.</li>
+  <li>Duplicate worker IDs after autoscaling.</li>
+  <li>Ignoring NTP clock adjustments.</li>
+  <li>Exposing sequential IDs publicly, leaking business volume.</li>
+  <li>Assuming time-ordered IDs are strictly ordered across nodes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First the requirements: unique, ideally time-sortable for index locality, high throughput without coordination. UUID v4 needs no coordination but is 128 bits and random, which fragments B-tree indexes. UUID v7 adds a millisecond timestamp prefix and is my default today. If I need 64-bit IDs, I'd use Snowflake: 41 bits of timestamp, 10 bits of worker ID and 12 bits of sequence, with unique worker IDs assigned at startup and refusing or waiting if the clock moves backwards. A ticket server handing out ranges is a simpler alternative.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are random UUIDs poor InnoDB keys?</strong> InnoDB clusters rows by primary key; random inserts cause page splits, fragmentation and larger secondary indexes.</li>
+  <li><strong>How to assign worker IDs?</strong> StatefulSet ordinals, ZooKeeper/etcd leases, or a DB table with leases.</li>
+  <li><strong>Sorting across nodes?</strong> Only roughly by millisecond; not a substitute for causal ordering.</li>
+</ul>
+</article>
+</body>
+</html>

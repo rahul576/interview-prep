@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-068 · The Terraform state file was corrupted or lost. How do you recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-068" data-topic="Infrastructure as Code">
+<h1>The Terraform state file was corrupted or lost. How do you recover?</h1>
+<p class="ex-meta">Infrastructure as Code · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>Stop all applies first</strong>, then <strong>restore the last good version</strong> from backend versioning and confirm with a <strong>plan showing no unexpected changes</strong>; with no backup, <strong>rebuild state by importing</strong> existing resources (import blocks, generated config) until the plan is clean; prevent it with a <strong>versioned, encrypted, locked backend</strong> and restricted access.</p>
+
+<h2>Detailed explanation</h2>
+<p>A missing or corrupted state is dangerous mainly because of what Terraform does next: with an empty state it believes nothing exists and will try to <strong>create everything again</strong>, failing on name conflicts or, worse, creating duplicates. With a corrupted or old state it may plan to delete or replace resources. So the first action is containment, not repair.</p>
+<p><strong>Contain.</strong> Pause pipelines for that stack, tell the team, and keep the lock held or revoke apply permissions.</p>
+<p><strong>Restore from versions.</strong> S3 with <strong>versioning</strong>, Azure Blob with versioning or soft delete, GCS object versioning and HCP Terraform state history all keep previous versions. Find the last good one (by timestamp and the <code>serial</code>/<code>lineage</code> fields), restore it, and run <code>terraform plan</code>. The plan should be empty, or show only changes applied after that version, which you then reconcile. With the older S3 backend setup using DynamoDB locking, a stored checksum (digest) may need updating after a manual restore; newer Terraform versions can lock with an S3 lock file instead of DynamoDB.</p>
+<p><strong>Rebuild if there is no backup.</strong> Create a fresh state and adopt resources with <strong><code>import</code> blocks</strong>. <code>terraform plan -generate-config-out=generated.tf</code> can draft configuration for imported resources, and an inventory from the cloud (resource explorer, tags, tools like Terraformer) gives the list of IDs. Iterate until the plan shows <strong>no changes</strong>.</p>
+<p><strong>Prevent.</strong> Versioned, encrypted backend with locking, MFA delete or object lock where appropriate, cross-region replication, write access only for pipeline roles, and no manual <code>state push</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Freeze applies; copy current state for analysis.</li>
+  <li>List object versions and identify the last good serial.</li>
+  <li>Restore it; run <code>terraform plan</code>.</li>
+  <li>If no backup: import resources in batches with import blocks.</li>
+  <li>Clean plan, then re-enable pipelines.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws s3api list-object-versions --bucket acme-tfstate \
+  --prefix prod/network/terraform.tfstate --query 'Versions[].[VersionId,LastModified]'
+aws s3api get-object --bucket acme-tfstate --key prod/network/terraform.tfstate \
+  --version-id &quot;3HL4kqtJlcpXroDTDmJ&quot; restored.tfstate
+terraform state push restored.tfstate   # deliberate, one-off, lock held
+terraform plan</code></pre>
+<pre><code class="language-hcl">import {
+  to = aws_vpc.main
+  id = &quot;vpc-0a1b2c3d4e5f&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running <code>apply</code> on an empty state &quot;to see what happens&quot;.</li>
+  <li>Restoring a version without checking it with a plan.</li>
+  <li>Importing and &quot;fixing&quot; configuration in the same step, causing unplanned changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I stop every pipeline for that stack, because an apply against an empty or broken state could try to recreate or delete everything. If the backend has versioning, I find the last good version, restore it and run a plan, which should show no changes or only ones I can explain. Without a backup I rebuild the state by importing existing resources with import blocks, using generate-config-out and a cloud inventory, iterating until the plan is clean. Then prevention: versioned, encrypted backend with locking, restricted write access, and no manual state pushes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How could you generate import blocks for hundreds of resources?</strong> Script them from a cloud inventory by tags or resource IDs, then use generated config as a starting point.</li>
+  <li><strong>What are serial and lineage?</strong> Serial increments per write; lineage identifies one state history and prevents mixing states.</li>
+  <li><strong>What if the state is fine but the lock is stuck?</strong> Confirm no run is active, then <code>terraform force-unlock</code> with the lock ID.</li>
+</ul>
+</article>
+</body>
+</html>

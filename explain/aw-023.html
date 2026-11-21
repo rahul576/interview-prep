@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-023 · What is Amazon ECR, and how do you use it with containers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-023" data-topic="Cloud (AWS)">
+<h1>What is Amazon ECR, and how do you use it with containers?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Amazon ECR</strong> is a managed <strong>private registry for Docker/OCI images</strong> (and Helm charts): you <strong>authenticate</strong> with <code>get-login-password</code> or the credential helper, <strong>push versioned, immutable tags</strong>, <strong>scan on push</strong>, clean up with <strong>lifecycle policies</strong>, and let <strong>ECS, EKS and Lambda pull via IAM</strong>, with <strong>replication</strong> and <strong>pull-through cache</strong> for multi-account and public images.</p>
+
+<h2>Detailed explanation</h2>
+<p>Running your own registry means managing storage, TLS, authentication and availability. ECR handles all of that and integrates with IAM, so pulls need no passwords.</p>
+<p>You create one <strong>repository</strong> per image, for example <code>orders-service</code>. Docker authenticates with a short-lived token from <code>aws ecr get-login-password</code> (valid 12 hours), or more conveniently the <strong>amazon-ecr-credential-helper</strong>, which fetches tokens automatically. Images are pushed with tags such as the commit SHA or a semantic version. Enabling <strong>tag immutability</strong> prevents a tag from being overwritten, which supports build-once-promote-many.</p>
+<p><strong>Image scanning</strong>: basic scanning checks OS packages for CVEs on push; <strong>enhanced scanning</strong> through <strong>Amazon Inspector</strong> continuously rescans images, including language packages, as new vulnerabilities are published. <strong>Lifecycle policies</strong> delete untagged images or keep only the last N images per prefix, controlling storage cost. Images are encrypted at rest with KMS.</p>
+<p>Consumers authenticate via <strong>IAM</strong>: an ECS task execution role, EKS node or pod role, or Lambda execution role needs <code>ecr:GetAuthorizationToken</code>, <code>ecr:BatchGetImage</code> and <code>ecr:GetDownloadUrlForLayer</code>. <strong>Repository policies</strong> grant pull access to other accounts. <strong>Replication</strong> copies images across regions and accounts automatically. <strong>Pull-through cache</strong> rules mirror public registries such as Docker Hub, Quay or ECR Public, avoiding rate limits and keeping copies under your control. Private clusters pull through <strong>VPC endpoints</strong> (<code>ecr.api</code>, <code>ecr.dkr</code> and the S3 gateway endpoint for layers).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a repository with immutability and scanning enabled.</li>
+  <li>CI authenticates and pushes an image tagged with the SHA.</li>
+  <li>Scanning reports vulnerabilities; the pipeline can block on criticals.</li>
+  <li>ECS/EKS pull using IAM roles.</li>
+  <li>Lifecycle policy prunes old images.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ecr create-repository --repository-name orders-service \
+  --image-tag-mutability IMMUTABLE --image-scanning-configuration scanOnPush=true
+
+aws ecr get-login-password --region eu-west-1 | docker login --username AWS \
+  --password-stdin 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+
+docker build -t 123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders-service:9f2e1ab .
+docker push 123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders-service:9f2e1ab</code></pre>
+<pre><code class="language-json">{ &quot;rules&quot;: [{ &quot;rulePriority&quot;: 1, &quot;description&quot;: &quot;expire untagged after 7 days&quot;,
+  &quot;selection&quot;: { &quot;tagStatus&quot;: &quot;untagged&quot;, &quot;countType&quot;: &quot;sinceImagePushed&quot;,
+                 &quot;countUnit&quot;: &quot;days&quot;, &quot;countNumber&quot;: 7 },
+  &quot;action&quot;: { &quot;type&quot;: &quot;expire&quot; } }] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Mutable <code>latest</code> tags in production.</li>
+  <li>No lifecycle policy, so storage grows forever.</li>
+  <li>Private clusters without ECR and S3 endpoints, sending pulls through NAT.</li>
+  <li>Ignoring scan findings.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ECR is AWS's managed private registry for Docker and OCI images. I create a repository per service, authenticate with get-login-password piped into docker login or the credential helper, and push images tagged with the commit SHA, with tag immutability turned on. Scanning on push, or enhanced scanning through Inspector, finds vulnerabilities, and lifecycle policies delete old or untagged images. ECS, EKS and Lambda pull with IAM roles, no passwords. Repositories can replicate across regions and accounts, and pull-through cache mirrors public registries like Docker Hub.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Share images from a central account?</strong> Repository policy allowing workload accounts, or replication into each account.</li>
+  <li><strong>Why pull-through cache?</strong> Avoids Docker Hub rate limits and keeps a controlled copy.</li>
+  <li><strong>How do you block vulnerable images?</strong> Fail the pipeline on critical findings and use admission policies in EKS.</li>
+</ul>
+</article>
+</body>
+</html>

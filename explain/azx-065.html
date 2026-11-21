@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-065 · How do you meet audit requirements about who deployed what to production with Azure DevOps?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-065" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you meet audit requirements about who deployed what to production with Azure DevOps?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Prove <strong>who changed what, who approved it and when it reached production</strong> by combining <strong>branch policies</strong>, <strong>environment deployment history with approvals</strong>, a <strong>build-once-promote artifact</strong> chain, long enough <strong>retention policies</strong>, and <strong>audit log streaming</strong> to Log Analytics or a SIEM.</p>
+
+<h2>Detailed explanation</h2>
+<p>Auditors typically follow a chain: a requirement or ticket, the code change, the review, the build, the approval and the production deployment. Azure DevOps can provide every link if it is configured deliberately.</p>
+<p><strong>Code:</strong> branch policies on <code>main</code> require pull requests, a minimum number of reviewers (excluding the author), linked work items and successful builds. This proves the <strong>four-eyes principle</strong>, and the PR record shows who reviewed and approved.</p>
+<p><strong>Deployment:</strong> production is an <strong>environment</strong>, and deployment jobs targeting it are recorded in its <strong>deployment history</strong>, listing each run, its commits and work items. <strong>Approvals and checks</strong> on the environment record who approved and when. Because the artifact is <strong>built once and promoted</strong>, with the same image digest or package version moving from test to production, there is an immutable link between commit, artifact and deployment.</p>
+<p><strong>Retention:</strong> by default, runs and their logs are deleted after the project's retention period. For regulated industries you configure retention policies, <strong>retain specific production runs</strong> (manually or with a retention lease from the pipeline), or export run data, logs and approvals to long-term storage, for example for seven years.</p>
+<p><strong>Organisation events:</strong> the <strong>audit log</strong> covers permission changes, policy changes, service connection edits and pipeline modifications. It is only kept for a limited time in the portal (90 days), so you configure <strong>audit streaming</strong> to Azure Monitor Logs, Splunk or Event Grid for long-term retention, alerting and correlation with Azure Activity Logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enforce branch policies and link PRs to work items.</li>
+  <li>Deploy to production only via deployment jobs targeting a protected environment.</li>
+  <li>Promote immutable artifacts; record image digests in the run.</li>
+  <li>Add retention leases to production runs.</li>
+  <li>Stream audit logs to Log Analytics; build workbooks and alerts.</li>
+  <li>Periodically produce an evidence report for auditors.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- stage: Prod
+  jobs:
+  - deployment: Deploy
+    environment: payments-prod      # approvals + history
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo &quot;Deploying digest $(imageDigest)&quot;
+          - task: PowerShell@2       # keep this run for the audit period
+            inputs:
+              targetType: inline
+              script: |
+                $body = @{ daysValid = 2555; definitionId = $(System.DefinitionId);
+                           ownerId = &quot;User:$(Build.RequestedForId)&quot;; protectPipeline = $false;
+                           runId = $(Build.BuildId) } | ConvertTo-Json -AsArray
+                Invoke-RestMethod -Method Post -ContentType 'application/json' `
+                  -Uri &quot;$(System.CollectionUri)$(System.TeamProject)/_apis/build/retention/leases?api-version=7.1&quot; `
+                  -Headers @{ Authorization = &quot;Bearer $(System.AccessToken)&quot; } -Body $body</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on default retention and discovering old runs were deleted.</li>
+  <li>Rebuilding for production, breaking the commit-to-artifact link.</li>
+  <li>Allowing people to bypass branch policies without logging or alerting.</li>
+  <li>Forgetting changes made directly in the Azure portal outside pipelines.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Auditors want who changed what, who approved it and when it reached production. Branch policies with required reviewers prove four-eyes for code. Production is an environment, so its deployment history shows each run with commits, work items and who approved. We build once and promote the same artifact, so the chain is immutable. I configure retention so production runs and logs are kept for the required period, and I stream the organisation audit log to Log Analytics or our SIEM for long-term retention and alerts on permission or policy changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which changes outside pipelines matter?</strong> Portal changes, permission grants and policy bypasses, covered by Azure Activity Log and audit streaming.</li>
+  <li><strong>How do you stop portal changes?</strong> Restrict write roles in production; use PIM for break-glass access.</li>
+  <li><strong>What if an approver approves their own change?</strong> Configure approvals to block the person who requested the run.</li>
+</ul>
+</article>
+</body>
+</html>

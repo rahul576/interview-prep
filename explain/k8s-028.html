@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-028 · You updated a ConfigMap but the application still uses the old values. Why, and how do you handle config changes properly?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-028" data-topic="Kubernetes">
+<h1>You updated a ConfigMap but the application still uses the old values. Why, and how do you handle config changes properly?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>It depends on <strong>how the ConfigMap is consumed</strong>: <strong>environment variables</strong> are read only at <strong>container start</strong>; <strong>mounted volumes</strong> update <strong>eventually</strong> (but <strong>subPath mounts never</strong>); and the app may <strong>not reload</strong> files anyway. Handle changes with a <strong>rollout</strong>: <code>rollout restart</code>, a <strong>checksum annotation</strong>, or <strong>immutable, versioned ConfigMaps</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A ConfigMap is just an API object; changing it does not touch running containers directly. What happens depends on the consumption path:</p>
+<ul>
+  <li><strong>Env vars</strong> (<code>env.valueFrom.configMapKeyRef</code> or <code>envFrom</code>): resolved by the kubelet once when the container starts. A running process's environment never changes, so the pod keeps old values until it is recreated.</li>
+  <li><strong>Volume mounts:</strong> the kubelet periodically syncs projected files, using an atomic symlink swap. The delay is the kubelet sync period plus its cache TTL, often up to a minute or two. The files change, but the application must <strong>watch or re-read</strong> them; many frameworks read config once at start-up.</li>
+  <li><strong>subPath mounts:</strong> mount a single file into an existing directory, bypassing the symlink mechanism, so they are <strong>never updated</strong>.</li>
+</ul>
+<p>So &quot;I changed the ConfigMap and nothing happened&quot; is expected. The robust approach is to treat config like code and <strong>roll it out</strong>:</p>
+<ul>
+  <li><code>kubectl rollout restart deployment/orders</code> creates new pods with new values, respecting rolling update settings and readiness.</li>
+  <li>Better, a <strong>checksum annotation</strong> in the pod template, such as <code>checksum/config: &lt;sha256 of the config&gt;</code>; Helm templates do this with <code>sha256sum</code>, and Kustomize's <strong>configMapGenerator</strong> appends a content hash to the name (<code>orders-config-7g9k2m</code>) and rewrites references. Any change alters the template, triggering a normal rolling update.</li>
+  <li><strong>Immutable, versioned ConfigMaps</strong> (<code>immutable: true</code> plus a new name per version) mean old pods keep the old version, new pods get the new one, a bad config rolls out gradually with readiness protection, and rollback simply returns to the previous ReplicaSet. Immutable objects also reduce kubelet watch load.</li>
+</ul>
+<p>Hot reloading suits log levels or flags, but it changes all pods at once.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Config change committed to Git.</li>
+  <li>Generator or template produces a new name or checksum.</li>
+  <li>Pod template changes → Deployment creates a new ReplicaSet.</li>
+  <li>New pods start with new config and must pass readiness.</li>
+  <li>Old ReplicaSet scaled down; rollback reverts to old config.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># kustomization.yaml
+configMapGenerator:
+- name: orders-config
+  files: [app.yaml]
+  options:
+    immutable: true</code></pre>
+<pre><code class="language-yaml"># Helm deployment template
+spec:
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath &quot;/configmap.yaml&quot;) . | sha256sum }}</code></pre>
+<pre><code class="language-bash">kubectl rollout restart deployment/orders -n shop</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting env vars to update in running pods.</li>
+  <li>Using subPath and wondering why the file never changes.</li>
+  <li>Editing a ConfigMap in place in production with no rollout or rollback path.</li>
+  <li>Hot-reloading a bad config into every pod simultaneously.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;It depends on how the ConfigMap is consumed. Env vars are read only when the container starts, so they never change in a running pod. Mounted files are updated by the kubelet eventually, but subPath mounts never update, and even updated files don't help if the app reads them only at start-up. So I trigger a rollout when config changes: rollout restart, or better a checksum annotation in the pod template, which Helm and Kustomize generate. Even safer is immutable, versioned ConfigMaps, so bad config rolls out gradually like code and can be rolled back.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is hot-reloading everywhere at once dangerous?</strong> A bad value hits all pods instantly with no readiness gate or gradual rollout.</li>
+  <li><strong>Do Secrets behave the same?</strong> Yes, same rules for env vars, volumes and subPath.</li>
+  <li><strong>What does Reloader do?</strong> A controller that restarts workloads when referenced ConfigMaps or Secrets change.</li>
+</ul>
+</article>
+</body>
+</html>

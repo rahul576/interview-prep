@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-067 · What is node auto provisioning on AKS, and how does it differ from the cluster autoscaler?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-067" data-topic="Azure Kubernetes (AKS)">
+<h1>What is node auto provisioning on AKS, and how does it differ from the cluster autoscaler?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Node auto provisioning (NAP)</strong> is managed <strong>Karpenter</strong> on AKS: it reads pending pods' requirements and <strong>creates nodes with dynamically chosen VM sizes</strong>, then <strong>consolidates</strong> underused nodes; the <strong>cluster autoscaler</strong> only scales <strong>predefined node pools</strong> between min and max counts.</p>
+
+<h2>Detailed explanation</h2>
+<p>With the <strong>cluster autoscaler</strong>, you design node pools in advance, for example <code>D4s_v5</code> for general workloads and <code>E8s_v5</code> for memory-heavy ones. When pods are pending, it adds nodes of that fixed size; when nodes are underused, it removes them. If your guess about VM size is wrong, you waste capacity or have pods that fit nowhere, and many teams end up with lots of pools.</p>
+<p><strong>NAP</strong> works pod-first. When pods are pending, it evaluates their <strong>resource requests, node selectors, affinity, topology spread and tolerations</strong>, and picks a VM size that fits, from a broad range of allowed SKUs. One large pending pod may get a large VM; many small pods may be bin-packed onto one node.</p>
+<p>Constraints are expressed in Kubernetes resources:</p>
+<ul>
+  <li><strong>NodePool</strong> (<code>karpenter.sh</code>): allowed VM families or sizes (<code>karpenter.azure.com/sku-family</code>), capacity type (<strong>spot</strong> or <strong>on-demand</strong>), zones, architecture, taints, <strong>limits</strong> on total CPU and memory, and <strong>disruption</strong> settings.</li>
+  <li><strong>AKSNodeClass</strong> (<code>karpenter.azure.com</code>): Azure-specific settings such as the <strong>OS image family</strong>, OS disk size and other node configuration.</li>
+</ul>
+<p>NAP also does <strong>consolidation</strong>: it removes empty nodes and replaces several underused nodes with fewer or cheaper ones, and handles <strong>drift</strong>, replacing nodes whose configuration no longer matches the NodePool or node image. This disruption is controlled with <strong>disruption budgets</strong>, consolidation policies and the <code>karpenter.sh/do-not-disrupt</code> annotation, plus PodDisruptionBudgets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable NAP: <code>az aks update --node-provisioning-mode Auto</code>.</li>
+  <li>Define NodePools and AKSNodeClasses (defaults are created for you).</li>
+  <li>A pod is pending; NAP computes a fitting SKU and creates a node.</li>
+  <li>The node joins and the pod is scheduled.</li>
+  <li>Consolidation and drift checks run continuously within disruption budgets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: { name: general }
+spec:
+  template:
+    spec:
+      nodeClassRef: { group: karpenter.azure.com, kind: AKSNodeClass, name: default }
+      requirements:
+      - { key: karpenter.azure.com/sku-family, operator: In, values: [D, E] }
+      - { key: karpenter.sh/capacity-type, operator: In, values: [on-demand, spot] }
+  limits: { cpu: &quot;400&quot; }
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    budgets:
+    - nodes: &quot;10%&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Cluster autoscaler</th><th>Node auto provisioning</th></tr></thead>
+<tbody>
+<tr><td>Unit of scaling</td><td>Fixed node pool</td><td>Individual right-sized nodes</td></tr>
+<tr><td>VM size</td><td>Chosen in advance</td><td>Chosen per demand</td></tr>
+<tr><td>Consolidation</td><td>Scale-down only</td><td>Replace and bin-pack</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pods without resource requests, so NAP cannot size nodes correctly.</li>
+  <li>No limits on NodePools, allowing runaway cost.</li>
+  <li>Ignoring disruption settings for latency-sensitive workloads.</li>
+  <li>Running cluster autoscaler and NAP on the same pools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Node auto provisioning is the managed Karpenter on AKS. Instead of scaling fixed pools, it looks at pending pods' requests, selectors, affinity and tolerations and creates a node with a fitting VM size from the families I allow. I describe constraints in NodePool resources, like VM families, spot or on-demand, zones and limits, and Azure-specific settings in AKSNodeClass. It consolidates underused nodes and handles drift. The cluster autoscaler only grows and shrinks predefined pools, so you have to guess sizes. NAP usually gives better utilisation and cost.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you protect latency-sensitive pods?</strong> PDBs, <code>do-not-disrupt</code> annotations, disruption budgets and consolidation only in a maintenance window.</li>
+  <li><strong>How do you use spot safely?</strong> Allow spot for tolerant workloads and on-demand fallback in the NodePool.</li>
+  <li><strong>What drives right sizing?</strong> Accurate resource requests on pods.</li>
+</ul>
+</article>
+</body>
+</html>

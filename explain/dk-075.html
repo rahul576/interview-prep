@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-075 · How do you debug a container that has no shell or tools inside (distroless)?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-075" data-topic="Docker">
+<h1>How do you debug a container that has no shell or tools inside (distroless)?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>When a distroless or scratch container has no shell, bring the tools to it instead of putting them in the image: use a <strong><code>:debug</code> image variant</strong> temporarily, attach a <strong>debug container that shares its namespaces</strong> (<code>--pid</code>/<code>--network container:&lt;name&gt;</code>), use <strong><code>kubectl debug</code> ephemeral containers</strong> in Kubernetes, and inspect from outside with <strong>logs, <code>docker inspect</code>, <code>docker cp</code> and exit codes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Distroless</strong> images (for example <code>gcr.io/distroless/java21-debian12</code>) and <code>scratch</code> images contain only the application and its runtime libraries: no shell, no package manager, no <code>curl</code>. That is good for security and size, but <code>docker exec -it app sh</code> simply fails with &quot;executable file not found&quot;.</p>
+<p>The key idea is that a container is just a process in a set of <strong>Linux namespaces</strong>. Another container can <strong>join</strong> those namespaces. With <code>--pid container:app</code> the debug container sees the target's processes; with <code>--network container:app</code> it shares its network stack, so <code>localhost:8080</code> is the app itself and <code>ss</code>, <code>tcpdump</code> and <code>curl</code> see exactly its traffic. Images like <strong>nicolaka/netshoot</strong> or busybox provide the toolbox. Through <code>/proc/&lt;pid&gt;/root</code> in a shared PID namespace you can even browse the target's filesystem (with sufficient privileges).</p>
+<p>In Kubernetes, <strong><code>kubectl debug</code></strong> adds an <strong>ephemeral container</strong> to a running pod without restarting it; <code>--target</code> shares the process namespace of a specific container. It can also copy a pod with a different image, or start a debug pod on a node.</p>
+<p>Many problems need no shell at all: <code>docker logs</code>, <code>docker inspect</code> (exit code, OOMKilled flag, env, mounts), <code>docker cp</code> to pull files out, and <code>docker diff</code>. Distroless also publishes <strong><code>:debug</code></strong> tags with a busybox shell, useful in test environments only.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check the basics: <code>docker logs</code>, <code>docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}'</code>.</li>
+  <li>Start a toolbox container joining the target's PID and network namespaces.</li>
+  <li>Inspect processes, connections, DNS and the filesystem via <code>/proc/1/root</code>.</li>
+  <li>In Kubernetes, use <code>kubectl debug -it pod --image=busybox --target=app</code>.</li>
+  <li>Copy files out with <code>docker cp</code> or <code>kubectl cp</code> (the latter needs <code>tar</code> in the container, so prefer the debug container).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run --rm -it --pid container:orders --network container:orders \
+  --cap-add SYS_PTRACE nicolaka/netshoot
+# inside: ps aux; ss -tlnp; curl -s localhost:8080/actuator/health; ls /proc/1/root/app
+
+kubectl debug -it orders-7d9f-abc12 --image=nicolaka/netshoot --target=orders
+docker cp orders:/app/config/application.yaml ./application.yaml</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding bash and curl to the production image &quot;just in case&quot;.</li>
+  <li>Deploying <code>:debug</code> tags to production and forgetting them.</li>
+  <li>Forgetting <code>--target</code> with <code>kubectl debug</code>, so the process list is not visible.</li>
+  <li>Ignoring the cheap clues: exit code 137 usually means OOM kill or SIGKILL.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Distroless images have no shell, so instead of adding tools to the image I bring a toolbox to the container. With Docker I start a debug container like netshoot that joins the target's PID and network namespaces, so I can see its processes, its listening ports and test <code>localhost</code> exactly as the app sees it, and browse its filesystem through <code>/proc/1/root</code>. In Kubernetes I use <code>kubectl debug</code> to add an ephemeral container with <code>--target</code>. Before that I check logs, exit codes and <code>docker inspect</code> for OOM kills, and I can <code>docker cp</code> files out. Distroless <code>:debug</code> variants exist, but only for test environments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you inspect the filesystem of a running distroless container?</strong> Shared PID namespace plus <code>/proc/&lt;pid&gt;/root</code>, <code>docker cp</code>, or <code>docker export</code>.</li>
+  <li><strong>Do ephemeral containers restart the pod?</strong> No; they are added to the running pod and cannot be removed until the pod is deleted.</li>
+  <li><strong>What does exit code 137 mean?</strong> Killed by SIGKILL (128 + 9), often the OOM killer.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-218 · How do microservices communicate with each other?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-218" data-topic="Microservices">
+<h1>How do microservices communicate with each other?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Microservices talk <strong>synchronously</strong> via <strong>REST or gRPC</strong> (caller waits) or <strong>asynchronously</strong> via <strong>events and commands on Kafka or RabbitMQ</strong>, found through <strong>service discovery</strong> and load balancing behind an <strong>API gateway</strong>, with <strong>timeouts, retries, circuit breakers</strong>, explicit <strong>contracts</strong> and propagated <strong>auth and trace context</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Synchronous request-response.</strong> REST over HTTP with JSON is the most common style: universal, easy to debug, described with <strong>OpenAPI</strong>. In Spring you call it with <strong>RestClient</strong>, <strong>WebClient</strong>, declarative <strong>HTTP interfaces</strong> (<code>@HttpExchange</code>) or <strong>OpenFeign</strong>. <strong>gRPC</strong> uses HTTP/2 and Protocol Buffers: compact binary messages, generated typed clients, streaming and deadlines, which makes it attractive for high-volume internal calls. The caller waits, so it is simple but couples <strong>availability and latency</strong>.</p>
+<p><strong>Asynchronous messaging.</strong> A service publishes <strong>events</strong> (&quot;OrderPlaced&quot;, something happened) or <strong>commands</strong> (&quot;SendInvoice&quot;, please do something) to a broker. <strong>Kafka</strong> suits event streams with retention and replay; <strong>RabbitMQ</strong> suits task queues and routing; cloud options include SQS/SNS, Azure Service Bus and Google Pub/Sub. Consumers process independently, which decouples services and absorbs spikes, but introduces eventual consistency, duplicates and ordering concerns. Events should be published reliably with the <strong>outbox pattern</strong> and consumed idempotently.</p>
+<p><strong>Finding each other.</strong> Services call logical names, not IPs. On Kubernetes, <strong>Services and DNS</strong> provide discovery and load balancing; elsewhere, registries like <strong>Eureka</strong> or <strong>Consul</strong> with client-side load balancing. External traffic enters through an <strong>API gateway</strong>; a <strong>service mesh</strong> (Istio, Linkerd) can add mTLS, retries and telemetry to east-west calls.</p>
+<p><strong>Cross-cutting requirements.</strong> Every synchronous call needs <strong>timeouts</strong>, limited <strong>retries</strong> with backoff for idempotent operations, <strong>circuit breakers</strong> and <strong>bulkheads</strong> (Resilience4j). Contracts are explicit and versioned: OpenAPI, protobuf files, or event schemas in a <strong>schema registry</strong>, verified by <strong>contract tests</strong>. Each call propagates the <strong>user or service token</strong> (OAuth2 token relay or client credentials) and the <strong>W3C trace context</strong>, so security and tracing work end to end.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide per interaction: need an answer now (sync) or react later (async)?</li>
+  <li>Sync: resolve name via discovery, call with timeout and resilience policies.</li>
+  <li>Async: write event to outbox, relay to broker, consumers react.</li>
+  <li>Propagate auth token and <code>traceparent</code> header in both cases.</li>
+  <li>Verify contracts in CI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Declarative HTTP interface (Spring 6+)
+@HttpExchange(&quot;/customers&quot;)
+interface CustomerClient {
+    @GetExchange(&quot;/{id}&quot;) Customer get(@PathVariable String id);
+}
+
+@Bean
+CustomerClient customerClient(RestClient.Builder builder) {
+    RestClient rc = builder.baseUrl(&quot;http://customer-service&quot;).build(); // K8s DNS name
+    return HttpServiceProxyFactory.builderFor(RestClientAdapter.create(rc))
+            .build().createClient(CustomerClient.class);
+}
+
+// Async: publish an event others react to
+kafkaTemplate.send(&quot;orders.events&quot;, orderId, new OrderPlaced(orderId, total));</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Style</th><th>Examples</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>REST</td><td>RestClient, Feign</td><td>Public and CRUD-style APIs</td></tr>
+<tr><td>gRPC</td><td>Protobuf stubs</td><td>Fast internal calls, streaming</td></tr>
+<tr><td>Events</td><td>Kafka</td><td>Integration, fan-out, audit</td></tr>
+<tr><td>Queues/commands</td><td>RabbitMQ, SQS</td><td>Background work</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long synchronous call chains for one user action.</li>
+  <li>No timeouts or circuit breakers.</li>
+  <li>Events without schemas or versioning.</li>
+  <li>Dropping trace context and auth when crossing async boundaries.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are two styles. Synchronous request-response with REST, using RestClient or Feign, or gRPC for efficient internal calls; it is simple but the caller depends on the callee being up. And asynchronous messaging with events or commands on Kafka or RabbitMQ, which decouples services and absorbs spikes, at the cost of eventual consistency. Services find each other through Kubernetes Services or Eureka, with an API gateway at the edge. Every sync call gets timeouts, retries and circuit breakers; contracts are explicit with OpenAPI or a schema registry; and the auth token and trace context are propagated on every hop.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>REST call or event?</strong> Event if the caller does not need the result and others merely react; REST if a response is needed now.</li>
+  <li><strong>When choose gRPC over REST?</strong> High-volume internal calls, strict typed contracts, streaming.</li>
+  <li><strong>What does a service mesh add?</strong> mTLS, traffic policies, retries and telemetry without application code.</li>
+</ul>
+</article>
+</body>
+</html>

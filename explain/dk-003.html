@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-003 · How does port mapping with -p work in Docker?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-003" data-topic="Docker">
+<h1>How does port mapping with -p work in Docker?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>-p host:container</code></strong> publishes a container port on the host (e.g. <strong><code>-p 8080:80</code></strong> → <code>localhost:8080</code> reaches port 80 inside), optionally bound to an interface like <strong><code>127.0.0.1</code></strong>; <strong><code>-P</code></strong> publishes all <code>EXPOSE</code>d ports to <strong>random host ports</strong>; <code>docker port</code> shows mappings, and a taken host port causes <strong>&quot;address already in use&quot;</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each container has its own <strong>network namespace</strong> and a private IP on a Docker network. A service listening on port 80 inside is reachable from other containers on that network, but <strong>not from the host's external interfaces</strong> until you publish it.</p>
+<p><strong><code>-p [ip:]hostPort:containerPort[/protocol]</code></strong> asks Docker to forward traffic. On Linux this uses iptables/nftables NAT rules. Variants:</p>
+<ul>
+  <li><code>-p 8080:80</code> → all host interfaces, port 8080 → container 80.</li>
+  <li><code>-p 127.0.0.1:5432:5432</code> → only reachable from the host itself; safer for databases and admin UIs.</li>
+  <li><code>-p 53:53/udp</code> → UDP instead of TCP.</li>
+  <li><code>-p 80</code> → container port 80 to a random host port.</li>
+  <li><code>-p 8000-8010:8000-8010</code> → ranges.</li>
+</ul>
+<p><strong><code>-P</code></strong> (capital) publishes every port declared with <code>EXPOSE</code> in the image to random high ports. <strong><code>docker port name</code></strong> or <code>docker ps</code> shows the actual mapping.</p>
+<p>Port conflicts: a host port can be bound by only one process. If another container or a local service already uses 8080, <code>docker run</code> fails with <strong>&quot;bind: address already in use&quot;</strong>; choose another host port. The container port can be the same in many containers because each has its own namespace.</p>
+<p><strong>Security note:</strong> Docker's NAT rules are inserted before many host firewall rules, so on Linux a published port can be reachable from the internet <strong>even if UFW appears to block it</strong>. On a cloud VM, publishing a database with <code>-p 5432:5432</code> may expose it publicly unless the security group or firewall blocks it. Bind to <code>127.0.0.1</code> or keep it unpublished and use a Docker network.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App listens on a port inside the container (on <code>0.0.0.0</code>, not <code>127.0.0.1</code>).</li>
+  <li><code>-p</code> creates NAT rules from host IP:port to container IP:port.</li>
+  <li>Client connects to host:port → forwarded to the container.</li>
+  <li>Other containers on the same network use the container port directly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -d --name web -p 8080:80 nginx:1.27
+curl -I http://localhost:8080
+docker run -d --name db -p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD=dev postgres:17
+docker run -d --name tmp -P nginx:1.27
+docker port tmp            # 80/tcp -&gt; 0.0.0.0:32768
+docker run -d -p 8080:80 httpd   # fails: port is already allocated</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>App inside the container listening on <code>127.0.0.1</code>, so the published port gives &quot;connection reset&quot;.</li>
+  <li>Reversing the order (it is host first, container second).</li>
+  <li>Publishing database ports on all interfaces on a cloud VM.</li>
+  <li>Thinking <code>EXPOSE</code> alone makes a port reachable.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Containers have their own network namespace, so a service on port 80 inside isn't reachable from outside until I publish it. -p host:container does that: docker run -p 8080:80 nginx forwards host port 8080 to container port 80, so I open localhost:8080. By default it binds on all host interfaces; -p 127.0.0.1:8080:80 restricts it to local access, which I use for databases. Capital -P publishes every exposed port to random host ports, and docker port shows the mapping. If the host port is already used, the run fails with address already in use.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a published DB port risky on a cloud VM?</strong> It may be exposed to the internet, and Docker's iptables rules can bypass UFW.</li>
+  <li><strong>Do containers on the same network need <code>-p</code>?</strong> No, they use the container port directly.</li>
+  <li><strong>&quot;Connection reset&quot; on a mapped port?</strong> The app is likely bound to localhost inside the container.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-007 · Explain checked versus unchecked exceptions, and how you handle resources safely.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-007" data-topic="Exceptions">
+<h1>Explain checked versus unchecked exceptions, and how you handle resources safely.</h1>
+<p class="ex-meta">Exceptions · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Checked exceptions</strong> (subclasses of <code>Exception</code> but not <code>RuntimeException</code>, e.g. <code>IOException</code>) must be <strong>caught or declared</strong> at compile time; <strong>unchecked exceptions</strong> (<code>RuntimeException</code> and <code>Error</code> subclasses) are not enforced. Handle resources safely with <strong>try-with-resources</strong> on <code>AutoCloseable</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>All throwables extend <code>Throwable</code>, which has two branches: <strong><code>Error</code></strong> (serious JVM problems such as <code>OutOfMemoryError</code> and <code>StackOverflowError</code> that applications normally should not catch) and <strong><code>Exception</code></strong>.</p>
+<p><strong>Checked exceptions</strong> are <code>Exception</code> subclasses outside <code>RuntimeException</code>: <code>IOException</code>, <code>SQLException</code>, <code>InterruptedException</code>. The compiler enforces <strong>handle or declare</strong>: either catch them in <code>try</code>/<code>catch</code> or add <code>throws</code> to the method signature. They represent <strong>recoverable conditions outside the program's control</strong>, such as a missing file or a network failure, where the caller is expected to react.</p>
+<p><strong>Unchecked exceptions</strong> extend <code>RuntimeException</code>: <code>NullPointerException</code>, <code>IllegalArgumentException</code>, <code>IllegalStateException</code>, <code>IndexOutOfBoundsException</code>. They usually signal <strong>programming errors</strong> or violated preconditions, and the compiler does not force handling. Modern frameworks (Spring's <code>DataAccessException</code>, JPA exceptions) use unchecked exceptions because checked ones clutter signatures and do not work well with lambdas and streams. Spring's <code>@Transactional</code> by default rolls back on unchecked exceptions and errors, not on checked ones.</p>
+<p><strong>Resource safety</strong>: files, sockets, JDBC connections and locks must be released even when exceptions occur. <strong>try-with-resources</strong> (Java 7) declares resources in the <code>try</code> header; anything implementing <strong><code>AutoCloseable</code></strong> is closed automatically in reverse order. If the body throws and <code>close()</code> also throws, the close exception is attached as a <strong>suppressed exception</strong> (<code>getSuppressed()</code>) rather than hiding the original. Since Java 9 you can use an effectively final variable in the header.</p>
+<p><strong>In services</strong>: catch exceptions where you can do something meaningful, <strong>translate</strong> low-level exceptions into domain exceptions (keeping the cause), never swallow them silently, and handle them centrally, for example with <code>@RestControllerAdvice</code> mapping to HTTP responses (Problem Details, RFC 9457).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A method throws; the JVM unwinds the stack looking for a matching <code>catch</code>.</li>
+  <li>The compiler has already checked that checked exceptions are caught or declared.</li>
+  <li>try-with-resources closes resources on every exit path, in reverse order.</li>
+  <li>Close failures are added as suppressed exceptions.</li>
+  <li>Unhandled exceptions reach the framework's handler or the thread's uncaught handler.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public List&lt;String&gt; readSkus(Path file) {
+    try (BufferedReader in = Files.newBufferedReader(file)) {          // auto-closed
+        return in.lines().map(String::trim).toList();
+    } catch (NoSuchFileException e) {
+        throw new ImportFileMissingException(file, e);                  // domain, unchecked
+    } catch (IOException e) {
+        throw new UncheckedIOException(&quot;Cannot read &quot; + file, e);       // keep the cause
+    }
+}
+
+@RestControllerAdvice
+class ApiErrors {
+    @ExceptionHandler(ImportFileMissingException.class)
+    ProblemDetail missing(ImportFileMissingException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Checked</th><th>Unchecked</th></tr></thead>
+<tbody>
+<tr><td>Hierarchy</td><td>Exception (not Runtime)</td><td>RuntimeException, Error</td></tr>
+<tr><td>Compiler enforced</td><td>Yes, catch or declare</td><td>No</td></tr>
+<tr><td>Typical meaning</td><td>Recoverable external failure</td><td>Programming error, bad state</td></tr>
+<tr><td>Examples</td><td>IOException, SQLException</td><td>NPE, IllegalArgumentException</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Empty catch blocks or just <code>e.printStackTrace()</code>.</li>
+  <li>Wrapping without passing the cause.</li>
+  <li>Catching <code>Exception</code> broadly and hiding bugs.</li>
+  <li>Closing resources manually in <code>finally</code> and losing the original exception.</li>
+  <li>Catching <code>InterruptedException</code> without restoring the interrupt flag.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Checked exceptions, like IOException or SQLException, are verified at compile time: the method must catch them or declare them with throws. Unchecked exceptions extend RuntimeException, like NullPointerException or IllegalArgumentException, and usually indicate programming errors, so the compiler doesn't force handling; Errors like OutOfMemoryError are also unchecked and shouldn't normally be caught. For resources I use try-with-resources, which closes anything AutoCloseable even when an exception occurs, and keeps close failures as suppressed exceptions. In services I translate low-level exceptions into meaningful domain exceptions with the cause, and handle them centrally with a ControllerAdvice.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Should you ever catch Exception or Throwable? Why or why not?</strong> Only at top-level boundaries (a request handler, a job runner) to log and respond; elsewhere it hides bugs, and catching Throwable can intercept Errors you cannot recover from.</li>
+  <li><strong>What are suppressed exceptions?</strong> Exceptions thrown by close() in try-with-resources, attached to the primary exception instead of replacing it.</li>
+  <li><strong>Does @Transactional roll back on checked exceptions?</strong> Not by default; configure rollbackFor if needed.</li>
+</ul>
+</article>
+</body>
+</html>

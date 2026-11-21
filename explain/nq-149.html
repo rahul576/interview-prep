@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-149 · What is the Observer pattern?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-149" data-topic="Design Patterns">
+<h1>What is the Observer pattern?</h1>
+<p class="ex-meta">Design Patterns · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Observer</strong> defines a <strong>one-to-many</strong> dependency: when a <strong>subject</strong> changes state, it <strong>notifies all registered observers</strong> through a common interface, keeping the subject <strong>loosely coupled</strong> from whoever reacts.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without Observer, an <code>OrderService</code> that must send an email, update inventory and record analytics calls all three services directly. Every new reaction means editing <code>OrderService</code>, and it ends up depending on half the system.</p>
+<p>With Observer, the <strong>subject</strong> keeps a list of <strong>observers</strong> that implement a shared interface (<code>OrderListener.onOrderPlaced(event)</code>). Observers <strong>subscribe</strong> and <strong>unsubscribe</strong>; when the event happens, the subject loops over them and calls the method. The subject knows only the interface, so new reactions are added without touching it (open/closed).</p>
+<p><strong>Push vs pull:</strong> the subject can push data in the notification (an event object), or just signal and let observers pull state. Event objects are the modern norm.</p>
+<p><strong>Where it appears:</strong></p>
+<ul>
+  <li>GUI listeners (<code>ActionListener</code>), JavaBeans <code>PropertyChangeListener</code>. (The old <code>java.util.Observable</code> is deprecated since Java 9.)</li>
+  <li><strong>Spring events:</strong> <code>ApplicationEventPublisher.publishEvent(new OrderPlacedEvent(...))</code> and <code>@EventListener</code> methods. By default listeners run <strong>synchronously in the publisher's thread</strong> and transaction. <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> runs only once the transaction commits, and <code>@Async</code> moves work to another thread.</li>
+  <li><strong>Reactive streams</strong> (<code>Flow.Publisher</code>/<code>Subscriber</code>, Project Reactor) add backpressure.</li>
+  <li>At system level: <strong>publish/subscribe</strong> with Kafka, RabbitMQ or cloud pub/sub, where observers are separate services.</li>
+</ul>
+<p><strong>Pitfalls:</strong> <strong>memory leaks</strong> from listeners never removed (the subject holds strong references); a <strong>slow or failing observer</strong> blocking or breaking the subject if notification is synchronous; <strong>unpredictable ordering</strong>; and hidden control flow that is harder to debug. In-process events are also lost on crash, so critical side effects use the <strong>transactional outbox</strong> plus a broker.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define an observer interface or event type.</li>
+  <li>Observers register with the subject (or are discovered by Spring).</li>
+  <li>Subject state changes; it creates an event.</li>
+  <li>Subject notifies each observer in turn (or via a broker).</li>
+  <li>Observers react independently; they can unsubscribe.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public record OrderPlacedEvent(long orderId, String email) {}
+
+@Service
+class OrderService {
+    private final ApplicationEventPublisher events;
+    OrderService(ApplicationEventPublisher events) { this.events = events; }
+
+    @Transactional
+    public void place(Order o) {
+        // save order...
+        events.publishEvent(new OrderPlacedEvent(o.id(), o.email()));
+    }
+}
+
+@Component
+class OrderEmailListener {
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPlaced(OrderPlacedEvent e) { /* send confirmation email */ }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sending emails in a synchronous listener inside the transaction, then rolling back.</li>
+  <li>Forgetting to unregister listeners.</li>
+  <li>Assuming listener execution order.</li>
+  <li>Relying on in-memory events for data that must never be lost.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Observer defines a one-to-many dependency: when the subject changes, every registered observer is notified automatically. Observers implement a common interface, so the subject doesn't know their concrete classes and I can add reactions without changing it. In Spring I use ApplicationEventPublisher with @EventListener: an OrderPlaced event triggers email, inventory and analytics listeners. At system level it becomes pub/sub with Kafka. I watch out for listeners that are never unregistered, and for slow synchronous observers, so I use @TransactionalEventListener after commit and @Async where appropriate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you make notifications asynchronous in Spring?</strong> <code>@EnableAsync</code> and <code>@Async</code> on the listener, or publish to a message broker.</li>
+  <li><strong>Observer vs pub/sub?</strong> Pub/sub adds a broker between publishers and subscribers, so they do not know each other at all.</li>
+  <li><strong>How do you avoid losing events?</strong> Transactional outbox table relayed to Kafka.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-031 · How do you force Terraform to recreate a single resource?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-031" data-topic="Infrastructure as Code">
+<h1>How do you force Terraform to recreate a single resource?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Use <strong>terraform apply -replace=&quot;ADDRESS&quot;</strong>, which plans a destroy-and-recreate of <strong>just that resource</strong> and shows it <strong>in the plan for review</strong>; it replaced the older <strong>terraform taint</strong>, and <strong>create_before_destroy</strong> avoids downtime.</p>
+
+<h2>Detailed explanation</h2>
+<p>Sometimes a resource's configuration is correct but the real object is not: an instance that is unhealthy or was modified by hand, a VM whose user data should run again, a key, password or certificate that must be <strong>regenerated or rotated</strong>. Terraform would show no changes because nothing in the code differs, so you need to ask explicitly for replacement.</p>
+<p><code>terraform plan -replace=&quot;aws_instance.web[0]&quot;</code> or <code>terraform apply -replace=...</code> tells Terraform to treat the resource as if a force-new argument changed. The plan shows the <code>-/+</code> action with &quot;will be replaced, as requested&quot;, so it can be <strong>reviewed</strong> like any other change, and nothing is altered until apply. You can pass <code>-replace</code> multiple times. Addresses with indexes or keys need quoting in the shell, for example <code>-replace='aws_iam_access_key.ci[&quot;deploy&quot;]'</code>.</p>
+<p>Before Terraform 0.15.2 the tool was <code>terraform taint</code>, which <strong>immediately wrote a mark into the state</strong> saying &quot;recreate this on the next apply&quot;. That had two problems: it changed shared state without showing the impact, and anyone else's next apply would unexpectedly recreate the resource. Taint still exists but is deprecated in favour of <code>-replace</code>. Terraform also taints resources automatically when creation fails partway, which is why a failed provisioner leads to replacement next time.</p>
+<p>Replacement follows the usual graph rules: resources that <strong>depend on</strong> the replaced one are updated if they reference changed attributes such as its ID or IP, and may themselves be replaced if those attributes force new resources. For resources serving traffic, <code>lifecycle { create_before_destroy = true }</code> creates the new object first, then deletes the old one, which requires that names do not collide. For declarative, repeatable triggers, <code>replace_triggered_by</code> replaces a resource whenever another value changes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Run plan/apply with <code>-replace=ADDRESS</code>.</li>
+  <li>Terraform plans delete + create for that address.</li>
+  <li>Dependent resources referencing changed attributes are updated or replaced.</li>
+  <li>Review, then apply.</li>
+  <li>State records the new object.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform plan -replace='aws_instance.web[0]' -out=tfplan
+terraform show tfplan | grep -A3 &quot;replaced&quot;
+terraform apply tfplan
+
+# Rotate a generated password
+terraform apply -replace='random_password.db'</code></pre>
+<pre><code class="language-hcl">resource &quot;aws_instance&quot; &quot;web&quot; {
+  count = 2
+  # ...
+  lifecycle {
+    create_before_destroy = true
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>terraform taint</code> on shared state without telling the team.</li>
+  <li>Replacing a stateful resource (database, volume) without a backup.</li>
+  <li>Forgetting quotes around addresses with brackets.</li>
+  <li>Replacing to &quot;fix&quot; drift that should be fixed in code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use terraform plan or apply with -replace and the resource address, for example -replace='aws_instance.web[0]'. Terraform plans to destroy and recreate just that resource even though its configuration hasn't changed, and it shows up in the plan, so it can be reviewed first. That replaced the old terraform taint command, which modified state immediately without showing the effect. Typical reasons are a broken or manually modified instance, rotating a key or certificate, or re-running user data. For things serving traffic I use create_before_destroy so the replacement comes up before the old one goes away.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to resources that depend on the replaced one?</strong> They're updated if they reference changed attributes, and may be replaced if those attributes force it.</li>
+  <li><strong>Why did Terraform replace a resource I didn't ask for?</strong> It was tainted after a failed create or provisioner.</li>
+  <li><strong>How do you replace automatically when something else changes?</strong> <code>replace_triggered_by</code> in the lifecycle block.</li>
+</ul>
+</article>
+</body>
+</html>

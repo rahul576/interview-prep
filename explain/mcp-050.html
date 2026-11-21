@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-050 · How do you use MCP servers in non-interactive settings, such as CI pipelines or scheduled agents?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-050" data-topic="MCP Servers">
+<h1>How do you use MCP servers in non-interactive settings, such as CI pipelines or scheduled agents?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In CI pipelines and scheduled agents <strong>no human is present to approve</strong>, so safety is designed in advance: a <strong>pre-approved allowlist of tools</strong> (mostly read-only), <strong>machine identities</strong> with short-lived scoped tokens, <strong>outputs as pull requests or reports</strong> for later review, and hard <strong>budgets, step limits and timeouts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Interactive MCP use leans on the human in the loop: the host asks before a tool with side effects runs. Headless runs, such as a GitHub Actions job that triages failing tests or a nightly agent that reviews dependency updates, remove that safety net. Whatever the agent is allowed to call, it will be able to call without anyone watching.</p>
+<p>So the first control is an <strong>explicit allowlist</strong>. The agent's configuration lists exactly which servers and tools it may use, and destructive tools are simply not available. Most CLI agents support allow and deny lists for tools in a non-interactive mode; anything not listed is refused rather than prompted.</p>
+<p>The second is <strong>identity</strong>. Never reuse a person's token in a pipeline. Use a <strong>machine identity</strong>: OAuth <strong>client credentials</strong> (MCP has an extension for this), or <strong>workload identity federation</strong>, where the CI system's OIDC token is exchanged for a short-lived cloud or API token with narrow scopes.</p>
+<p>The third is <strong>deferred human review</strong>. The agent proposes rather than acts: a pull request that fixes a flaky test, a comment summarising a failure, a report listing upgrade risks. Humans review on their own schedule.</p>
+<p>Finally, <strong>budgets</strong>: maximum tokens or cost, maximum tool calls or turns, and an overall wall-clock timeout, so a confused agent stops instead of looping. All tool calls are logged against the pipeline run ID.</p>
+<p>Be careful with <strong>untrusted input</strong>. A CI agent reading pull requests from forks is reading attacker-controlled text; combine that with write tools or secrets and you have a prompt injection path.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pipeline starts the agent with a fixed config: allowed servers, allowed tools, model, budgets.</li>
+  <li>CI's OIDC token is exchanged for short-lived, scoped credentials.</li>
+  <li>Agent runs non-interactively; disallowed tool calls are rejected.</li>
+  <li>Output is a PR, comment, artefact or report, never a direct production change.</li>
+  <li>Logs and traces are attached to the run; failure or budget exhaustion fails the job visibly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># .github/workflows/triage.yml (sketch)
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run agent on failing tests
+        run: |
+          agent run --non-interactive \
+            --allowed-tools &quot;github.get_workflow_run,github.get_job_logs,github.create_pull_request&quot; \
+            --max-turns 30 \
+            --prompt-file .ci/triage-prompt.md</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running with a &quot;skip all permissions&quot; flag and a personal access token.</li>
+  <li>Letting a job triggered by forked PRs access secrets and write tools.</li>
+  <li>No turn or cost limit, so a looping agent burns budget for hours.</li>
+  <li>Agents pushing directly to main instead of opening a PR.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Without a human present, approvals have to be designed in advance. I give the agent an explicit allowlist of pre-approved tools, mostly read-only, and destructive tools simply aren't available. It authenticates with a machine identity, client credentials or workload identity federation, with narrow scopes and short-lived tokens, never someone's personal credentials. Instead of acting directly, it produces things humans review later: a pull request with a fix, a comment summarising a failure, or a report. Runs have token and cost budgets, step limits and timeouts, and every tool call is logged with the pipeline run. I'm particularly careful when the agent reads untrusted content like PRs from forks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of untrusted PR content with write tools?</strong> Prompt injection could make the agent leak secrets or push malicious changes.</li>
+  <li><strong>How do approvals work overnight?</strong> Queue proposed actions for review in the morning instead of executing them.</li>
+  <li><strong>Why workload identity over stored secrets?</strong> Nothing long-lived to leak, and tokens are bound to the specific job.</li>
+</ul>
+</article>
+</body>
+</html>

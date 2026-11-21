@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-019 · Explain Docker networking modes and how volumes work.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-019" data-topic="Docker">
+<h1>Explain Docker networking modes and how volumes work.</h1>
+<p class="ex-meta">Docker · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Containers use the default <strong>bridge</strong> network (NAT, <code>-p</code> to publish), <strong>user-defined bridges</strong> with <strong>DNS by container name</strong>, <strong>host</strong> mode (no network isolation), <strong>overlay</strong> for multi-host, or <strong>none</strong>; for data, <strong>volumes</strong> (Docker-managed, persistent), <strong>bind mounts</strong> (host paths) and <strong>tmpfs</strong> survive beyond, or avoid, the ephemeral writable layer.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Networking drivers:</strong></p>
+<ul>
+  <li><strong>Default bridge (<code>bridge</code>/<code>docker0</code>)</strong>: each container gets a private IP on a virtual bridge; outbound traffic is NATed via the host; inbound access requires <strong>publishing ports</strong> with <code>-p 8080:80</code>. Containers here can reach each other by IP but <strong>not by name</strong>; that only worked through the legacy <code>--link</code>.</li>
+  <li><strong>User-defined bridge</strong>: created with <code>docker network create</code>. Docker's <strong>embedded DNS</strong> (127.0.0.11) resolves container names and aliases, networks are isolated from each other, and containers can be connected or disconnected on the fly. <strong>Compose</strong> creates one per project, which is why services reach each other as <code>db</code> or <code>redis</code>.</li>
+  <li><strong>Host</strong>: the container uses the host's network stack directly, with no NAT and no port mapping, for maximum performance or many ports, at the cost of isolation and port conflicts. Full support is on Linux.</li>
+  <li><strong>Overlay</strong>: spans multiple Docker hosts with VXLAN, used by Swarm services.</li>
+  <li><strong>none</strong> disables networking (macvlan/ipvlan attach to the physical network).</li>
+</ul>
+<p><strong>Storage:</strong> the container's writable layer is lost when the container is removed and is slow for heavy writes. So:</p>
+<ul>
+  <li><strong>Named volumes</strong> (<code>-v pgdata:/var/lib/postgresql/data</code> or <code>--mount type=volume</code>) are managed by Docker under its data directory, independent of host layout, easy to back up, and pre-populated from the image path on first use. Right for databases and persistent app data.</li>
+  <li><strong>Bind mounts</strong> (<code>-v $(pwd)/src:/app/src</code>) map a host path, great for live code reload and config files in development, but tied to the host's directory layout and file permissions.</li>
+  <li><strong>tmpfs</strong> mounts keep data in memory only, for scratch or sensitive temporary files.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>docker network create appnet</code> → bridge with DNS.</li>
+  <li>Containers join with <code>--network appnet</code> and resolve each other by name.</li>
+  <li>Only the public entry point publishes a port to the host.</li>
+  <li>Stateful containers mount named volumes; dev containers bind-mount source.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker network create appnet
+docker volume create pgdata
+docker run -d --name db --network appnet \
+  -e POSTGRES_PASSWORD=secret -v pgdata:/var/lib/postgresql/data postgres:17
+docker run -d --name api --network appnet -p 8080:8080 \
+  -e DB_HOST=db -v &quot;$(pwd)/config:/app/config:ro&quot; shop-api:1.4.2
+docker exec api getent hosts db      # resolves via embedded DNS</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting name resolution on the default bridge.</li>
+  <li>Publishing database ports to <code>0.0.0.0</code> when only other containers need them.</li>
+  <li>Storing database data in the container's writable layer.</li>
+  <li>Bind-mount permission issues with non-root container users.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default containers join the bridge network, a private virtual network with NAT, and I publish ports with -p. On a user-defined bridge, which Compose creates automatically, containers resolve each other by name through Docker's embedded DNS. Host mode uses the host's network stack directly, overlay spans multiple hosts as in Swarm, and none disables networking. For storage, the writable layer is ephemeral, so persistent data goes into named volumes, which Docker manages and which survive container removal, while bind mounts map host paths and are handy for development and config files. tmpfs is for in-memory scratch data.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can't two containers on the default bridge resolve names?</strong> The default bridge has no embedded DNS; use a user-defined network.</li>
+  <li><strong>Back up a volume?</strong> Run a temporary container mounting it and tar the contents.</li>
+  <li><strong>Volume vs bind mount in production?</strong> Volumes; bind mounts couple you to the host.</li>
+</ul>
+</article>
+</body>
+</html>

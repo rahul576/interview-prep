@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>az-002 · What is Microsoft Entra ID, and how do managed identities work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="az-002" data-topic="Azure">
+<h1>What is Microsoft Entra ID, and how do managed identities work?</h1>
+<p class="ex-meta">Azure · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Microsoft Entra ID</strong> (formerly Azure AD) is Microsoft's cloud <strong>identity platform</strong>; a <strong>managed identity</strong> is a service principal that <strong>Azure creates and rotates for a resource</strong>, so code obtains tokens <strong>without any secret</strong>, either <strong>system-assigned</strong> (tied to one resource) or <strong>user-assigned</strong> (standalone and reusable).</p>
+
+<h2>Detailed explanation</h2>
+<p>Entra ID handles authentication and authorisation for users, groups, devices and applications using standards such as <strong>OAuth 2.0</strong>, <strong>OpenID Connect</strong> and SAML. It also provides conditional access, MFA and Privileged Identity Management.</p>
+<p>Applications are represented in two ways. An <strong>app registration</strong> is the global definition of an application. A <strong>service principal</strong> is its local instance in a tenant, and that is what you grant roles to. Traditionally, an app authenticates as its service principal with a <strong>client secret</strong> or <strong>certificate</strong>, which must be stored, protected and rotated, and leaked secrets are a frequent cause of breaches.</p>
+<p><strong>Managed identities</strong> remove that burden. Azure creates a service principal for a resource such as a VM, App Service, Function, Container App or AKS workload, and manages its credentials internally. The code asks the local <strong>Azure Instance Metadata Service</strong> (or an equivalent endpoint on PaaS) for an access token for a target resource such as Key Vault or Storage, and receives a short-lived token. There is nothing to store in configuration and nothing to rotate.</p>
+<p>There are two types. A <strong>system-assigned</strong> identity is enabled on a resource and shares its lifecycle: delete the resource and the identity is deleted. A <strong>user-assigned</strong> identity is a separate Azure resource that you can attach to several resources, pre-create and grant permissions to before deployment, and keep when resources are recreated. User-assigned identities are also what <strong>AKS workload identity</strong> federates with. Either way, you grant access through <strong>RBAC role assignments</strong> on the target.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable a system-assigned identity on the resource, or create and attach a user-assigned identity.</li>
+  <li>Grant it an RBAC role on the target, such as <em>Key Vault Secrets User</em>.</li>
+  <li>Application code uses an SDK credential, such as <code>DefaultAzureCredential</code>.</li>
+  <li>The SDK requests a token from the local identity endpoint.</li>
+  <li>Entra ID issues a short-lived token; the app calls the target service.</li>
+  <li>Azure rotates the underlying credentials automatically.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az identity create -g rg-app -n id-orders-api
+az webapp identity assign -g rg-app -n orders-api \
+  --identities /subscriptions/&lt;sub&gt;/resourceGroups/rg-app/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-orders-api
+az role assignment create --assignee &lt;principal-id&gt; \
+  --role &quot;Key Vault Secrets User&quot; --scope &lt;key-vault-resource-id&gt;</code></pre>
+<pre><code class="language-python">from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+client = SecretClient(&quot;https://kv-orders.vault.azure.net&quot;, DefaultAzureCredential())
+db_password = client.get_secret(&quot;db-password&quot;).value</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing client secrets in app settings when a managed identity would work.</li>
+  <li>Granting the identity Contributor on the subscription instead of a narrow data role.</li>
+  <li>Using system-assigned identities where resources are recreated often, breaking role assignments.</li>
+  <li>Forgetting that user-assigned identities need explicit client ID selection when several are attached.</li>
+  <li>Confusing app registrations with service principals.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Microsoft Entra ID, formerly Azure AD, is the identity platform for users, groups and applications, based on OAuth and OpenID Connect. Applications are represented by app registrations and service principals. A managed identity is a service principal that Azure manages for a resource like a VM, App Service or AKS workload: the code requests tokens from a local endpoint, so there are no secrets in code or config and credentials rotate automatically. System-assigned identities live and die with the resource; user-assigned identities are standalone and can be shared and pre-authorised. I then grant the identity least-privilege RBAC roles, for example Key Vault Secrets User on one vault.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does AKS workload identity map a service account to an Entra identity?</strong> A federated credential on a user-assigned identity trusts the cluster's OIDC issuer and a specific service account.</li>
+  <li><strong>When would you still use a service principal with a certificate?</strong> For workloads outside Azure that cannot use federation.</li>
+  <li><strong>What is DefaultAzureCredential?</strong> An SDK chain that tries environment, workload identity, managed identity and developer credentials in order.</li>
+</ul>
+</article>
+</body>
+</html>

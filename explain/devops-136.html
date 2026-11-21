@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-136 · A server says the disk is full, but du does not show where the space went. What is happening?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-136" data-topic="Linux">
+<h1>A server says the disk is full, but du does not show where the space went. What is happening?</h1>
+<p class="ex-meta">Linux · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The space is usually held by a <strong>deleted file that a process still has open</strong>, invisible to <code>du</code> but counted by <code>df</code>; find it with <strong><code>lsof +L1</code></strong>, then <strong>restart the process or truncate the file via /proc</strong>, fix <strong>log rotation</strong>, and also check <strong>inode exhaustion</strong> with <code>df -i</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>df</code> asks the filesystem how many blocks are allocated; <code>du</code> walks directory entries and adds up file sizes. Normally they agree. A file's blocks are only freed when its <strong>link count reaches zero and no process holds it open</strong>. If someone runs <code>rm</code> on a 40 GB log while the application keeps writing to it, the directory entry disappears, so <code>du</code> cannot see it, but the inode and data stay allocated until the process closes the file descriptor. <code>df</code> keeps showing the disk as full.</p>
+<p><code>lsof +L1</code> lists open files with a link count below one, that is deleted but open; <code>lsof | grep '(deleted)'</code> works too. The output shows the process, PID, file descriptor number and size. The clean fix is to <strong>restart or reload</strong> the process so it reopens its logs. If you cannot restart immediately, <strong>truncate through the proc file descriptor</strong>: <code>: &gt; /proc/&lt;pid&gt;/fd/&lt;fd&gt;</code> frees the space at once.</p>
+<p>Prevention is proper <strong>log rotation</strong>: logrotate with a <code>postrotate</code> signal (such as <code>kill -USR1</code> or <code>systemctl reload</code>) so the app reopens files, or <code>copytruncate</code> for apps that cannot reopen (accepting that a few lines may be lost).</p>
+<p>Other causes of &quot;full but no files&quot;: <strong>inode exhaustion</strong> from millions of tiny files (<code>df -i</code> at 100% while <code>df -h</code> shows space), <strong>reserved blocks</strong> for root on ext4 (about 5% by default), files <strong>hidden under a mount point</strong> (written before a filesystem was mounted over the directory).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>df -h</code> says full; <code>du -shx /</code> totals much less.</li>
+  <li><code>lsof +L1</code> finds deleted-but-open files and their PIDs.</li>
+  <li>Restart the process, or truncate via <code>/proc/&lt;pid&gt;/fd/&lt;n&gt;</code>.</li>
+  <li>Check <code>df -i</code> for inodes.</li>
+  <li>Fix logrotate so it does not recur.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">df -h /var
+du -shx /var 2&gt;/dev/null
+sudo lsof +L1 | head
+# java 2314 app 12w REG 259,1 42949672960 0 /var/log/app/app.log (deleted)
+sudo sh -c ': &gt; /proc/2314/fd/12'     # frees space immediately
+df -i /var                            # inode check</code></pre>
+<pre><code class="language-conf"># /etc/logrotate.d/app
+/var/log/app/*.log {
+  daily
+  rotate 7
+  compress
+  postrotate
+    systemctl reload app &gt;/dev/null 2&gt;&amp;1 || true
+  endscript
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting a log with <code>rm</code> while the app is writing to it.</li>
+  <li>Rebooting the server instead of identifying the process.</li>
+  <li>Forgetting inodes and reserved blocks.</li>
+  <li>Using copytruncate where the app supports a reopen signal.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The classic cause is a deleted file that a process still holds open, usually a big log someone removed with rm while the app keeps writing. The space is not freed until the file handle closes, and du cannot see it because the directory entry is gone. I find it with lsof +L1, then restart or reload the process, or truncate the file through its /proc file descriptor if I cannot restart. To prevent it, I use proper log rotation that signals the app to reopen logs, or copytruncate. I also check df -i for inode exhaustion, and files hidden under mount points.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you find the largest directories quickly on a huge filesystem?</strong> <code>du -xh --max-depth=1 / | sort -h</code>, or ncdu, staying on one filesystem with -x.</li>
+  <li><strong>What are reserved blocks?</strong> Space ext4 keeps for root; tune2fs -m changes it.</li>
+  <li><strong>How can files hide under a mount point?</strong> Data written to the directory before mounting stays underneath; bind-mount / elsewhere to see it.</li>
+</ul>
+</article>
+</body>
+</html>

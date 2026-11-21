@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-061 · How do CodePipeline, CodeBuild and CodeDeploy work together?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-061" data-topic="Cloud (AWS)">
+<h1>How do CodePipeline, CodeBuild and CodeDeploy work together?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>CodePipeline</strong> orchestrates the release as <strong>stages</strong> (source, build, test, approval, deploy), <strong>CodeBuild</strong> runs builds and tests in managed containers from a <strong>buildspec.yml</strong>, and <strong>CodeDeploy</strong> deploys to <strong>EC2/on-premises, ECS or Lambda</strong> with <strong>in-place, blue/green, canary or linear</strong> strategies and <strong>automatic rollback</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>CodePipeline</strong> models the workflow as ordered stages of actions. A <strong>source</strong> stage triggers on changes in GitHub, GitLab or Bitbucket through <strong>CodeConnections</strong> (formerly CodeStar Connections), on an S3 object or an ECR image push. CodeCommit is no longer offered to new customers, so new projects use an external Git host. Artifacts pass between stages through an encrypted <strong>S3 artifact bucket</strong>. Stages can include <strong>manual approvals</strong>, parallel actions, and invoke Lambda, Step Functions or CloudFormation deployments. <strong>V2 pipelines</strong> add triggers filtered by branch, tag or file path, pipeline variables, and stage-level rollback conditions.</p>
+<p><strong>CodeBuild</strong> runs each build in a fresh managed container image, or your custom image, with compute sizes from small to GPU, plus Lambda-based and reserved fleets. A <strong>buildspec.yml</strong> defines install, pre_build, build and post_build phases, environment variables and secrets from Parameter Store or Secrets Manager, artifacts and reports (JUnit, coverage). It scales without build servers and bills per minute, and can run in your VPC to reach private resources.</p>
+<p><strong>CodeDeploy</strong> handles deployments. For <strong>EC2/on-premises</strong>, an agent runs an <strong>appspec.yml</strong> with lifecycle hooks (BeforeInstall, AfterInstall, ApplicationStart, ValidateService) in place or blue/green with Auto Scaling groups. For <strong>ECS</strong>, it shifts ALB traffic between blue and green target groups. For <strong>Lambda</strong>, it shifts alias weights between versions. Predefined configs like <strong>Canary10Percent5Minutes</strong> or <strong>Linear10PercentEvery1Minute</strong> control traffic shifting, and <strong>CloudWatch alarms</strong> trigger automatic rollback.</p>
+<p>All three use <strong>IAM service roles</strong>, so no long-lived credentials live in the pipeline.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer merges to main; CodeConnections triggers the pipeline.</li>
+  <li>Source artifact is stored in S3.</li>
+  <li>CodeBuild builds, tests and pushes an image to ECR.</li>
+  <li>Optional manual approval for production.</li>
+  <li>CodeDeploy shifts traffic gradually, running validation hooks.</li>
+  <li>Alarms during the bake time trigger automatic rollback.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># buildspec.yml
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password | docker login --username AWS --password-stdin $REPO
+  build:
+    commands:
+      - docker build -t $REPO:$CODEBUILD_RESOLVED_SOURCE_VERSION .
+      - docker push $REPO:$CODEBUILD_RESOLVED_SOURCE_VERSION
+  post_build:
+    commands:
+      - printf '{&quot;ImageURI&quot;:&quot;%s&quot;}' $REPO:$CODEBUILD_RESOLVED_SOURCE_VERSION &gt; imageDetail.json
+artifacts:
+  files: [imageDetail.json, appspec.yaml, taskdef.json]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No rollback alarms, so canaries shift fully even when errors rise.</li>
+  <li>Over-privileged pipeline roles that can modify anything in the account.</li>
+  <li>Building different artifacts per environment instead of promoting one.</li>
+  <li>Assuming CodeCommit is available for new accounts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CodePipeline orchestrates the release as stages: source from GitHub through CodeConnections, S3 or ECR, then build and test, approvals and deployment, with artifacts passed through S3. CodeBuild runs builds and tests in managed containers defined by a buildspec.yml, scaling without build servers. CodeDeploy deploys to EC2 or on-premises, ECS or Lambda, in place or blue/green, with canary or linear traffic shifting, and rolls back automatically when CloudWatch alarms fire. Each piece uses IAM roles, so there are no stored keys.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a CodeDeploy canary for Lambda work?</strong> It shifts a percentage of alias traffic to the new version, waits, checks alarms and hooks, then shifts the rest.</li>
+  <li><strong>How deploy to multiple accounts?</strong> Pipeline in a tooling account assumes deployment roles in target accounts.</li>
+  <li><strong>Why promote the same artifact?</strong> What was tested is exactly what reaches production.</li>
+</ul>
+</article>
+</body>
+</html>

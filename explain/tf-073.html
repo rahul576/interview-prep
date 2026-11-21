@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-073 · How do you handle DNS and TLS certificate validation in Terraform, for example with ACM or App Service certificates?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-073" data-topic="Terraform">
+<h1>How do you handle DNS and TLS certificate validation in Terraform, for example with ACM or App Service certificates?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>For DNS-validated certificates such as <strong>ACM</strong>, create the <strong>validation records</strong> from the certificate's <strong><code>domain_validation_options</code></strong> with <strong><code>for_each</code></strong>, use an <strong><code>aws_acm_certificate_validation</code></strong> resource that <strong>waits until issued</strong>, and make listeners <strong>reference the validation resource</strong>; handle DNS zones in <strong>other accounts or providers</strong> with <strong>provider aliases</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Public certificate authorities must verify that you control a domain. With <strong>DNS validation</strong>, the CA gives you a record (a CNAME for ACM) and checks that it exists. Terraform can do the whole flow in one apply.</p>
+<p><strong>ACM flow.</strong> <code>aws_acm_certificate</code> with <code>validation_method = &quot;DNS&quot;</code> returns <strong><code>domain_validation_options</code></strong>, one entry per domain or SAN, with the record name, type and value. A <code>for_each</code> over those options creates the records in <strong>Route 53</strong>. Then <strong><code>aws_acm_certificate_validation</code></strong> takes the certificate ARN and the record FQDNs and <strong>waits</strong> until ACM reports the certificate as issued. The load balancer listener references <strong><code>aws_acm_certificate_validation.this.certificate_arn</code></strong>, not the certificate resource directly; that creates a dependency so the listener is only created after the certificate is valid. Certificates for CloudFront must be in <strong>us-east-1</strong>, which also needs a provider alias.</p>
+<p><strong>Azure patterns</strong> are similar in spirit: <strong>App Service managed certificates</strong> require a custom domain binding verified with a TXT <code>asuid</code> record and a CNAME or A record; <strong>Front Door</strong> managed certificates require a <code>_dnsauth</code> TXT record with a validation token exposed by the custom domain resource. Terraform creates those records from the resource attributes and then the binding.</p>
+<p><strong>Cross-boundary DNS.</strong> The zone often lives in a central networking account, another subscription or an external provider like <strong>Cloudflare</strong>. Use a <strong>provider alias</strong> with credentials for that zone, or a separate DNS provider in the same configuration.</p>
+<p><strong>Renewal.</strong> ACM and managed certificates renew automatically <strong>as long as the validation records remain</strong> and the domain still resolves.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request the certificate with DNS validation.</li>
+  <li>Read validation records from the resource attributes.</li>
+  <li>Create records in the right zone using <code>for_each</code> and an alias provider if needed.</li>
+  <li>Wait for issuance with the validation resource.</li>
+  <li>Reference the validated certificate in listeners or bindings.</li>
+  <li>Keep records in place for automatic renewal.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_acm_certificate&quot; &quot;api&quot; {
+  domain_name               = &quot;api.example.com&quot;
+  subject_alternative_names = [&quot;www.api.example.com&quot;]
+  validation_method         = &quot;DNS&quot;
+  lifecycle { create_before_destroy = true }
+}
+
+resource &quot;aws_route53_record&quot; &quot;validation&quot; {
+  provider = aws.dns   # zone in the shared networking account
+  for_each = {
+    for o in aws_acm_certificate.api.domain_validation_options : o.domain_name =&gt; o
+  }
+  zone_id = var.zone_id
+  name    = each.value.resource_record_name
+  type    = each.value.resource_record_type
+  records = [each.value.resource_record_value]
+  ttl     = 60
+  allow_overwrite = true
+}
+
+resource &quot;aws_acm_certificate_validation&quot; &quot;api&quot; {
+  certificate_arn         = aws_acm_certificate.api.arn
+  validation_record_fqdns = [for r in aws_route53_record.validation : r.fqdn]
+}
+
+resource &quot;aws_lb_listener&quot; &quot;https&quot; {
+  # ...
+  certificate_arn = aws_acm_certificate_validation.api.certificate_arn
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Referencing the certificate ARN directly, so the listener is created before issuance and fails.</li>
+  <li>Deleting validation records after issuance, breaking renewal.</li>
+  <li>Using a list instead of a map for validation records, causing churn.</li>
+  <li>Requesting CloudFront certificates outside us-east-1.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With ACM, the certificate resource with DNS validation exposes domain_validation_options, the CNAME records proving ownership. I create those in Route 53 with for_each, then an aws_acm_certificate_validation resource that waits until the certificate is issued. The listener references the validation resource's ARN, so it only uses the certificate once valid. Azure is similar, with TXT or CNAME records for App Service or Front Door managed certificates. The zone often lives in another account or in Cloudflare, so I use a provider alias. Renewal is automatic as long as the records stay.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if validation records are deleted?</strong> Renewal fails and the certificate eventually expires.</li>
+  <li><strong>Why create_before_destroy on certificates?</strong> A replacement must exist before the old one is detached from listeners.</li>
+  <li><strong>Wildcard plus apex?</strong> They share one validation record; key the map by domain carefully.</li>
+</ul>
+</article>
+</body>
+</html>

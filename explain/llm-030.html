@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-030 · What query transformation techniques improve retrieval, such as query rewriting, multi-query and HyDE?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-030" data-topic="LLMOps &amp; RAG">
+<h1>What query transformation techniques improve retrieval, such as query rewriting, multi-query and HyDE?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Improve retrieval by transforming the query: <strong>rewrite</strong> conversational follow-ups into <strong>standalone queries</strong>, generate <strong>multiple query variants</strong> and merge results, use <strong>HyDE</strong> (embed a hypothetical answer), <strong>decompose</strong> complex questions, and <strong>extract metadata filters</strong>, measuring gains against <strong>extra latency and cost</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Users type questions, not search queries. They are short, ambiguous, rely on chat context, or combine several needs. Query transformation uses a (usually small, fast) LLM to turn the question into better retrieval input.</p>
+<p><strong>Standalone rewriting.</strong> In a conversation, &quot;what about the second one?&quot; or &quot;does that apply in Germany?&quot; has no searchable meaning on its own. A rewriter takes recent history and produces &quot;Does the parental leave policy apply to employees in Germany?&quot;. This is the single most valuable transformation for chat-based RAG.</p>
+<p><strong>Multi-query.</strong> Generate three to five paraphrases or perspectives of the question, retrieve for each, and merge results with <strong>reciprocal rank fusion</strong> (RAG-Fusion). It improves <strong>recall</strong> when the corpus uses different vocabulary from the user.</p>
+<p><strong>HyDE (Hypothetical Document Embeddings).</strong> Ask the model to write a short hypothetical answer, then embed that instead of, or in addition to, the question. An answer-shaped passage often lies closer in embedding space to real answer passages than a terse question does. It can hurt when the model's guess is <strong>wrong or off-domain</strong> (for example internal product names it does not know), pulling retrieval towards plausible but irrelevant content, and it adds a generation step before retrieval.</p>
+<p><strong>Decomposition.</strong> &quot;Compare the travel policy for contractors and employees&quot; becomes two sub-queries, each retrieved separately, with results combined; multi-hop questions can be answered step by step (an agentic retrieval loop).</p>
+<p><strong>Filter extraction (self-query).</strong> The model extracts structured fields from the question, like product = &quot;X200&quot;, region = &quot;EU&quot;, year &gt;= 2024, and applies them as <strong>metadata filters</strong>, which is much more precise than hoping embeddings capture them.</p>
+<p>Each transformation adds <strong>an LLM call</strong> (tens to hundreds of ms and token cost) and new failure modes. Use small models, run transformations in parallel where possible, and <strong>measure</strong> on a test set: keep only those that improve recall or answer quality enough to justify the cost.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Receive question plus chat history.</li>
+  <li>Rewrite to standalone; extract filters.</li>
+  <li>Optionally generate variants, a HyDE passage or sub-questions.</li>
+  <li>Retrieve for each with filters; fuse with RRF.</li>
+  <li>Rerank and pass top chunks to generation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">REWRITE = &quot;&quot;&quot;Given the conversation and the follow-up, write a standalone search query.
+Also extract JSON filters: product, region, year. Return JSON {&quot;query&quot;:..., &quot;filters&quot;:{...}}.&quot;&quot;&quot;
+
+plan = small_llm.json(REWRITE, history=history[-6:], question=q)
+variants = small_llm.list(f&quot;Give 3 alternative phrasings of: {plan['query']}&quot;)
+results = [search(v, filters=plan[&quot;filters&quot;], k=30) for v in [plan[&quot;query&quot;], *variants]]
+candidates = rrf(results)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Embedding raw follow-up questions without history.</li>
+  <li>Using HyDE for proprietary terminology the model does not know.</li>
+  <li>Stacking every technique without measuring.</li>
+  <li>Letting extracted filters be too strict, returning nothing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;User questions are often poor search queries. In a chat, a follow-up only makes sense with history, so an LLM rewrites it into a standalone query first. Multi-query generates several phrasings and merges their results to improve recall. HyDE asks the model for a hypothetical answer and embeds that, because answer-shaped text lands closer to relevant passages. Complex questions can be decomposed into sub-questions, and the model can extract filters like product, region or date to apply as metadata filters. Each adds model calls, latency and cost, so I measure the gain on a test set before keeping it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When does HyDE hurt?</strong> When the model's guess is wrong or domain-specific terms are unknown.</li>
+  <li><strong>Which is most valuable?</strong> Standalone rewriting for conversational RAG.</li>
+  <li><strong>Fallback if filters return nothing?</strong> Relax filters progressively and log the case.</li>
+</ul>
+</article>
+</body>
+</html>

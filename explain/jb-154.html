@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-154 · What causes connection pool exhaustion? How would you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-154" data-topic="Databases &amp; SQL">
+<h1>What causes connection pool exhaustion? How would you troubleshoot it?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Pool exhaustion means every connection is <strong>busy or leaked</strong> and threads time out waiting; causes are <strong>leaks</strong>, <strong>long transactions</strong>, <strong>slow queries</strong>, <strong>remote calls inside transactions</strong>, an <strong>undersized pool</strong> or a <strong>traffic spike</strong>, diagnosed with <strong>pool metrics, leak detection, thread dumps</strong> and <strong>database session views</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The classic symptom with HikariCP is <code>SQLTransientConnectionException: HikariPool-1 - Connection is not available, request timed out after 30000ms</code>, often with the database looking calm. Requests pile up, latency rises, and health checks may fail, triggering restarts that hide the cause.</p>
+<p>Common causes:</p>
+<ul>
+  <li><strong>Connection leaks</strong>: code borrows a connection and never closes it, typically manual JDBC without try-with-resources, or a stream/ResultSet left open.</li>
+  <li><strong>Long-held connections</strong>: a <code>@Transactional</code> method that makes an HTTP call, sends to Kafka, or waits on a lock while holding a connection.</li>
+  <li><strong>Slow queries or lock waits</strong> that keep connections busy much longer than expected.</li>
+  <li><strong>Open Session in View</strong> (<code>spring.jpa.open-in-view=true</code>, Spring Boot's default, with a startup warning) keeping a connection for the whole web request including view rendering.</li>
+  <li><strong>Undersized pool</strong> for the concurrency, or more app threads than connections with every request needing the DB.</li>
+  <li><strong>Traffic spikes</strong> or retries amplifying load.</li>
+  <li><strong>Nested transactions</strong> using <code>REQUIRES_NEW</code>, which need a second connection per thread and can deadlock a small pool.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check metrics: <code>hikaricp.connections.active</code>, <code>idle</code>, <code>pending</code>, <code>usage</code> and <code>acquire</code> time (via Micrometer/Actuator).</li>
+  <li>If active stays at max with pending threads, find who holds connections.</li>
+  <li>Enable <code>leakDetectionThreshold</code> to log the stack trace of connections held longer than the threshold.</li>
+  <li>Take thread dumps; look for threads inside JDBC calls, HTTP clients or locks while holding a connection.</li>
+  <li>Inspect <code>pg_stat_activity</code> (state, <code>idle in transaction</code>, wait events) or <code>SHOW PROCESSLIST</code>.</li>
+  <li>Fix the code path, add timeouts, then size the pool based on measurements.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  jpa:
+    open-in-view: false
+  datasource:
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000        # fail fast instead of 30 s
+      leak-detection-threshold: 20000 # log stack trace if held &gt; 20 s</code></pre>
+<pre><code class="language-sql">SELECT pid, state, now() - xact_start AS tx_age, wait_event, left(query, 80)
+FROM pg_stat_activity
+WHERE datname = 'shop' ORDER BY tx_age DESC NULLS LAST;
+-- many 'idle in transaction' rows = app holding connections without working</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Simply raising <code>maximum-pool-size</code> to 200, which overloads the database.</li>
+  <li>Leaving Open Session in View on in a busy API.</li>
+  <li>Calling external services inside <code>@Transactional</code>.</li>
+  <li>No statement or socket timeouts, so stuck queries hold connections forever.</li>
+  <li>Ignoring that N app instances times pool size must fit the database's max connections.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The symptom is threads timing out waiting for a connection, like Hikari's 'connection is not available, request timed out', while the database may look idle. Causes are leaks where connections aren't closed, long transactions, slow queries or lock waits, remote HTTP or Kafka calls inside a transaction, open session in view, a pool too small for the concurrency, or a traffic spike. I'd check Hikari metrics for active and pending connections, turn on leakDetectionThreshold to get stack traces, take thread dumps to see what connection-holding threads are doing, and look at pg_stat_activity for long or idle-in-transaction sessions. Then I fix the code path and size the pool from measurements, not guesses.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why isn't a bigger pool always the fix?</strong> The database has limited cores and connections; more concurrent queries add contention and slow everything.</li>
+  <li><strong>How do you size a pool?</strong> Start small (roughly cores times two on the DB side, divided across instances) and tune with load tests.</li>
+  <li><strong>What does 'idle in transaction' mean?</strong> The app opened a transaction and is holding the connection without running a query.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-012 · Why should the Terraform state file never be committed to Git?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-012" data-topic="Infrastructure as Code">
+<h1>Why should the Terraform state file never be committed to Git?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>The state file contains <strong>secrets in plain text</strong> and needs <strong>locking</strong>, which Git cannot provide; keep it in an <strong>encrypted, versioned, locked remote backend</strong> and add <code><em>.tfstate</em></code> to <strong>.gitignore</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform state maps each resource address to the real object and stores <strong>every attribute</strong> Terraform knows about it. That routinely includes sensitive data: database master passwords, generated <code>random_password</code> results, private keys from <code>tls_private_key</code>, access keys, connection strings. Marking values <code>sensitive</code> only hides them in CLI output; in state they are plain JSON. Committing state therefore leaks secrets to everyone with repository access, to every fork and clone, and <strong>forever in history</strong>, because deleting the file later does not remove old commits.</p>
+<p>The second problem is <strong>concurrency</strong>. Terraform expects one writer at a time, protected by a <strong>lock</strong>. Git has no locking: two engineers on different branches can both apply, each pushing a state that knows only about their own changes. The state diverges from reality, resources become orphaned or get recreated, and resolving a <strong>merge conflict</strong> in a large JSON state with serial numbers and lineage is practically impossible to do correctly. Git also makes it easy to apply with a <strong>stale</strong> state pulled days ago.</p>
+<p>The answer is a <strong>remote backend</strong>: S3 (with native lockfile locking in recent Terraform versions, or the older DynamoDB table), Azure Storage with blob leases, Google Cloud Storage, or HCP Terraform. The backend should have <strong>encryption at rest</strong> (ideally with a customer-managed key), <strong>versioning</strong> so a corrupted state can be rolled back, <strong>restricted access</strong> to the pipeline role and a few admins, and access logging.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Configure a <code>backend</code> block; run <code>terraform init -migrate-state</code> to move existing local state.</li>
+  <li>Each plan/apply acquires a lock, reads state remotely, writes it back, releases the lock.</li>
+  <li>Versioning keeps previous states for recovery.</li>
+  <li><code>.gitignore</code> excludes <code><em>.tfstate</code>, <code></em>.tfstate.*</code> and <code>.terraform/</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  backend &quot;s3&quot; {
+    bucket       = &quot;acme-tfstate-prod&quot;
+    key          = &quot;network/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    encrypt      = true
+    kms_key_id   = &quot;alias/tfstate&quot;
+    use_lockfile = true
+  }
+}</code></pre>
+<pre><code class="language-gitignore">*.tfstate
+*.tfstate.*
+.terraform/
+crash.log</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing state &quot;just for the first setup&quot; and leaving it in history.</li>
+  <li>A state bucket readable by every developer.</li>
+  <li>No versioning, so a bad write cannot be undone.</li>
+  <li>Running applies against local copies of a remote state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Two reasons. First, state holds every attribute Terraform knows, often including database passwords, private keys and tokens in plain text, so committing it leaks secrets to everyone with repo access, permanently in history. Second, Git has no locking: two people applying from different branches overwrite each other, state drifts from reality, and merge conflicts in state JSON are almost impossible to resolve safely. So state lives in a remote backend like S3 with locking, Azure Storage, GCS or HCP Terraform, encrypted, versioned and restricted, and tfstate files are in .gitignore.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you recover if state with secrets was already pushed?</strong> Rotate every secret in it first, migrate state to a remote backend, then purge history (git filter-repo) and force-push, accepting clones may still have it.</li>
+  <li><strong>What if a lock is stuck?</strong> Confirm no run is active, then <code>terraform force-unlock &lt;id&gt;</code>.</li>
+  <li><strong>How do you roll back a corrupted state?</strong> Restore a previous object version from the versioned bucket.</li>
+</ul>
+</article>
+</body>
+</html>

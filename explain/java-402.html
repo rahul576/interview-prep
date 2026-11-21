@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-402 · How would you find the second-highest salary, or the top N per department, in SQL?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-402" data-topic="Databases &amp; SQL">
+<h1>How would you find the second-highest salary, or the top N per department, in SQL?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>window functions</strong>: <code>DENSE_RANK() OVER (ORDER BY salary DESC)</code> and filter rank = 2 for the second-highest salary, and add <strong><code>PARTITION BY department</code></strong> with rank &lt;= N for top N per department, deciding explicitly how to treat <strong>ties and NULLs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The classic answer for the second-highest salary is a subquery: the maximum salary below the overall maximum. It works, but does not generalise to &quot;third&quot; or &quot;top N per group&quot;.</p>
+<p>Window functions do. They compute a value for each row over a set of related rows without collapsing them. The three ranking functions differ on ties:</p>
+<ul>
+  <li><strong>ROW_NUMBER</strong> gives 1, 2, 3 even for equal values, picking an arbitrary order among ties unless you add a tie-breaker.</li>
+  <li><strong>RANK</strong> gives ties the same rank and then skips: 100, 100, 90 become 1, 1, 3.</li>
+  <li><strong>DENSE_RANK</strong> gives ties the same rank without gaps: 1, 1, 2.</li>
+</ul>
+<p>For &quot;second-highest salary value&quot;, DENSE_RANK is correct, because if two people earn the top salary, the second-highest value is still the next distinct amount. For &quot;exactly N people per department&quot;, ROW_NUMBER with a deterministic tie-breaker is right. Because window functions are evaluated after <code>WHERE</code>, you filter on the rank in an outer query or CTE (or with <code>QUALIFY</code> in databases that support it, such as Snowflake or BigQuery).</p>
+<p><strong>NULL salaries</strong> sort first or last depending on the database, so filter them out or use <code>NULLS LAST</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose the ranking function based on how ties should behave.</li>
+  <li>Define the window: <code>PARTITION BY</code> the group, <code>ORDER BY</code> the measure descending.</li>
+  <li>Compute the rank in a CTE or derived table.</li>
+  <li>Filter the rank in the outer query.</li>
+  <li>Handle NULLs and add a tie-breaker column if needed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Second-highest distinct salary
+SELECT DISTINCT salary FROM (
+  SELECT salary, DENSE_RANK() OVER (ORDER BY salary DESC) AS rnk
+  FROM employee WHERE salary IS NOT NULL
+) t WHERE rnk = 2;
+
+-- Subquery alternative
+SELECT MAX(salary) FROM employee
+WHERE salary &lt; (SELECT MAX(salary) FROM employee);
+
+-- Top 3 earners per department
+WITH ranked AS (
+  SELECT e.*, DENSE_RANK() OVER (PARTITION BY dept_id ORDER BY salary DESC) AS rnk
+  FROM employee e
+)
+SELECT dept_id, name, salary FROM ranked WHERE rnk &lt;= 3;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>LIMIT 1 OFFSET 1</code> without <code>DISTINCT</code>, which returns the top salary again when there is a tie.</li>
+  <li>Filtering on the window alias directly in <code>WHERE</code>, which fails because windows run later.</li>
+  <li>Using ROW_NUMBER when the requirement is &quot;salary values&quot;, silently dropping ties.</li>
+  <li>Forgetting that the query should return NULL or nothing when there is no second salary.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For the second-highest salary I can use a subquery, max salary less than the max, but my general approach is a window function. I compute DENSE_RANK over salary descending in a CTE and select where the rank is two, which handles ties correctly. For top N per department I add PARTITION BY department and filter rank less than or equal to N. The choice of function matters: ROW_NUMBER gives unique numbers and drops ties arbitrarily, RANK leaves gaps after ties, and DENSE_RANK doesn't. I also exclude NULL salaries and confirm with the interviewer how ties should be treated.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>RANK vs DENSE_RANK?</strong> Both share ranks on ties; RANK leaves gaps afterwards, DENSE_RANK does not.</li>
+  <li><strong>Why can't you filter a window function in WHERE?</strong> Window functions are evaluated after WHERE, GROUP BY and HAVING.</li>
+  <li><strong>How do you get the latest order per customer?</strong> ROW_NUMBER partitioned by customer ordered by date descending, keep row 1.</li>
+</ul>
+</article>
+</body>
+</html>

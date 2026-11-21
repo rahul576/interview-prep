@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-021 · How do pagination, list change notifications and caching hints work for MCP list operations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-021" data-topic="MCP Servers">
+<h1>How do pagination, list change notifications and caching hints work for MCP list operations?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>MCP list operations use <strong>cursor-based pagination</strong> (<code>nextCursor</code>), servers with the <strong><code>listChanged</code></strong> capability send <strong><code>list_changed</code> notifications</strong> so clients re-fetch, and newer revisions add <strong>caching hints</strong>: <strong><code>ttlMs</code></strong> for freshness and <strong><code>cacheScope</code></strong> for whether a cached result may be <strong>shared across users</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pagination.</strong> <code>tools/list</code>, <code>resources/list</code>, <code>resources/templates/list</code> and <code>prompts/list</code> are paginated with <strong>opaque cursors</strong>. A response may include <code>nextCursor</code>; the client passes it back as <code>cursor</code> to get the next page, and the absence of <code>nextCursor</code> means the end. The server chooses the page size, and clients must treat cursors as opaque strings, never parsing or constructing them. This keeps servers with thousands of resources from returning everything in one response.</p>
+<p><strong>List change notifications.</strong> A server that declares <code>listChanged</code> in a capability (e.g. <code>&quot;tools&quot;: {&quot;listChanged&quot;: true}</code>) sends <strong><code>notifications/tools/list_changed</code></strong>, <code>notifications/resources/list_changed</code> or <code>notifications/prompts/list_changed</code> when the set changes. Reasons include a feature flag turning on, a plugin being installed, or the <strong>user gaining or losing a permission</strong>, since servers often return <strong>different lists for different users</strong>. The notification carries no payload; the client re-fetches the list. In the stateless revision these notifications arrive over a subscription stream.</p>
+<p><strong>Caching hints.</strong> Fetching <code>tools/list</code> on every model turn adds latency, while caching forever misses changes. Per the reference material for this question, newer revisions add hints modelled on HTTP caching to list and read results: <strong><code>ttlMs</code></strong> says how many milliseconds the result can be considered fresh, and <strong><code>cacheScope</code></strong> says whether the cached result may be shared across users or must be kept <strong>private to one user</strong>.</p>
+<p>The <code>cacheScope</code> part is a <strong>security issue</strong>, not just performance. A gateway or multi-tenant host that caches a private per-user tool list or resource and serves it to another user can <strong>leak</strong> tool names, data or even capabilities belonging to another tenant. Shared caches must key private results by user identity, or not cache them at all.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client calls <code>tools/list</code>; follows <code>nextCursor</code> until exhausted.</li>
+  <li>Client caches the list for <code>ttlMs</code>, respecting <code>cacheScope</code> (shared vs per user).</li>
+  <li>Server state changes → sends <code>list_changed</code> notification.</li>
+  <li>Client invalidates its cache and re-fetches.</li>
+  <li>Host updates tool definitions in the next model request.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:4,&quot;method&quot;:&quot;tools/list&quot;,&quot;params&quot;:{&quot;cursor&quot;:&quot;eyJwYWdlIjoyfQ&quot;}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:4,&quot;result&quot;:{
+  &quot;tools&quot;:[{&quot;name&quot;:&quot;search_orders&quot;,&quot;description&quot;:&quot;...&quot;,&quot;inputSchema&quot;:{&quot;type&quot;:&quot;object&quot;}}],
+  &quot;nextCursor&quot;:&quot;eyJwYWdlIjozfQ&quot;,
+  &quot;ttlMs&quot;:300000, &quot;cacheScope&quot;:&quot;private&quot;}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;notifications/tools/list_changed&quot;}</code></pre>
+<p>(Placement of caching fields illustrative; consult the published schema.)</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ignoring <code>nextCursor</code> and only reading the first page.</li>
+  <li>Parsing or generating cursors client-side.</li>
+  <li>Caching per-user lists in a shared cache keyed only by server URL.</li>
+  <li>Re-fetching lists on every turn, adding latency for nothing.</li>
+  <li>Declaring <code>listChanged</code> but never sending notifications.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;List operations like tools/list use cursor-based pagination: the response may include a nextCursor that the client passes back to get the next page, and cursors are opaque. Servers that declare listChanged send list_changed notifications when their tools, resources or prompts change, say after a user gains a permission, and the client re-fetches. Newer revisions add caching hints modelled on HTTP: ttlMs for how long a result stays fresh, so clients don't refetch every turn, and cacheScope for whether the cache may be shared across users or must stay private. Getting cacheScope wrong in a shared cache can leak one tenant's tools or data to another.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why different tool lists per user?</strong> Authorisation: users only see tools and resources they are permitted to use.</li>
+  <li><strong>Why opaque cursors?</strong> Servers can change pagination internals without breaking clients.</li>
+  <li><strong>What if a notification is missed?</strong> TTL expiry eventually forces a refresh.</li>
+</ul>
+</article>
+</body>
+</html>

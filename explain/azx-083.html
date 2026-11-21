@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-083 · How do you run AI models on AKS with GPU node pools and KAITO?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-083" data-topic="Azure Kubernetes (AKS)">
+<h1>How do you run AI models on AKS with GPU node pools and KAITO?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run AI models on AKS with <strong>GPU node pools</strong> (NVIDIA NC/ND sizes, drivers by AKS or the <strong>GPU operator</strong>), <strong>tainted</strong> so only GPU workloads land there and <strong>autoscaled</strong> to control cost; <strong>KAITO</strong> (Kubernetes AI Toolchain Operator) automates it: a <strong>Workspace</strong> resource provisions GPU nodes and deploys an <strong>OpenAI-compatible vLLM inference</strong> server for a preset open model, and supports <strong>fine-tuning</strong> and RAG.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>GPU node pools</strong> use VM sizes like the <strong>NC A100/H100</strong> or <strong>ND</strong> series. AKS can install NVIDIA drivers automatically, or you skip that and use the <strong>NVIDIA GPU Operator</strong> for drivers, device plugin and monitoring (DCGM exporter). Pods request GPUs with <code>resources.limits: nvidia.com/gpu: 1</code>. Because GPU VMs are expensive, pools are <strong>tainted</strong> (for example <code>sku=gpu:NoSchedule</code>) so ordinary pods cannot use them, and <strong>autoscaled</strong>, possibly to zero when idle. Capacity and quota for GPU families must be requested in advance per region.</p>
+<p>Wiring a model server yourself means choosing a VM size that fits the model's memory, building an image with the model weights, configuring vLLM or another runtime, setting probes for long start-up times and exposing an API. <strong>KAITO</strong>, available as an <strong>AKS add-on</strong>, does this from one custom resource. A <strong>Workspace</strong> names a <strong>preset model</strong> (families such as Phi, Llama, Mistral, Qwen or DeepSeek variants) and an instance type; KAITO provisions matching GPU nodes (via node auto provisioning or its GPU provisioner), pulls the model image, and deploys an <strong>inference server using vLLM by default</strong> with an <strong>OpenAI-compatible API</strong>. It also supports <strong>fine-tuning</strong> with <strong>LoRA/QLoRA</strong> adapters (tuning workspaces that output adapters to a registry), and a <strong>RAG engine</strong> that adds retrieval in front of the model.</p>
+<p>Self-hosting makes sense for <strong>data control</strong>, specific open models, fine-tuned variants, predictable high volume or offline/sovereign environments; managed APIs like Azure OpenAI are simpler for most teams.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable the KAITO add-on (and OIDC issuer) on the cluster.</li>
+  <li>Ensure GPU quota for the chosen VM family.</li>
+  <li>Apply a Workspace with preset model and instance type.</li>
+  <li>KAITO creates GPU nodes and the inference deployment and service.</li>
+  <li>Call the OpenAI-compatible endpoint from apps inside the cluster or through a gateway.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks update -g rg-ai -n aks-ai --enable-ai-toolchain-operator --enable-oidc-issuer</code></pre>
+<pre><code class="language-yaml">apiVersion: kaito.sh/v1beta1
+kind: Workspace
+metadata: { name: workspace-phi-4-mini }
+resource:
+  instanceType: Standard_NC24ads_A100_v4
+  labelSelector:
+    matchLabels: { apps: phi-4-mini }
+inference:
+  preset:
+    name: phi-4-mini-instruct</code></pre>
+<pre><code class="language-bash">kubectl run -it --rm curl --image=curlimages/curl -- \
+  curl http://workspace-phi-4-mini/v1/chat/completions -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;model&quot;:&quot;phi-4-mini-instruct&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;Hello&quot;}]}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving GPU pools untainted so ordinary pods waste them.</li>
+  <li>Underestimating GPU memory needed for model size and context length.</li>
+  <li>Short readiness probes for models that take minutes to load.</li>
+  <li>Forgetting GPU quota requests until launch day.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I add GPU node pools with NVIDIA sizes like NC or ND, with drivers from AKS or the GPU operator, taint them so only workloads requesting nvidia.com/gpu land there, and autoscale them, even to zero. KAITO, the AI toolchain operator add-on, simplifies serving open models: I create a Workspace naming a preset model, it provisions suitable GPU nodes, pulls the model and deploys a vLLM inference server with an OpenAI-compatible API. It also supports LoRA fine-tuning and a RAG engine.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Self-host vs Azure OpenAI?</strong> Self-host for open or fine-tuned models, data control or steady high volume; managed for simplicity.</li>
+  <li><strong>How to share a GPU?</strong> MIG partitions or time-slicing for smaller workloads.</li>
+  <li><strong>How to autoscale inference?</strong> HPA or KEDA on queue depth or request metrics, with node provisioning underneath.</li>
+</ul>
+</article>
+</body>
+</html>

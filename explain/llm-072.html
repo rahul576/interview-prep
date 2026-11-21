@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-072 · How do you test application code that calls LLMs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-072" data-topic="LLMOps &amp; RAG">
+<h1>How do you test application code that calls LLMs?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Separate <strong>deterministic logic</strong> from <strong>model quality</strong>: <strong>unit tests</strong> with a <strong>mocked model client</strong> cover prompt construction, parsing and error handling; <strong>contract tests</strong> cover structured outputs and fallbacks; <strong>integration tests</strong> use <strong>recorded responses or a small local model</strong>; an <strong>evaluation suite</strong> with real models checks quality with <strong>thresholds</strong>, never <strong>exact text matches</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Code that calls an LLM has two very different parts. Most of it is ordinary code that can and should be tested deterministically; the model's behaviour is probabilistic and needs evaluation, not assertions on strings.</p>
+<p><strong>Unit tests (mocked client).</strong> Replace the model client with a fake that returns scripted responses. Test that prompts are built correctly from inputs (variables filled, right context and tools included, token budget respected), that outputs are <strong>parsed and validated</strong>, and that errors are handled: timeouts, 429s, refusals, empty content, malformed JSON, unexpected tool calls, truncated output due to max tokens. Snapshot tests of rendered prompts catch accidental template changes.</p>
+<p><strong>Contract tests.</strong> Verify that structured outputs map to your types and that <strong>invalid outputs trigger the right behaviour</strong> (retry with error feedback, fallback, user-facing error). Also check tool schemas generated from code match expectations.</p>
+<p><strong>Integration tests.</strong> Exercise the whole flow (API, retrieval, model client, tool execution) cheaply and reproducibly using <strong>recorded real responses</strong> (VCR-style cassettes, WireMock stubs) or a <strong>small local model</strong> via Ollama or Testcontainers. Assertions target structure and flow, not wording.</p>
+<p><strong>Evaluation suite.</strong> Runs against the <strong>real model</strong> with realistic inputs, scoring outputs with deterministic checks and judges, in CI or nightly, with <strong>thresholds</strong> (for example 95% schema-valid, groundedness 0.9 or above). Outputs vary between runs and model versions, so exact-text assertions produce flaky tests and false confidence.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Wrap model access behind an interface.</li>
+  <li>Unit test logic with a fake implementation.</li>
+  <li>Contract test schemas and invalid-output handling.</li>
+  <li>Integration test with recordings or a local model.</li>
+  <li>Evaluate quality with real models against thresholds.</li>
+  <li>Refresh recordings when prompts or models change.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Test
+void fallsBackWhenModelReturnsInvalidJson() {
+    ChatModel fake = prompt -&gt; new ChatResponse(List.of(
+        new Generation(new AssistantMessage(&quot;Sure! Here is the data: {category: billing&quot;))));
+    var classifier = new TicketClassifier(ChatClient.builder(fake).build());
+
+    Classification c = classifier.classify(&quot;I was charged twice&quot;);
+
+    assertThat(c.category()).isEqualTo(&quot;unknown&quot;);   // graceful fallback
+    assertThat(c.needsHumanReview()).isTrue();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Asserting exact sentences from real model outputs.</li>
+  <li>Only end-to-end tests against the live API: slow, costly, flaky.</li>
+  <li>No tests for refusals, truncation or malformed outputs.</li>
+  <li>Stale recordings that no longer reflect real model behaviour.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I separate what's deterministic from model quality. Unit tests mock the model client and check our logic: how prompts are built, that the right context and tools are included, how outputs are parsed and validated, and how timeouts, refusals and malformed responses are handled. Contract tests make sure structured outputs map to our types and invalid ones trigger retries or fallbacks. Integration tests replay recorded responses or use a small local model to run the full flow cheaply. Quality is checked separately by an evaluation suite against the real model with thresholds. I never assert exact text from a real model, because outputs vary.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keep recordings current?</strong> Re-record on prompt or model changes, flagged automatically in CI.</li>
+  <li><strong>Testing agents?</strong> Fake tools and scripted model turns; trajectory evals with real models.</li>
+  <li><strong>Cost of eval runs?</strong> Smaller subset per PR, full suite nightly.</li>
+</ul>
+</article>
+</body>
+</html>

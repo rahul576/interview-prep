@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-170 · How do you handle API versioning and backward compatibility between microservices?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-170" data-topic="Microservices">
+<h1>How do you handle API versioning and backward compatibility between microservices?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Make changes <strong>additive and backward compatible</strong> by default, have consumers act as <strong>tolerant readers</strong>, introduce a <strong>new version</strong> (URI or header) only for unavoidable breaking changes, catch breaks with <strong>contract tests in CI</strong>, and <strong>deprecate</strong> old versions with timelines and <strong>usage monitoring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Independent deployment only works if a provider can release without breaking its consumers. The first rule is <strong>backward compatibility</strong>: add new optional fields, new endpoints, new enum values only if consumers handle unknowns; never remove, rename or change the type or meaning of a field, never make an optional input mandatory. Postel's principle applies on the consumer side as the <strong>tolerant reader</strong>: ignore unknown fields (Jackson <code>FAIL_ON_UNKNOWN_PROPERTIES=false</code>, which Spring Boot already sets), read only what you need, and handle missing optional data. For events, a <strong>schema registry</strong> with a compatibility mode (backward or full) enforces the same rule automatically.</p>
+<p>When a <strong>breaking change</strong> is unavoidable, introduce a <strong>new version</strong> and run old and new <strong>side by side</strong>. Options: <strong>URI versioning</strong> (<code>/v2/orders</code>), simple and visible, widely used for public APIs; <strong>header or media-type versioning</strong> (<code>Accept: application/vnd.acme.order.v2+json</code>), keeping URIs stable; for events, a new event type or topic. Internally, the provider often maps both versions onto one domain model. Spring Framework 7 also added first-class API versioning support to request mappings, which makes header or path versioning easier to wire.</p>
+<p>To prevent accidents, run <strong>consumer-driven contract tests</strong> with <strong>Pact</strong> or <strong>Spring Cloud Contract</strong> in CI: consumers publish expectations, and the provider build fails if it breaks them; <code>can-i-deploy</code> checks gate releases. <strong>OpenAPI diff</strong> tools flag breaking spec changes in pull requests.</p>
+<p>Finally, <strong>deprecate</strong> deliberately: announce a timeline, add <code>Deprecation</code> and <code>Sunset</code> headers, document migration, and <strong>monitor usage per client</strong> (client id in the token or a header, gateway metrics) so you know when v1 traffic reaches zero.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Propose a change; check if it is additive.</li>
+  <li>If additive: ship, consumers ignore unknown fields.</li>
+  <li>If breaking: add v2 alongside v1.</li>
+  <li>Contract tests and OpenAPI diff verify compatibility in CI.</li>
+  <li>Mark v1 deprecated with Sunset date; notify owners.</li>
+  <li>Track v1 calls per client; remove when zero.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestController
+@RequestMapping(&quot;/api&quot;)
+class OrderController {
+    @GetMapping(&quot;/v1/orders/{id}&quot;)
+    OrderV1 v1(@PathVariable UUID id, HttpServletResponse res) {
+        res.setHeader(&quot;Deprecation&quot;, &quot;true&quot;);
+        res.setHeader(&quot;Sunset&quot;, &quot;Wed, 31 Mar 2027 23:59:59 GMT&quot;);
+        return mapper.toV1(service.find(id));
+    }
+    @GetMapping(&quot;/v2/orders/{id}&quot;)
+    OrderV2 v2(@PathVariable UUID id) { return mapper.toV2(service.find(id)); }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>Pros</th><th>Cons</th></tr></thead>
+<tbody>
+<tr><td>URI <code>/v2</code></td><td>Visible, cache-friendly, easy routing</td><td>URI changes</td></tr>
+<tr><td>Header / media type</td><td>Clean URIs</td><td>Harder to test and see</td></tr>
+<tr><td>No versioning, only additive</td><td>Simplest</td><td>Needs strict discipline</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Bumping the version for every small change.</li>
+  <li>Renaming a field &quot;because it is cleaner&quot;.</li>
+  <li>Strict deserialisation that fails on new fields.</li>
+  <li>Removing v1 without knowing who still calls it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My default is that every change is additive and backward compatible: add optional fields, never remove, rename or change meanings. Consumers are tolerant readers that ignore unknown fields. When a breaking change is unavoidable, I add a new version, usually <code>/v2</code> in the path or a header, run both side by side and migrate consumers. Contract tests with Pact or Spring Cloud Contract in CI catch accidental breaks before deployment, and a schema registry does the same for events. Old versions get a deprecation timeline with Sunset headers, and I monitor usage per client to know when removal is safe.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find who still calls v1?</strong> Gateway or service metrics tagged by client id from the token or a client header.</li>
+  <li><strong>Is adding an enum value safe?</strong> Only if consumers handle unknown values; otherwise treat it as breaking.</li>
+  <li><strong>Consumer-driven contracts vs OpenAPI?</strong> OpenAPI describes the API; contracts verify what real consumers actually rely on.</li>
+</ul>
+</article>
+</body>
+</html>

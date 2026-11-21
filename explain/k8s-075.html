@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-075 · Pods on the same node can talk to each other, but pods on different nodes cannot. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-075" data-topic="Kubernetes">
+<h1>Pods on the same node can talk to each other, but pods on different nodes cannot. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Same-node traffic working means pod networking on each node is fine, so the fault is <strong>between nodes</strong>: a broken <strong>CNI agent</strong>, <strong>firewall or security group rules</strong> blocking the overlay (VXLAN, Geneve, BGP) or pod CIDR routes, or an <strong>MTU mismatch</strong>; isolate it with <strong>ping, curl and tcpdump</strong> on both nodes.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pods on one node talk through a local bridge or eBPF path that never leaves the host. Cross-node traffic must be carried between hosts, either <strong>encapsulated</strong> in an overlay (VXLAN, Geneve, IP-in-IP) or <strong>natively routed</strong>, where the network must know which node owns each pod CIDR (cloud route tables, BGP peering or VPC-native IPs). Different CNIs, same principle.</p>
+<p><strong>CNI health</strong>: check the CNI DaemonSet pods (calico-node, cilium, kube-flannel) are running and ready on <strong>every</strong> node; read their logs for errors like failed BGP sessions, missing tunnel devices or IPAM failures. <code>cilium status</code> or <code>calicoctl node status</code> give quick summaries.</p>
+<p><strong>Firewalls</strong>: overlays need specific ports open between nodes: VXLAN typically <strong>UDP 4789</strong> (Calico, Cilium default 8472 as in Flannel), Geneve UDP 6081, Calico IP-in-IP uses <strong>IP protocol 4</strong>, BGP <strong>TCP 179</strong>, WireGuard encryption has its own UDP ports. A new security group, NSG or on-premises firewall rule that only allows node-port traffic breaks pod-to-pod across nodes. With native routing, check the cloud route table or BGP advertisements, and source/destination checks on cloud instances.</p>
+<p><strong>MTU</strong>: encapsulation adds headers (about 50 bytes for VXLAN). If pod MTU equals the node MTU, large packets exceed it and are dropped, especially when ICMP &quot;fragmentation needed&quot; is blocked. Symptoms are strange: ping and small HTTP requests work, but TLS handshakes or large responses hang.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm: same-node pod-to-pod OK, cross-node fails (ping, curl by pod IP).</li>
+  <li>Check CNI pods and logs on both nodes.</li>
+  <li>Verify firewall/security group rules for overlay protocol and ports.</li>
+  <li>With native routing, check routes and BGP sessions.</li>
+  <li>Test MTU with large non-fragmenting pings.</li>
+  <li>tcpdump on both nodes' interfaces to see where packets vanish.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get pods -n kube-system -o wide -l k8s-app=cilium
+kubectl exec -it netshoot-a -- ping -c3 10.244.2.15          # pod on other node
+kubectl exec -it netshoot-a -- ping -c3 -M do -s 1400 10.244.2.15   # MTU test
+# on source and destination nodes
+sudo tcpdump -ni eth0 udp port 8472</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Debugging Services and DNS before raw pod-IP connectivity.</li>
+  <li>Firewall rules updated for nodes but not for overlay traffic.</li>
+  <li>Ignoring MTU because ping works.</li>
+  <li>Mixing CNI versions or configs across node pools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;If same-node traffic works but cross-node doesn't, the pod interfaces are fine and the problem is the path between nodes, the overlay tunnel or pod CIDR routing. I'd check the CNI pods are healthy on every node and read their logs. Then firewalls and security groups: overlays need ports like UDP 4789 or 8472 for VXLAN, BGP needs TCP 179, and native routing needs pod CIDR routes. MTU mismatch is a classic: ping works but large packets are dropped because of encapsulation headers, so TLS hangs. I'd test with pings of different sizes and tcpdump on both nodes to see where packets disappear.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do small requests work but large responses hang with bad MTU?</strong> Small packets fit; large ones exceed MTU and are dropped, often silently when ICMP is blocked.</li>
+  <li><strong>Overlay vs native routing?</strong> Overlay works anywhere but adds overhead; native routing is faster but needs network integration.</li>
+  <li><strong>How does Cilium help debugging?</strong> Hubble shows flows and drop reasons per packet.</li>
+</ul>
+</article>
+</body>
+</html>

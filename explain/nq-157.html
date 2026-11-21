@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-157 · What are the main memory areas in the JVM?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-157" data-topic="JVM &amp; Performance">
+<h1>What are the main memory areas in the JVM?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>The JVM's runtime data areas are the shared <strong>heap</strong> (objects, garbage collected) and <strong>method area/Metaspace</strong> (class metadata, native memory), and per thread a <strong>JVM stack</strong> of frames, a <strong>program counter register</strong> and a <strong>native method stack</strong>; HotSpot also has the <strong>code cache</strong> for JIT code and uses <strong>direct buffers</strong> off-heap.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Heap.</strong> Created at JVM start, shared by all threads. Every object and array lives here. Sized with <code>-Xms</code>/<code>-Xmx</code> or <code>MaxRAMPercentage</code>, divided into young and old generations (or regions in G1/ZGC), managed by the garbage collector. Error: <code>OutOfMemoryError: Java heap space</code>.</p>
+<p><strong>Method area (Metaspace).</strong> Logically shared storage for class-level data: class structures, field and method data, method bytecode, and the <strong>runtime constant pool</strong>. In HotSpot since Java 8 it is <strong>Metaspace</strong> in native memory, which replaced PermGen. Capped with <code>-XX:MaxMetaspaceSize</code>. Error: <code>OutOfMemoryError: Metaspace</code> (or <code>Compressed class space</code>).</p>
+<p><strong>JVM stack (per thread).</strong> Each method call pushes a <strong>frame</strong> holding local variables, an operand stack for computation, and data for returning. Size per thread set by <code>-Xss</code>. Errors: <code>StackOverflowError</code> when too deep, or <code>OutOfMemoryError</code> if a new thread's stack cannot be allocated.</p>
+<p><strong>PC register (per thread).</strong> Holds the address of the current bytecode instruction; undefined while executing native code. The only area with no <code>OutOfMemoryError</code> defined.</p>
+<p><strong>Native method stack (per thread).</strong> Used by native (JNI) code; in HotSpot it is combined with the Java stack.</p>
+<p><strong>Code cache.</strong> Stores machine code produced by the JIT compilers (C1/C2). If full, the JVM logs &quot;CodeCache is full. Compiler has been disabled&quot; and performance drops. Sized with <code>-XX:ReservedCodeCacheSize</code>.</p>
+<p><strong>Other native memory.</strong> <strong>Direct <code>ByteBuffer</code>s</strong> (NIO, Netty) limited by <code>-XX:MaxDirectMemorySize</code> (error: <code>Direct buffer memory</code>), GC data structures, thread structures, symbol tables. <strong>Native Memory Tracking</strong> shows all of these.</p>
+<p>Understanding these areas explains why a JVM's process memory (RSS) is always bigger than <code>-Xmx</code>, which is critical for container sizing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>JVM starts: reserves heap, Metaspace, code cache.</li>
+  <li>Classes load: metadata goes into Metaspace.</li>
+  <li>Each thread gets a stack, PC register and native stack.</li>
+  <li>Objects are allocated on the heap; references live in frames.</li>
+  <li>JIT-compiled code is placed in the code cache.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:NativeMemoryTracking=summary -Xmx1g -jar app.jar
+jcmd &lt;pid&gt; VM.native_memory summary</code></pre>
+<pre><code class="language-text">Java Heap (reserved=1048576KB, committed=1048576KB)
+Class (reserved=1056768KB, committed=11520KB)      &lt;- Metaspace + class space
+Thread (reserved=40000KB, committed=40000KB)       &lt;- ~40 thread stacks
+Code (reserved=251904KB, committed=13056KB)        &lt;- code cache
+GC (reserved=60000KB, committed=60000KB)</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Area</th><th>Scope</th><th>Contents</th><th>OOM message</th></tr></thead>
+<tbody>
+<tr><td>Heap</td><td>Shared</td><td>Objects, arrays</td><td>Java heap space</td></tr>
+<tr><td>Metaspace</td><td>Shared</td><td>Class metadata</td><td>Metaspace</td></tr>
+<tr><td>JVM stack</td><td>Per thread</td><td>Frames</td><td>StackOverflowError</td></tr>
+<tr><td>PC register</td><td>Per thread</td><td>Current instruction</td><td>None</td></tr>
+<tr><td>Code cache</td><td>Shared</td><td>JIT code</td><td>Compilation disabled</td></tr>
+<tr><td>Direct memory</td><td>Shared</td><td>NIO buffers</td><td>Direct buffer memory</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Listing PermGen for modern JVMs.</li>
+  <li>Assuming the JVM uses only <code>-Xmx</code> memory.</li>
+  <li>Forgetting the code cache and direct buffers.</li>
+  <li>Saying the string pool is in Metaspace (it is on the heap).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The runtime data areas are the heap, shared by all threads, where objects and arrays live and which the garbage collector manages; the method area, implemented since Java 8 as Metaspace in native memory, holding class metadata, method bytecode and the runtime constant pool; and per thread, a JVM stack of frames with local variables and operand stacks, a program counter register pointing at the current instruction, and a native method stack for native code. HotSpot also has the code cache for JIT-compiled code, and direct buffers live outside the heap. That's why the process uses more memory than Xmx, which matters for container sizing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which of these areas can throw OutOfMemoryError, and with what message?</strong> Heap (&quot;Java heap space&quot;), Metaspace (&quot;Metaspace&quot;), direct memory (&quot;Direct buffer memory&quot;), thread creation (&quot;unable to create native thread&quot;); the PC register cannot.</li>
+  <li><strong>Why is RSS larger than -Xmx?</strong> Metaspace, stacks, code cache, GC structures and direct buffers are native.</li>
+  <li><strong>What happens when the code cache is full?</strong> The JIT stops compiling new code, so performance degrades.</li>
+</ul>
+</article>
+</body>
+</html>

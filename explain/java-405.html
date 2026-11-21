@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-405 · Your application logs database deadlock errors. How do you analyse and fix them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-405" data-topic="Databases &amp; SQL">
+<h1>Your application logs database deadlock errors. How do you analyse and fix them?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>deadlock</strong> is two or more transactions each waiting for a lock the other holds; the database kills one as the <strong>victim</strong>, so you read the <strong>deadlock report</strong>, find the <strong>inconsistent lock order</strong> or over-broad locking, fix it, and make the application <strong>retry</strong> the victim.</p>
+
+<h2>Detailed explanation</h2>
+<p>Deadlocks are normal in busy OLTP systems, but frequent ones signal a design problem. Both InnoDB and PostgreSQL detect a cycle in the wait-for graph and abort one transaction: MySQL raises error 1213 (<code>ER_LOCK_DEADLOCK</code>), PostgreSQL raises SQLSTATE <code>40P01</code>, and Spring translates them into exceptions such as <code>CannotAcquireLockException</code> or <code>DeadlockLoserDataAccessException</code>.</p>
+<p>The first step is evidence. In MySQL, <code>SHOW ENGINE INNODB STATUS</code> shows the latest deadlock, with both transactions, the statements, the index and the locks held and waited for; <code>innodb_print_all_deadlocks=ON</code> writes every deadlock to the error log. PostgreSQL logs the deadlock with both queries (with <code>log_lock_waits</code> helping to see long waits too).</p>
+<p>Typical causes:</p>
+<ul>
+  <li><strong>Different lock order</strong>: one transfer updates account A then B, another B then A.</li>
+  <li><strong>Missing indexes</strong>: an <code>UPDATE ... WHERE email = ?</code> without an index scans and locks many rows (and in InnoDB, gap/next-key locks under Repeatable Read), widening collisions.</li>
+  <li><strong>Long transactions</strong> that hold locks while doing remote calls or user think-time.</li>
+  <li><strong>Lock upgrades</strong>: read with a shared lock, then try to write.</li>
+  <li>Foreign key checks and unique-index inserts that take extra locks.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Collect deadlock reports and correlate them with application logs and endpoints.</li>
+  <li>Identify the two statements and the rows or index ranges involved.</li>
+  <li>Enforce a consistent lock order (for example, always lock the lower account id first).</li>
+  <li>Add indexes so statements lock only the rows they need.</li>
+  <li>Keep transactions short; move HTTP or messaging calls outside them.</li>
+  <li>Consider optimistic locking (<code>@Version</code>) or Read Committed to reduce gap locks.</li>
+  <li>Add a bounded retry with backoff for the victim.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public void transfer(long a, long b, BigDecimal amt) {
+    long first = Math.min(a, b), second = Math.max(a, b);
+    Account x = repo.findByIdForUpdate(first);   // SELECT ... FOR UPDATE
+    Account y = repo.findByIdForUpdate(second);  // same order in every transaction
+    // debit/credit ...
+}
+
+// Retry the deadlock victim (spring-retry)
+@Retryable(retryFor = CannotAcquireLockException.class,
+           maxAttempts = 3, backoff = @Backoff(delay = 50, multiplier = 2))
+public void transferWithRetry(long a, long b, BigDecimal amt) { tx.transfer(a, b, amt); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying inside the same transaction instead of starting a new one.</li>
+  <li>Raising the lock wait timeout, which does not prevent deadlocks.</li>
+  <li>Ignoring them because &quot;the database resolves it&quot; while users see errors.</li>
+  <li>Retrying non-idempotent work that includes external side effects.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A deadlock means two transactions wait on each other's locks, and the database aborts one as the victim. I'd start with evidence: SHOW ENGINE INNODB STATUS or innodb_print_all_deadlocks in MySQL, or the PostgreSQL logs, to see the exact statements and rows. The usual cause is acquiring locks in different orders, like A then B versus B then A, so I enforce a consistent order. I'd also add indexes so updates don't scan and lock extra rows, keep transactions short with no remote calls inside, and use optimistic locking where it fits. Because deadlocks can still occur, the application retries the victim transaction a few times with backoff.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a missing index increase deadlocks?</strong> The statement scans and locks many rows or gaps instead of one, so more transactions collide.</li>
+  <li><strong>Deadlock vs lock wait timeout?</strong> A deadlock is a cycle detected immediately; a timeout is a long wait with no cycle.</li>
+  <li><strong>Where should the retry live?</strong> Around the whole transaction boundary, outside <code>@Transactional</code>.</li>
+</ul>
+</article>
+</body>
+</html>

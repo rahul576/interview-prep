@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-307 · How do Spring application events work, and when would you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-307" data-topic="Spring Framework">
+<h1>How do Spring application events work, and when would you use them?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A bean publishes an event with <strong>ApplicationEventPublisher</strong> and <strong>@EventListener</strong> methods receive it, <strong>synchronously in the same thread and transaction</strong> by default; <strong>@Async</strong> makes listeners asynchronous and <strong>@TransactionalEventListener</strong> runs them <strong>after commit</strong>. Events <strong>decouple modules</strong> inside one app but are <strong>in-memory, not durable</strong> like Kafka.</p>
+
+<h2>Detailed explanation</h2>
+<p>Application events implement the <strong>observer pattern</strong> inside the Spring container. The publisher does not know who is listening: <code>OrderService</code> publishes <code>OrderPlaced</code>, and the email, loyalty and analytics components each react. Adding a new reaction means adding a listener, not editing <code>OrderService</code>. Events can be any object; records work well.</p>
+<p><strong>Synchronous by default:</strong> <code>publishEvent</code> calls each listener in turn on the publisher's thread. Listeners join the publisher's <strong>transaction</strong>, and an exception in a listener propagates to the publisher and can roll back its work. Order listeners with <code>@Order</code>. Listeners can filter with SpEL (<code>condition = &quot;#event.total &gt; 100&quot;</code>) and can return a new event to chain.</p>
+<p><strong>@Async listeners</strong> run on a task executor so the publisher is not slowed down, but they no longer share the transaction and exceptions are not propagated.</p>
+<p><strong>@TransactionalEventListener</strong> binds the listener to a transaction phase, by default <strong>AFTER_COMMIT</strong>: the welcome email is sent only if the user row really committed; if the transaction rolls back, the listener never runs. Other phases: BEFORE_COMMIT, AFTER_ROLLBACK, AFTER_COMPLETION. Note that in AFTER_COMMIT the original transaction is finished, so database writes in the listener need <code>REQUIRES_NEW</code> or should be async.</p>
+<p><strong>Limits:</strong> events live only in memory in one JVM. If the app crashes after commit but before the listener runs, the event is <strong>lost</strong>, and other services never see it. For important cross-service events, use the <strong>transactional outbox</strong>: write the event to a table in the same transaction, then relay it to Kafka or RabbitMQ. <strong>Spring Modulith</strong> builds on application events with an <strong>event publication registry</strong> that persists events and retries incomplete ones, plus externalisation to brokers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Publisher calls <code>publisher.publishEvent(new OrderPlaced(...))</code>.</li>
+  <li>The multicaster finds matching listeners by event type.</li>
+  <li>Plain listeners run immediately on the same thread.</li>
+  <li>Transactional listeners are registered as synchronisations and run at the chosen phase.</li>
+  <li>Async listeners are submitted to an executor.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public record UserRegistered(long userId, String email) {}
+
+@Service
+class UserService {
+    private final UserRepository repo;
+    private final ApplicationEventPublisher events;
+    UserService(UserRepository repo, ApplicationEventPublisher events) { this.repo = repo; this.events = events; }
+
+    @Transactional
+    public void register(NewUser u) {
+        User saved = repo.save(new User(u.email()));
+        events.publishEvent(new UserRegistered(saved.getId(), saved.getEmail()));
+    }
+}
+
+@Component
+class WelcomeMailListener {
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    void on(UserRegistered e) { mail.sendWelcome(e.email()); }
+}
+
+@Component
+class AuditListener {
+    @EventListener   // synchronous, same transaction
+    void on(UserRegistered e) { audit.record(&quot;USER_REGISTERED&quot;, e.userId()); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sending emails in a plain <code>@EventListener</code> that fires even if the transaction later rolls back.</li>
+  <li>Using events as a replacement for a message broker between services.</li>
+  <li>Assuming listeners are asynchronous by default.</li>
+  <li>Writing to the database in an AFTER_COMMIT listener without a new transaction.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A component publishes an event through ApplicationEventPublisher, and any bean method with @EventListener for that type receives it. By default listeners run synchronously in the same thread and transaction, so they can roll it back. Adding @Async makes them asynchronous. @TransactionalEventListener runs the listener only after commit, so I send the welcome email only if the user was really saved. I use events to decouple modules inside one application, like in a modular monolith. But they're in-memory, not durable like Kafka: if the app crashes, they're lost. For important cross-service events I use the outbox pattern, or Spring Modulith's persistent event publication registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Spring Modulith improve on plain application events?</strong> It persists event publications, retries incomplete ones, and can externalise events to Kafka or AMQP.</li>
+  <li><strong>Can a listener stop the publisher's transaction?</strong> A synchronous listener throwing an exception can, which may or may not be desired.</li>
+  <li><strong>How do you test events?</strong> <code>@RecordApplicationEvents</code> with <code>ApplicationEvents</code>, or Modulith's <code>Scenario</code>.</li>
+</ul>
+</article>
+</body>
+</html>

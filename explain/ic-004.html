@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-004 · What is the difference between count and for_each in Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-004" data-topic="Infrastructure as Code">
+<h1>What is the difference between count and for_each in Terraform?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>count</strong> creates N instances addressed by <strong>index</strong> (<code>[0]</code>, <code>[1]</code>); <strong>for_each</strong> creates one instance per element of a <strong>map or set</strong>, addressed by <strong>key</strong> (<code>[&quot;alice&quot;]</code>), which keeps addresses <strong>stable</strong> when the collection changes.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both meta-arguments let a single resource or module block create many objects. With <strong>count</strong>, you give a whole number and Terraform creates that many instances, exposing <code>count.index</code> inside the block. Instances are addressed by position, for example <code>aws_instance.web[0]</code>.</p>
+<p>With <strong>for_each</strong>, you give a <strong>map</strong> or a <strong>set of strings</strong>, and Terraform creates one instance per element, exposing <code>each.key</code> and <code>each.value</code>. Instances are addressed by key, for example <code>aws_iam_user.users[&quot;alice&quot;]</code>.</p>
+<p>The difference matters when the collection changes. Suppose <code>count = length(var.users)</code> with users <code>[&quot;alice&quot;, &quot;bob&quot;, &quot;carol&quot;]</code>. If you remove <code>bob</code>, <code>carol</code> moves from index 2 to index 1. Terraform sees that index 1 now has different arguments and index 2 no longer exists, so it plans to <strong>modify or replace bob's object into carol</strong> and destroy the old carol: unnecessary churn, and for some resources, real data loss. With for_each keyed by username, removing <code>bob</code> destroys only <code>[&quot;bob&quot;]</code>; everything else is untouched.</p>
+<p>So the rule of thumb is: use <strong>for_each</strong> whenever instances have a natural identity, and keep <strong>count</strong> for identical, interchangeable copies or for <strong>conditional creation</strong>, <code>count = var.enabled ? 1 : 0</code>. Note that for_each keys must be <strong>known at plan time</strong>, so you cannot key on attributes that are only known after apply, such as generated IDs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform evaluates <code>count</code> or <code>for_each</code> during planning.</li>
+  <li>It creates one instance address per index or key.</li>
+  <li>It compares each address with the state.</li>
+  <li>With count, a shifted list changes what each index means; with for_each, keys keep their identity.</li>
+  <li>Only addresses that disappear are destroyed, only new ones are created.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Fragile: removing &quot;bob&quot; shifts carol's index
+resource &quot;aws_iam_user&quot; &quot;by_index&quot; {
+  count = length(var.users)
+  name  = var.users[count.index]
+}
+
+# Stable: each user keyed by name
+resource &quot;aws_iam_user&quot; &quot;by_key&quot; {
+  for_each = toset(var.users)
+  name     = each.key
+}
+
+# Conditional creation
+resource &quot;aws_cloudwatch_log_group&quot; &quot;debug&quot; {
+  count = var.enable_debug ? 1 : 0
+  name  = &quot;/app/debug&quot;
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>count</th><th>for_each</th></tr></thead>
+<tbody>
+<tr><td>Input</td><td>number</td><td>map or set of strings</td></tr>
+<tr><td>Address</td><td><code>res[0]</code></td><td><code>res[&quot;key&quot;]</code></td></tr>
+<tr><td>Removing a middle item</td><td>shifts indexes, churn</td><td>removes only that key</td></tr>
+<tr><td>Best for</td><td>identical copies, on/off</td><td>named, distinct items</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using count over a list of names and then removing an item from the middle.</li>
+  <li>Passing a list directly to for_each instead of <code>toset()</code> or a map.</li>
+  <li>Keying for_each on values only known after apply.</li>
+  <li>Changing from count to for_each without <code>moved</code> blocks, which recreates everything.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;count creates a number of instances addressed by index, for_each creates one per element of a map or set addressed by key. The practical difference is stability: if I remove an element from the middle of a count list, every later index shifts and Terraform wants to change or recreate resources that didn't really change. With for_each, addresses are keys, so only the removed item is destroyed. I use for_each for anything with an identity, like users, buckets or subnets, and count for identical copies or the classic conditional 'count = var.enabled ? 1 : 0'.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you convert count to for_each without recreating?</strong> Add <code>moved</code> blocks from <code>res[0]</code> to <code>res[&quot;key&quot;]</code> (or use <code>terraform state mv</code>), then confirm the plan shows only moves.</li>
+  <li><strong>Can you use both on one resource?</strong> No, they are mutually exclusive.</li>
+  <li><strong>Why must keys be known at plan time?</strong> Terraform needs the full set of addresses to build the plan.</li>
+</ul>
+</article>
+</body>
+</html>

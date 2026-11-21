@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-062 · What are rootless Docker and user namespace remapping?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-062" data-topic="Docker">
+<h1>What are rootless Docker and user namespace remapping?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>User namespace remapping</strong> (<code>userns-remap</code>) maps <strong>container root to an unprivileged high host UID range</strong>, while <strong>rootless Docker</strong> runs the <strong>daemon and all containers as an ordinary user</strong>; both mean <strong>container root is not host root</strong>, at the cost of limits on <strong>low ports, some storage, networking and cgroup features</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a default installation the daemon runs as root and <strong>UID 0 in the container is UID 0 on the host</strong>. Capabilities, seccomp and LSM profiles restrict that root, but if a process escapes through a kernel or runtime bug, it lands on the host as real root.</p>
+<p><strong>User namespace remapping</strong> changes the mapping. With <code>&quot;userns-remap&quot;: &quot;default&quot;</code> in <code>daemon.json</code>, Docker creates a <code>dockremap</code> user and uses a subordinate UID range from <code>/etc/subuid</code> and <code>/etc/subgid</code>, for example 165536-231071. Container UID 0 becomes host UID 165536, UID 1000 becomes 166536, and so on. An escaped process has <strong>no privileges</strong> on host files it does not own. The daemon itself still runs as root. Downsides: it is a daemon-wide setting, image layers are stored separately per remapping, <code>--privileged</code> and host namespace sharing need <code>--userns=host</code>, and <strong>bind-mounted host files appear owned by <code>nobody</code></strong> or unexpected UIDs, so permissions must be adjusted.</p>
+<p><strong>Rootless mode</strong> goes further: <strong>dockerd, containerd and all containers run as a normal user</strong> inside a user namespace created by <strong>RootlessKit</strong>. Networking uses <strong>slirp4netns</strong> or <strong>pasta</strong> user-space networking, which can be slower, and storage uses native overlay (on recent kernels) or fuse-overlayfs. Limitations include binding <strong>ports below 1024</strong> (unless you lower <code>net.ipv4.ip_unprivileged_port_start</code> or grant a capability), resource limits needing <strong>cgroup v2 with systemd delegation</strong>, some network drivers such as macvlan or overlay being unavailable, and AppArmor or some storage drivers not working. In exchange, compromise of the daemon or a container breakout yields only that user's privileges. Kubernetes has comparable support through <strong>user namespaces for pods</strong> (<code>hostUsers: false</code>).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Host defines subordinate UID/GID ranges for a user.</li>
+  <li>The runtime creates a user namespace with that mapping.</li>
+  <li>Inside, the process sees itself as UID 0.</li>
+  <li>On the host, it is a high unprivileged UID.</li>
+  <li>Rootless mode also runs the daemon itself inside that namespace.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{ &quot;userns-remap&quot;: &quot;default&quot; }</code></pre>
+<pre><code class="language-bash">grep dockremap /etc/subuid           # dockremap:165536:65536
+docker run -d --name t alpine sleep 600
+ps -o user,pid,cmd -C sleep          # runs as 165536 on the host
+
+# Rootless mode for user alice
+dockerd-rootless-setuptool.sh install
+systemctl --user enable --now docker
+export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Default</th><th>userns-remap</th><th>Rootless</th></tr></thead>
+<tbody>
+<tr><td>Daemon runs as</td><td>root</td><td>root</td><td>normal user</td></tr>
+<tr><td>Container root on host</td><td>root</td><td>high UID</td><td>user's UID range</td></tr>
+<tr><td>Low ports</td><td>Yes</td><td>Yes</td><td>Needs sysctl</td></tr>
+<tr><td>Compatibility</td><td>Full</td><td>Most</td><td>Some limits</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Enabling remapping on an existing host and &quot;losing&quot; images (stored per remap).</li>
+  <li>Forgetting bind mount ownership changes.</li>
+  <li>Expecting rootless performance to match rootful networking.</li>
+  <li>Believing user namespaces make <code>--privileged</code> safe.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Normally the daemon runs as root and root in a container is UID 0 on the host too. With userns-remap in daemon.json, UID 0 in the container maps to a high unprivileged host UID range, so a process that escapes has no real privileges. Rootless mode goes further: the daemon and all containers run as an ordinary user, with user-space networking like slirp4netns or pasta. Limitations include ports below 1024, some storage and network drivers, cgroup delegation and performance. Both greatly reduce the impact of a breakout.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do bind-mounted files show strange owners?</strong> Host UIDs outside the mapped range appear as nobody inside, and container UIDs are offset on the host.</li>
+  <li><strong>Kubernetes equivalent?</strong> User namespaces for pods with <code>hostUsers: false</code>.</li>
+  <li><strong>How do you bind port 80 in rootless mode?</strong> Lower <code>ip_unprivileged_port_start</code> or use a port mapping above 1024.</li>
+</ul>
+</article>
+</body>
+</html>

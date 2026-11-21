@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-074 · A Lambda function is timing out or being throttled in production. How do you troubleshoot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-074" data-topic="Cloud (AWS)">
+<h1>A Lambda function is timing out or being throttled in production. How do you troubleshoot?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Use the function's <strong>CloudWatch metrics</strong> (Duration, Errors, <strong>Throttles</strong>, ConcurrentExecutions) to tell <strong>timeouts</strong> from <strong>throttling</strong>, use <strong>X-Ray traces</strong> and <strong>REPORT log lines</strong> to find slow downstream calls, VPC issues or cold starts, and fix throttling by managing <strong>account and reserved concurrency</strong> and buffering bursts with <strong>SQS</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Identify the problem</strong>: timeouts show up as <code>Task timed out after N seconds</code> in logs and as errors with Duration at the configured limit. Throttling shows in the <strong>Throttles</strong> metric and as <code>TooManyRequestsException</code> (HTTP 429) for synchronous callers; asynchronous and event source invocations retry automatically.</p>
+<p><strong>Timeouts</strong>: the <strong>REPORT</strong> line for each invocation shows duration, billed duration, memory used and <strong>Init Duration</strong> for cold starts. <strong>X-Ray</strong> or OpenTelemetry traces show which subsegment is slow. Typical causes are a slow downstream API or database <strong>without its own client timeout</strong>, waiting on database connections (consider RDS Proxy), a function in a <strong>VPC</strong> without a NAT or VPC endpoint so calls hang until timeout, large <strong>cold starts</strong> for Java or .NET (use <strong>SnapStart</strong> or provisioned concurrency), or simply too little memory. Lambda allocates <strong>CPU proportionally to memory</strong>, so raising memory often reduces duration and cost; Lambda Power Tuning finds the sweet spot.</p>
+<p><strong>Throttling</strong>: each account has a regional <strong>concurrency quota</strong> (often 1,000 by default, lower on new accounts) shared by all functions, and scaling speed is limited (each function can add up to 1,000 concurrent executions every 10 seconds). <strong>Reserved concurrency</strong> guarantees capacity for one function but also caps it; an over-reserved neighbour or runaway function can starve others. Concurrency equals requests per second times average duration, so slow downstream calls also increase throttling. Fixes: request a quota increase, set reserved concurrency for critical functions and caps for noisy ones, use <strong>provisioned concurrency</strong> for predictable bursts, reduce duration, and put <strong>SQS</strong> (with a <strong>maximum concurrency</strong> setting on the event source mapping) in front of bursty synchronous producers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check Errors versus Throttles and ConcurrentExecutions over time.</li>
+  <li>For timeouts, read REPORT lines and traces to find the slow segment.</li>
+  <li>Verify VPC routing, client timeouts and connection handling.</li>
+  <li>Tune memory and cold starts.</li>
+  <li>For throttles, review account concurrency and reserved settings.</li>
+  <li>Add queues, retries with backoff and alarms.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws logs start-query --log-group-name /aws/lambda/checkout \
+  --start-time $(date -d '-1 hour' +%s) --end-time $(date +%s) \
+  --query-string 'filter @type = &quot;REPORT&quot;
+    | stats max(@duration), avg(@duration), max(@initDuration), count(*) by bin(5m)'
+
+aws lambda put-function-concurrency --function-name checkout \
+  --reserved-concurrent-executions 200</code></pre>
+<pre><code class="language-python">import requests
+# client timeout well below the 30 s function timeout
+resp = requests.get(PAYMENTS_URL, timeout=(2, 5))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising the function timeout instead of finding the slow dependency.</li>
+  <li>HTTP or database clients with no timeouts.</li>
+  <li>Reserved concurrency on many functions, starving the rest of the account.</li>
+  <li>Forgetting that VPC functions need NAT or endpoints to reach AWS APIs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with CloudWatch: Duration, Errors, Throttles and ConcurrentExecutions tell me whether it is timeouts or throttling. For timeouts, X-Ray traces and the REPORT lines show where time goes: usually a slow downstream call without its own timeout, slow database connections, a VPC function with no route to the service, or cold starts for big Java functions. More memory also means more CPU. Throttling means the account limit or a function's reserved concurrency is hit, so I check other functions using the pool, request an increase and put SQS in front of bursty producers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why set a client timeout shorter than the function timeout?</strong> So the function can handle the failure, log it and return or retry instead of being killed.</li>
+  <li><strong>What is the difference between reserved and provisioned concurrency?</strong> Reserved guarantees and caps capacity; provisioned keeps environments pre-initialised to avoid cold starts.</li>
+  <li><strong>How do you limit Lambda load on a database?</strong> Reserved concurrency or SQS maximum concurrency, plus RDS Proxy.</li>
+</ul>
+</article>
+</body>
+</html>

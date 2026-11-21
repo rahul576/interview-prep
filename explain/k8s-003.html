@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-003 · What are init containers, and when do you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-003" data-topic="Kubernetes">
+<h1>What are init containers, and when do you use them?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Init containers</strong> run <strong>to completion, one by one, before app containers start</strong>; each must succeed, failures are retried according to the pod's <strong>restartPolicy</strong>, and they are used to <strong>wait for dependencies, run migrations, fetch config or prepare volumes</strong>, sharing results through <strong>volumes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some work must happen before the application can start, and doing it inside the app image complicates the image and its start-up code. Init containers, listed under <code>spec.initContainers</code>, separate that work. The kubelet runs them <strong>sequentially</strong> in the listed order; container 2 starts only after container 1 exits with code 0. Only when all have succeeded do the regular containers start. While they run, the pod shows <code>Init:0/2</code>; failures show <code>Init:Error</code> or <code>Init:CrashLoopBackOff</code>.</p>
+<p>If an init container fails, the kubelet retries it per <code>restartPolicy</code>: with <code>Always</code> or <code>OnFailure</code> it restarts with backoff; with <code>Never</code> the whole pod fails. Because init containers can run again after a pod restart (for example node reboot), their work must be <strong>idempotent</strong>.</p>
+<p>Typical uses:</p>
+<ul>
+  <li><strong>Wait for a dependency</strong>, for example loop until the database port answers.</li>
+  <li><strong>Schema migrations</strong> before the app starts (with care, see below).</li>
+  <li><strong>Fetch config, certificates or models</strong> into a shared <code>emptyDir</code>.</li>
+  <li><strong>Fix volume permissions</strong> or generate config files from templates.</li>
+</ul>
+<p>They can use <strong>different images</strong> with tools (curl, migration binaries, git) that you don't want in the hardened app image, and they have their own resources and security context. Their resource requests affect scheduling: the effective request is the maximum of any init container and the sum of the app containers.</p>
+<p>A related feature is the <strong>native sidecar</strong>: an init container with <code>restartPolicy: Always</code> keeps running alongside the app instead of completing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod scheduled; volumes mounted.</li>
+  <li>Init container 1 runs to completion.</li>
+  <li>Init container 2 runs to completion.</li>
+  <li>App containers start, reading files the init containers wrote.</li>
+  <li>On failure, retries per restartPolicy; pod stays in Init state.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  volumes:
+  - { name: config, emptyDir: {} }
+  initContainers:
+  - name: wait-for-db
+    image: busybox:1.36
+    command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting; sleep 2; done']
+  - name: render-config
+    image: registry.example.com/config-tool:2.1
+    args: ['--out', '/config/app.yaml']
+    volumeMounts: [ { name: config, mountPath: /config } ]
+  containers:
+  - name: app
+    image: registry.example.com/orders:1.8.2
+    volumeMounts: [ { name: config, mountPath: /etc/app } ]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Endless &quot;wait for X&quot; loops that block every restart during an outage.</li>
+  <li>Running migrations in each of 20 replicas at once.</li>
+  <li>Non-idempotent init work that breaks on rerun.</li>
+  <li>Forgetting that init containers' resources affect scheduling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Init containers are defined in initContainers and run to completion, sequentially, before the app containers start; each must succeed before the next begins, and failures are retried according to the pod's restart policy, with the pod showing Init status. I use them to wait for a dependency, fetch config or certificates, fix volume permissions, and sometimes run migrations, sharing results with the main container through an emptyDir. They can use a separate image, keeping tools out of the app image. I keep them short and idempotent, because they rerun on every pod restart.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Downside of migrations in init containers with many replicas?</strong> Concurrent runs and lock contention; prefer a single pre-deploy Job or a migration lock.</li>
+  <li><strong>Are probes supported on init containers?</strong> Not on regular ones; native sidecars can have probes.</li>
+  <li><strong>How do you see init container logs?</strong> <code>kubectl logs pod -c &lt;init-name&gt;</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-020 · How do you handle transactions that span multiple services or databases?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-020" data-topic="Data &amp; Storage Design">
+<h1>How do you handle transactions that span multiple services or databases?</h1>
+<p class="ex-meta">Data &amp; Storage Design · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Avoid cross-service transactions through good boundaries; when unavoidable, use <strong>sagas</strong> (local transactions plus <strong>compensating actions</strong>) instead of two-phase commit, with the <strong>outbox</strong> pattern, <strong>idempotent</strong> steps and acceptance of <strong>eventual consistency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Two-phase commit (2PC)</strong> asks every participant to prepare, then commit. It gives atomicity but blocks participants if the coordinator fails, couples services tightly, scales poorly and isn't supported by most message brokers and NoSQL stores. In microservices it is rarely the answer.</p>
+<p>A <strong>saga</strong> breaks the business transaction into steps, each a local ACID transaction in one service. If a step fails, previous steps are undone by <strong>compensations</strong> (refund the payment, release the stock). Compensations are semantic, not rollbacks: an email already sent can't be unsent, so you send a correction.</p>
+<p>Two styles: <strong>choreography</strong> (each service reacts to events, no central brain; simple for 2–3 steps but hard to follow) and <strong>orchestration</strong> (a workflow engine like Temporal, Camunda or AWS Step Functions drives the steps, easier to see, retry and monitor).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Order service creates order <code>PENDING</code> (+ outbox event).</li>
+  <li>Inventory reserves stock; on failure → order <code>CANCELLED</code>.</li>
+  <li>Payment charges; on failure → inventory releases stock, order <code>CANCELLED</code>.</li>
+  <li>Shipping books; on failure → refund, release, cancel.</li>
+  <li>Success → order <code>CONFIRMED</code>.</li>
+</ol>
+<p>Every step and compensation is idempotent and retried.</p>
+
+<h2>Example</h2>
+<pre><code class="language-text">Orchestrator (Temporal workflow):
+  reserveStock(order) -&gt; ok
+  chargePayment(order) -&gt; FAILED
+  compensate: releaseStock(order)
+  markOrder(order, CANCELLED)</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>2PC</th><th>Saga</th></tr></thead>
+<tbody>
+<tr><td>Consistency</td><td>Atomic</td><td>Eventual</td></tr>
+<tr><td>Availability</td><td>Blocks on coordinator failure</td><td>High</td></tr>
+<tr><td>Coupling</td><td>Tight</td><td>Loose</td></tr>
+<tr><td>Complexity</td><td>In infrastructure</td><td>In business logic (compensations)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting that intermediate states are visible (show &quot;processing&quot;).</li>
+  <li>Non-idempotent steps that double-charge on retry.</li>
+  <li>No compensation for some steps.</li>
+  <li>Publishing events outside the database transaction (dual-write problem).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd first try to keep data that must change atomically in one service. If a process spans services, like order, stock and payment, I'd use a saga: each step is a local transaction, and failures trigger compensating actions like refunds and stock release. For more than a couple of steps I prefer orchestration with something like Temporal. Events go through the outbox and every step is idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which actions can't be compensated?</strong> Sent emails, shipped parcels: do them last or compensate semantically.</li>
+  <li><strong>How do you handle the 'pending' state in the UI?</strong> Show status and update via polling or push.</li>
+  <li><strong>Choreography or orchestration?</strong> Orchestration for complex flows with many steps.</li>
+</ul>
+</article>
+</body>
+</html>

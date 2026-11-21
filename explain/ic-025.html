@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-025 · What is a dynamic inventory in Ansible?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-025" data-topic="Configuration Management">
+<h1>What is a dynamic inventory in Ansible?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>dynamic inventory</strong> builds the host list <strong>at runtime from a source of truth</strong> (AWS, Azure, GCP, VMware, Kubernetes, a CMDB) using <strong>inventory plugins</strong>, creating <strong>groups from tags/metadata</strong> (<code>keyed_groups</code>) so playbooks always target the current fleet.</p>
+
+<h2>Detailed explanation</h2>
+<p>A static inventory file works for a handful of long-lived servers. In the cloud, instances are created and destroyed by auto scaling, Terraform and deployments, so a hand-maintained list is stale within days: new servers are missed and old IPs time out.</p>
+<p>A dynamic inventory asks the platform at the start of each run. Modern Ansible uses <strong>inventory plugins</strong> configured by YAML files, for example <code>amazon.aws.aws_ec2</code>, <code>azure.azcollection.azure_rm</code>, <code>google.cloud.gcp_compute</code>, <code>community.vmware.vmware_vm_inventory</code>, <code>kubernetes.core.k8s</code> or a CMDB such as <strong>NetBox</strong>. (Older custom scripts still work but plugins are preferred.)</p>
+<p>The power is in grouping. With the aws_ec2 plugin, <code>keyed_groups</code> creates groups from tags or attributes: all instances tagged <code>role=web</code> land in <code>role_web</code>, those tagged <code>env=prod</code> in <code>env_prod</code>. <code>groups</code> with Jinja conditions creates groups from expressions, <code>compose</code> sets host variables such as <code>ansible_host</code> from the private IP, and <code>filters</code> limit which instances are included (for example only running instances in one VPC). Playbooks then target <code>role_web:&amp;env_prod</code> and never need editing when the fleet changes. The plugin config can be combined with static <code>group_vars</code> in the same inventory directory.</p>
+<p>Querying cloud APIs on every run can be slow, so plugins support <strong>caching</strong> with a timeout. Tagging discipline becomes essential: an untagged instance will not be configured.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ansible loads the inventory source file matching a plugin (name must end appropriately, e.g. <code>aws_ec2.yml</code>).</li>
+  <li>The plugin authenticates and queries the API.</li>
+  <li>It filters instances and creates hosts with variables.</li>
+  <li>keyed_groups and groups build group membership.</li>
+  <li>Results may be cached; playbooks target groups as usual.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># inventory/prod.aws_ec2.yml
+plugin: amazon.aws.aws_ec2
+regions: [eu-west-1]
+filters:
+  instance-state-name: running
+  tag:env: prod
+keyed_groups:
+  - key: tags.role
+    prefix: role
+  - key: tags.env
+    prefix: env
+compose:
+  ansible_host: private_ip_address
+cache: true
+cache_plugin: ansible.builtin.jsonfile
+cache_connection: /tmp/aws_inventory
+cache_timeout: 300</code></pre>
+<pre><code class="language-bash">ansible-inventory -i inventory/prod.aws_ec2.yml --graph
+ansible-playbook -i inventory/ site.yml --limit 'role_web:&amp;env_prod'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Inconsistent tags, so hosts end up in no group.</li>
+  <li>Using public IPs when the control node is inside the VPC.</li>
+  <li>Wrong file suffix so the plugin isn't recognised.</li>
+  <li>No filters, accidentally targeting every instance in the account.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A static inventory goes stale in the cloud, where instances come and go. A dynamic inventory builds the host list at runtime from the source of truth using inventory plugins for AWS, Azure, GCP, VMware, Kubernetes or a CMDB. With the aws_ec2 plugin I use keyed_groups to create groups from tags, so every instance tagged role=web and env=prod lands in the right groups automatically, compose to set ansible_host to the private IP, and filters to include only running instances. Results can be cached to avoid hitting the API every run.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you target only production web servers?</strong> <code>--limit 'role_web:&amp;env_prod'</code> or a filter on <code>tag:env: prod</code>.</li>
+  <li><strong>How do you check what the inventory produces?</strong> <code>ansible-inventory --graph</code> or <code>--list</code>.</li>
+  <li><strong>Can you mix static and dynamic sources?</strong> Yes, point <code>-i</code> at a directory containing both.</li>
+</ul>
+</article>
+</body>
+</html>

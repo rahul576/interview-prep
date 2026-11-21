@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-312 · How does asynchronous messaging work using SQS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-312" data-topic="Cloud (AWS)">
+<h1>How does asynchronous messaging work using SQS?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The producer calls <strong><code>SendMessage</code></strong> and continues immediately; consumers <strong>poll with <code>ReceiveMessage</code></strong> (long polling, batches up to 10), each received message becomes <strong>invisible for the visibility timeout</strong>, successful processing calls <strong><code>DeleteMessage</code></strong>, failures <strong>reappear and are retried</strong>, and after <strong><code>maxReceiveCount</code></strong> the <strong>redrive policy</strong> moves them to a <strong>DLQ</strong>; because delivery is at-least-once, processing must be <strong>idempotent</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Producer side:</strong> the API stores the order request and sends a message such as <code>{&quot;orderId&quot;:&quot;ORD-1&quot;,&quot;type&quot;:&quot;OrderPlaced&quot;}</code>; once SQS acknowledges, the request returns, for example with 202 Accepted. Batch sends (<code>SendMessageBatch</code>) reduce cost. Optional <strong>message attributes</strong> carry metadata like correlation IDs.</p>
+<p><strong>Consumer side:</strong> a Spring Boot service with <strong>Spring Cloud AWS</strong> <code>@SqsListener</code>, a plain SDK loop, or <strong>Lambda</strong> via an event source mapping. Consumers long-poll so empty queues cost little.</p>
+<p><strong>In-flight state:</strong> a received message is <strong>not deleted</strong>; it carries a <strong>receipt handle</strong> and is hidden for the <strong>visibility timeout</strong>. If processing succeeds, the consumer deletes it using the receipt handle. If the consumer crashes, throws or takes too long, the message becomes visible again and another consumer receives it. The <code>ApproximateReceiveCount</code> attribute increases each time.</p>
+<p><strong>Poison messages:</strong> a <strong>redrive policy</strong> with <code>maxReceiveCount</code> (say 5) moves repeatedly failing messages to a <strong>dead-letter queue</strong> where you alert, inspect and later <strong>redrive</strong> them after fixing the bug.</p>
+<p><strong>Idempotency:</strong> standard queues may deliver duplicates, and a consumer can process successfully but crash before deleting. So use a processed-message table, unique constraints or conditional writes keyed on a business ID.</p>
+<p><strong>Long jobs:</strong> extend visibility with <code>ChangeMessageVisibility</code> as a heartbeat.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer sends message; returns immediately.</li>
+  <li>Consumer long-polls and receives a batch.</li>
+  <li>Messages hidden for the visibility timeout.</li>
+  <li>Process each idempotently.</li>
+  <li>Delete on success; on failure let it reappear.</li>
+  <li>After max receives, the message moves to the DLQ.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@SqsListener(&quot;orders&quot;)
+public void onOrder(OrderPlaced event) {
+    if (processedRepo.existsById(event.messageId())) return;   // idempotency
+    fulfilmentService.fulfil(event.orderId());
+    processedRepo.save(new Processed(event.messageId()));
+}   // returns normally -&gt; Spring Cloud AWS deletes the message; exception -&gt; retried</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting before processing, losing messages on crash.</li>
+  <li>Visibility timeout shorter than processing time.</li>
+  <li>Non-idempotent side effects such as double charging.</li>
+  <li>Ignoring the DLQ with no alarm.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The producer calls SendMessage and continues without waiting. SQS stores it redundantly. Consumers, like a Spring service with @SqsListener or a Lambda, long-poll with ReceiveMessage in batches of up to ten. A received message isn't deleted; it becomes invisible for the visibility timeout. If processing succeeds, the consumer deletes it; if it crashes or fails, the message reappears and is retried. After maxReceiveCount attempts, the redrive policy moves it to a dead-letter queue. Because a message can arrive more than once, I make processing idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Processing longer than the visibility timeout?</strong> The message reappears and is processed twice; extend visibility or raise the timeout.</li>
+  <li><strong>How do you monitor?</strong> <code>ApproximateAgeOfOldestMessage</code>, queue depth, DLQ depth alarms.</li>
+  <li><strong>Ordering?</strong> Use FIFO with message groups when order matters.</li>
+</ul>
+</article>
+</body>
+</html>

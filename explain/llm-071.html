@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-071 · Which resilience patterns do you apply to LLM API calls in backend services?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-071" data-topic="LLMOps &amp; RAG">
+<h1>Which resilience patterns do you apply to LLM API calls in backend services?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Treat LLM APIs as slow, variable, rate-limited dependencies: <strong>timeouts sized to generation length</strong> (with <strong>streaming</strong>), <strong>retries with exponential backoff and jitter</strong> on <strong>429 and 5xx</strong> honouring <strong>Retry-After</strong>, <strong>circuit breakers</strong>, <strong>fallback</strong> to another model, region or provider, <strong>bulkheads and rate limiting</strong>, and <strong>graceful degradation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An LLM call differs from a typical REST call: latency ranges from hundreds of milliseconds to minutes depending on output length and reasoning, providers enforce tokens-per-minute quotas, and outages or capacity issues happen regularly.</p>
+<p><strong>Timeouts.</strong> Separate <strong>connect timeout</strong> (short, a few seconds) from <strong>overall or read timeout</strong>, sized to expected generation length plus margin, and set <code>max_tokens</code> so generation is bounded. For long outputs, <strong>stream</strong> and apply an <strong>idle timeout</strong> between chunks. Always respect the caller's deadline.</p>
+<p><strong>Retries.</strong> Retry <strong>429</strong> (rate limited), <strong>5xx</strong> and overload errors (Anthropic uses 529 for overloaded), and connection resets, with <strong>exponential backoff and jitter</strong>, a small maximum (2-3 attempts), and honouring <strong>Retry-After</strong> headers. Don't retry 400-class validation errors. Many SDKs include retry logic; configure it rather than layering another retry on top. Never automatically repeat <strong>side effects</strong> triggered by a response (sending an email based on the model's output) without idempotency.</p>
+<p><strong>Circuit breaker.</strong> With Resilience4j, Polly or a gateway, open the circuit when failure or slow-call rates exceed a threshold, failing fast instead of piling up waiting threads.</p>
+<p><strong>Fallbacks.</strong> Route to another <strong>deployment, region or provider</strong>, or a smaller model, typically through an LLM gateway (LiteLLM, cloud API gateways, Azure API Management) that knows the alternatives. Test that prompts work acceptably on the fallback model.</p>
+<p><strong>Bulkheads and rate limiting.</strong> Limit concurrent LLM calls per feature so slow responses don't exhaust the service's thread or connection pools, and rate-limit client-side to stay within quotas and share them fairly between features.</p>
+<p><strong>Graceful degradation.</strong> Cached answers, a simpler non-LLM feature, a queued &quot;we'll email you&quot; path, or a clear message.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Bulkhead permit -&gt; rate limiter -&gt; circuit breaker -&gt; call with timeout.</li>
+  <li>Retryable error -&gt; backoff with jitter -&gt; retry (max 2-3).</li>
+  <li>Breaker open or retries exhausted -&gt; fallback model/provider.</li>
+  <li>Fallback fails -&gt; degraded response.</li>
+  <li>Metrics: latency, 429s, breaker state, fallback rate.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Retry(name = &quot;llm&quot;)                       // 429/5xx, exponential backoff + jitter, max 3
+@CircuitBreaker(name = &quot;llm&quot;, fallbackMethod = &quot;fallbackModel&quot;)
+@Bulkhead(name = &quot;llm&quot;, type = Bulkhead.Type.SEMAPHORE)   // e.g. max 50 concurrent
+public String summarise(String text) {
+    return primaryClient.complete(text, Duration.ofSeconds(30));
+}
+
+String fallbackModel(String text, Throwable t) {
+    try { return secondaryClient.complete(text, Duration.ofSeconds(20)); }
+    catch (Exception e) { return &quot;Summary unavailable right now; please try again shortly.&quot;; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default HTTP timeouts (often far too long or infinite).</li>
+  <li>Retries in the SDK, the gateway and the app simultaneously.</li>
+  <li>Fallback model never tested with the prompts.</li>
+  <li>Retrying a stream from the start and duplicating output to the user.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;LLM calls are slow, variable and rate-limited, so I apply the usual remote-dependency patterns tuned for them. Timeouts account for generation length, with a short connect timeout, bounded max tokens and streaming for long outputs. Retries use exponential backoff with jitter on 429 and 5xx, honour Retry-After, and are limited, at one layer only. A circuit breaker stops hammering a failing provider, and a gateway falls back to another deployment, region or provider. Bulkheads cap concurrent calls so slow responses don't exhaust threads, rate limits protect quotas, and users get a graceful degraded response.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is retrying a stream harder?</strong> Partial output was already sent; you must resume, discard, or clearly restart.</li>
+  <li><strong>Fallback quality?</strong> Evaluate prompts on the fallback model in CI.</li>
+  <li><strong>Rate limits across many pods?</strong> Central gateway or distributed rate limiter.</li>
+</ul>
+</article>
+</body>
+</html>

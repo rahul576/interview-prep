@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-018 · How do you connect on-premises networks or several cloud networks securely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-018" data-topic="Networking">
+<h1>How do you connect on-premises networks or several cloud networks securely?</h1>
+<p class="ex-meta">Networking · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>site-to-site IPsec VPN</strong> for quick, cheaper connectivity, <strong>dedicated links (Direct Connect, ExpressRoute, Interconnect)</strong> for bandwidth, latency and compliance, <strong>peering</strong> for a few VNets/VPCs and <strong>hub-and-spoke with Transit Gateway or Virtual WAN</strong> at scale, all built on <strong>non-overlapping CIDRs</strong>, <strong>BGP routing</strong>, <strong>hybrid DNS</strong> and <strong>least-privilege rules</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Site-to-site VPN:</strong> encrypted <strong>IPsec</strong> tunnels over the internet between an on-prem VPN device and a cloud VPN gateway. Quick to set up and inexpensive, but bandwidth is limited per tunnel (around 1.25 Gbps on AWS) and latency varies with the internet. Use <strong>two tunnels</strong> (and ideally two customer devices) for redundancy, and <strong>BGP</strong> for dynamic route exchange and failover.</p>
+<p><strong>Dedicated connectivity:</strong> <strong>AWS Direct Connect, Azure ExpressRoute, Google Cloud Interconnect</strong> provide private circuits via colocation facilities or partners: high bandwidth (1-100 Gbps), consistent latency, lower data transfer costs and often a compliance requirement. They're not encrypted by default, so add <strong>MACsec</strong> or IPsec over the link where needed. Design for resilience with <strong>two connections at different locations</strong>, or keep a VPN as backup.</p>
+<p><strong>Cloud-to-cloud networks:</strong> <strong>VPC/VNet peering</strong> is simple, low-latency and non-transitive, so it fits a handful of networks; full meshes don't scale. <strong>Hub-and-spoke</strong> with <strong>AWS Transit Gateway</strong>, <strong>Azure Virtual WAN</strong> or a hub VNet with Azure Firewall, or GCP Network Connectivity Center centralises routing, <strong>inspection</strong> (firewalls in the hub), shared services and controlled egress; route tables and segments separate prod from non-prod. Multi-cloud links use VPNs or partner interconnects between providers.</p>
+<p><strong>Foundations:</strong></p>
+<ul>
+  <li><strong>Non-overlapping CIDR plan</strong> across all clouds and on-prem; overlaps force NAT and break routing.</li>
+  <li><strong>Routing:</strong> BGP, route propagation, summarisation and preventing unwanted transit.</li>
+  <li><strong>DNS:</strong> hybrid resolution with Route 53 Resolver endpoints, Azure DNS Private Resolver, or conditional forwarders, so on-prem resolves cloud private zones and vice versa.</li>
+  <li><strong>Private endpoints</strong> (PrivateLink, Private Endpoint, Private Service Connect) to reach managed services and SaaS without public exposure.</li>
+  <li><strong>Least access:</strong> security groups, NSGs and firewalls allow only the flows each workload needs; log flows; zero-trust access for users instead of flat network access.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocate CIDRs centrally across environments.</li>
+  <li>Build a hub with transit gateway or Virtual WAN, firewall and DNS resolvers.</li>
+  <li>Attach spoke VPCs or VNets with segmented route tables.</li>
+  <li>Connect on-prem via Direct Connect or ExpressRoute plus VPN backup, using BGP.</li>
+  <li>Configure hybrid DNS forwarding and private endpoints.</li>
+  <li>Apply firewall policies and monitor flows and tunnel health.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_ec2_transit_gateway&quot; &quot;hub&quot; {
+  description                     = &quot;org hub&quot;
+  default_route_table_association = &quot;disable&quot;
+  default_route_table_propagation = &quot;disable&quot;
+}
+resource &quot;aws_vpn_connection&quot; &quot;onprem&quot; {
+  customer_gateway_id = aws_customer_gateway.dc1.id
+  transit_gateway_id  = aws_ec2_transit_gateway.hub.id
+  type                = &quot;ipsec.1&quot;
+  static_routes_only  = false          # BGP
+}
+resource &quot;aws_ec2_transit_gateway_vpc_attachment&quot; &quot;prod_app&quot; {
+  transit_gateway_id = aws_ec2_transit_gateway.hub.id
+  vpc_id             = aws_vpc.prod_app.id
+  subnet_ids         = aws_subnet.tgw[*].id
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Overlapping CIDRs discovered only when connecting.</li>
+  <li>Single VPN tunnel or a single dedicated circuit without backup.</li>
+  <li>Forgetting DNS, so connectivity works by IP but not by name.</li>
+  <li>Flat routing that lets every spoke reach every other spoke.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For a quick, cheaper link I'd use a site-to-site IPsec VPN with two tunnels and BGP. For high bandwidth, stable latency or compliance I'd use Direct Connect or ExpressRoute, ideally redundant or with a VPN as backup. Between cloud networks, peering works for a few, but at scale I'd build hub and spoke with Transit Gateway or Virtual WAN to centralise routing, inspection and egress. It all depends on a non-overlapping CIDR plan. I'd also design hybrid DNS, use private endpoints for managed services, and restrict routes and firewall rules to what each workload needs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if two networks have overlapping ranges?</strong> Routing becomes ambiguous; you need NAT, PrivateLink-style service exposure or re-addressing.</li>
+  <li><strong>Is Direct Connect encrypted?</strong> Not by default; use MACsec or IPsec over it.</li>
+  <li><strong>Why is peering non-transitive a problem?</strong> A can't reach C through B, so meshes grow quadratically.</li>
+</ul>
+</article>
+</body>
+</html>

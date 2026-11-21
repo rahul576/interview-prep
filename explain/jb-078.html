@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-078 · What is the difference between stateless and stateful stream operations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-078" data-topic="Java 8+ Features">
+<h1>What is the difference between stateless and stateful stream operations?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Stateless</strong> operations (<code>filter</code>, <code>map</code>, <code>flatMap</code>, <code>peek</code>) process each element <strong>independently</strong>, while <strong>stateful</strong> ones (<code>sorted</code>, <code>distinct</code>, <code>limit</code>, <code>skip</code>) need <strong>information about other elements</strong>, so they may <strong>buffer</strong> data, cost memory, act as <strong>barriers</strong> in parallel streams and can break on <strong>infinite streams</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>stateless</strong> intermediate operation decides what to do with an element using only that element. <code>filter</code> tests it, <code>map</code> transforms it, <code>flatMap</code> expands it. These operations stream data element by element with constant memory, work on infinite streams, and parallelise trivially because chunks need no coordination.</p>
+<p>A <strong>stateful</strong> operation must remember something about elements it has already seen, or must see elements it hasn't seen yet:</p>
+<ul>
+  <li><strong><code>sorted</code></strong> must consume the <strong>entire</strong> upstream before emitting the first element: O(n) memory, and on an infinite stream it never finishes.</li>
+  <li><strong><code>distinct</code></strong> must keep a <strong>set of every element seen</strong>, so memory grows with the number of unique elements. In ordered parallel streams it must also preserve the first occurrence.</li>
+  <li><strong><code>limit(n)</code></strong> and <strong><code>skip(n)</code></strong> must count elements. Sequentially that's cheap, but on an <strong>ordered parallel</strong> stream they must know which elements are the first <code>n</code> in encounter order, requiring buffering and coordination across chunks.</li>
+</ul>
+<p>In parallel pipelines stateful operations act as <strong>barriers</strong>: the pipeline may need to complete one phase before the next, reducing the speed-up. Calling <code>unordered()</code> can relax <code>distinct</code>, <code>limit</code> and <code>skip</code> when order isn't needed.</p>
+<p>A separate but related rule: the <strong>lambdas</strong> you pass should be <strong>stateless and non-interfering</strong>. A lambda that mutates a shared counter or list produces race conditions in parallel and unpredictable results even sequentially, since the library may reorder or skip calls.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stateless stages forward each element immediately to the next sink.</li>
+  <li>Stateful stages keep internal buffers or sets.</li>
+  <li><code>sorted</code> collects all elements at end-of-input, sorts, then emits.</li>
+  <li>In parallel, stateful stages may force full evaluation of upstream chunks before continuing.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Stateless: constant memory, works on infinite stream
+Stream.iterate(1, i -&gt; i + 1).filter(i -&gt; i % 2 == 0).map(i -&gt; i * i).limit(5).toList();
+
+// Stateful sorted on infinite stream: never terminates
+// Stream.iterate(1, i -&gt; i + 1).sorted().limit(5).toList();
+
+// distinct remembers all seen ids
+List&lt;String&gt; uniqueCustomers = orders.stream().map(Order::customerId).distinct().toList();
+
+// Parallel with order relaxed
+long count = bigList.parallelStream().unordered().distinct().count();
+
+// Stateful lambda: wrong
+List&lt;Integer&gt; seen = new ArrayList&lt;&gt;();
+nums.parallelStream().filter(n -&gt; seen.add(n)).count();   // race condition</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Stateless</th><th>Stateful</th></tr></thead>
+<tbody>
+<tr><td>Examples</td><td>filter, map, flatMap, peek</td><td>sorted, distinct, limit, skip</td></tr>
+<tr><td>Memory</td><td>O(1) per element</td><td>Up to O(n)</td></tr>
+<tr><td>Infinite streams</td><td>Fine</td><td>sorted never ends</td></tr>
+<tr><td>Parallel</td><td>Scales well</td><td>Barriers/coordination</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>sorted()</code> early on huge streams instead of near the end or in the database.</li>
+  <li>Using <code>distinct</code> on large data without considering memory.</li>
+  <li>Using <code>limit</code> on ordered parallel streams and expecting speed-ups.</li>
+  <li>Confusing stateful operations with stateful lambdas.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A stateless operation like filter, map or flatMap handles each element independently, so data streams through element by element and parallelises easily. A stateful operation like sorted, distinct, limit or skip needs information about other elements. sorted has to buffer the whole stream before emitting anything, and distinct remembers every element seen, which costs memory. In parallel streams they act as barriers and need coordination, which reduces the speed-up, and sorted on an infinite stream never finishes. Separately, the lambdas themselves should be stateless to stay correct in parallel.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is limit() expensive on an ordered parallel stream?</strong> It must find the first n elements in encounter order across chunks, buffering and coordinating.</li>
+  <li><strong>How can unordered() help?</strong> It lets distinct/limit take any elements, avoiding order bookkeeping.</li>
+  <li><strong>Is peek stateful?</strong> No, but it is meant only for debugging.</li>
+</ul>
+</article>
+</body>
+</html>

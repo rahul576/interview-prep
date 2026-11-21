@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-046 · How do you reduce Kubernetes infrastructure costs without hurting reliability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-046" data-topic="Kubernetes">
+<h1>How do you reduce Kubernetes infrastructure costs without hurting reliability?</h1>
+<p class="ex-meta">Kubernetes · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Most waste is <strong>over-requested resources</strong>, so <strong>rightsize requests</strong> from real usage (VPA recommendations), improve <strong>bin packing</strong> with node autoscaling and <strong>Karpenter consolidation</strong>, move tolerant work to <strong>spot</strong>, <strong>scale down non-production</strong>, and make cost visible per team with <strong>OpenCost or Kubecost</strong>, while keeping <strong>PDBs, headroom and SLO checks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes bills you for <strong>nodes</strong>, but the scheduler packs nodes by <strong>requests</strong>, not usage. If a service requests 2 CPU and uses 0.2, the remaining 1.8 CPU is reserved and paid for but idle. In most clusters, the gap between requested and used resources is the single largest cost, often more than half of node capacity. So the first lever is <strong>rightsizing</strong>: compare requests with real usage percentiles over a few weeks (Prometheus, VPA in recommendation mode, Goldilocks) and lower them team by team.</p>
+<p>Lower requests only save money if nodes are then removed. <strong>Cluster autoscaler</strong> scale-down or <strong>Karpenter consolidation</strong> packs pods onto fewer, better-fitting nodes and deletes empty or underused ones. Choosing suitable instance families (including arm64, often cheaper per unit of performance) helps.</p>
+<p><strong>Spot or preemptible</strong> capacity costs a fraction of on-demand. It suits stateless services with several replicas spread across zones, CI runners and batch jobs, provided they handle interruption notices and graceful shutdown. <strong>Non-production</strong> clusters and namespaces can scale to zero at night and weekends. <strong>Cost allocation</strong> per namespace or team with OpenCost or Kubecost turns cost into something teams own.</p>
+<p>Reliability guards: <strong>PodDisruptionBudgets</strong> so consolidation cannot take down all replicas, <strong>topology spread</strong> across zones, an on-demand base for critical services, some <strong>headroom</strong> for spikes (possibly low-priority placeholder pods), and checking <strong>SLO dashboards</strong> after each change.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: cost per namespace, requests vs p95 usage.</li>
+  <li>Rightsize requests in small steps; keep memory request close to real peak.</li>
+  <li>Enable consolidation or autoscaler scale-down; review instance types.</li>
+  <li>Move tolerant workloads to spot with interruption handling.</li>
+  <li>Schedule non-production scale-down.</li>
+  <li>Protect with PDBs, spread constraints and on-demand for critical paths.</li>
+  <li>Watch SLOs and roll back if latency, OOMKills or errors rise.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: { name: general }
+spec:
+  template:
+    spec:
+      requirements:
+        - { key: karpenter.sh/capacity-type, operator: In, values: [&quot;spot&quot;, &quot;on-demand&quot;] }
+        - { key: kubernetes.io/arch, operator: In, values: [&quot;amd64&quot;, &quot;arm64&quot;] }
+      nodeClassRef: { group: karpenter.k8s.aws, kind: EC2NodeClass, name: default }
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Cutting memory requests below real peaks, causing OOMKills and node pressure evictions.</li>
+  <li>Lowering requests but never letting nodes scale down.</li>
+  <li>Putting singletons or stateful primaries on spot.</li>
+  <li>Missing PDBs, so consolidation evicts all replicas at once.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Most waste comes from requests far above real usage, so I start by comparing requests with actual usage and VPA recommendations and rightsize team by team. Then I make sure the savings turn into fewer nodes, with Karpenter consolidation or autoscaler scale-down and suitable instance types. Tolerant workloads move to spot, and non-production scales down out of hours. OpenCost or Kubecost shows each team its spend. To protect reliability I keep PDBs, zone spreading, on-demand for critical services, some headroom, and I check SLO dashboards after every change.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can lowering requests increase incidents?</strong> Pods get packed tightly, then contend for CPU or get OOMKilled and evicted under real peaks.</li>
+  <li><strong>Should you use HPA and VPA together?</strong> Not on the same CPU/memory metric; VPA for recommendations, HPA for replicas.</li>
+  <li><strong>Reserved instances or savings plans?</strong> Yes, for the stable on-demand baseline.</li>
+</ul>
+</article>
+</body>
+</html>

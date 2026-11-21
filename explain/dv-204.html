@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-204 · What is Terraform state locking, and how do you import existing resources?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-204" data-topic="Infrastructure as Code">
+<h1>What is Terraform state locking, and how do you import existing resources?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Team state lives in a <strong>remote backend</strong> (S3, Azure Storage, GCS, HCP Terraform), <strong>encrypted and versioned</strong>, and <strong>state locking</strong> ensures only <strong>one operation writes state at a time</strong> (S3 <strong>native lock file</strong> or legacy <strong>DynamoDB</strong>, Azure <strong>blob leases</strong>); existing resources are adopted with <strong><code>terraform import</code></strong> or <strong><code>import</code> blocks</strong> (which can <strong>generate config</strong>), refactors use <strong><code>moved</code> blocks</strong> or <code>state mv</code>, and <strong>state is never edited by hand</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Why locking:</strong> <code>plan</code> and <code>apply</code> read state, call APIs and write state back. If two engineers (or two pipelines) apply at the same time from the same state, one can overwrite the other's changes, leading to <strong>lost or corrupted state</strong> and duplicate or orphaned resources. With locking, Terraform acquires a lock before any state-modifying operation; a second run waits (<code>-lock-timeout</code>) or fails with the lock holder's details.</p>
+<p>Backends: <strong>S3</strong> historically required a <strong>DynamoDB table</strong> for locks; since <strong>Terraform 1.10</strong> it supports <strong>native locking</strong> with a lock file in the bucket (<code>use_lockfile = true</code>), and the DynamoDB option is deprecated. <strong>Azure Storage</strong> uses <strong>blob leases</strong>, <strong>GCS</strong> uses lock objects, and <strong>HCP Terraform</strong> locks workspaces itself. Enable <strong>bucket versioning</strong> and encryption.</p>
+<p><strong>Stuck locks:</strong> if a CI job was killed, the lock remains. First confirm no run is active, then <strong><code>terraform force-unlock &lt;ID&gt;</code></strong>.</p>
+<p><strong>Importing:</strong> resources created manually or by another tool aren't in state, so Terraform would try to create duplicates. Options:</p>
+<ul>
+  <li><strong><code>terraform import &lt;address&gt; &lt;id&gt;</code></strong>: imperative CLI command, one resource at a time, not reviewable in a PR.</li>
+  <li><strong><code>import</code> blocks</strong> (Terraform 1.5+): declared in code, shown in <code>plan</code>, applied like any change, so they're reviewable and repeatable. With <strong><code>terraform plan -generate-config-out=generated.tf</code></strong> Terraform drafts the resource configuration for you. Then tidy the code until <code>plan</code> shows <strong>no changes</strong>.</li>
+</ul>
+<p><strong>Refactoring:</strong> renaming a resource or moving it into a module would normally destroy and recreate it. <strong><code>moved</code> blocks</strong> record the address change in code; <code>terraform state mv</code> does it imperatively.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Configure backend with versioning, encryption and locking.</li>
+  <li>Every plan/apply acquires and releases the lock.</li>
+  <li>To adopt a resource: add an <code>import</code> block, generate config, plan, apply.</li>
+  <li>To refactor: add <code>moved</code> blocks; plan should show moves, not destroys.</li>
+  <li>Restore from bucket versions if state is damaged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">import {
+  to = aws_s3_bucket.legacy
+  id = &quot;acme-legacy-data&quot;
+}
+
+moved {
+  from = aws_instance.web
+  to   = module.web.aws_instance.this
+}</code></pre>
+<pre><code class="language-bash">terraform plan -generate-config-out=generated.tf
+terraform apply
+terraform force-unlock 2f6e9c1d-...     # only after confirming no active run</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No locking, especially with several pipelines sharing state.</li>
+  <li>Force-unlocking a lock that belongs to a running apply.</li>
+  <li>Importing and then applying without reaching a clean plan, causing unwanted changes.</li>
+  <li>Editing state JSON by hand.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Team state lives in a remote backend like S3, Azure Storage or HCP Terraform, encrypted and versioned. Locking ensures only one apply runs at a time; without it two people can corrupt state or create duplicates. The S3 backend used a DynamoDB table for locks and now supports native locking with a lock file, and Azure uses blob leases. To bring manually created infrastructure under management I use import blocks, which are reviewable in the plan and can generate the configuration, then adjust the code until plan shows no changes; the older terraform import command also works. For refactoring I use moved blocks or state mv, and I never edit the state file by hand.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you recover a stuck lock?</strong> Verify no run is active, then <code>terraform force-unlock</code> with the lock ID.</li>
+  <li><strong>Why prefer import blocks over the CLI command?</strong> They're in code, reviewed in plan, and can generate configuration.</li>
+  <li><strong>Stop managing a resource without deleting it?</strong> A <code>removed</code> block with <code>lifecycle { destroy = false }</code>, or <code>terraform state rm</code>.</li>
+</ul>
+</article>
+</body>
+</html>

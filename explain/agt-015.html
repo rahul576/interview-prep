@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-015 · How do you implement observability for agents in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-015" data-topic="AI Agents &amp; AIOps">
+<h1>How do you implement observability for agents in production?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Trace <strong>every run end to end</strong>, with spans for <strong>each model call and tool call</strong>, capture <strong>inputs, outputs, decisions and token usage</strong>, aggregate <strong>metrics</strong> (success, steps, cost, latency, tool errors, escalations), link traces to <strong>user feedback and outcomes</strong>, follow <strong>OpenTelemetry GenAI conventions</strong>, and <strong>replay</strong> failed runs.</p>
+
+<h2>Detailed explanation</h2>
+<p>Traditional APM tells you an endpoint is slow; with agents you need to know <strong>why the agent did what it did</strong>. The core is <strong>distributed tracing</strong>: a root span per agent run, nested spans for every <strong>model call</strong> (model and version, prompt version, input and output tokens, latency, finish reason) and every <strong>tool call</strong> (name, arguments, result size, errors, latency). Sub-agents become child spans under the same trace. Where models expose them, <strong>reasoning summaries</strong> and decision points are captured, so you can reconstruct the trajectory step by step.</p>
+<p><strong>OpenTelemetry GenAI semantic conventions</strong> define standard attributes such as <code>gen_ai.request.model</code>, <code>gen_ai.usage.input_tokens</code>, and operation names for chat and tool execution, including agent spans. Instrumenting with them lets traces flow both to LLM-focused tools such as <strong>Langfuse</strong>, <strong>LangSmith</strong>, Arize Phoenix or cloud offerings, and to your main APM like Datadog, Grafana or Azure Monitor.</p>
+<p><strong>Metrics</strong> aggregate health: task success rate, steps per task, cost per task, latency distribution, tool error rates, escalation and abandonment rates, guardrail triggers and how often limits are hit. Dashboards should slice by agent version, model, tenant and task type.</p>
+<p><strong>Outcome linking</strong> closes the loop: thumbs up or down, whether a resolved ticket was reopened, whether a code change was merged or reverted. Those signals are often more meaningful than model metrics.</p>
+<p>Because traces contain user data, apply <strong>redaction</strong>, access control and retention limits. Finally, failed or poorly rated runs can be <strong>inspected and replayed</strong> in a test environment and turned into evaluation cases.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Generate a run ID; create the root span with user, tenant and agent version.</li>
+  <li>Wrap each model and tool call in child spans with GenAI attributes.</li>
+  <li>Export via OpenTelemetry to an LLM observability tool and APM.</li>
+  <li>Compute metrics and alerts on success, cost, latency and errors.</li>
+  <li>Attach feedback and business outcomes to the trace.</li>
+  <li>Sample failing runs for review; convert them into eval cases.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from opentelemetry import trace
+tracer = trace.get_tracer(&quot;support-agent&quot;)
+
+with tracer.start_as_current_span(&quot;invoke_agent support-agent&quot;) as run:
+    run.set_attribute(&quot;gen_ai.operation.name&quot;, &quot;invoke_agent&quot;)
+    run.set_attribute(&quot;app.agent.version&quot;, &quot;2026.05.2&quot;)
+    with tracer.start_as_current_span(&quot;chat&quot;) as span:
+        resp = client.messages.create(model=MODEL, messages=msgs, tools=tools)
+        span.set_attribute(&quot;gen_ai.request.model&quot;, MODEL)
+        span.set_attribute(&quot;gen_ai.usage.input_tokens&quot;, resp.usage.input_tokens)
+        span.set_attribute(&quot;gen_ai.usage.output_tokens&quot;, resp.usage.output_tokens)
+    with tracer.start_as_current_span(&quot;execute_tool find_orders&quot;) as span:
+        span.set_attribute(&quot;gen_ai.tool.name&quot;, &quot;find_orders&quot;)
+        result = find_orders(**args)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Logging only the final answer.</li>
+  <li>Storing full prompts with personal data forever.</li>
+  <li>No link between traces and outcomes.</li>
+  <li>Separate, unlinked traces for sub-agents.</li>
+  <li>Dashboards without version breakdowns, so regressions hide.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each run is traced end to end: a root span for the task and nested spans for every model call, with model, prompt version, tokens and latency, and every tool call, with arguments, results and errors, so I can see the full trajectory. Metrics show health: success rate, steps and cost per task, latency, tool errors, escalations and limit hits. Traces are linked to user feedback and business outcomes, like whether a ticket was reopened. I instrument with OpenTelemetry GenAI conventions so data goes to tools like Langfuse or LangSmith and to our APM. Failed runs can be replayed and become evaluation cases, with redaction and retention rules for sensitive data.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which metric warns first that a new model made things worse?</strong> Task success and escalation rate by category, plus steps per task, compared against the previous version.</li>
+  <li><strong>How long do you keep traces?</strong> Short retention for full content, longer for redacted metadata and metrics.</li>
+  <li><strong>Sampling?</strong> Keep all failures and a sample of successes.</li>
+</ul>
+</article>
+</body>
+</html>

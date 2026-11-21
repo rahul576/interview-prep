@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-315 · What is reserved concurrency in AWS Lambda?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-315" data-topic="Cloud (AWS)">
+<h1>What is reserved concurrency in AWS Lambda?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Reserved concurrency</strong> sets aside a number of concurrent executions for one function from the <strong>regional account pool</strong> and simultaneously <strong>caps</strong> the function at that number; setting it to <strong>0 disables</strong> the function; it is <strong>free</strong> and different from <strong>provisioned concurrency</strong>, which <strong>pre-initialises instances</strong> to avoid cold starts and <strong>costs money</strong>; for SQS triggers, <strong>maximum concurrency on the event source mapping</strong> is usually preferred.</p>
+
+<h2>Detailed explanation</h2>
+<p>All Lambda functions in a region share the account's concurrency quota (1,000 by default). Without controls, one busy function can consume it all and starve others, and one function can overwhelm whatever it calls.</p>
+<p><strong>Reserved concurrency</strong> solves both:</p>
+<ul>
+  <li><strong>Guarantee:</strong> reserving 100 for the payments function means those 100 are always available to it; other functions cannot use them.</li>
+  <li><strong>Cap:</strong> the payments function can never exceed 100 concurrent executions. Excess invocations are <strong>throttled</strong> (HTTP 429 for synchronous calls; retried for async and stream or queue sources).</li>
+  <li><strong>Kill switch:</strong> reserved concurrency 0 stops all invocations immediately, useful during incidents.</li>
+  <li><strong>No charge.</strong> But reserved capacity reduces the unreserved pool for other functions (AWS keeps at least 100 unreserved).</li>
+</ul>
+<p><strong>Provisioned concurrency</strong> keeps a set number of execution environments <strong>initialised and warm</strong>, eliminating cold starts for that number of concurrent requests. It is billed while configured, and is applied to a version or alias. It can be scheduled or auto-scaled with Application Auto Scaling. For Java, <strong>SnapStart</strong> is often a cheaper alternative.</p>
+<p><strong>With SQS:</strong> reserved concurrency limits invocations, but the event source mapping keeps polling; messages that cannot be invoked are throttled and returned, and their receive count increases, which can push them into the <strong>DLQ</strong> without ever being processed. <strong>Maximum concurrency</strong> on the ESM limits polling itself, avoiding this. You can use both, with maximum concurrency at or below reserved concurrency.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide the safe concurrency for the function and its downstreams.</li>
+  <li>Set reserved concurrency to guarantee and cap it.</li>
+  <li>For SQS triggers, set maximum concurrency on the mapping.</li>
+  <li>Add provisioned concurrency only for latency-sensitive paths.</li>
+  <li>Monitor <code>Throttles</code> and <code>ConcurrentExecutions</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws lambda put-function-concurrency --function-name payments \
+  --reserved-concurrent-executions 20        # guarantee and cap at 20
+
+aws lambda put-function-concurrency --function-name payments \
+  --reserved-concurrent-executions 0         # emergency stop
+
+aws lambda put-provisioned-concurrency-config --function-name checkout-api \
+  --qualifier live --provisioned-concurrent-executions 10   # warm instances, billed</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Reserved concurrency</th><th>Provisioned concurrency</th></tr></thead>
+<tbody>
+<tr><td>Purpose</td><td>Guarantee and cap</td><td>Pre-warmed, no cold starts</td></tr>
+<tr><td>Cost</td><td>Free</td><td>Charged while configured</td></tr>
+<tr><td>Applies to</td><td>Function</td><td>Version or alias</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Confusing reserved with provisioned concurrency.</li>
+  <li>Using reserved concurrency as the only throttle for an SQS trigger.</li>
+  <li>Reserving so much that other functions are starved.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Reserved concurrency guarantees a function a number of concurrent executions from the regional pool, so other functions can't take them, and at the same time caps it at that number. For example, reserving twenty protects a downstream database because at most twenty instances run. Setting it to zero disables the function, a handy kill switch. It's free. Provisioned concurrency is different: it keeps instances pre-initialised to avoid cold starts and costs money. For SQS triggers I prefer maximum concurrency on the event source mapping, because it limits polling instead of causing throttled retries.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can reserved concurrency with SQS cause DLQ messages?</strong> Throttled invocations return messages and increase their receive count until <code>maxReceiveCount</code> is hit.</li>
+  <li><strong>When use provisioned concurrency?</strong> Latency-sensitive synchronous APIs with predictable traffic.</li>
+  <li><strong>Unreserved minimum?</strong> AWS keeps at least 100 unreserved executions per account.</li>
+</ul>
+</article>
+</body>
+</html>

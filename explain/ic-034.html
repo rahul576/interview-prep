@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-034 · What are dynamic blocks in Terraform, and when should you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-034" data-topic="Infrastructure as Code">
+<h1>What are dynamic blocks in Terraform, and when should you use them?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>dynamic block</strong> generates <strong>repeated nested blocks</strong> (such as <code>ingress</code> rules or <code>setting</code> blocks) from a collection with <strong>for_each</strong> and a <strong>content</strong> body; useful in reusable modules, but overuse hurts readability, and <strong>separate resources</strong> are often clearer.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some resources define parts of themselves with <strong>nested blocks</strong> rather than arguments, for example <code>ingress {}</code> and <code>egress {}</code> inside an <code>aws_security_group</code>, <code>setting {}</code> in an Elastic Beanstalk environment, or <code>rule {}</code> in a WAF. Normal <code>for_each</code> repeats a whole resource; to repeat a <strong>nested block</strong> inside one resource, you use a <code>dynamic</code> block.</p>
+<p>Syntax: <code>dynamic &quot;ingress&quot; { for_each = var.ingress_rules content { ... } }</code>. The label is the name of the nested block to generate. Inside <code>content</code>, the iterator is named after the label by default, so you access <code>ingress.key</code> and <code>ingress.value</code>; the <code>iterator</code> argument renames it. You can also use dynamic blocks to make an <strong>optional nested block</strong>: <code>for_each = var.logging_enabled ? [1] : []</code>.</p>
+<p>They shine in <strong>reusable modules</strong>, where callers pass a list of rules or settings and the module should not hard-code how many there are.</p>
+<p>The downsides: dynamic blocks hide the actual configuration behind loops, making code and reviews harder, and plans on large nested-block resources are noisy. A security group with 30 inline rules is <strong>one resource</strong>; changing one rule often shows the whole set of nested blocks being modified because the provider tracks them as a set, which makes it hard to see what actually changed. Many providers now offer <strong>separate resources</strong> for the repeated items, for example <code>aws_vpc_security_group_ingress_rule</code> and <code>aws_vpc_security_group_egress_rule</code>, each rule then a resource with its own address, combined with <code>for_each</code>. That yields smaller, clearer diffs and lets different modules add rules to the same group. Do not mix inline rules and separate rule resources for the same group: they fight each other.</p>
+<p>HashiCorp's guidance is to use dynamic blocks sparingly, mainly when building modules, not to hide simple static configuration.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform evaluates the <code>for_each</code> collection.</li>
+  <li>For each element, it emits one nested block with the <code>content</code> body.</li>
+  <li>The iterator exposes key and value.</li>
+  <li>An empty collection produces no blocks.</li>
+  <li>The provider receives the expanded blocks like hand-written ones.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;ingress_rules&quot; {
+  type = list(object({ port = number, cidr = string, description = string }))
+}
+
+resource &quot;aws_security_group&quot; &quot;web&quot; {
+  name   = &quot;web&quot;
+  vpc_id = var.vpc_id
+
+  dynamic &quot;ingress&quot; {
+    for_each = var.ingress_rules
+    content {
+      from_port   = ingress.value.port
+      to_port     = ingress.value.port
+      protocol    = &quot;tcp&quot;
+      cidr_blocks = [ingress.value.cidr]
+      description = ingress.value.description
+    }
+  }
+}
+
+# Often clearer: one resource per rule
+resource &quot;aws_vpc_security_group_ingress_rule&quot; &quot;web&quot; {
+  for_each          = { for r in var.ingress_rules : &quot;${r.port}-${r.cidr}&quot; =&gt; r }
+  security_group_id = aws_security_group.web.id
+  from_port         = each.value.port
+  to_port           = each.value.port
+  ip_protocol       = &quot;tcp&quot;
+  cidr_ipv4         = each.value.cidr
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Dynamic blocks for static configuration that is clearer written out.</li>
+  <li>Nesting dynamic blocks several levels deep.</li>
+  <li>Mixing inline rules and standalone rule resources on the same security group.</li>
+  <li>Forgetting that the iterator name is the block label, not <code>each</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Some resources have repeating nested blocks, like ingress rules in a security group. A dynamic block generates them from a collection: dynamic ingress with for_each over var.ingress_rules and a content block using ingress.value. That's useful in reusable modules where callers pass a list. But overusing them makes code hard to read and review, so I use them only when needed, and where the provider offers separate resources, such as aws_vpc_security_group_ingress_rule, I prefer those: each rule has its own address and the diffs are much smaller.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can one big security group with dynamic rules produce noisy plans?</strong> The rules are one set attribute of one resource, so any change shows the set being rewritten.</li>
+  <li><strong>How do you make a nested block optional?</strong> <code>for_each = var.enabled ? [1] : []</code>.</li>
+  <li><strong>Can dynamic blocks generate meta-arguments like lifecycle?</strong> No, only provider-defined nested blocks.</li>
+</ul>
+</article>
+</body>
+</html>

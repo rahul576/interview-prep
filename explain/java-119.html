@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-119 · How does the JIT compiler optimise code, and what do warm-up and GraalVM native images change?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-119" data-topic="JVM &amp; Performance">
+<h1>How does the JIT compiler optimise code, and what do warm-up and GraalVM native images change?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The JVM <strong>interprets</strong> bytecode first, <strong>profiles</strong> it, and uses <strong>tiered compilation</strong> (fast <strong>C1</strong>, then optimising <strong>C2</strong>) to compile <strong>hot methods</strong> with <strong>inlining, escape analysis</strong> and <strong>speculative optimisations</strong>, which is why services need <strong>warm-up</strong>; <strong>GraalVM native image</strong> compiles <strong>ahead of time</strong> for instant startup, while <strong>CRaC</strong> and <strong>Project Leyden AOT caches</strong> cut startup without leaving the JVM.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Interpreter and profiling.</strong> At startup every method runs in the interpreter, which is slow but starts immediately. The JVM counts invocations and loop back-edges and collects <strong>profiles</strong>: which branches are taken, which concrete types appear at call sites.</p>
+<p><strong>Tiered compilation.</strong> When a method gets warm, <strong>C1</strong> compiles it quickly with light optimisations and profiling code. When it becomes hot, <strong>C2</strong> recompiles it using the gathered profile into highly optimised machine code. Hot loops can be replaced mid-execution via <strong>on-stack replacement (OSR)</strong>. Compiled code lives in the <strong>code cache</strong>.</p>
+<p><strong>Key optimisations.</strong> <strong>Inlining</strong> copies small or hot callees into the caller, removing call overhead and enabling everything else. <strong>Escape analysis</strong> detects objects that never leave a method, enabling <strong>scalar replacement</strong> (no heap allocation) and <strong>lock elision</strong>. Also <strong>loop unrolling</strong>, range-check elimination, intrinsics for things like <code>System.arraycopy</code> and string operations, and <strong>speculative</strong> optimisations: if a call site has only ever seen one implementation, C2 devirtualises it. If an assumption later breaks (a new subclass is loaded, an untaken branch is hit), the code is <strong>deoptimised</strong> back to the interpreter and recompiled.</p>
+<p><strong>Warm-up.</strong> Until hot paths are compiled, latency is higher and CPU usage spikes from compilation. Mitigations: warm-up traffic before joining the load balancer, readiness probes that wait, or synthetic requests at startup.</p>
+<p><strong>GraalVM native image.</strong> Builds a standalone executable ahead of time with a <strong>closed-world</strong> analysis. Startup is milliseconds, memory footprint is much smaller, there is no warm-up. Trade-offs: long builds, reflection, proxies and resources need configuration (Spring Boot generates much of it via its AOT processing), and peak throughput may be lower than a well-warmed C2 unless profile-guided optimisation is used (available in Oracle GraalVM).</p>
+<p><strong>Other options.</strong> <strong>CRaC</strong> (Coordinated Restore at Checkpoint, in some OpenJDK distributions and supported by Spring) snapshots a warmed JVM and restores it in milliseconds. <strong>Project Leyden</strong> has started landing in OpenJDK: recent JDKs offer an <strong>AOT cache</strong> that stores pre-loaded and linked classes and method profiles from a training run, improving startup and warm-up while staying on the normal JVM.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Method runs in the interpreter; counters and profiles accumulate.</li>
+  <li>Threshold reached: C1 compiles with profiling.</li>
+  <li>More invocations: C2 compiles optimised code using the profile.</li>
+  <li>Assumption violated: deoptimise, interpret, recompile.</li>
+  <li>Native image skips steps 1-4 by compiling everything at build time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Watch JIT activity
+java -XX:+PrintCompilation -jar app.jar | head
+
+# JDK AOT cache (recent JDKs): training run, then production run
+java -XX:AOTCacheOutput=app.aot -jar app.jar   # run representative workload, exit
+java -XX:AOTCache=app.aot -jar app.jar
+
+# Spring Boot native image (GraalVM installed)
+./mvnw -Pnative native:compile
+./target/orders-service     # starts in tens of milliseconds</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>JIT (HotSpot)</th><th>Native image (AOT)</th></tr></thead>
+<tbody>
+<tr><td>Startup</td><td>Seconds</td><td>Milliseconds</td></tr>
+<tr><td>Peak throughput</td><td>Excellent after warm-up</td><td>Good; PGO helps</td></tr>
+<tr><td>Memory</td><td>Higher</td><td>Lower</td></tr>
+<tr><td>Dynamic features</td><td>Full</td><td>Need configuration</td></tr>
+<tr><td>Build</td><td>Fast</td><td>Slow, memory-hungry</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Benchmarking without warm-up and blaming Java for slowness.</li>
+  <li>Assuming native image is always faster at steady state.</li>
+  <li>Sending full traffic to a freshly started pod.</li>
+  <li>Treating deoptimisation as a bug rather than normal behaviour.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The JVM starts by interpreting bytecode and profiling which methods are hot. With tiered compilation, C1 compiles warm code quickly, then C2 recompiles the hottest code using the profile, applying inlining, escape analysis that can remove allocations, loop optimisations and speculative devirtualisation, with deoptimisation if an assumption breaks. That's why Java services need warm-up before peak performance. GraalVM native image compiles ahead of time into a native binary with millisecond startup and lower memory, good for serverless or scale-to-zero, at the cost of long builds and reflection configuration. CRaC snapshots and Leyden-style AOT caches are ways to cut startup while staying on the JVM.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What would make you choose a native image for a Spring Boot service?</strong> Fast scale-out, serverless or scale-to-zero, tight memory limits, and dependencies that support AOT.</li>
+  <li><strong>What is deoptimisation?</strong> Discarding compiled code whose speculative assumptions no longer hold, falling back to the interpreter.</li>
+  <li><strong>How do you reduce warm-up impact in Kubernetes?</strong> Readiness gates after warm-up requests, gradual traffic ramp, or AOT caches/CRaC.</li>
+</ul>
+</article>
+</body>
+</html>

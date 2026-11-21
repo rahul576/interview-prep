@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-010 · How does ConcurrentHashMap differ from Hashtable or Collections.synchronizedMap?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-010" data-topic="Collections">
+<h1>How does ConcurrentHashMap differ from Hashtable or Collections.synchronizedMap?</h1>
+<p class="ex-meta">Collections · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Hashtable</strong> and <strong>Collections.synchronizedMap</strong> guard every call with <strong>one lock for the whole map</strong>, while <strong>ConcurrentHashMap</strong> uses <strong>CAS and per-bin locking</strong>, <strong>non-blocking reads</strong>, <strong>weakly consistent iterators</strong> and <strong>atomic compound operations</strong>, and it rejects <strong>null keys and values</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>Hashtable</code> is a legacy class whose methods are all <code>synchronized</code>. <code>Collections.synchronizedMap(map)</code> wraps any map and synchronises every method on a single mutex. In both cases only one thread can touch the map at a time, so under contention threads queue up and throughput collapses. Worse, iterating still requires the caller to hold the lock manually, otherwise you can get <code>ConcurrentModificationException</code>.</p>
+<p><code>ConcurrentHashMap</code> was designed for concurrency. In <strong>Java 7</strong> it used <strong>segments</strong> (lock striping). Since <strong>Java 8</strong>, a write to an empty bin uses a <strong>compare-and-swap</strong>, and a write to an occupied bin synchronises only on the <strong>first node of that bin</strong>. Threads writing to different bins proceed in parallel, and <strong>reads take no lock</strong> at all, relying on volatile reads. Resizing is incremental and other writers help transfer bins.</p>
+<p>Its iterators are <strong>weakly consistent</strong>: they never throw ConcurrentModificationException and may or may not reflect updates made during iteration. It <strong>forbids null</strong> keys and values, because in a concurrent map <code>get</code> returning null must unambiguously mean &quot;absent&quot;. Most importantly it offers <strong>atomic compound operations</strong> such as <code>putIfAbsent</code>, <code>computeIfAbsent</code>, <code>compute</code> and <code>merge</code>, which make check-then-act logic safe.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>get</code> reads the volatile table and bin without locking.</li>
+  <li><code>put</code> into an empty bin: CAS the new node in.</li>
+  <li><code>put</code> into an occupied bin: <code>synchronized</code> on the head node only.</li>
+  <li>Long bins become trees, like HashMap.</li>
+  <li><code>size()</code> uses striped counters, so it is an estimate under concurrent updates.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ConcurrentMap&lt;String, LongAdder&gt; hits = new ConcurrentHashMap&lt;&gt;();
+
+void record(String page) {
+    hits.computeIfAbsent(page, k -&gt; new LongAdder()).increment(); // atomic
+}
+
+// Unsafe check-then-act, even on ConcurrentHashMap:
+// if (!map.containsKey(k)) map.put(k, v);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>Hashtable / synchronizedMap</th><th>ConcurrentHashMap</th></tr></thead>
+<tbody>
+<tr><td>Locking</td><td>one lock, whole map</td><td>CAS + per-bin lock</td></tr>
+<tr><td>Reads</td><td>blocking</td><td>non-blocking</td></tr>
+<tr><td>Iterator</td><td>fail-fast</td><td>weakly consistent</td></tr>
+<tr><td>Nulls</td><td>Hashtable no, wrapper depends on map</td><td>not allowed</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking <code>containsKey</code> followed by <code>put</code> is atomic because the map is concurrent.</li>
+  <li>Using <code>synchronizedMap</code> and iterating without holding its lock.</li>
+  <li>Relying on <code>size()</code> as an exact value during heavy writes.</li>
+  <li>Doing slow work inside <code>computeIfAbsent</code>, which holds the bin lock.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Hashtable and synchronizedMap put a single lock around the whole map, so only one thread works at a time and contention kills throughput. ConcurrentHashMap since Java 8 uses CAS for empty bins and locks only the head node of a bin, so writers to different bins run in parallel and readers never block. Its iterators are weakly consistent and don't throw ConcurrentModificationException. It rejects nulls to avoid ambiguity, and it gives atomic operations like computeIfAbsent and merge, which is what I use instead of check-then-act.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is containsKey then put safe?</strong> No, it is a race; use <code>putIfAbsent</code> or <code>computeIfAbsent</code>.</li>
+  <li><strong>Why no nulls?</strong> You couldn't distinguish &quot;absent&quot; from &quot;mapped to null&quot; between two calls.</li>
+  <li><strong>How did Java 7 differ?</strong> It used 16 segments, each with its own ReentrantLock.</li>
+</ul>
+</article>
+</body>
+</html>

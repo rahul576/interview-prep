@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-051 · A build pipeline takes 40 minutes and developers are frustrated. How do you speed it up?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-051" data-topic="Azure DevOps &amp; Pipelines">
+<h1>A build pipeline takes 40 minutes and developers are frustrated. How do you speed it up?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Measure first</strong> (run timeline), then attack the biggest steps: <strong>cache dependencies</strong> (Cache task keyed on lock files), <strong>parallelise</strong> independent jobs, <strong>build only what changed</strong> (path filters), use <strong>Docker layer/registry caching</strong>, <strong>split slow tests</strong> across agents, and use <strong>faster or warm agents</strong> (Managed DevOps Pools with standby and persistent caches).</p>
+
+<h2>Detailed explanation</h2>
+<p>Optimising without data wastes effort. The <strong>run timeline</strong> shows duration per stage, job and step; <strong>Pipeline analytics</strong> shows trends and failure rates. Typically two or three steps dominate: dependency restore, Docker build, tests or waiting for an agent.</p>
+<p><strong>Common wins:</strong></p>
+<ul>
+  <li><strong>Dependency caching:</strong> the <code>Cache@2</code> task restores <code>~/.npm</code>, <code>~/.nuget/packages</code>, <code>~/.m2</code> or pip caches with a key built from the <strong>lock file hash</strong>, plus <code>restoreKeys</code> fallbacks. Restoring 2 GB of packages from scratch every run is often minutes.</li>
+  <li><strong>Parallel jobs:</strong> unit tests, linting, SAST and container build don't depend on each other; split them into jobs that run simultaneously (needs enough parallel jobs).</li>
+  <li><strong>Build only what changed:</strong> path filters or an &quot;affected&quot; script in monorepos; skip docs-only changes.</li>
+  <li><strong>Docker:</strong> order Dockerfile layers so dependency installation comes before copying source, use <strong>BuildKit</strong> with <code>--cache-from</code>/<code>--cache-to</code> a registry cache, and multi-stage builds to keep images small.</li>
+  <li><strong>Tests:</strong> <strong>split test suites</strong> across parallel agents (<code>parallel: 4</code> with test slicing), move slow end-to-end tests to a later stage or nightly, and fix or quarantine flaky tests that cause reruns.</li>
+  <li><strong>Agents:</strong> Microsoft-hosted agents start cold and are relatively small. <strong>Managed DevOps Pools</strong> with larger SKUs, <strong>standby agents</strong> and <strong>stateful</strong> agents keep caches and Docker layers warm, cutting startup and restore time. Also check queue time.</li>
+  <li><strong>Shallow checkout:</strong> <code>fetchDepth: 1</code> for large repos.</li>
+</ul>
+<p>Set a target (for example under 10 minutes for PR builds) and track it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Collect step durations over several runs.</li>
+  <li>Fix the largest contributor first.</li>
+  <li>Add caching keyed on lock files.</li>
+  <li>Restructure into parallel jobs.</li>
+  <li>Optimise Docker and tests.</li>
+  <li>Upgrade agents; re-measure and repeat.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">variables:
+  npm_config_cache: $(Pipeline.Workspace)/.npm
+steps:
+- checkout: self
+  fetchDepth: 1
+- task: Cache@2
+  inputs:
+    key: 'npm | &quot;$(Agent.OS)&quot; | package-lock.json'
+    restoreKeys: 'npm | &quot;$(Agent.OS)&quot;'
+    path: $(npm_config_cache)
+- script: npm ci
+- script: |
+    docker buildx build --cache-from type=registry,ref=acrprod.azurecr.io/web:cache \
+      --cache-to type=registry,ref=acrprod.azurecr.io/web:cache,mode=max -t web:$(Build.BuildId) .</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Caching without the lock file in the key, causing stale or wrong builds.</li>
+  <li>Caching <code>node_modules</code> instead of the package manager cache.</li>
+  <li>Parallelising without enough parallel jobs, so jobs just queue.</li>
+  <li>Deleting tests instead of moving or fixing them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd measure with the run timeline, which usually shows two or three steps dominating. Then: cache dependencies with the Cache task keyed on the lock file, run independent work like unit tests, linting and scans as parallel jobs, and use path filters so a monorepo only builds what changed. For containers I'd order Dockerfile layers well and use registry-based BuildKit caching. Slow suites get split across agents, with heavy end-to-end tests later or nightly. Finally, agents: larger, warm agents in Managed DevOps Pools with standby and persistent caches can save many minutes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keep caches from causing wrong builds?</strong> Key on lock files and OS, use <code>npm ci</code>, never cache build outputs blindly.</li>
+  <li><strong>Measure improvement?</strong> Pipeline analytics duration trends, p50 and p90.</li>
+  <li><strong>Test splitting?</strong> Distribute tests by historical duration across parallel jobs.</li>
+</ul>
+</article>
+</body>
+</html>

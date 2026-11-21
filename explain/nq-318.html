@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-318 · How would you implement a callback or polling mechanism for an asynchronous downstream system?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-318" data-topic="Cloud (AWS)">
+<h1>How would you implement a callback or polling mechanism for an asynchronous downstream system?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Prefer <strong>callbacks or events</strong> from the downstream system: store the request as <strong>PENDING with a correlation ID</strong>, return <strong>202 Accepted with a status link</strong>, and on callback <strong>authenticate, verify the signature, match the correlation ID and update state idempotently</strong>; if callbacks are impossible, <strong>poll efficiently</strong> with <strong>delayed SQS messages or Step Functions wait states</strong>, <strong>exponential backoff</strong> and a <strong>maximum timeout</strong>, then notify clients via <strong>status endpoint, webhook, WebSocket or events</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Many downstream systems (payment providers, KYC checks, document processing, partner APIs) take seconds to hours. Holding an HTTP request open for that is fragile, so the design becomes asynchronous.</p>
+<p><strong>Callback first:</strong></p>
+<ol>
+  <li>Persist the request with a <strong>correlation ID</strong> and status <code>PENDING</code> <strong>before</strong> calling downstream (avoiding the race where the callback arrives first).</li>
+  <li>Submit to the downstream system with the correlation ID and a <strong>callback URL</strong>, or subscribe to its events.</li>
+  <li>Return <strong>202 Accepted</strong> with <code>Location: /requests/{id}</code> to your client.</li>
+  <li>On callback: <strong>authenticate</strong> (mTLS, OAuth, or HMAC <strong>signature</strong> with timestamp to stop replay), look up by correlation ID, apply a <strong>state transition idempotently</strong> (callbacks can be repeated or out of order), respond 2xx quickly and process asynchronously via a queue.</li>
+  <li>Publish a domain event and notify the client.</li>
+</ol>
+<p><strong>Polling fallback:</strong> avoid tight loops and cron jobs scanning tables. Schedule each check: send an SQS message with <code>DelaySeconds</code>, re-enqueue with longer delays (10 s, 30 s, 2 min, 10 min); or use <strong>Step Functions</strong> with a Wait state and a loop with retry/backoff, ideal for long durations. Respect downstream rate limits, and after a <strong>maximum time</strong> mark the request <code>FAILED</code> or <code>TIMED_OUT</code> and escalate.</p>
+<p><strong>Hybrid:</strong> many teams use callbacks plus a slower <strong>reconciliation poll</strong> to catch missed callbacks.</p>
+<p><strong>Client notification:</strong> status endpoint for polling clients, webhooks to their systems, WebSocket or Server-Sent Events for UIs, or events on a bus.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Save request as PENDING with correlation ID.</li>
+  <li>Call downstream with callback URL.</li>
+  <li>Return 202 and status link.</li>
+  <li>Callback: verify, match, update idempotently.</li>
+  <li>If no callback: delayed polls with backoff until done or timeout.</li>
+  <li>Notify the client and publish an event.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@PostMapping(&quot;/payments/callback&quot;)
+public ResponseEntity&lt;Void&gt; callback(@RequestHeader(&quot;X-Signature&quot;) String sig, @RequestBody String body) {
+    if (!signatureVerifier.valid(body, sig)) return ResponseEntity.status(401).build();
+    CallbackEvent e = mapper.readValue(body, CallbackEvent.class);
+    int updated = jdbc.update(
+        &quot;UPDATE payment_request SET status = ? WHERE correlation_id = ? AND status = 'PENDING'&quot;,
+        e.status(), e.correlationId());           // idempotent: only first transition applies
+    if (updated == 1) events.publish(new PaymentCompleted(e.correlationId(), e.status()));
+    return ResponseEntity.ok().build();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saving the record after calling downstream, so early callbacks find nothing.</li>
+  <li>Unauthenticated callback endpoints.</li>
+  <li>Non-idempotent updates on duplicate callbacks.</li>
+  <li>Tight polling loops with no backoff or timeout.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My first choice is a callback. I save the request as PENDING with a correlation ID before calling downstream, send the correlation ID and a callback URL, and return 202 Accepted with a status link to our client. When the callback arrives, I verify its signature, find the request by correlation ID and update the state idempotently, since callbacks can repeat, then publish an event or notify the client by webhook or WebSocket. If the downstream system can't call back, I poll efficiently with delayed SQS messages or a Step Functions wait loop with exponential backoff, and give up after a maximum time, marking it failed or escalating.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Callback arrives before your record is saved?</strong> Persist first; otherwise store unmatched callbacks and retry matching.</li>
+  <li><strong>What if callbacks are lost?</strong> Reconciliation polling for requests pending too long.</li>
+  <li><strong>How to stop replay attacks?</strong> Signed timestamps, short tolerance windows and event-ID deduplication.</li>
+</ul>
+</article>
+</body>
+</html>

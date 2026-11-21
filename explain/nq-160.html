@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-160 · What is Metaspace?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-160" data-topic="JVM &amp; Performance">
+<h1>What is Metaspace?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Metaspace</strong> stores <strong>class metadata</strong> (class structures, method bytecode, constant pools, annotations) since <strong>Java 8</strong>, replacing <strong>PermGen</strong>; it lives in <strong>native memory</strong> and grows automatically, so cap it with <strong><code>-XX:MaxMetaspaceSize</code></strong>; <strong><code>OutOfMemoryError: Metaspace</code></strong> usually means a <strong>class loader leak</strong> or <strong>too many generated classes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When a class is loaded, the JVM creates an internal representation: its fields, methods, bytecode, the runtime constant pool, annotations, vtables and profiling data. That is <strong>class metadata</strong>. Until Java 7 it lived in <strong>PermGen</strong>, a fixed-size part of the heap that was hard to size and frequently overflowed.</p>
+<p><strong>Metaspace</strong> (JEP 122, Java 8) moved this to <strong>native memory</strong>. Each class loader gets its own chunks of Metaspace, so when a loader becomes unreachable and is collected, all its classes are unloaded and the memory is returned in bulk. With compressed class pointers, part of the data, the class structures themselves, lives in the <strong>Compressed Class Space</strong> (<code>-XX:CompressedClassSpaceSize</code>, 1 GB reserved by default), which can overflow separately with <code>OutOfMemoryError: Compressed class space</code>.</p>
+<p><strong>Sizing flags.</strong></p>
+<ul>
+  <li><code>-XX:MaxMetaspaceSize</code>: hard cap; unlimited by default. Setting it in containers turns an invisible native-memory creep into a clear error.</li>
+  <li><code>-XX:MetaspaceSize</code>: the initial <strong>high-water mark</strong> that triggers a GC to unload classes (shown as <code>Metadata GC Threshold</code> in logs). Raising it avoids early full GCs during startup of large applications.</li>
+</ul>
+<p><strong>Typical causes of Metaspace OOM.</strong></p>
+<ul>
+  <li><strong>Class loader leaks</strong>: after hot redeploys in Tomcat or other containers, something in a parent loader (a <code>ThreadLocal</code>, a JDBC driver in <code>DriverManager</code>, a static cache, a running thread) still references the old application loader, so its thousands of classes stay loaded.</li>
+  <li><strong>Runtime class generation</strong>: dynamic proxies, CGLIB or ByteBuddy, scripting engines, or frameworks creating a new class per call.</li>
+  <li>Simply many classes in a large application with an overly tight limit.</li>
+</ul>
+<p><strong>Investigation.</strong> <code>jcmd VM.metaspace</code> and <code>VM.classloader_stats</code> show usage per loader; <code>-Xlog:class+load,class+unload</code> shows whether classes are being unloaded; a heap dump in MAT can reveal duplicate class loaders and their paths to GC roots.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Class loaded: metadata allocated in Metaspace chunks owned by its loader.</li>
+  <li>Usage reaches the high-water mark: GC attempts class unloading.</li>
+  <li>Unreachable class loaders are collected; their metadata is freed.</li>
+  <li>If usage reaches <code>MaxMetaspaceSize</code>, <code>OutOfMemoryError: Metaspace</code> is thrown.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:MetaspaceSize=128m -XX:MaxMetaspaceSize=300m -jar app.jar
+
+jstat -gc &lt;pid&gt; 2000 | awk '{print $9, $10}'   # MC (capacity), MU (used)
+jcmd &lt;pid&gt; VM.metaspace summary
+jcmd &lt;pid&gt; VM.classloader_stats | sort -k4 -n | tail</code></pre>
+<pre><code class="language-text">java.lang.OutOfMemoryError: Metaspace
+  at java.base/java.lang.ClassLoader.defineClass1(Native Method)
+  at net.bytebuddy.dynamic.loading...   &lt;- runtime class generation</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>PermGen</th><th>Metaspace</th></tr></thead>
+<tbody>
+<tr><td>Java versions</td><td>Up to 7</td><td>8 and later</td></tr>
+<tr><td>Memory</td><td>Heap</td><td>Native</td></tr>
+<tr><td>Default limit</td><td>Fixed (MaxPermSize)</td><td>Unlimited</td></tr>
+<tr><td>Error</td><td>PermGen space</td><td>Metaspace / Compressed class space</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving it unbounded in containers.</li>
+  <li>Believing <code>MetaspaceSize</code> is the maximum.</li>
+  <li>Raising the limit without checking for class loader leaks.</li>
+  <li>Placing the string pool or static values in Metaspace.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Metaspace is where the JVM stores class metadata: class structures, method bytecode, the constant pool and annotations. It replaced the Permanent Generation in Java 8. Unlike PermGen, which was part of the heap with a fixed maximum and often caused OutOfMemoryError: PermGen space, Metaspace is in native memory and grows as needed, by default without a limit, so I usually cap it with MaxMetaspaceSize. Class metadata is freed when its class loader is garbage collected. Problems typically come from class loader leaks after hot redeploys or from libraries generating many proxy classes at runtime, and I investigate them with jcmd VM.metaspace, class loading logs and a heap dump.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you investigate a Metaspace OutOfMemoryError?</strong> Check loader stats, class load/unload logs and a heap dump for duplicate loaders and their GC root paths.</li>
+  <li><strong>What is the Compressed Class Space?</strong> A reserved region for class structures when compressed class pointers are on.</li>
+  <li><strong>Does Metaspace get garbage collected?</strong> Indirectly; classes are unloaded when their loader is collected.</li>
+</ul>
+</article>
+</body>
+</html>

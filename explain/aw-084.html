@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-084 · How do you design hybrid DNS and connectivity between on-premises and many AWS accounts?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-084" data-topic="Cloud (AWS)">
+<h1>How do you design hybrid DNS and connectivity between on-premises and many AWS accounts?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Connect on-premises over <strong>redundant Direct Connect with site-to-site VPN backup</strong> into a <strong>Transit Gateway</strong> in a central network account, allocate addresses with <strong>VPC IPAM</strong>, and unify DNS with <strong>Route 53 Resolver inbound and outbound endpoints</strong>, <strong>forwarding rules shared through RAM</strong>, and <strong>private hosted zones associated</strong> across VPCs.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Connectivity</strong>: two or more <strong>Direct Connect</strong> connections at different DX locations (for high resilience), connected via a <strong>Direct Connect gateway</strong> to a <strong>Transit Gateway</strong> using a transit virtual interface. A <strong>site-to-site VPN</strong> over the internet to the same Transit Gateway serves as backup, with BGP preferring DX. The Transit Gateway lives in the <strong>network account</strong> and is shared with workload accounts through <strong>AWS Resource Access Manager</strong>. <strong>TGW route tables</strong> segment traffic: production VPCs, non-production VPCs, shared services and on-premises each get route tables controlling who can reach whom, and an <strong>inspection VPC</strong> with Network Firewall can sit in the path. For very large global networks, <strong>AWS Cloud WAN</strong> offers policy-based management.</p>
+<p><strong>IP planning</strong>: <strong>VPC IPAM</strong> manages pools per region and environment, allocates <strong>non-overlapping CIDRs</strong> to every new VPC and tracks usage, because overlaps with on-premises ranges make routing impossible without NAT.</p>
+<p><strong>DNS</strong>: inside VPCs, the <strong>Route 53 Resolver</strong> (the .2 address) answers queries. <strong>Inbound endpoints</strong> are ENIs in the shared VPC that on-premises DNS servers forward to, allowing them to resolve <strong>private hosted zones</strong> like aws.example.internal and VPC endpoint names. <strong>Outbound endpoints</strong> with <strong>forwarding rules</strong> send queries for corp.example.com to on-premises DNS servers. Rules are created in the network account and <strong>shared via RAM</strong> to all accounts, then associated with their VPCs, so every workload resolves on-premises names the same way. Private hosted zones are <strong>associated with VPCs</strong> in other accounts (via authorisation), or managed with <strong>Route 53 Profiles</strong>, which bundle zones, rules and DNS Firewall settings and share them across accounts. Centralising interface endpoints with shared private hosted zones also cuts cost.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>On-prem router peers BGP with AWS over DX and VPN.</li>
+  <li>DX gateway and VPN terminate on the Transit Gateway.</li>
+  <li>Workload VPCs attach to the TGW; route tables segment traffic.</li>
+  <li>On-prem DNS forwards AWS zones to Resolver inbound endpoints.</li>
+  <li>VPCs resolve corp zones via shared outbound forwarding rules.</li>
+  <li>IPAM guarantees unique CIDRs for new VPCs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws route53resolver create-resolver-rule --name corp-forward \
+  --rule-type FORWARD --domain-name corp.example.com \
+  --resolver-endpoint-id rslvr-out-123 \
+  --target-ips Ip=10.0.0.53,Port=53 Ip=10.0.1.53,Port=53
+
+aws ram create-resource-share --name dns-rules \
+  --resource-arns arn:aws:route53resolver:eu-west-1:111122223333:resolver-rule/rslvr-rr-abc \
+  --principals arn:aws:organizations::111122223333:organization/o-xyz
+
+# In each workload account
+aws route53resolver associate-resolver-rule \
+  --resolver-rule-id rslvr-rr-abc --vpc-id vpc-workload</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A single Direct Connect link with no backup.</li>
+  <li>Overlapping CIDRs discovered only when attaching a VPC.</li>
+  <li>Each account building its own DNS forwarding, creating inconsistent resolution.</li>
+  <li>Forgetting to authorise and associate private hosted zones across accounts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Connectivity runs over redundant Direct Connect links, with site-to-site VPN as backup, into a Transit Gateway in a central network account that attaches all workload VPCs and controls routing between them and on-premises. Address ranges come from VPC IPAM so nothing overlaps. For DNS, Resolver inbound endpoints let on-premises servers resolve AWS private zones, and outbound endpoints with forwarding rules send corp.example.com queries on-premises. Those rules are shared to every account through RAM, and private hosted zones are associated with the VPCs that need them, so every workload resolves both worlds consistently.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is DNS usually the hardest part?</strong> Split-horizon zones, many accounts, conditional forwarding loops and endpoint names all need consistent resolution in both directions.</li>
+  <li><strong>When choose Cloud WAN over Transit Gateway?</strong> For multi-region global networks managed through central policy.</li>
+  <li><strong>How make Direct Connect highly available?</strong> Multiple connections at separate locations, plus VPN failover.</li>
+</ul>
+</article>
+</body>
+</html>

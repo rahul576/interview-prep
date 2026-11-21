@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-067 · What must you consider when designing an active-active multi-region application on AWS?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-067" data-topic="Cloud (AWS)">
+<h1>What must you consider when designing an active-active multi-region application on AWS?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Active-active multi-region needs <strong>global routing</strong> (Route 53 latency/failover or <strong>Global Accelerator</strong>), a <strong>data replication and conflict strategy</strong> (DynamoDB global tables, home-region partitioning, Aurora Global with one writer), <strong>stateless, independent regions</strong>, <strong>idempotency and eventual consistency</strong>, <strong>region-by-region deployments</strong> and a budget for roughly double the infrastructure.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Routing</strong>: Route 53 <strong>latency-based</strong> records with health checks send users to the nearest healthy region, but failover depends on DNS caching. <strong>AWS Global Accelerator</strong> gives two static <strong>anycast IPs</strong>, routes over the AWS backbone, and shifts traffic within seconds when endpoint health fails. CloudFront in front adds origin failover for cacheable content. <strong>Route 53 Application Recovery Controller</strong> adds controlled, manual-override switching.</p>
+<p><strong>Data</strong> is the hard part. If both regions accept writes to the same items, you need <strong>conflict resolution</strong>. <strong>DynamoDB global tables</strong> replicate asynchronously with <strong>last-writer-wins</strong>, and now also offer <strong>multi-region strong consistency</strong> for some setups at higher latency. Alternatively, give each user or tenant a <strong>home region</strong> (cell or partition-based routing), so writes for one entity happen in one place and other regions serve reads or take over on failure. <strong>Aurora Global Database</strong> has <strong>one writer region</strong> (with write forwarding from secondaries), so it is active-active for reads but failover for writes. <strong>Aurora DSQL</strong> offers active-active distributed SQL. S3 cross-region replication, ElastiCache Global Datastore and Secrets Manager replication cover other state.</p>
+<p><strong>Independence</strong>: each region must run on its own, with its own copies of dependencies, queues and caches, and <strong>no synchronous cross-region calls</strong> on the request path, because that couples their availability and adds latency. Sessions must be stateless (tokens) or replicated.</p>
+<p><strong>Operations</strong>: design for <strong>idempotent</strong> writes (requests may be retried in another region), accept and surface <strong>eventual consistency</strong>, <strong>deploy one region at a time</strong> with bake time, keep identical IaC, run <strong>game days</strong> that fail a whole region, and watch quotas. Cost roughly doubles, plus cross-region data transfer.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Users resolve to the nearest region through Global Accelerator or Route 53.</li>
+  <li>Each region serves reads and writes from local data stores.</li>
+  <li>Data replicates asynchronously to the other region.</li>
+  <li>Conflicts resolve via last-writer-wins or home-region ownership.</li>
+  <li>On regional failure, health checks remove it and the other region absorbs traffic.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws dynamodb update-table --table-name carts \
+  --replica-updates '[{&quot;Create&quot;:{&quot;RegionName&quot;:&quot;us-east-1&quot;}}]'
+
+aws globalaccelerator create-endpoint-group --listener-arn $LISTENER \
+  --endpoint-group-region eu-west-1 \
+  --endpoint-configurations EndpointId=$ALB_EU,Weight=100 \
+  --health-check-path /health --traffic-dial-percentage 100</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Synchronous calls to the other region on the hot path.</li>
+  <li>Ignoring write conflicts until customers see lost updates.</li>
+  <li>Deploying to both regions simultaneously, so one bug takes down both.</li>
+  <li>Never testing full region evacuation under load and capacity limits.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First, routing: Route 53 latency-based records with health checks or Global Accelerator with anycast IPs and fast failover. The hard part is data: if both regions write, I need conflict handling, like DynamoDB global tables with last-writer-wins, or a home region per user or tenant, because Aurora Global Database has a single writer region. Each region must be stateless and fully independent, with no synchronous cross-region calls. Writes must be idempotent and the product must tolerate eventual consistency. I deploy one region at a time, run regular region-failure game days and budget for roughly double the infrastructure.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How avoid a deployment bug taking down both regions?</strong> Sequential regional deployments with bake time, alarms and automatic rollback.</li>
+  <li><strong>Why Global Accelerator over DNS?</strong> Static IPs and failover in seconds without depending on DNS caching.</li>
+  <li><strong>What is a cell-based architecture?</strong> Independent copies of the stack, each serving a subset of customers, limiting blast radius.</li>
+</ul>
+</article>
+</body>
+</html>

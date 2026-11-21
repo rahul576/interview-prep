@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-267 · How would you handle multiple orders from the same customer in the same year and return one row per customer per year?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-267" data-topic="Databases &amp; SQL">
+<h1>How would you handle multiple orders from the same customer in the same year and return one row per customer per year?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>GROUP BY customer and year</strong> already merges multiple orders into one row with <code>SUM(amount)</code> and <code>COUNT(order_id)</code>; the real trap is extra <strong>one-to-many joins</strong> that repeat orders and inflate sums, which you fix by <strong>pre-aggregating in a CTE</strong> rather than using DISTINCT.</p>
+
+<h2>Detailed explanation</h2>
+<p>If customer 7 placed five orders in 2024, all five rows share the key (7, 2024), so they fall into one group. <code>SUM(o.amount)</code> adds them and <code>COUNT(o.order_id)</code> reports five. The output has exactly one row per customer per year, which is the requirement.</p>
+<p>Problems appear when the query joins more tables with a <strong>one-to-many</strong> relationship to orders, such as <code>order_items</code>, <code>payments</code> or <code>shipments</code>. Each order row is then repeated once per item. An order of 1,000 with three items contributes 3,000 to <code>SUM(o.amount)</code>, and <code>COUNT(o.order_id)</code> says three. This is often called <strong>fan-out</strong> or a <strong>join explosion</strong>, and it produces convincing but wrong numbers.</p>
+<p>Patching it with <code>SUM(DISTINCT o.amount)</code> is dangerous: two different orders of the same amount get collapsed into one. <code>COUNT(DISTINCT o.order_id)</code> is fine for counting, but sums need a structural fix. The clean solution is to <strong>aggregate each child table to the order grain first</strong> (one row per order) in a subquery or <strong>CTE</strong>, then join that to orders and customers and group by customer and year. Every table being joined is then at the same grain, so nothing is repeated.</p>
+<p>Always state the <strong>grain</strong> of each intermediate result; it makes these bugs easy to spot in code review.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide the target grain: one row per customer per year.</li>
+  <li>Pre-aggregate child tables to one row per order (CTE).</li>
+  <li>Join customers, orders and the pre-aggregated CTE: one row per order.</li>
+  <li>GROUP BY customer and year; SUM and COUNT.</li>
+  <li>Verify with a reconciliation query (grand total equals sum of orders).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">WITH order_totals AS (
+    SELECT order_id,
+           SUM(quantity * unit_price) AS items_total,
+           COUNT(*)                   AS item_count
+    FROM order_items
+    GROUP BY order_id
+)
+SELECT c.customer_id, c.name,
+       EXTRACT(YEAR FROM o.order_date) AS order_year,
+       COUNT(o.order_id)               AS orders,
+       SUM(ot.items_total)             AS revenue,
+       SUM(ot.item_count)              AS items
+FROM customers c
+JOIN orders o        ON o.customer_id = c.customer_id
+JOIN order_totals ot ON ot.order_id = o.order_id
+WHERE o.status = 'COMPLETED'
+GROUP BY c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date)
+ORDER BY c.name, order_year;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Summing an order-level column after joining item-level rows.</li>
+  <li>Using <code>SUM(DISTINCT amount)</code> to hide duplication.</li>
+  <li>Grouping by full order date and getting one row per day.</li>
+  <li>Not reconciling totals against a simple orders-only query.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That's exactly what grouping does: all orders for customer 7 in 2024 land in the same group, SUM adds the amounts and COUNT of order_id shows how many orders, so I get one row per customer per year. The subtle trap is joining another one-to-many table like order_items or payments; each order is repeated per item and SUM of the order amount is inflated. In that case I pre-aggregate the child table per order in a CTE, then join and group, rather than patching it with DISTINCT.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can you write the CTE version?</strong> Aggregate <code>order_items</code> by <code>order_id</code> in a CTE, join it to orders, then group by customer and year.</li>
+  <li><strong>Why not SUM(DISTINCT)?</strong> It merges different orders with equal amounts and gives wrong totals.</li>
+  <li><strong>How would you show each customer's best year?</strong> Use a window function such as <code>RANK() OVER (PARTITION BY customer_id ORDER BY revenue DESC)</code> over the grouped result.</li>
+</ul>
+</article>
+</body>
+</html>

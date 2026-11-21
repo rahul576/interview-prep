@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-098 · Design the backend for an online multiplayer game with matchmaking and real-time play.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-098" data-topic="Classic Design Problems">
+<h1>Design the backend for an online multiplayer game with matchmaking and real-time play.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A multiplayer game backend uses a <strong>matchmaking service</strong> (skill, party, latency), allocates a <strong>dedicated authoritative game server per match</strong> (e.g. <strong>Agones</strong>), runs gameplay over <strong>UDP with client prediction and server reconciliation</strong>, deploys <strong>regionally</strong>, keeps <strong>profiles and inventory in durable storage</strong>, and invests in <strong>anti-cheat and peak scaling</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>There are two very different halves. The <strong>meta-game</strong> (accounts, friends, inventory, store, leaderboards) is a classic web backend: stateless services, databases, caches. The <strong>real-time match</strong> is stateful, latency-critical and short-lived, and runs on dedicated game servers.</p>
+<p><strong>Matchmaking</strong> places players in a queue with attributes: skill rating (Elo, Glicko, TrueSkill), party size, mode and measured ping to each region. A matchmaking function forms balanced matches and <strong>widens criteria over time</strong> so nobody waits forever. <strong>Open Match</strong> is an open-source framework for this; cloud options also exist.</p>
+<p>When a match is formed, an allocator reserves a <strong>dedicated game server</strong> from a warm fleet; <strong>Agones</strong> on Kubernetes manages fleets of game-server pods with &quot;Ready/Allocated&quot; states. Players get the IP and port plus a session token.</p>
+<p>Gameplay uses <strong>UDP</strong> (often with a reliability layer for important messages) because a late packet is worse than a lost one. The <strong>server is authoritative</strong>: clients send inputs, not positions. Clients use <strong>prediction</strong> to move immediately, <strong>interpolation</strong> to smooth other players, and the server reconciles; techniques like <strong>lag compensation</strong> handle hit detection.</p>
+<p><strong>Regional deployment</strong> keeps round-trip times low. Persistent data, especially <strong>purchases</strong>, uses transactional storage; match results are written via events at match end.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Player logs in, client pings regions, enters the matchmaking queue.</li>
+  <li>Matchmaker forms a match, requests a server allocation in the best region.</li>
+  <li>Agones returns a Ready server; players connect over UDP with a token.</li>
+  <li>Server simulates at a fixed tick rate (e.g. 30-60 Hz), broadcasts state snapshots.</li>
+  <li>At match end, the server publishes results; services update ratings, progress and rewards.</li>
+  <li>The server shuts down and the fleet autoscaler replaces it.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: &quot;allocation.agones.dev/v1&quot;
+kind: GameServerAllocation
+spec:
+  selectors:
+    - matchLabels:
+        agones.dev/fleet: arena-eu-west
+        mode: ranked-5v5
+  metadata:
+    labels:
+      match-id: m-7f31c2</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trusting the client with positions, damage or currency.</li>
+  <li>Using TCP for fast-paced gameplay, causing head-of-line stalls.</li>
+  <li>Spinning up servers on demand with no warm buffer, so matches wait minutes.</li>
+  <li>Writing every in-match event to the database synchronously.</li>
+  <li>Ignoring launch-day peaks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd split it into meta-services and real-time servers. Players join a matchmaking queue that groups them by skill, party size and latency, widening criteria over time. When a match forms, we allocate a dedicated, authoritative game server from a warm fleet managed by Agones in the nearest region. Gameplay runs over UDP; clients send inputs, use prediction and interpolation, and the server reconciles. Profiles, inventory and purchases are in durable transactional storage, updated from match-end events. Anti-cheat relies on server authority plus detection, and fleets are pre-warmed for launches.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Game server crashes mid-match?</strong> Detect via health checks, void or restore from periodic snapshots, compensate players.</li>
+  <li><strong>How do you balance wait time and match quality?</strong> Gradually relax skill and latency windows; track both metrics.</li>
+  <li><strong>Peer-to-peer instead?</strong> Cheaper, but exposes IPs and makes cheating easier; fine for casual co-op.</li>
+</ul>
+</article>
+</body>
+</html>

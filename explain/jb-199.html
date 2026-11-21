@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-199 · Explain GET, POST, PUT, PATCH, and DELETE.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-199" data-topic="REST &amp; API Design">
+<h1>Explain GET, POST, PUT, PATCH, and DELETE.</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>GET</strong> reads (<strong>safe, idempotent, cacheable</strong>); <strong>POST</strong> creates or triggers actions (<strong>not idempotent</strong>, 201 Created); <strong>PUT</strong> <strong>replaces</strong> a full resource (<strong>idempotent</strong>); <strong>PATCH</strong> <strong>partially updates</strong> it; <strong>DELETE</strong> removes it (<strong>idempotent</strong>, usually <strong>204</strong>).</p>
+
+<h2>Detailed explanation</h2>
+<p>The HTTP methods give each request a well-defined meaning (RFC 9110), which lets clients, caches, proxies and retries behave correctly.</p>
+<p><strong>GET</strong> retrieves a resource (<code>GET /orders/42</code>) or collection (<code>GET /orders?status=PAID</code>). It is <strong>safe</strong>, meaning it must not change server state, and <strong>idempotent</strong>. Responses can be <strong>cached</strong> and requests can be retried freely. GET requests should not carry a body; parameters go in the path or query string.</p>
+<p><strong>POST</strong> submits data for processing. Most often it <strong>creates</strong> a resource in a collection: <code>POST /orders</code> with a JSON body, returning <strong>201 Created</strong> with a <strong>Location</strong> header (<code>/orders/43</code>) and usually the created resource. It is also used for actions that do not map to CRUD, like <code>POST /orders/43/cancellation</code>. It is <strong>not idempotent</strong>: retrying may create duplicates, so critical POSTs use an <strong>Idempotency-Key</strong> header.</p>
+<p><strong>PUT</strong> replaces the resource at a known URI with the <strong>full representation</strong> sent. Fields omitted are cleared or reset. Repeating the same PUT gives the same state, so it is <strong>idempotent</strong>. It can also create a resource if the client chooses the URI, returning 201. Typical responses: 200 with the body or 204.</p>
+<p><strong>PATCH</strong> sends only the <strong>changes</strong>: <code>PATCH /orders/43</code> with <code>{&quot;status&quot;:&quot;SHIPPED&quot;}</code> as <strong>JSON Merge Patch</strong>, or a list of operations as <strong>JSON Patch</strong>. It avoids sending the full object and overwriting concurrent changes to other fields. It is not guaranteed idempotent.</p>
+<p><strong>DELETE</strong> removes the resource and usually returns <strong>204 No Content</strong>. It is <strong>idempotent</strong>: after the first call the resource is gone, and a second call returns 404 (or 204), but the state is unchanged.</p>
+<p>Also worth knowing: <strong>HEAD</strong> (GET without body) and <strong>OPTIONS</strong> (allowed methods, CORS preflight).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client picks the method that matches its intent.</li>
+  <li>Server applies the semantics (read, create, replace, modify, remove).</li>
+  <li>Server returns a matching status code.</li>
+  <li>Safe/idempotent properties decide caching and retry behaviour.</li>
+</ol>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Safe</th><th>Idempotent</th><th>Typical success</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td>Yes</td><td>Yes</td><td>200</td></tr>
+<tr><td>POST</td><td>No</td><td>No</td><td>201</td></tr>
+<tr><td>PUT</td><td>No</td><td>Yes</td><td>200/204</td></tr>
+<tr><td>PATCH</td><td>No</td><td>Not guaranteed</td><td>200/204</td></tr>
+<tr><td>DELETE</td><td>No</td><td>Yes</td><td>204</td></tr>
+</tbody>
+</table>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestController
+@RequestMapping(&quot;/orders&quot;)
+class OrderController {
+    @GetMapping(&quot;/{id}&quot;)  OrderDto get(@PathVariable long id) { return service.get(id); }
+    @PostMapping          ResponseEntity&lt;OrderDto&gt; create(@Valid @RequestBody NewOrder o) {
+        OrderDto created = service.create(o);
+        return ResponseEntity.created(URI.create(&quot;/orders/&quot; + created.id())).body(created);
+    }
+    @PutMapping(&quot;/{id}&quot;)  OrderDto replace(@PathVariable long id, @Valid @RequestBody OrderDto o) { return service.replace(id, o); }
+    @PatchMapping(path = &quot;/{id}&quot;, consumes = &quot;application/merge-patch+json&quot;)
+                          OrderDto patch(@PathVariable long id, @RequestBody Map&lt;String, Object&gt; changes) { return service.patch(id, changes); }
+    @DeleteMapping(&quot;/{id}&quot;) @ResponseStatus(HttpStatus.NO_CONTENT)
+                          void delete(@PathVariable long id) { service.delete(id); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Changing state in a GET handler.</li>
+  <li>Using PUT with partial data and wiping fields.</li>
+  <li>Returning 200 instead of 201 + Location on create.</li>
+  <li>Retrying POST without idempotency protection.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;GET reads a resource or collection; it's safe, so no side effects, idempotent and cacheable. POST creates a new resource under a collection, like POST /orders, and returns 201 Created with a Location header, or triggers an action; it isn't idempotent, so a retry can create a duplicate. PUT replaces the full resource at a known URI and is idempotent. PATCH sends only the changed fields, for example as JSON Merge Patch. DELETE removes the resource, usually returns 204, and is idempotent: a second call might return 404, but the state is the same.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you make a POST endpoint safe to retry?</strong> Idempotency key stored with the response, or a unique business constraint.</li>
+  <li><strong>Can GET have a request body?</strong> Technically allowed but has no defined semantics; avoid it.</li>
+  <li><strong>What are HEAD and OPTIONS for?</strong> Headers without body, and allowed methods/CORS preflight.</li>
+</ul>
+</article>
+</body>
+</html>

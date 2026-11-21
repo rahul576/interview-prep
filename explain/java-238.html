@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-238 · When should you NOT use parallel streams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-238" data-topic="Java 8+ Features">
+<h1>When should you NOT use parallel streams?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Avoid <strong>parallel streams</strong> for <strong>small data</strong>, <strong>blocking I/O</strong>, <strong>side effects or shared mutable state</strong>, <strong>poorly splittable sources</strong> (<code>LinkedList</code>, <code>Stream.iterate</code>), <strong>order-dependent stateful</strong> operations, and in <strong>servers</strong> where everything competes for the shared <strong>ForkJoinPool common pool</strong>; always <strong>measure</strong> first.</p>
+
+<h2>Detailed explanation</h2>
+<p>Parallel streams split the source with a <strong>Spliterator</strong>, process chunks on worker threads of the <strong>common ForkJoinPool</strong> (sized to cores minus one by default), then merge results. That overhead is only worth paying for <strong>large, CPU-bound, independent</strong> work on sources that split cheaply and evenly, such as arrays, <code>ArrayList</code>, <code>IntStream.range</code>.</p>
+<p>When <strong>not</strong> to use them:</p>
+<ul>
+  <li><strong>Small data sets</strong> or cheap per-element work: splitting, task scheduling and merging cost more than the work itself. A rough heuristic is the &quot;NQ model&quot;: N elements times Q cost per element must be large (often quoted above ~10,000).</li>
+  <li><strong>Blocking I/O</strong> (HTTP, JDBC, files) inside the pipeline: it ties up the few common-pool threads, starving every other parallel stream and <code>CompletableFuture</code> default tasks in the JVM. Use an executor, virtual threads or reactive clients instead.</li>
+  <li><strong>Side effects / shared mutable state</strong>: adding to an <code>ArrayList</code> from <code>forEach</code> is a race condition; use collectors.</li>
+  <li><strong>Poorly splittable sources</strong>: <code>LinkedList</code>, <code>Stream.iterate</code>, <code>BufferedReader.lines()</code> split badly.</li>
+  <li><strong>Ordered stateful operations</strong>: <code>limit</code>, <code>skip</code>, <code>sorted</code>, <code>distinct</code>, <code>findFirst</code> on ordered streams require coordination; <code>forEachOrdered</code> serialises output.</li>
+  <li><strong>Servers</strong>: per-request parallelism multiplies across concurrent requests, all sharing one pool, so latency becomes unpredictable. The server already parallelises across requests.</li>
+</ul>
+<p>Also beware of boxing costs, contention on synchronised resources, and <strong>non-associative</strong> reductions, which give wrong results in parallel.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>parallel()</code> sets a flag on the pipeline.</li>
+  <li>At the terminal op the source is recursively split into tasks.</li>
+  <li>Tasks run on common-pool workers (and the calling thread).</li>
+  <li>Partial results are combined; ordered ops add synchronisation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Good candidate: large array, CPU-bound, no shared state
+long primes = LongStream.rangeClosed(2, 50_000_000).parallel()
+    .filter(Primes::isPrime).count();
+
+// Bad: blocking I/O on the common pool
+List&lt;Price&gt; prices = skus.parallelStream()
+    .map(sku -&gt; pricingClient.fetch(sku))        // HTTP call blocks a pool thread
+    .toList();
+
+// Better for I/O-bound work (Java 21)
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    List&lt;Future&lt;Price&gt;&gt; futures = skus.stream()
+        .map(sku -&gt; exec.submit(() -&gt; pricingClient.fetch(sku))).toList();
+}
+
+// Bad: race condition
+List&lt;String&gt; out = new ArrayList&lt;&gt;();
+names.parallelStream().map(String::trim).forEach(out::add);   // not thread-safe</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Turning on <code>parallel()</code> as a free speed-up without benchmarking (use JMH).</li>
+  <li>Doing network or database calls inside parallel streams.</li>
+  <li>Mutating shared collections instead of collecting.</li>
+  <li>Expecting deterministic order from <code>forEach</code> in parallel.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Parallel streams only pay off for large CPU-bound workloads on easily splittable sources like arrays or ArrayList. I avoid them for small data sets, where splitting and merging overhead outweighs the work; for blocking I/O, which ties up the shared common pool; for side effects or shared mutable state, which aren't thread-safe; and for poorly splittable sources like LinkedList or Stream.iterate. In server applications every request would compete for the same ForkJoinPool common pool, so one request can slow others. I always measure with a proper benchmark before using them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you run a parallel stream on a custom ForkJoinPool?</strong> Submit the terminal operation inside <code>customPool.submit(() -&gt; stream.parallel()...).get()</code>; this relies on implementation behaviour, so prefer explicit executors.</li>
+  <li><strong>What size is the common pool?</strong> By default available processors minus one, configurable via <code>java.util.concurrent.ForkJoinPool.common.parallelism</code>.</li>
+  <li><strong>Why must reductions be associative?</strong> Partial results are combined in arbitrary groupings.</li>
+</ul>
+</article>
+</body>
+</html>

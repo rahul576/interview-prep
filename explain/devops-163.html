@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-163 · How do you secure SSH access to Linux servers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-163" data-topic="Linux">
+<h1>How do you secure SSH access to Linux servers?</h1>
+<p class="ex-meta">Linux · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>key-based authentication only</strong>, <strong>disable root login and passwords</strong>, keep <strong>port 22 off the internet</strong> behind a bastion, <strong>Session Manager or a zero-trust proxy</strong>, prefer <strong>short-lived SSH certificates via SSO and MFA</strong>, and <strong>audit</strong> everything, ideally needing SSH rarely at all.</p>
+
+<h2>Detailed explanation</h2>
+<p>SSH is one of the most attacked services on the internet, so harden both the daemon and the access model.</p>
+<p>In <code>/etc/ssh/sshd_config</code>: <code>PasswordAuthentication no</code> and <code>KbdInteractiveAuthentication no</code> so only keys work; <code>PermitRootLogin no</code>, so people log in as themselves and use <strong>sudo</strong>, which leaves an audit trail; <code>AllowGroups</code> to restrict who may log in; modern key types such as <strong>Ed25519</strong>. Keep OpenSSH patched, since serious vulnerabilities do appear.</p>
+<p><strong>Network exposure</strong> matters more than any setting. Port 22 should not be open to <code>0.0.0.0/0</code>. Access goes through a <strong>bastion host</strong>, or better through <strong>AWS Systems Manager Session Manager</strong>, <strong>Azure Bastion</strong>, <strong>GCP IAP TCP forwarding</strong> or a <strong>zero-trust access proxy</strong> (Teleport, Cloudflare Access, Tailscale), which need no inbound port, enforce identity and <strong>record sessions</strong>.</p>
+<p><strong>Static keys</strong> scattered across <code>authorized_keys</code> files are hard to rotate and revoke. For teams, an <strong>SSH certificate authority</strong> (OpenSSH CA, HashiCorp Vault, Teleport) issues <strong>short-lived certificates</strong> after <strong>SSO with MFA</strong>; servers trust the CA, not individual keys, and access expires automatically. <strong>fail2ban</strong> or similar blocks brute-force sources on anything still exposed. Logs (auth logs, auditd, session recordings) go to a central SIEM.</p>
+<p>The best SSH is no SSH: <strong>immutable servers</strong> built from images and managed with config management or containers rarely need interactive access, so it becomes a break-glass path.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Engineer authenticates to the access proxy or SSO with MFA.</li>
+  <li>A short-lived certificate is issued or a session is brokered.</li>
+  <li>The connection reaches the server without a public port 22.</li>
+  <li>sshd accepts only key or certificate auth for allowed groups.</li>
+  <li>Sessions and commands are logged centrally.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-conf"># /etc/ssh/sshd_config.d/10-hardening.conf
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AllowGroups ssh-users
+TrustedUserCAKeys /etc/ssh/user_ca.pub
+MaxAuthTries 3</code></pre>
+<pre><code class="language-bash">sudo sshd -t &amp;&amp; sudo systemctl reload ssh     # validate before reloading
+aws ssm start-session --target i-0abc123def4567890</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Opening port 22 to the whole internet &quot;temporarily&quot;.</li>
+  <li>Shared accounts or shared private keys.</li>
+  <li>Never removing keys of people who left.</li>
+  <li>Reloading sshd with a broken config and locking everyone out.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I allow only key-based authentication, disable passwords and direct root login, and people use sudo. Port 22 is not open to the internet: access goes through a bastion, or better Session Manager, Azure Bastion or a zero-trust proxy, which also record sessions. For bigger teams I prefer short-lived SSH certificates issued after SSO with MFA instead of distributing static keys, so access expires on its own. fail2ban blocks brute force on anything exposed and all access is logged centrally. Ideally servers are immutable and SSH is only a break-glass path.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you revoke access for an engineer who leaves?</strong> Disable their SSO account; with short-lived certificates access ends at expiry, otherwise remove keys everywhere via config management.</li>
+  <li><strong>Why change the default port?</strong> It only reduces log noise; it is not real security.</li>
+  <li><strong>How do you avoid locking yourself out?</strong> Test with sshd -t and keep an existing session open while testing a new one.</li>
+</ul>
+</article>
+</body>
+</html>

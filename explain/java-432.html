@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-432 · Design a search autocomplete (typeahead) service.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-432" data-topic="System Design">
+<h1>Design a search autocomplete (typeahead) service.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Typeahead serves <strong>precomputed top-K suggestions per prefix</strong> from memory or <strong>Redis</strong>, built from a <strong>trie or search-engine prefix index</strong> ranked by <strong>popularity from search logs</strong> (plus trending and personal boosts), refreshed by an <strong>offline pipeline</strong>, and kept fast with <strong>client debouncing and edge caching</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Autocomplete must respond in <strong>tens of milliseconds</strong>, on every keystroke, at huge request volumes. That rules out computing suggestions by scanning data at query time.</p>
+<p><strong>Data structure:</strong> a <strong>trie</strong> maps prefixes to nodes; walking to the node for &quot;ipho&quot; and collecting descendants gives candidates. Collecting and sorting at query time is slow for short prefixes, so each node stores its <strong>precomputed top-K</strong> (e.g. 10) completions. Alternatives: <strong>Elasticsearch/OpenSearch completion suggester</strong> (in-memory FST), or <strong>edge n-gram</strong> fields for infix-tolerant matching, or simply a key-value store with key = prefix, value = top-K list.</p>
+<p><strong>Ranking:</strong> popularity (query frequency from logs, weighted by recency with time decay), plus signals such as conversion, <strong>trending</strong> boost, location, and <strong>personalisation</strong> (user's recent searches, merged at serving time).</p>
+<p><strong>Pipeline:</strong> a batch job (Spark) aggregates query logs daily or hourly, filters <strong>offensive or unsafe terms</strong> and spam, computes top-K per prefix, and publishes an immutable snapshot that serving nodes load and swap atomically. For trending, a <strong>streaming job</strong> (Flink/Kafka Streams) counts queries over a sliding window (e.g. last hour) and merges a small trending list.</p>
+<p><strong>Serving:</strong> stateless services hold the trie in memory (sharded by prefix range if too large) or read from Redis. The client <strong>debounces</strong> input (e.g. 100-150 ms), cancels outdated requests, and caches results locally; responses for short popular prefixes are cacheable at the <strong>CDN</strong> for a few minutes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Logs -&gt; Kafka -&gt; data lake.</li>
+  <li>Batch job: normalise queries, count with decay, filter, build prefix -&gt; top-K map.</li>
+  <li>Publish snapshot; servers load into memory or Redis.</li>
+  <li>Client types &quot;iph&quot; -&gt; debounced request <code>GET /suggest?q=iph</code>.</li>
+  <li>Server returns cached top-K, merged with trending and personal history.</li>
+  <li>Selections are logged, feeding the next build.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">final class TrieNode {
+    final Map&lt;Character, TrieNode&gt; children = new HashMap&lt;&gt;();
+    List&lt;String&gt; topK = List.of();                    // precomputed offline
+}
+
+final class Suggester {
+    private volatile TrieNode root;                  // swapped atomically on new snapshot
+    List&lt;String&gt; suggest(String prefix) {
+        TrieNode n = root;
+        for (char c : prefix.toLowerCase().toCharArray()) {
+            n = n.children.get(c);
+            if (n == null) return List.of();
+        }
+        return n.topK;
+    }
+    void load(TrieNode newRoot) { this.root = newRoot; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Querying the database with <code>LIKE 'pre%'</code> on each keystroke.</li>
+  <li>Collecting and sorting all descendants at query time.</li>
+  <li>No profanity or safety filtering.</li>
+  <li>No client debouncing, multiplying load.</li>
+  <li>Updating the live trie in place with locks instead of swapping snapshots.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Suggestions must come back in tens of milliseconds as the user types, so I precompute. Offline, a pipeline aggregates search logs, ranks queries by popularity with time decay, filters offensive terms, and builds a prefix-to-top-K map, as a trie or using the Elasticsearch completion suggester. Serving nodes load the snapshot in memory or Redis, so a lookup is one read. Trending queries come from a streaming job over the last hour, merged at serving time with personal history. On the client I debounce keystrokes, and popular prefixes are cached at the edge.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Trending from the last hour?</strong> Sliding-window counts in Flink, boost terms whose rate jumps against baseline.</li>
+  <li><strong>Typos?</strong> Fuzzy matching on the completion suggester or spelling correction.</li>
+  <li><strong>Multiple languages?</strong> Separate tries per locale with language-specific normalisation.</li>
+</ul>
+</article>
+</body>
+</html>

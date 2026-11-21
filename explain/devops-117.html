@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-117 · How does Karpenter differ from the Cluster Autoscaler?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-117" data-topic="Kubernetes">
+<h1>How does Karpenter differ from the Cluster Autoscaler?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The <strong>Cluster Autoscaler</strong> resizes <strong>predefined node groups</strong> with fixed instance types; <strong>Karpenter</strong> reads pending pods' requirements and <strong>provisions right-sized nodes directly</strong> from a wide set of instance types (including <strong>spot</strong>), and continuously <strong>consolidates</strong> to cut cost, usually faster and with far less node-group management.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>Cluster Autoscaler (CA)</strong> is the long-standing, provider-neutral autoscaler. It works on node groups such as AWS Auto Scaling Groups, Azure VM Scale Sets or GKE node pools. When pods are Pending it simulates which group could fit them and increases that group's desired size; when nodes stay underused it drains and removes them. Every group has a fixed shape, so to offer many instance types, GPUs, zones and spot you end up maintaining many groups, and scaling goes through the cloud's group API, which adds latency.</p>
+<p><strong>Karpenter</strong> removes the node-group layer. It batches unschedulable pods by their constraints (requests, selectors, affinity, topology spread, tolerations) and calls the cloud API directly to launch the cheapest instance that fits, usually in under a minute. You describe what is allowed in a <strong>NodePool</strong> (instance families, sizes, zones, spot or on-demand, limits) and provider settings in a node class (on AWS an <code>EC2NodeClass</code> for AMI, subnets, security groups).</p>
+<p>Its other big feature is <strong>disruption</strong>: <strong>consolidation</strong> removes empty nodes and replaces underused ones with cheaper combinations, <strong>drift</strong> replaces nodes that no longer match the NodePool, and <strong>expiration</strong> recycles old nodes. Karpenter began on AWS and now also has an Azure provider (behind AKS node auto-provisioning); the CA still supports the most providers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod becomes Pending because no node fits.</li>
+  <li>Karpenter batches pending pods and computes their combined constraints.</li>
+  <li>It picks instance types allowed by the NodePool, preferring the cheapest that fit.</li>
+  <li>It launches the node directly and binds the pods once the node is ready.</li>
+  <li>Over time, consolidation repacks pods and removes surplus nodes, within disruption budgets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: { name: general }
+spec:
+  template:
+    spec:
+      requirements:
+      - { key: karpenter.sh/capacity-type, operator: In, values: [spot, on-demand] }
+      - { key: karpenter.k8s.aws/instance-category, operator: In, values: [c, m, r] }
+      nodeClassRef: { group: karpenter.k8s.aws, kind: EC2NodeClass, name: default }
+      expireAfter: 720h
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+    budgets:
+    - nodes: &quot;10%&quot;
+  limits: { cpu: &quot;1000&quot; }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Cluster Autoscaler</th><th>Karpenter</th></tr></thead>
+<tbody>
+<tr><td>Unit</td><td>Node group</td><td>Individual node</td></tr>
+<tr><td>Instance choice</td><td>Fixed per group</td><td>Chosen per batch of pods</td></tr>
+<tr><td>Cost optimisation</td><td>Scale-down only</td><td>Consolidation and replacement</td></tr>
+<tr><td>Providers</td><td>Most clouds</td><td>AWS, Azure, some others</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Pods without resource requests, so Karpenter sizes nodes wrongly.</li>
+  <li>No disruption budgets or PDBs, so consolidation churns critical pods.</li>
+  <li>Allowing only one or two instance types, losing spot availability.</li>
+  <li>Running CA and Karpenter on the same nodes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The Cluster Autoscaler scales predefined node groups up and down, and each group has fixed instance types, so you manage many groups to get flexibility. Karpenter looks directly at pending pods' requirements and launches right-sized nodes from a broad set of instance types, including spot, which is faster and removes most node-group management. It also consolidates continuously, replacing underused nodes with cheaper ones, and handles drift and node expiry. I'd control that with disruption budgets, PDBs and the do-not-disrupt annotation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which disruption controls would you configure?</strong> NodePool budgets (percentage and schedules), <code>consolidateAfter</code>, <code>expireAfter</code>, PDBs and <code>karpenter.sh/do-not-disrupt</code> on sensitive pods.</li>
+  <li><strong>How does Karpenter handle spot interruptions?</strong> It watches interruption notices via a queue and cordons and drains the node in advance.</li>
+  <li><strong>When stay on the CA?</strong> Clouds without a Karpenter provider, or strictly uniform node groups.</li>
+</ul>
+</article>
+</body>
+</html>

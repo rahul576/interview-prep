@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-072 · An EC2 instance in a private subnet cannot reach the internet. How do you troubleshoot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-072" data-topic="Cloud (AWS)">
+<h1>An EC2 instance in a private subnet cannot reach the internet. How do you troubleshoot?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Follow the packet path: the private subnet's <strong>route table</strong> must send <strong>0.0.0.0/0 to a NAT gateway</strong>, the NAT gateway must sit in a <strong>public subnet</strong> routed to an <strong>internet gateway</strong> with an <strong>Elastic IP</strong>, <strong>security groups</strong> and stateless <strong>NACLs</strong> (including <strong>ephemeral ports</strong>) must allow the traffic, <strong>VPC DNS</strong> must work, and <strong>Reachability Analyzer</strong> and <strong>flow logs</strong> confirm where it breaks.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Routing</strong>: check the route table <strong>associated with the instance's subnet</strong>, not the main table by assumption. It needs <code>0.0.0.0/0 -&gt; nat-xxxx</code> (or <code>::/0</code> to an egress-only internet gateway for IPv6). The <strong>NAT gateway</strong> must be <strong>public</strong> type, in state <strong>available</strong>, placed in a <strong>public subnet</strong> whose own route table has <code>0.0.0.0/0 -&gt; igw-xxxx</code>, and have an <strong>Elastic IP</strong>. The internet gateway must be <strong>attached</strong> to the VPC. A common error is putting the NAT gateway in a private subnet.</p>
+<p><strong>Filtering</strong>: the instance <strong>security group</strong> allows all outbound by default, but hardened environments restrict it; check egress to 443 and 53. <strong>Network ACLs</strong> are <strong>stateless</strong>, so the private subnet's NACL must allow outbound to the destination port and <strong>inbound from the ephemeral range 1024-65535</strong> for responses, and the public subnet's NACL must allow the NAT's traffic both ways. <strong>Firewalls</strong> like AWS Network Firewall or a proxy may also be in the path.</p>
+<p><strong>DNS</strong>: <code>enableDnsSupport</code> must be on (and <code>enableDnsHostnames</code> for private DNS of endpoints). Custom DHCP option sets pointing to unreachable DNS servers or <strong>Route 53 Resolver DNS Firewall</strong> rules can make names fail while IPs work.</p>
+<p><strong>Tools</strong>: <strong>VPC Reachability Analyzer</strong> traces the configured path from the instance to the internet gateway and names the blocking component. <strong>Flow logs</strong> on the instance ENI and NAT ENI show ACCEPT or REJECT. On the instance, <code>curl</code>, <code>dig</code> and <code>traceroute</code> separate DNS from connectivity. Also check the OS: local firewalls, proxy settings and missing default routes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Verify the instance's subnet route table: 0.0.0.0/0 to NAT.</li>
+  <li>Verify the NAT gateway: public subnet, available, Elastic IP.</li>
+  <li>Verify the public subnet route: 0.0.0.0/0 to an attached IGW.</li>
+  <li>Check security group egress and both subnets' NACLs.</li>
+  <li>Test DNS separately from IP connectivity.</li>
+  <li>Run Reachability Analyzer and inspect flow logs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># On the instance (via Session Manager)
+dig +short amazon.com             # DNS works?
+curl -sv --max-time 5 https://1.1.1.1 -o /dev/null   # IP connectivity?
+
+# From your workstation
+aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-priv-a \
+  --query 'RouteTables[].Routes'
+aws ec2 describe-nat-gateways --nat-gateway-ids nat-0abc \
+  --query 'NatGateways[].{State:State,Subnet:SubnetId,IP:NatGatewayAddresses[0].PublicIp}'
+aws ec2 create-network-insights-path --source i-0123 \
+  --destination igw-0456 --protocol tcp --destination-port 443</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking the main route table instead of the subnet's explicit association.</li>
+  <li>NAT gateway placed in a private subnet.</li>
+  <li>NACLs without the inbound ephemeral port range.</li>
+  <li>Testing only with a hostname and blaming routing for a DNS issue.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I follow the path. The private subnet's route table must send 0.0.0.0/0 to a NAT gateway. The NAT gateway must be in a public subnet whose route table points to an attached internet gateway, with an Elastic IP and in available state. The security group must allow outbound traffic, and NACLs, being stateless, must allow the outbound port and inbound ephemeral ports 1024 to 65535. DNS support must be enabled. Then I test DNS and IP connectivity separately, run Reachability Analyzer and check flow logs for rejects.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How test whether it is DNS or connectivity?</strong> Resolve a name with dig and curl a known IP; if the IP works but the name fails, it is DNS.</li>
+  <li><strong>Why does the NAT need to be in a public subnet?</strong> It must reach the internet gateway itself.</li>
+  <li><strong>Could a VPC endpoint be involved?</strong> Yes, endpoint policies or private DNS can block access to specific AWS services.</li>
+</ul>
+</article>
+</body>
+</html>

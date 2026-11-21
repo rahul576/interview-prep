@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-229 · When does an object become eligible for garbage collection? Explain GC roots and reference types.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-229" data-topic="JVM &amp; Performance">
+<h1>When does an object become eligible for garbage collection? Explain GC roots and reference types.</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An object is eligible for GC when it is <strong>unreachable from every GC root</strong> (thread stack locals, static fields, active threads, JNI references); tracing means <strong>cycles do not prevent collection</strong>; <strong>soft, weak and phantom references</strong> let objects be collected while still being referred to; and <strong><code>System.gc()</code> is only a hint</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Java collectors use <strong>tracing</strong>, not reference counting. They start from <strong>GC roots</strong> and mark everything reachable by following references. Roots include local variables and parameters in active stack frames of all threads, <strong>static fields</strong> of loaded classes, live <strong>Thread</strong> objects, objects held by <strong>JNI</strong> global references, monitors currently held, and some JVM-internal references. Anything not reached is garbage, regardless of how many references it still has from other garbage.</p>
+<p>Because of tracing, <strong>circular references</strong> are fine. If an <code>Order</code> refers to its <code>Customer</code> and the <code>Customer</code> refers back to the <code>Order</code>, but nothing reachable points to either, both are collected. Reference counting would leak that cycle.</p>
+<p>&quot;Eligible&quot; does not mean &quot;collected now&quot;. The object is reclaimed whenever the collector next processes the region it lives in, which could be milliseconds or much later (old-generation objects are collected less often).</p>
+<p><strong>Reference types</strong> in <code>java.lang.ref</code> refine reachability:</p>
+<ul>
+  <li><strong>Strong</strong>: normal references; keep objects alive.</li>
+  <li><strong><code>SoftReference</code></strong>: cleared only when the JVM needs memory, before throwing OOM. Historically used for memory-sensitive caches, though a bounded cache like Caffeine is more predictable.</li>
+  <li><strong><code>WeakReference</code></strong>: cleared at the next GC once no strong references remain. <code>WeakHashMap</code> uses weak keys, useful for metadata attached to objects you do not own.</li>
+  <li><strong><code>PhantomReference</code></strong>: <code>get()</code> always returns null; it is enqueued after the object is finalised and is used for <strong>post-mortem cleanup</strong> of native resources. <code>java.lang.ref.Cleaner</code> (Java 9) builds on this and replaces deprecated <code>finalize()</code>.</li>
+</ul>
+<p><strong><code>System.gc()</code></strong> requests a collection but the JVM may ignore it (<code>-XX:+DisableExplicitGC</code>), and in HotSpot it usually triggers an expensive full GC. Code must never depend on it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>GC starts from roots: stacks, statics, threads, JNI handles.</li>
+  <li>It marks every object reachable via strong references.</li>
+  <li>Softly reachable objects are cleared if memory is tight; weakly reachable ones are cleared.</li>
+  <li>Unmarked objects' memory is reclaimed by sweeping, copying or compaction.</li>
+  <li>Phantom references to collected objects are enqueued for cleanup.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Order a = new Order(); Customer c = new Customer();
+a.customer = c; c.lastOrder = a;     // cycle
+a = null; c = null;                  // both now unreachable -&gt; both eligible
+
+Map&lt;Key, Meta&gt; meta = new WeakHashMap&lt;&gt;(); // entry disappears when Key is unreachable
+
+WeakReference&lt;byte[]&gt; ref = new WeakReference&lt;&gt;(new byte[1024]);
+System.gc();                         // only a hint
+System.out.println(ref.get());       // likely null, not guaranteed
+
+// Cleaner for native resources
+private static final Cleaner CLEANER = Cleaner.create();
+CLEANER.register(this, () -&gt; nativeFree(handle)); // action must not reference 'this'</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Reference</th><th>Cleared when</th><th>Typical use</th></tr></thead>
+<tbody>
+<tr><td>Strong</td><td>Never while reachable</td><td>Normal code</td></tr>
+<tr><td>Soft</td><td>Memory pressure</td><td>Memory-sensitive caches</td></tr>
+<tr><td>Weak</td><td>Next GC</td><td>WeakHashMap, canonical maps</td></tr>
+<tr><td>Phantom</td><td>After collection (enqueued)</td><td>Cleaner, native cleanup</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing cycles cause leaks in Java.</li>
+  <li>Setting every local to <code>null</code> &quot;to help the GC&quot;.</li>
+  <li>Relying on <code>finalize()</code> or <code>System.gc()</code> for cleanup.</li>
+  <li>Thinking a removed object is gone when a listener list or static map still holds it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An object becomes eligible for garbage collection when it's unreachable from all GC roots. Roots include local variables on thread stacks, static fields of loaded classes, active threads and JNI references. Because the JVM traces reachability instead of counting references, circular references between unreachable objects don't prevent collection. Reference types refine this: soft references are cleared only under memory pressure, weak references at the next GC, as in WeakHashMap, and phantom references are used for cleanup after collection, which is what Cleaner builds on. System.gc is only a hint and should never be relied on.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a removed listener still cause a memory leak?</strong> If it was never unregistered, the event source's listener list strongly references it from a root.</li>
+  <li><strong>Why was <code>finalize()</code> deprecated?</strong> Unpredictable timing, performance cost, resurrection bugs; use <code>Cleaner</code> or try-with-resources.</li>
+  <li><strong>Are soft references a good cache?</strong> Rarely; eviction is unpredictable and causes GC spikes; use a bounded cache.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-197 · How would you optimize a JPA application that generates thousands of SQL queries?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-197" data-topic="Spring Data &amp; JPA">
+<h1>How would you optimize a JPA application that generates thousands of SQL queries?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Measure first</strong> (SQL logging, Hibernate statistics, query-count tests), then remove <strong>N+1 selects</strong> with <strong>JOIN FETCH, entity graphs or batch fetching</strong>, use <strong>DTO projections</strong> for reads, enable <strong>JDBC batching</strong> with <strong>sequence ids</strong> for writes, add <strong>caching</strong> and <strong>disable open-session-in-view</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Thousands of queries per request almost always mean the ORM is loading data row by row. The classic cause is <strong>N+1</strong>: one query loads 500 orders, then accessing <code>order.getCustomer()</code> or <code>order.getItems()</code> in a loop fires one query per order. Eager to-one associations make it worse because they load even when unused.</p>
+<p><strong>Measuring</strong> comes first, because guesses waste time. Turn on <code>hibernate.generate_statistics</code>, log SQL with a proxy like <strong>datasource-proxy</strong> or <strong>p6spy</strong>, or look at the APM trace, and count queries per endpoint. Then lock in the improvement with tests that assert a maximum query count.</p>
+<p><strong>Fixes for reads:</strong></p>
+<ul>
+  <li><strong>JOIN FETCH</strong> or <strong>@EntityGraph</strong> loads associations in the same query for that use case.</li>
+  <li><strong><code>hibernate.default_batch_fetch_size</code></strong> (for example 50) or <code>@BatchSize</code> makes lazy collections load in batches with <code>IN (...)</code>, turning N+1 into N/50+1.</li>
+  <li><strong>DTO projections</strong> select only the needed columns and skip the persistence context, ideal for list and report endpoints.</li>
+  <li><strong>Pagination</strong>, and avoid fetching collections together with pagination (Hibernate then paginates in memory).</li>
+</ul>
+<p><strong>Fixes for writes:</strong> set <code>hibernate.jdbc.batch_size</code>, <code>order_inserts</code> and <code>order_updates</code>, use <strong>SEQUENCE</strong> ids (IDENTITY disables insert batching), and for huge imports use bulk JPQL updates or plain JDBC.</p>
+<p><strong>Structure:</strong> disable <code>spring.jpa.open-in-view</code> so lazy loading cannot happen silently in controllers or JSON serialisation; cache reference data in the second-level cache or Spring Cache.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable query counting and find the endpoints with the most SQL.</li>
+  <li>Read the logged SQL to identify repeated patterns (same SELECT with different ids).</li>
+  <li>Choose a fetch plan per use case: fetch join, entity graph or batch fetching.</li>
+  <li>Replace entity loading with projections for read-only views.</li>
+  <li>Enable JDBC batching and sequence ids for bulk writes.</li>
+  <li>Add query-count assertions in tests so regressions fail CI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        default_batch_fetch_size: 50
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+        generate_statistics: true   # in test/staging</code></pre>
+<pre><code class="language-java">@EntityGraph(attributePaths = {&quot;customer&quot;, &quot;items&quot;})
+@Query(&quot;select o from Order o where o.status = :status&quot;)
+List&lt;Order&gt; findWithDetails(@Param(&quot;status&quot;) Status status);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making everything EAGER to &quot;fix&quot; lazy exceptions, which multiplies queries.</li>
+  <li>Fetch-joining several collections at once, causing a Cartesian product or <code>MultipleBagFetchException</code>.</li>
+  <li>Optimising without measuring, or only measuring in production.</li>
+  <li>Leaving open-session-in-view on, hiding lazy loading in the view layer.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure: SQL logging or Hibernate statistics, or datasource-proxy, to count queries per request and see the repeated patterns. Usually it's N+1 from lazy associations in loops, so I define a fetch plan per use case with JOIN FETCH or an entity graph, or set default_batch_fetch_size so collections load in batches. Read-heavy endpoints get DTO projections. For writes I enable JDBC batching with ordered inserts and a sequence generator. I disable open-session-in-view, cache reference data, and add tests that assert the query count so the problem can't come back.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test for N+1?</strong> Use datasource-proxy or Hibernate statistics in a test and assert the statement count for an endpoint.</li>
+  <li><strong>JOIN FETCH vs batch fetching?</strong> Fetch join is one query for a known use case; batch fetching is a global safety net.</li>
+  <li><strong>Why not just add a second-level cache?</strong> It hides the problem and does not help queries returning collections.</li>
+</ul>
+</article>
+</body>
+</html>

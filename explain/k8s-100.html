@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-100 · What happens in Kubernetes from the moment you run kubectl apply on a Deployment until the pods are running?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-100" data-topic="Kubernetes">
+<h1>What happens in Kubernetes from the moment you run kubectl apply on a Deployment until the pods are running?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><code>kubectl apply</code> goes through <strong>authentication, authorisation and admission</strong> at the API server, is stored in <strong>etcd</strong>, then the <strong>Deployment and ReplicaSet controllers</strong> create pods, the <strong>scheduler</strong> binds them to nodes, the <strong>kubelet</strong> starts them via the <strong>container runtime and CNI</strong>, and <strong>readiness</strong> adds them to Service endpoints.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes is a set of independent control loops that react to changes in the API server; no component calls another directly. Understanding that chain is what lets you debug where a rollout stops.</p>
+<p>The <strong>API server</strong> first <strong>authenticates</strong> the caller (certificate, token or OIDC), then <strong>authorises</strong> the request with <strong>RBAC</strong>. <strong>Mutating admission</strong> (webhooks, defaults, Pod Security labels) can modify the object, schema validation runs, then <strong>validating admission</strong> (policies such as Kyverno, Gatekeeper or ValidatingAdmissionPolicy) can reject it. The Deployment is persisted in <strong>etcd</strong>.</p>
+<p>The <strong>Deployment controller</strong> in kube-controller-manager sees the new object and creates a <strong>ReplicaSet</strong> with a pod-template hash. The <strong>ReplicaSet controller</strong> creates the desired number of <strong>Pod</strong> objects, which pass admission again and have no <code>nodeName</code> yet. The <strong>scheduler</strong> filters nodes on resource requests, taints and tolerations, affinity and volume topology, scores the remainder and <strong>binds</strong> each pod to a node.</p>
+<p>The <strong>kubelet</strong> on that node sees the bound pod and calls the <strong>container runtime</strong> (containerd or CRI-O) through CRI: create the pod sandbox, the <strong>CNI plugin</strong> assigns an IP and sets up networking, volumes are mounted, images pulled, init containers run, then app containers start. Startup and <strong>readiness probes</strong> run; once ready, the <strong>EndpointSlice controller</strong> adds the pod IP to the Service, and kube-proxy or the CNI dataplane routes traffic to it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>API server: authenticate, authorise, mutate, validate, store in etcd.</li>
+  <li>Deployment controller creates a ReplicaSet.</li>
+  <li>ReplicaSet controller creates Pods (unscheduled).</li>
+  <li>Scheduler filters, scores and binds pods to nodes.</li>
+  <li>Kubelet + runtime + CNI create sandbox, network, volumes, containers.</li>
+  <li>Readiness passes; EndpointSlices updated; traffic flows.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl apply -f deploy.yaml
+kubectl get rs -l app=web                # ReplicaSet created
+kubectl get pods -l app=web -o wide      # NODE column filled after scheduling
+kubectl get events --sort-by=.lastTimestamp | tail
+# Scheduled  -&gt; Pulling -&gt; Pulled -&gt; Created -&gt; Started
+kubectl get endpointslices -l kubernetes.io/service-name=web</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking kubectl talks to nodes directly.</li>
+  <li>Saying the scheduler starts containers (it only binds).</li>
+  <li>Forgetting admission webhooks, which often explain rejected or modified objects.</li>
+  <li>Assuming a Running pod receives traffic before readiness passes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kubectl sends the manifest to the API server, which authenticates me, authorises with RBAC, runs mutating and validating admission and stores the Deployment in etcd. The Deployment controller creates a ReplicaSet and the ReplicaSet controller creates pod objects without a node. The scheduler filters nodes by requests, taints and affinity, scores them and binds each pod. The kubelet on that node asks the container runtime to create the sandbox, the CNI gives it an IP, volumes are mounted, images pulled and containers started. When readiness passes, the pod is added to the Service's EndpointSlices and gets traffic.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where do you look if pods are created but never get a node?</strong> The scheduler's FailedScheduling events in kubectl describe pod.</li>
+  <li><strong>What if the ReplicaSet exists but no pods?</strong> Admission or quota rejected them; check ReplicaSet events.</li>
+  <li><strong>What does the kubelet report back?</strong> Pod status and conditions, written to the API server.</li>
+</ul>
+</article>
+</body>
+</html>

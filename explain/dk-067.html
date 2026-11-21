@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-067 · Docker builds in CI have become very slow. How do you speed them up?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-067" data-topic="Docker">
+<h1>Docker builds in CI have become very slow. How do you speed them up?</h1>
+<p class="ex-meta">Docker · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Speed up slow CI Docker builds by first <strong>measuring each step</strong> (<code>--progress=plain</code>), then fixing <strong>layer order</strong>, adding a <strong>remote BuildKit cache</strong> for ephemeral runners, using <strong>cache mounts</strong> for package managers, shrinking the <strong>build context</strong> and running <strong>independent stages in parallel</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Most slow builds are not slow because of compilation; they are slow because <strong>nothing is cached</strong>. Three patterns cause almost all of it. First, a Dockerfile that does <code>COPY . .</code> before installing dependencies, so every code change invalidates the cache and reinstalls the whole dependency tree. Second, <strong>ephemeral CI runners</strong> that start with an empty local cache, so even a perfect Dockerfile rebuilds everything. Third, <strong>package managers re-downloading</strong> the same artifacts on every run.</p>
+<p>BuildKit (the default builder, driven by <code>docker buildx</code>) solves these well. <strong>Cache export/import</strong> (<code>--cache-to</code> / <code>--cache-from</code>) stores layer cache in a registry or the CI provider's cache (for example <code>type=gha</code> on GitHub Actions), so a fresh runner reuses previous layers. <code>mode=max</code> also exports intermediate stages of multi-stage builds. <strong>Cache mounts</strong> (<code>RUN --mount=type=cache</code>) keep <code>~/.m2</code>, <code>~/.npm</code> or pip caches between builds without baking them into the image.</p>
+<p>Other wins: a strict <strong><code>.dockerignore</code></strong> so you don't upload <code>.git</code>, <code>node_modules</code> or test data as context; multi-stage builds where independent stages (frontend and backend) build in <strong>parallel</strong>; and larger or persistent runners, or a shared remote BuildKit builder, for the heaviest builds.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Run <code>docker buildx build --progress=plain</code> and note per-step times and <code>CACHED</code> markers.</li>
+  <li>Reorder: copy lock files, install dependencies, then copy source.</li>
+  <li>Add <code>--cache-from</code>/<code>--cache-to</code> pointing at a registry or CI cache.</li>
+  <li>Add <code>--mount=type=cache</code> to dependency install steps.</li>
+  <li>Tighten <code>.dockerignore</code> and check the &quot;transferring context&quot; size.</li>
+  <li>Re-measure and compare against a baseline over several runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+FROM deps AS build
+COPY . .
+RUN npm run build</code></pre>
+<pre><code class="language-bash">docker buildx build \
+  --cache-from type=registry,ref=registry.example.com/web:buildcache \
+  --cache-to type=registry,ref=registry.example.com/web:buildcache,mode=max \
+  -t registry.example.com/web:${GIT_SHA} --push .</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising blindly without measuring which step is slow.</li>
+  <li><code>COPY . .</code> at the top of the Dockerfile.</li>
+  <li>Using <code>--no-cache</code> in CI &quot;to be safe&quot; on every build.</li>
+  <li>Forgetting <code>mode=max</code>, so multi-stage intermediate layers are never cached.</li>
+  <li>Huge build contexts because <code>.dockerignore</code> is missing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd start by measuring: <code>buildx build --progress=plain</code> shows the time of every step and whether it hit the cache. Usually the cause is one of three things: dependencies reinstalled on every code change because of layer order, ephemeral runners with no cache, or package managers downloading everything again. So I copy the lock file and install dependencies before copying source, export BuildKit cache to the registry or CI cache with <code>--cache-to</code> and <code>--cache-from</code>, and use cache mounts for npm or Maven. Then I trim the context with <code>.dockerignore</code> and split independent work into parallel stages. Finally I compare build times over a week of runs to prove the gain.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prove the improvement?</strong> Track p50/p90 build duration and cache hit rate in CI metrics before and after, over many runs.</li>
+  <li><strong>Registry cache vs CI cache?</strong> Registry cache is portable across runners and providers; CI caches are convenient but size-limited and scoped per branch.</li>
+  <li><strong>Why do cache mounts not bloat the image?</strong> Their contents are kept by the builder, not written into the layer.</li>
+</ul>
+</article>
+</body>
+</html>

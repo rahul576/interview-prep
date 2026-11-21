@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-033 · How do StatefulSet updates work, and what are partitions and podManagementPolicy?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-033" data-topic="Kubernetes">
+<h1>How do StatefulSet updates work, and what are partitions and podManagementPolicy?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With <strong>RollingUpdate</strong>, a StatefulSet replaces pods <strong>one at a time in reverse ordinal order</strong>, waiting for each to be <strong>Ready</strong>; a <strong>partition</strong> limits the update to ordinals <strong>≥ the partition</strong> (canaries), <strong>OnDelete</strong> updates only pods you delete, and <strong>podManagementPolicy</strong> chooses <strong>OrderedReady</strong> (sequential) or <strong>Parallel</strong> creation and scaling.</p>
+
+<h2>Detailed explanation</h2>
+<p>StatefulSets manage pods with stable identities (<code>db-0</code>, <code>db-1</code>, <code>db-2</code>) and their own PVCs, so updates must be careful: members are not interchangeable and often form a cluster with a leader.</p>
+<p><strong>RollingUpdate</strong> (default): when the pod template changes, the controller deletes and recreates pods from the <strong>highest ordinal down to 0</strong>. It waits until the updated pod is Running and Ready before moving on (and <code>minReadySeconds</code> if set). Each recreated pod reattaches to the same PVC and DNS name. The lowest ordinals, often the initial leader or seed, are updated last.</p>
+<p><strong>partition</strong> (<code>updateStrategy.rollingUpdate.partition</code>): only pods with ordinal <strong>≥ partition</strong> are updated; lower ones stay on the old revision even if deleted. In a 5-replica set, partition 4 updates only <code>db-4</code>: a <strong>canary</strong>. Observe it, then lower the partition step by step to 0. This is the StatefulSet equivalent of a staged rollout.</p>
+<p><strong>OnDelete</strong>: the controller never replaces pods automatically; a pod picks up the new template only when you (or an operator) delete it. Database operators often use this to control order themselves, for example updating replicas first, then failing over and updating the old primary.</p>
+<p><strong>podManagementPolicy</strong> affects creation, scaling and deletion, not updates:</p>
+<ul>
+  <li><code>OrderedReady</code> (default): create <code>0</code>, wait for Ready, then <code>1</code>…; scale down from the highest ordinal one at a time.</li>
+  <li><code>Parallel</code>: create or delete all at once, faster for systems where members don't depend on start order (for example Cassandra with seeds configured).</li>
+</ul>
+<p>Rollbacks need care: a new version may already have migrated on-disk data formats, so returning to the old image is not always safe.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Template change creates a new controller revision.</li>
+  <li>Controller picks the highest ordinal ≥ partition still on the old revision.</li>
+  <li>Deletes it; recreates with new template, same PVC and name.</li>
+  <li>Waits for Ready (and minReadySeconds).</li>
+  <li>Repeats down to the partition; lowering partition continues.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: kafka }
+spec:
+  serviceName: kafka
+  replicas: 5
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 4         # canary: only kafka-4 updates
+  selector: { matchLabels: { app: kafka } }
+  template: { ... }</code></pre>
+<pre><code class="language-bash">kubectl rollout status sts/kafka
+kubectl patch sts kafka -p '{&quot;spec&quot;:{&quot;updateStrategy&quot;:{&quot;rollingUpdate&quot;:{&quot;partition&quot;:0}}}}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming podManagementPolicy Parallel speeds up rolling updates by itself.</li>
+  <li>Readiness probes that don't reflect cluster membership, so updates move on too early.</li>
+  <li>Forgetting a stuck partition, leaving the set half-updated.</li>
+  <li>Rolling back an image after an irreversible data migration.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With RollingUpdate a StatefulSet replaces pods one at a time in reverse ordinal order, from the highest down to zero, waiting for each to be Ready, and each pod keeps its name and volume. A partition restricts the update to ordinals at or above it, so partition 4 in a five-pod set updates only the last pod as a canary, and lowering it continues the rollout. OnDelete updates only pods you delete, which operators use for full control. podManagementPolicy is about creation and scaling: OrderedReady is sequential, Parallel starts everything at once. Rollbacks need care because data formats may have changed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a rollout get stuck?</strong> An updated pod never becomes Ready (bad config, failed migration); the controller waits and may need manual fixing even after reverting.</li>
+  <li><strong>Why reverse order?</strong> Higher ordinals are typically followers; ordinal 0 is often the initial leader or seed.</li>
+  <li><strong>What happens to PVCs on scale-down?</strong> Retained by default; <code>persistentVolumeClaimRetentionPolicy</code> can delete them.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-110 · How do you do progressive delivery (canary) on Kubernetes with automated rollback?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-110" data-topic="GitOps &amp; Helm">
+<h1>How do you do progressive delivery (canary) on Kubernetes with automated rollback?</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use a <strong>progressive delivery controller</strong> such as <strong>Argo Rollouts or Flagger</strong>: it shifts traffic in <strong>gradual steps</strong> (for example 5 → 25 → 50 → 100%) via an <strong>ingress controller, Gateway API or service mesh</strong>, runs <strong>automated analysis</strong> against metrics (error rate, latency vs stable) at each step, and <strong>aborts and rolls back automatically</strong> when thresholds are breached.</p>
+
+<h2>Detailed explanation</h2>
+<p>A plain Kubernetes <strong>Deployment rolling update</strong> replaces pods gradually but has no notion of <strong>traffic percentage</strong> or <strong>health beyond readiness probes</strong>: if the new version returns 5% errors, it still rolls out to 100%. <strong>Progressive delivery</strong> adds measured exposure and automatic decisions.</p>
+<p><strong>Argo Rollouts</strong> replaces the Deployment with a <code>Rollout</code> resource that defines <strong>canary steps</strong>: set a weight, pause, run analysis, continue. <strong>Flagger</strong> wraps an existing Deployment and drives the canary through a <code>Canary</code> resource. Both integrate with <strong>traffic routers</strong>: NGINX or other ingress controllers, the <strong>Gateway API</strong>, AWS ALB, and service meshes like <strong>Istio</strong> or Linkerd, which split traffic by <strong>weights</strong> precisely, or by headers for internal testers. Without a router, Rollouts approximates weights by replica counts.</p>
+<p>At each step an <strong>analysis</strong> runs: an <code>AnalysisTemplate</code> queries <strong>Prometheus</strong> (or Datadog, CloudWatch, New Relic) for the canary's <strong>error rate, p99 latency</strong> and maybe business KPIs, ideally <strong>compared with the stable version</strong> in the same time window. If a metric fails its condition a set number of times, the rollout <strong>aborts</strong>: traffic goes back to stable and the canary scales down, with no human involved. Success promotes it to 100%.</p>
+<p>Practicalities: canaries need <strong>enough traffic</strong> to be statistically meaningful, metrics must be labelled by version, and changes must be <strong>backward compatible</strong>, because old and new versions run together. Database migrations follow <strong>expand/contract</strong>: add compatible schema first, deploy code, remove old columns later. <strong>Feature flags</strong> complement canaries by decoupling deploy from release.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>New image committed → Rollout starts canary at 5% traffic.</li>
+  <li>Pause (for example 5 minutes) while analysis queries metrics.</li>
+  <li>Pass → 25% → analysis → 50% → analysis → 100%.</li>
+  <li>Fail → abort: traffic to stable, canary scaled down, alert sent.</li>
+  <li>Promotion makes the canary the new stable.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata: { name: orders }
+spec:
+  strategy:
+    canary:
+      canaryService: orders-canary
+      stableService: orders-stable
+      trafficRouting: { nginx: { stableIngress: orders } }
+      analysis:
+        templates: [ { templateName: error-rate } ]
+        startingStep: 1
+      steps:
+        - setWeight: 5
+        - pause: { duration: 5m }
+        - setWeight: 25
+        - pause: { duration: 10m }
+        - setWeight: 50
+        - pause: { duration: 10m }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata: { name: error-rate }
+spec:
+  metrics:
+    - name: error-rate
+      interval: 1m
+      failureLimit: 2
+      successCondition: result[0] &lt; 0.01
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_requests_total{app=&quot;orders&quot;,role=&quot;canary&quot;,code=~&quot;5..&quot;}[2m]))
+            / sum(rate(http_requests_total{app=&quot;orders&quot;,role=&quot;canary&quot;}[2m]))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Analysing metrics that mix stable and canary traffic.</li>
+  <li>Canary steps too short or traffic too low to detect anything.</li>
+  <li>Non-backward-compatible schema changes deployed with the canary.</li>
+  <li>Relying on readiness probes as the only health signal.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use Argo Rollouts or Flagger instead of a plain Deployment. The rollout defines gradual steps, say 5, 25, 50 and 100 percent, and the ingress controller, Gateway API or a service mesh splits traffic by weight. At each step an analysis queries Prometheus for the canary's error rate and p99 latency, compared with thresholds or the stable version. If it fails, the rollout aborts automatically and traffic returns to stable, without anyone being paged first. I make sure metrics are labelled by version, there's enough traffic for a signal, and changes are backward compatible, with database changes done via expand and contract. Combined with feature flags, this keeps the blast radius of a bad release very small.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Canary with a database migration?</strong> Expand/contract: backward-compatible schema change first, then the canary, then cleanup later.</li>
+  <li><strong>Canary vs blue-green?</strong> Blue-green switches all traffic at once with instant rollback; canary exposes gradually.</li>
+  <li><strong>Low-traffic services?</strong> Use longer steps, synthetic traffic, or header-based canaries for internal users.</li>
+</ul>
+</article>
+</body>
+</html>

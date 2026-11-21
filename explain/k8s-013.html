@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-013 · Compare ValidatingAdmissionPolicy, admission webhooks, Kyverno and OPA Gatekeeper for enforcing cluster policies.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-013" data-topic="Kubernetes">
+<h1>Compare ValidatingAdmissionPolicy, admission webhooks, Kyverno and OPA Gatekeeper for enforcing cluster policies.</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>ValidatingAdmissionPolicy</strong> runs <strong>CEL</strong> rules <strong>inside the API server</strong> (GA since 1.30), simple and with no extra service; <strong>admission webhooks</strong> call an <strong>external service</strong> and can <strong>validate and mutate</strong>; <strong>Kyverno</strong> (YAML policies, mutation, generation) and <strong>OPA Gatekeeper</strong> (Rego) are webhook-based engines, carrying <strong>availability and failurePolicy</strong> risks.</p>
+
+<h2>Detailed explanation</h2>
+<p>Admission control is the last gate before an object is stored: after authentication and RBAC, admission can reject or modify the request. Options:</p>
+<ul>
+  <li><strong>ValidatingAdmissionPolicy (VAP):</strong> you write a policy with <strong>CEL</strong> expressions, for example <code>object.spec.template.spec.containers.all(c, has(c.resources.limits))</code>, and a <strong>binding</strong> that selects which resources and namespaces it applies to and whether to Deny, Warn or Audit. It runs in-process, so there's no network hop, no extra deployment to keep alive, and it is fast. Parameters can come from a ConfigMap or CRD. Limits: validation only, and CEL is less expressive for complex lookups. A <strong>MutatingAdmissionPolicy</strong> counterpart has been added more recently and is still maturing.</li>
+  <li><strong>Admission webhooks:</strong> the API server calls your HTTPS endpoint with an AdmissionReview. <strong>Mutating</strong> webhooks run first and can patch the object (inject sidecars, set defaults), then <strong>validating</strong> webhooks run. Fully flexible, but you operate a highly available service.</li>
+  <li><strong>Kyverno:</strong> a webhook-based policy engine where policies are Kubernetes YAML with pattern matching; supports validate, <strong>mutate</strong>, <strong>generate</strong> (for example create default NetworkPolicies in new namespaces), image signature verification and background reports. Approachable for platform teams; recent versions also support CEL-based policies.</li>
+  <li><strong>OPA Gatekeeper:</strong> uses <strong>Rego</strong> via ConstraintTemplates and Constraints; very expressive and shared with OPA policies elsewhere (Terraform, APIs), with audit of existing resources and some mutation support; steeper learning curve.</li>
+</ul>
+<p>The webhook trade-off is <strong>availability</strong>: with <code>failurePolicy: Fail</code>, if the webhook is down, matching requests are rejected and deployments, even of the webhook itself, can stall. With <code>Ignore</code>, policy is silently skipped. Mitigate with multiple replicas, PDBs, short <code>timeoutSeconds</code>, and <code>namespaceSelector</code> excluding <code>kube-system</code> and the engine's own namespace.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request passes authentication and authorisation.</li>
+  <li>Mutating admission (webhooks, mutating policies) modifies the object.</li>
+  <li>Schema validation.</li>
+  <li>Validating admission: VAP CEL rules and validating webhooks.</li>
+  <li>Any denial returns an error; otherwise the object is persisted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: require-limits }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - { apiGroups: [apps], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [deployments] }
+  validations:
+  - expression: &quot;object.spec.template.spec.containers.all(c, has(c.resources.limits) &amp;&amp; has(c.resources.limits.memory))&quot;
+    message: &quot;every container needs a memory limit&quot;
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: require-limits }
+spec:
+  policyName: require-limits
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { env: prod } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Webhooks with <code>failurePolicy: Fail</code> and a single replica.</li>
+  <li>Policies that also match <code>kube-system</code>, blocking recovery.</li>
+  <li>Enforcing new policies without an audit/warn phase.</li>
+  <li>Using a webhook for rules that CEL could express in-process.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ValidatingAdmissionPolicy is built into the API server since 1.30: rules in CEL, bound to resources and namespaces, running in-process with nothing extra to operate, so it's my first choice for simple validation. Webhooks call an external service and can validate and mutate; Kyverno and Gatekeeper build on them. Kyverno uses YAML policies and can mutate and generate resources, which platform teams find easy. Gatekeeper uses Rego, more powerful but harder. The main webhook risk is availability: with failurePolicy Fail an outage blocks deployments, so I run replicas, short timeouts and exclude system namespaces.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>First policies for a new prod cluster?</strong> Pod Security restricted, resource requests and limits, trusted registries, no <code>latest</code> tags, required owner labels.</li>
+  <li><strong>How do you test policies?</strong> Kyverno CLI or gator tests in CI, then audit mode in the cluster.</li>
+  <li><strong>Why order matters?</strong> Mutation runs before validation, so validators see the mutated object.</li>
+</ul>
+</article>
+</body>
+</html>

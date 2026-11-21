@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-057 · Design a multi-region active-active architecture for a global application.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-057" data-topic="Scalability &amp; Reliability">
+<h1>Design a multi-region active-active architecture for a global application.</h1>
+<p class="ex-meta">Scalability &amp; Reliability · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Active-active multi-region routes users to the <strong>nearest healthy region</strong> (GeoDNS/anycast), deploys stateless services everywhere, and handles data by <strong>home-region partitioning</strong>, <strong>conflict-tolerant replication</strong> or <strong>globally consistent databases</strong>, with <strong>capacity headroom</strong> and <strong>failover drills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Benefits: lower latency for a global user base and survival of a full region outage. The hard part is always <strong>data</strong>.</p>
+<p>Data strategies:</p>
+<ol>
+  <li><strong>Home region (partitioned writes):</strong> each user/tenant has a home region where their writes go; other regions hold read replicas. Few conflicts, easy reasoning; a region failure means failing over that region's users (with possible lag loss).</li>
+  <li><strong>Multi-leader with conflict resolution:</strong> every region accepts writes; resolve with LWW, merges or <strong>CRDTs</strong>. Good for carts, likes, presence; bad for balances.</li>
+  <li><strong>Globally consistent DBs:</strong> Spanner, CockroachDB, Cosmos DB (strong), YugabyteDB. Consensus across regions gives correctness but each write pays cross-region latency (tens to 100+ ms).</li>
+</ol>
+<p>Routing: Route 53 latency/geo routing, Azure Front Door, Cloudflare/Global Accelerator anycast, with health checks to drain a failing region. <strong>Headroom:</strong> with 3 regions, each needs ~50% extra capacity to absorb a lost region. <strong>Drills:</strong> regularly fail over for real.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Global LB → nearest healthy region.</li>
+  <li>Region: full stateless stack + local caches + data replicas.</li>
+  <li>Writes → home region (or consistent DB / CRDT store).</li>
+  <li>Async replication of events, search indexes, caches per region.</li>
+  <li>Region down → health checks fail → traffic shifted; promote replicas for its home users.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">users in India   ─▶ Front Door ─▶ ap-south  (home region for IN users: writes here)
+users in Germany ─▶ Front Door ─▶ eu-west   (home region for EU users: writes here)
+ap-south ⇄ async replication of read models, search indexes, events ⇄ eu-west
+eu-west down → health probe fails → EU traffic to ap-south; promote EU replica there</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Active-passive</th><th>Active-active</th></tr></thead>
+<tbody>
+<tr><td>Latency</td><td>One region</td><td>Nearest region</td></tr>
+<tr><td>Failover</td><td>Minutes</td><td>Seconds (traffic shift)</td></tr>
+<tr><td>Data complexity</td><td>Low</td><td>High</td></tr>
+<tr><td>Cost</td><td>Standby partly idle</td><td>All regions used</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming databases replicate magically without conflicts.</li>
+  <li>No spare capacity for failover.</li>
+  <li>Hidden single-region dependencies (auth, config, DNS).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Global load balancing sends users to the nearest healthy region, and stateless services run in all regions. For data I'd give each user a home region for writes with replicas elsewhere, which avoids most conflicts; conflict-tolerant data like carts could be multi-leader, and truly global strongly consistent data would use Spanner or Cosmos DB, accepting write latency. Each region keeps headroom to absorb another's traffic, and we rehearse failovers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is active-passive better?</strong> Strong consistency needs, simpler ops, lower budgets.</li>
+  <li><strong>What about sessions?</strong> Stateless tokens valid in all regions.</li>
+  <li><strong>Data residency?</strong> Home region aligned with legal region.</li>
+</ul>
+</article>
+</body>
+</html>

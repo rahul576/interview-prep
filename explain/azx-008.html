@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-008 · How does high availability work for Azure Database for PostgreSQL Flexible Server?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-008" data-topic="Azure">
+<h1>How does high availability work for Azure Database for PostgreSQL Flexible Server?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Flexible Server HA runs a <strong>hot standby</strong> (in <strong>another zone</strong> or the <strong>same zone</strong>) with <strong>synchronous replication</strong>, and <strong>fails over automatically</strong> in about <strong>one to two minutes</strong> behind the <strong>same endpoint</strong>; <strong>read replicas</strong> (asynchronous, optionally cross-region) handle read scaling and DR, and <strong>backups with PITR and geo-redundant backup</strong> protect data.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Azure Database for PostgreSQL Flexible Server</strong> offers two HA modes:</p>
+<ul>
+  <li><strong>Zone-redundant HA:</strong> the standby server runs in a <strong>different availability zone</strong> from the primary, protecting against a zone outage. This is the recommended production setting where zones exist.</li>
+  <li><strong>Same-zone HA:</strong> the standby is in the same zone, with slightly lower write latency, protecting against server and storage failures but not a zone failure.</li>
+</ul>
+<p>In both modes, the primary replicates its write-ahead log <strong>synchronously</strong> to the standby: a transaction is acknowledged only after it is durably written on both sides, so <strong>committed transactions are not lost</strong> on failover (RPO zero). This adds some write latency, especially across zones.</p>
+<p>When Azure detects the primary or its zone is unhealthy, it performs an <strong>automatic failover</strong>: the standby is promoted and the <strong>same server name/DNS endpoint</strong> points to it. Failover typically takes <strong>around 60 to 120 seconds</strong>. You can also trigger a <strong>planned failover</strong> to test. After failover a new standby is created automatically. Note that HA increases cost (you pay for the standby) and the standby cannot serve reads.</p>
+<p><strong>Read replicas</strong> use <strong>asynchronous</strong> streaming replication, so they may lag. They offload read-heavy queries and reporting, and can be placed in <strong>another region</strong> for disaster recovery; in a regional disaster you <strong>promote</strong> a replica to a standalone server, optionally using <strong>virtual endpoints</strong> to keep connection strings stable.</p>
+<p><strong>Backups</strong> are automatic with <strong>point-in-time restore</strong> within the retention period (up to 35 days), and <strong>geo-redundant backup</strong> allows restoring in the paired region.</p>
+<p><strong>Application side:</strong> use <strong>retry logic with backoff</strong> for transient connection errors, short DNS caching, <strong>connection pooling</strong> (the built-in PgBouncer), idempotent writes, and reasonable connection timeouts so failover is barely noticed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable zone-redundant HA; standby provisioned in another zone.</li>
+  <li>Writes commit on primary and standby synchronously.</li>
+  <li>Health monitoring detects primary failure.</li>
+  <li>Standby is promoted; DNS endpoint switches.</li>
+  <li>Clients reconnect with retries; a new standby is built.</li>
+  <li>Read replicas and geo-backups cover regional DR.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az postgres flexible-server create -g rg-db -n pg-orders --location westeurope \
+  --tier GeneralPurpose --sku-name Standard_D4ds_v5 --version 16 \
+  --high-availability ZoneRedundant --zone 1 --standby-zone 2 \
+  --geo-redundant-backup Enabled --backup-retention 35
+az postgres flexible-server replica create -g rg-db-neu \
+  --replica-name pg-orders-neu --source-server &lt;pg-orders-resource-id&gt; --location northeurope
+az postgres flexible-server restart -g rg-db -n pg-orders --failover Planned   # test failover</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No retry logic, so a one-minute failover becomes user-visible errors.</li>
+  <li>Assuming read replicas are synchronous and fully up to date.</li>
+  <li>Using same-zone HA and expecting zone-failure protection.</li>
+  <li>Never testing failover.</li>
+  <li>Long-lived connections with no reconnect handling or cached IPs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Flexible Server supports high availability with a hot standby. In zone-redundant mode the standby is in a different availability zone, while same-zone mode keeps it in the same zone for lower latency. Writes are replicated synchronously to the standby, so committed transactions are not lost, and if the primary or its zone fails Azure fails over automatically, usually within one to two minutes, keeping the same endpoint. Applications need retry logic and connection pooling for that brief interruption. Read replicas use asynchronous replication for read scaling and can be in another region for DR, where they can be promoted. Backups give point-in-time restore, and geo-redundant backup lets me restore in the paired region.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What do applications need so a failover is barely noticed?</strong> Retries with backoff, connection pooling, short timeouts and idempotent operations.</li>
+  <li><strong>Can the HA standby serve reads?</strong> No; use read replicas for that.</li>
+  <li><strong>How do you measure replica lag?</strong> The replication lag metric in Azure Monitor or <code>pg_stat_replication</code>.</li>
+</ul>
+</article>
+</body>
+</html>

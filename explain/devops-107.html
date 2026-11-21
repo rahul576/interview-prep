@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-107 · Compare push-based and pull-based (GitOps) deployment, including security implications.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-107" data-topic="GitOps &amp; Helm">
+<h1>Compare push-based and pull-based (GitOps) deployment, including security implications.</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In <strong>push-based</strong> deployment the <strong>CI pipeline holds cluster credentials</strong> and runs <code>kubectl apply</code>/<code>helm upgrade</code>; in <strong>pull-based GitOps</strong> an <strong>in-cluster agent</strong> (Argo CD, Flux) pulls desired state from Git and <strong>continuously reconciles</strong>, so <strong>credentials stay inside the cluster</strong>, <strong>drift is detected and corrected</strong>, and <strong>Git history is the audit trail</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Push model:</strong> after building and testing, the pipeline authenticates to the cluster and applies manifests. It is simple and familiar, and works for any target. But the <strong>CI system becomes a high-value target</strong>: it stores kubeconfigs or cloud credentials with broad write rights to every environment it deploys to. Anyone who compromises a runner, a plugin or a pipeline definition can deploy anything. And the pipeline only acts <strong>when it runs</strong>; if someone edits the cluster by hand later, nothing notices or corrects the <strong>drift</strong>.</p>
+<p><strong>Pull model (GitOps):</strong> an agent running <strong>inside</strong> the cluster watches a Git repository (or OCI artifact) and makes the cluster match it. CI's job ends at building the image and <strong>committing a new image tag</strong> to the config repo (or opening a PR). The agent authenticates outbound to Git and the registry with <strong>read-only</strong> credentials; no external system needs cluster admin rights, and the cluster API does not need to be reachable from CI at all, which suits private clusters. Because the agent reconciles continuously, <strong>manual changes show as OutOfSync</strong> and can be reverted automatically with <strong>self-heal</strong>. Every change is a commit, so you get <strong>review, audit and rollback via <code>git revert</code></strong>.</p>
+<p>GitOps has costs too: two repos or more to manage, the agent itself must be secured (its RBAC is powerful), <strong>secrets need a separate solution</strong>, and sequencing imperative steps (migrations, tests after deploy) needs hooks or extra tooling.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer merges code; CI builds, tests, scans and pushes the image.</li>
+  <li>CI (or Renovate/Argo CD Image Updater) updates the image tag in the config repo.</li>
+  <li>The in-cluster agent detects the new commit.</li>
+  <li>It renders manifests (Helm/Kustomize), diffs with live state and applies.</li>
+  <li>It keeps reconciling, reporting drift and health.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># CI step: no cluster credentials, only Git write access
+- name: Bump image tag in config repo
+  run: |
+    git clone https://github.com/acme/deploy-config &amp;&amp; cd deploy-config
+    yq -i '.image.tag = &quot;${{ github.sha }}&quot;' apps/orders/values-prod.yaml
+    git commit -am &quot;orders: deploy ${{ github.sha }}&quot; &amp;&amp; git push</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Push (CI deploys)</th><th>Pull (GitOps)</th></tr></thead>
+<tbody>
+<tr><td>Cluster credentials</td><td>In CI</td><td>Inside cluster only</td></tr>
+<tr><td>Drift handling</td><td>None after deploy</td><td>Continuous reconcile</td></tr>
+<tr><td>Audit</td><td>Pipeline logs</td><td>Git history</td></tr>
+<tr><td>Network</td><td>CI → cluster API</td><td>Cluster → Git (outbound)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling it GitOps while CI still runs <code>kubectl apply</code> with admin credentials.</li>
+  <li>Giving the GitOps agent cluster-admin everywhere without restricting projects.</li>
+  <li>Committing plain Kubernetes Secrets to the config repo.</li>
+  <li>Letting people make manual cluster changes and then wondering why self-heal reverts them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In a push model the CI pipeline holds cluster credentials and runs kubectl or helm, so CI becomes a powerful attack target, and once the pipeline finishes nothing stops manual drift. In a pull model, an agent such as Argo CD or Flux runs inside the cluster, watches Git and syncs the desired state. CI only needs to push an image and update a tag in a Git repo, so cluster credentials never leave the cluster, and the API server doesn't even need to be reachable from CI. The agent reconciles continuously, flags or reverts manual changes, and Git history gives us review, audit and rollback with git revert. The trade-off is that secrets and imperative steps need extra handling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle secrets in GitOps?</strong> External Secrets Operator from a vault, or encrypted with Sealed Secrets/SOPS.</li>
+  <li><strong>How does CI know the deployment succeeded?</strong> Query Argo CD/Flux status or notifications, or run post-sync hooks.</li>
+  <li><strong>Is push ever better?</strong> For non-Kubernetes targets or very simple setups where a reconciler adds little.</li>
+</ul>
+</article>
+</body>
+</html>

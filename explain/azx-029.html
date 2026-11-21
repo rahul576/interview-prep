@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-029 · What are Durable Functions, and which problems do they solve?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-029" data-topic="Azure">
+<h1>What are Durable Functions, and which problems do they solve?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Durable Functions</strong> lets you write <strong>stateful, long-running workflows in code</strong>: an <strong>orchestrator</strong> calls <strong>activities</strong>, its progress is <strong>checkpointed</strong> to a <strong>storage backend</strong>, and it is <strong>replayed</strong> from <strong>event history</strong>, so orchestrator code must be <strong>deterministic</strong>; it implements <strong>chaining, fan-out/fan-in, async HTTP, monitors and human interaction</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Plain functions are stateless and short. Real processes, like order fulfilment or document processing, involve several steps, parallel work, waiting for people and retries over hours or days. Building that by hand needs queues, state tables and timers. Durable Functions (built on the <strong>Durable Task Framework</strong>) gives you that as code.</p>
+<p>Function types: <strong>orchestrator</strong> functions describe the workflow, <strong>activity</strong> functions do the actual work (I/O, calculations), <strong>entity</strong> functions hold small pieces of durable state, and <strong>client</strong> functions start and query orchestrations.</p>
+<p>Patterns:</p>
+<ul>
+  <li><strong>Function chaining:</strong> A then B then C, with outputs passed along.</li>
+  <li><strong>Fan-out/fan-in:</strong> start many activities in parallel, <code>await Task.WhenAll</code>, aggregate.</li>
+  <li><strong>Async HTTP APIs:</strong> the client gets 202 with status URLs while work continues.</li>
+  <li><strong>Monitor:</strong> a loop with durable timers polling until a condition holds.</li>
+  <li><strong>Human interaction:</strong> wait for an <strong>external event</strong> (approval) with a <strong>timeout</strong> via a durable timer.</li>
+</ul>
+<p><strong>Replay:</strong> when an activity completes, the orchestrator is unloaded; later it is <strong>re-run from the start</strong>, and completed calls return their recorded results from history instead of executing again. That is why orchestrators must be <strong>deterministic</strong>: use <code>context.CurrentUtcDateTime</code> instead of <code>DateTime.Now</code>, <code>context.NewGuid()</code> instead of <code>Guid.NewGuid()</code>, no direct I/O, random numbers or thread sleeps; put those in activities. Long-running loops use <strong>ContinueAsNew</strong> to keep history small.</p>
+<p><strong>Backends</strong> store history and queues: <strong>Azure Storage</strong> (default), <strong>MSSQL</strong>, and the managed <strong>Durable Task Scheduler</strong>, which offers higher throughput and a monitoring dashboard. Version orchestrations carefully, because in-flight instances replay against new code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client function starts an orchestration instance with an ID.</li>
+  <li>Orchestrator schedules activities; framework records events.</li>
+  <li>Activities run on any worker; results are appended to history.</li>
+  <li>Orchestrator replays, consuming results, and continues.</li>
+  <li>Timers and external events resume it later.</li>
+  <li>Final output stored; status queryable via HTTP API.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-csharp">[Function(nameof(ProcessOrder))]
+public static async Task&lt;string&gt; ProcessOrder([OrchestrationTrigger] TaskOrchestrationContext ctx)
+{
+    var order = ctx.GetInput&lt;Order&gt;();
+    await ctx.CallActivityAsync(&quot;ReserveStock&quot;, order);
+    var tasks = order.Lines.Select(l =&gt; ctx.CallActivityAsync&lt;decimal&gt;(&quot;PriceLine&quot;, l));
+    var total = (await Task.WhenAll(tasks)).Sum();               // fan-out/fan-in
+    using var cts = new CancellationTokenSource();
+    var approval = ctx.WaitForExternalEvent&lt;bool&gt;(&quot;Approved&quot;);
+    var timeout = ctx.CreateTimer(ctx.CurrentUtcDateTime.AddHours(24), cts.Token);
+    if (await Task.WhenAny(approval, timeout) == approval) { cts.Cancel(); return &quot;approved&quot;; }
+    return &quot;expired&quot;;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>DateTime.Now</code>, HTTP clients or databases inside the orchestrator.</li>
+  <li>Huge inputs/outputs bloating history.</li>
+  <li>Infinite loops without ContinueAsNew.</li>
+  <li>Deploying breaking orchestrator changes while instances are in flight.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Durable Functions is an extension for stateful workflows in code. An orchestrator calls activities and waits for them, while the framework checkpoints progress to a backend, so a workflow survives restarts and can run for days. It covers chaining, fan-out fan-in, async HTTP status APIs, monitors and human approval with timeouts using durable timers and external events. Because orchestrators are replayed from history to rebuild state, their code must be deterministic: no DateTime.Now, random values or I/O, only durable APIs. State lives in Azure Storage, SQL or the managed Durable Task Scheduler.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is DateTime.Now a bug?</strong> Each replay gets a different value, so decisions diverge from recorded history.</li>
+  <li><strong>Durable Functions vs Logic Apps?</strong> Code-first for developers vs low-code designer with connectors.</li>
+  <li><strong>Versioning?</strong> Side-by-side deployment, new orchestrator names, or waiting for instances to drain.</li>
+</ul>
+</article>
+</body>
+</html>

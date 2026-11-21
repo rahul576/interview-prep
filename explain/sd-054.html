@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-054 · How should retries be designed so they help rather than cause retry storms?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-054" data-topic="Scalability &amp; Reliability">
+<h1>How should retries be designed so they help rather than cause retry storms?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Retry only <strong>transient</strong> failures on <strong>idempotent</strong> operations, with <strong>exponential backoff and jitter</strong>, <strong>limited attempts or retry budgets</strong>, at <strong>one layer only</strong>, within the request <strong>deadline</strong>, honouring <strong>Retry-After</strong>, and combined with <strong>circuit breakers</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Naive retries create <strong>retry storms</strong>. When a service struggles, every client retries immediately, multiplying its load and preventing recovery. With 3 retries at each of 4 layers, one user request can become 3^4 = 81 calls to the bottom service.</p>
+<p>Good practice:</p>
+<ul>
+  <li><strong>What to retry:</strong> timeouts, connection resets, 502/503/504, 429 (after waiting). Not 400/401/404/409.</li>
+  <li><strong>Idempotency:</strong> only retry operations that are safe to repeat, or use idempotency keys.</li>
+  <li><strong>Backoff:</strong> 100 ms, 200 ms, 400 ms… capped.</li>
+  <li><strong>Jitter:</strong> randomise each delay (full jitter: <code>random(0, base * 2^n)</code>) to avoid synchronised waves.</li>
+  <li><strong>Budgets:</strong> e.g. retries may be at most 10% of requests; stop retrying when the dependency is clearly down.</li>
+  <li><strong>Deadline propagation:</strong> if the caller's deadline is 2 s and 1.8 s are gone, don't retry.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Call with timeout.</li>
+  <li>On retryable failure: if attempts &lt; max and budget allows and deadline remains → sleep(backoff with jitter) → retry.</li>
+  <li>If the circuit breaker is open → fail fast / fallback.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">RetryConfig cfg = RetryConfig.custom()
+  .maxAttempts(3)
+  .intervalFunction(IntervalFunction.ofExponentialRandomBackoff(100, 2.0, 0.5))
+  .retryOnException(e -&gt; e instanceof IOException || e instanceof TimeoutException)
+  .build();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Fixed short intervals.</li>
+  <li>Retrying POSTs that aren't idempotent.</li>
+  <li>Retries in the client, gateway, service mesh and code all at once.</li>
+  <li>Timeouts longer than the caller's timeout.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Retries help with transient blips but can amplify outages. I retry only transient errors on idempotent calls, with exponential backoff and jitter, at most two or three times, under a retry budget, and only at one layer, usually the client closest to the failure. I propagate deadlines, respect Retry-After, and put a circuit breaker in front so a dead dependency isn't hammered.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Choosing timeouts in a chain?</strong> Each hop's timeout smaller than its caller's; based on dependency p99.</li>
+  <li><strong>Full vs equal jitter?</strong> Full jitter spreads load best.</li>
+  <li><strong>Hedging vs retries?</strong> Hedging duplicates proactively for tail latency, needs idempotency.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-019 · How do version and capability negotiation work in the stateless MCP revision?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-019" data-topic="MCP Servers">
+<h1>How do version and capability negotiation work in the stateless MCP revision?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In the stateless revision, <strong>every request declares its protocol version and relevant client capabilities in metadata</strong>, a <strong>discovery method</strong> lets clients check support in advance (cacheably), an <strong>unsupported-version error lists the versions the server supports</strong>, and the client <strong>retries with a mutually supported version</strong> or falls back to the handshake protocol for legacy servers.</p>
+
+<h2>Detailed explanation</h2>
+<p>Negotiation used to happen once, during <code>initialize</code>, and both sides remembered the result for the connection. Without a handshake, nothing is remembered, so negotiation information must <strong>travel with each request</strong>. Per the reference material for this question:</p>
+<p><strong>Per-request declaration.</strong> Each request includes, in its <code>_meta</code>, the <strong>protocol version</strong> it uses and the <strong>client capabilities</strong> relevant to that request, for example whether the client can satisfy input-required results through elicitation. The server can process the request completely independently, even if consecutive requests hit different replicas or a serverless function.</p>
+<p><strong>Discovery.</strong> A client that wants to know what a server supports before doing real work calls the <strong>discovery method</strong>, which returns the <strong>supported protocol versions</strong>, <strong>server capabilities</strong> (tools, resources, prompts, extensions) and server information. Because the answer rarely changes, it can be <strong>cached</strong>, avoiding a round trip on every conversation.</p>
+<p><strong>Version mismatch.</strong> If a request names a version the server does not support, the server returns an <strong>error listing the versions it does support</strong>. The client picks a <strong>mutually supported</strong> version and retries. If the server turns out to be a <strong>legacy server</strong> that does not understand the new style at all, the client can <strong>fall back to the older handshake-based protocol</strong> (<code>initialize</code>), so modern clients still interoperate with existing servers.</p>
+<p><strong>Capabilities and extensions.</strong> Capabilities still switch optional features on, including an <strong>extensions map</strong>: a feature such as Tasks or MCP Apps is only used when both sides declare the extension. The rule is unchanged from earlier revisions: <strong>use only what the other side supports</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client (optionally) calls discovery and caches result with a TTL.</li>
+  <li>Client chooses the highest version both support.</li>
+  <li>Every request carries that version and relevant capabilities in <code>_meta</code>.</li>
+  <li>On an unsupported-version error, client reads the supported list and retries.</li>
+  <li>If the server only speaks handshake revisions, client performs <code>initialize</code> instead.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Client -&gt; discovery
+Server &lt;- { supportedVersions: [&quot;2026-07-28&quot;,&quot;2025-11-25&quot;],
+            capabilities: { tools: {}, extensions: { tasks: {} } } }
+
+Client -&gt; tools/call  _meta.protocolVersion = &quot;2026-07-28&quot;   -&gt; OK
+
+Old client -&gt; tools/call _meta.protocolVersion = &quot;2027-xx&quot;   (unknown)
+Server &lt;- error: unsupported protocol version, supported: [&quot;2026-07-28&quot;,&quot;2025-11-25&quot;]
+Client -&gt; retry with &quot;2026-07-28&quot;</code></pre>
+<p>(Shapes illustrative; check the published schema for exact method and field names.)</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling discovery before every request instead of caching.</li>
+  <li>Ignoring the supported-versions list and failing hard.</li>
+  <li>Sending capabilities the client does not actually implement.</li>
+  <li>Forgetting a fallback path for handshake-only servers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Because there's no handshake, every request carries its protocol version and the client capabilities relevant to it in the metadata, so the server can handle each request independently on any replica. Clients that want to know support in advance call the discovery method, which returns supported versions, capabilities and server info, and they cache it. If a client sends a version the server doesn't support, the server returns an error listing the versions it does support, and the client retries with a mutual one, or falls back to the older initialize handshake for legacy servers. Capabilities, including the extensions map, still decide which optional features both sides use.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would a 2025-11-25 client talk to a new stateless server?</strong> Through the server's support for older versions via initialize, if it keeps that path.</li>
+  <li><strong>Why cache discovery?</strong> Saves latency; capabilities change rarely.</li>
+  <li><strong>What if capabilities change?</strong> Subscription notifications or cache expiry trigger re-discovery.</li>
+</ul>
+</article>
+</body>
+</html>

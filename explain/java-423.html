@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-423 · Design a payment processing service.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-423" data-topic="System Design">
+<h1>Design a payment processing service.</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A payment service requires <strong>idempotency keys</strong> on every request, models payments as an explicit <strong>state machine</strong>, records money in an immutable <strong>double-entry ledger</strong>, integrates <strong>gateways with timeouts, retries, signed webhooks and daily reconciliation</strong>, and stays mostly out of <strong>PCI DSS</strong> scope via <strong>tokenisation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Payments are about <strong>correctness under failure</strong>. Networks time out, users double-click, gateways send duplicate webhooks. The design must ensure <strong>no double charge, no lost money, and an auditable trail</strong>.</p>
+<p><strong>Idempotency:</strong> clients send an <code>Idempotency-Key</code> header. The service stores the key with the request hash and the response; a retry with the same key returns the stored result instead of charging again. A unique constraint makes this race-safe. The same key is passed to the gateway, which most providers (Stripe, Adyen, Razorpay) support.</p>
+<p><strong>State machine:</strong> <code>CREATED -&gt; AUTHORISED -&gt; CAPTURED -&gt; (PARTIALLY_)REFUNDED</code>, with <code>FAILED</code>, <code>CANCELLED</code> and an important <strong><code>UNKNOWN/PENDING</code></strong> state for timeouts. Transitions are validated (no refund before capture) and persisted with history, using optimistic locking.</p>
+<p><strong>Ledger:</strong> balances are never &quot;updated in place&quot;. Each movement is a <strong>double-entry</strong> journal: debits equal credits across accounts (customer, merchant payable, fees, gateway clearing). The ledger is <strong>append-only</strong>; corrections are new entries. Balances are derived and always reconcile.</p>
+<p><strong>Gateway integration:</strong> calls use timeouts and retries only when safe (with idempotency). Asynchronous results arrive via <strong>webhooks</strong>, verified by signature and processed idempotently. A <strong>reconciliation</strong> job compares internal records with provider <strong>settlement reports</strong> daily, flagging mismatches.</p>
+<p><strong>Security:</strong> never store raw card numbers; use the provider's <strong>hosted fields or tokenisation</strong> so card data never touches our servers (reducing PCI scope, e.g. to SAQ A). Encrypt data, restrict access, audit everything, and add fraud checks and 3-D Secure where required.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>POST /payments</code> with Idempotency-Key -&gt; insert key (unique) or return stored response.</li>
+  <li>Create payment <code>CREATED</code>, call gateway authorise with a token.</li>
+  <li>Success -&gt; <code>AUTHORISED</code>, ledger entries for the hold; failure -&gt; <code>FAILED</code>.</li>
+  <li>Timeout -&gt; <code>PENDING</code>; resolve via gateway status query or webhook.</li>
+  <li>Capture on shipment -&gt; <code>CAPTURED</code>, ledger moves funds to merchant payable.</li>
+  <li>Nightly reconciliation against settlement files.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE ledger_entries (
+  id          bigserial PRIMARY KEY,
+  journal_id  uuid    NOT NULL,           -- groups the balanced entries
+  account     text    NOT NULL,           -- e.g. 'customer:42', 'merchant:7:payable'
+  direction   text    NOT NULL CHECK (direction IN ('DEBIT','CREDIT')),
+  amount      numeric(19,4) NOT NULL CHECK (amount &gt; 0),
+  currency    char(3) NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+-- Capture of 1000 INR: two rows with the same journal_id
+-- DEBIT  gateway:clearing      1000.00 INR
+-- CREDIT merchant:7:payable    1000.00 INR</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying a charge after a timeout without an idempotency key.</li>
+  <li>Storing balances as a mutable column with no history.</li>
+  <li>Using floating-point types for money.</li>
+  <li>Trusting webhooks without signature verification.</li>
+  <li>Storing card numbers and dragging the whole system into PCI scope.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every request carries an idempotency key, stored with the response, so retries never double charge, and I pass it to the gateway too. Payments follow an explicit state machine, created, authorised, captured, refunded or failed, plus a pending state for unknown outcomes. Money is recorded in an append-only double-entry ledger so balances always reconcile. Gateway calls have timeouts, results come via signature-verified webhooks processed idempotently, and a daily job reconciles against settlement reports. Card data is tokenised by the provider so we stay mostly out of PCI scope, and everything is audited.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Gateway timed out, unknown result?</strong> Mark pending, query the gateway by idempotency key or wait for the webhook; never blindly re-charge.</li>
+  <li><strong>Why double-entry?</strong> Every movement balances, making errors detectable and audits simple.</li>
+  <li><strong>Multi-currency?</strong> Store amounts in minor units with currency; FX as explicit ledger entries.</li>
+</ul>
+</article>
+</body>
+</html>

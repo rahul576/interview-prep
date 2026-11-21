@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-035 · How do you debug a running pod whose image has no shell or debugging tools?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-035" data-topic="Kubernetes">
+<h1>How do you debug a running pod whose image has no shell or debugging tools?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Distroless images have <strong>no shell by design</strong>, so use <strong><code>kubectl debug</code></strong>: add an <strong>ephemeral container</strong> with tools to the running pod (with <strong><code>--target</code></strong> to share the app's <strong>process namespace</strong>), make a <strong>copy of the pod</strong> with a different image or command (<code>--copy-to</code>), or debug the <strong>node</strong> with a privileged pod (<code>kubectl debug node/...</code>).</p>
+
+<h2>Detailed explanation</h2>
+<p>Minimal images contain only the app and its runtime, shrinking the attack surface, but <code>kubectl exec -it pod -- sh</code> fails with &quot;executable file not found&quot;.</p>
+<p><strong>Ephemeral containers</strong> (stable since 1.25) are temporary containers added to an existing pod through the <code>ephemeralcontainers</code> subresource. They share the pod's network namespace and volumes (if mounted), can't have ports or probes, are never restarted, and stay in the pod spec until the pod is deleted. <code>kubectl debug -it pod --image=busybox:1.36 --target=app</code> adds one; <code>--target</code> places it in the <strong>process namespace of the app container</strong>, so <code>ps</code> shows the app's processes and <code>/proc/&lt;pid&gt;/root</code> exposes its filesystem, and you can inspect open files, environment and sockets. Tool images such as <code>nicolaka/netshoot</code> provide tcpdump, dig, curl and ss. <code>--profile</code> (general, netadmin, sysadmin, restricted) sets the security context, for example adding NET_ADMIN for packet capture.</p>
+<p><strong>Pod copies:</strong> <code>kubectl debug pod --copy-to=debug-pod --container=app --image=...</code> or <code>-- sleep infinity</code> creates a duplicate pod where you can swap the image or override the command, useful for a CrashLoopBackOff where the original container dies too fast to inspect. <code>--share-processes</code> enables a shared process namespace in the copy. Remember the copy may receive traffic if labels match; <code>--same-node</code> helps reproduce node-specific problems.</p>
+<p><strong>Node debugging:</strong> <code>kubectl debug node/node-3 -it --image=ubuntu</code> starts a pod in the host's namespaces with the node filesystem at <code>/host</code>; <code>chroot /host</code> then lets you run <code>crictl</code>, <code>journalctl -u kubelet</code> or check disk usage, without SSH.</p>
+<p>Because ephemeral containers can read memory, secrets and traffic of production pods, restrict the <code>pods/ephemeralcontainers</code> and <code>nodes/proxy</code> related permissions via RBAC and audit their use.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl debug</code> patches the pod's ephemeralcontainers subresource.</li>
+  <li>Kubelet starts the tool container in the pod's namespaces.</li>
+  <li>With <code>--target</code>, it joins the app container's PID namespace.</li>
+  <li>You attach interactively and investigate.</li>
+  <li>On exit the container stops but remains listed until the pod is replaced.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl debug -it orders-6d8f-abc --image=nicolaka/netshoot --target=orders --profile=netadmin
+# inside: ps aux; ss -tnp; cat /proc/1/environ | tr '\0' '\n'; tcpdump -i eth0 port 5432
+
+kubectl debug orders-6d8f-abc -it --copy-to=orders-debug --container=orders -- sh   # needs an image with sh
+kubectl debug orders-6d8f-abc --copy-to=orders-debug --set-image=orders=registry.example.com/orders:1.8.2-debug
+
+kubectl debug node/node-3 -it --image=ubuntu:24.04
+# chroot /host; crictl ps; journalctl -u kubelet --since &quot;10 min ago&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding shells to production images &quot;just in case&quot;.</li>
+  <li>Forgetting <code>--target</code>, so the app's processes are invisible.</li>
+  <li>Leaving debug pod copies running with production labels.</li>
+  <li>Allowing everyone to create ephemeral containers in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Distroless images have no shell by design, so kubectl exec doesn't help. I use kubectl debug to add an ephemeral container with a tools image like busybox or netshoot to the running pod without restarting it; with --target set to the app container it shares the process namespace, so I can see its processes, files and connections. If the container crashes too quickly, kubectl debug --copy-to creates a copy where I change the image or command. For node issues, kubectl debug node starts a privileged pod with the host filesystem mounted. In production, ephemeral containers are restricted by RBAC and audited.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why audit ephemeral containers?</strong> They can read secrets, memory and traffic of production workloads.</li>
+  <li><strong>Can you remove an ephemeral container?</strong> No, it stays in the spec until the pod is deleted.</li>
+  <li><strong>What does <code>--profile</code> do?</strong> Applies a preset security context, such as netadmin for packet capture.</li>
+</ul>
+</article>
+</body>
+</html>

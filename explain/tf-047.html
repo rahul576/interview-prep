@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-047 · Your scheduled drift detection should alert when production differs from code. How do you build it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-047" data-topic="Terraform">
+<h1>Your scheduled drift detection should alert when production differs from code. How do you build it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run a <strong>scheduled plan per production state</strong> with <strong>read-only credentials</strong>, use <strong><code>-detailed-exitcode</code></strong> (exit code <strong>2</strong> means changes), combine a <strong>normal plan</strong> and a <strong>refresh-only plan</strong>, <strong>alert with a summary</strong>, and <strong>triage</strong> each drift: revert or codify.</p>
+
+<h2>Detailed explanation</h2>
+<p>Drift is any difference between code and reality. It comes from manual portal changes, scripts, policies or autoscalers, and from merged code that was never applied. A nightly pipeline detects it before it surprises the next deployment.</p>
+<p>The key mechanism is <strong><code>terraform plan -detailed-exitcode</code></strong>: exit code <strong>0</strong> means no changes, <strong>1</strong> means an error, <strong>2</strong> means the plan contains changes. The job can then distinguish &quot;clean&quot;, &quot;broken&quot; and &quot;drifted&quot; without parsing text.</p>
+<p>Two plan types answer different questions. A <strong>normal plan</strong> shows everything an apply would do, including <strong>unapplied code changes</strong>. A <strong>refresh-only plan</strong> (<code>-refresh-only</code>) only shows how real objects differ from the <strong>last state</strong>, which isolates changes made outside Terraform. Running both tells you whether the problem is unapplied code or out-of-band change.</p>
+<p>The job should use a <strong>read-only identity</strong> (for example Reader on the subscription plus state read access) and should never have apply rights; a detector that can apply could revert an emergency fix or be abused. On drift it posts to the team channel or opens a ticket with a summary from <code>terraform show -json</code>: which resources, which attributes. Then someone <strong>triages</strong>: an intentional change is codified in a PR; an unintended one is reverted with a normal reviewed apply. <strong>HCP Terraform health assessments</strong> provide built-in drift detection if you use that platform.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduler triggers per state (matrix of production stacks).</li>
+  <li><code>init</code> with read-only backend access; <code>plan -refresh-only -detailed-exitcode</code>.</li>
+  <li>Optional second normal plan to catch unapplied code.</li>
+  <li>Exit 2: build a summary from the JSON plan.</li>
+  <li>Alert or create a ticket with owners and resource list.</li>
+  <li>Triage: codify or revert; track recurring sources of drift.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">set +e
+terraform plan -refresh-only -detailed-exitcode -lock=false -out=drift.plan
+rc=$?
+set -e
+if [ &quot;$rc&quot; -eq 2 ]; then
+  terraform show -json drift.plan \
+    | jq -r '.resource_drift[] | &quot;\(.address): \(.change.actions | join(&quot;,&quot;))&quot;' &gt; drift.txt
+  ./notify-teams.sh &quot;Drift in prod-network&quot; drift.txt
+elif [ &quot;$rc&quot; -eq 1 ]; then
+  exit 1
+fi</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Giving the drift job write credentials.</li>
+  <li>Alerting on noisy perpetual diffs until people ignore the channel.</li>
+  <li>Only running a normal plan and confusing unapplied code with manual drift.</li>
+  <li>Holding the state lock during long scheduled plans; use <code>-lock=false</code> for read-only checks.</li>
+  <li>No owner for triage, so alerts pile up.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I schedule a nightly plan for each production state with read-only credentials. With -detailed-exitcode, exit code 2 means changes, 1 means error, so the job can tell drift from failure. I use a refresh-only plan to isolate out-of-band changes, and sometimes a normal plan to catch merged but unapplied code. When drift is found, the job posts a summary built from terraform show -json to the team channel or a ticket. Someone triages it: codify it if it was intentional, or revert it with a reviewed apply. HCP Terraform has this built in as health assessments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should the drift job never apply?</strong> It could revert an emergency fix and is a high-value credential.</li>
+  <li><strong>How do you cut noise?</strong> Fix perpetual diffs and use <code>ignore_changes</code> only for legitimately external attributes.</li>
+  <li><strong>Where is drift in the JSON?</strong> In <code>resource_drift</code> for refresh-only results, <code>resource_changes</code> for planned changes.</li>
+</ul>
+</article>
+</body>
+</html>

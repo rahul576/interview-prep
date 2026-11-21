@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-036 · Design an ad click aggregation system that reports clicks per ad in near real time.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-036" data-topic="Classic Design Problems">
+<h1>Design an ad click aggregation system that reports clicks per ad in near real time.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Stream <strong>click events through Kafka</strong>, aggregate per ad per minute with <strong>event-time windows</strong> in Flink, <strong>deduplicate</strong> and use <strong>exactly-once</strong> sinks, handle <strong>late events with watermarks</strong>, serve from an <strong>OLAP store</strong>, and <strong>reconcile</strong> daily against raw logs for billing.</p>
+
+<h2>Detailed explanation</h2>
+<p>This is a classic interview problem because it mixes scale (billions of events/day), freshness (minutes) and <strong>money</strong>: advertisers are billed on these numbers, so double counting or losing clicks is unacceptable.</p>
+<p><strong>Event time vs processing time:</strong> a click on a phone at 10:01 may arrive at 10:07. Aggregating by arrival time puts it in the wrong minute. Stream processors use <strong>event time</strong> with <strong>watermarks</strong> (a notion of &quot;we've probably seen everything up to 10:02&quot;) and <strong>allowed lateness</strong> to update windows when stragglers arrive.</p>
+<p><strong>Exactly-once</strong> in Flink combines checkpoints of state with transactional sinks; events carry a <strong>click ID</strong> for deduplication (retries from ad servers or clients). <strong>Click fraud</strong> filtering removes bots before counting.</p>
+<p>Because streaming bugs happen, the <strong>raw events are archived</strong> to object storage, and a batch job recomputes daily totals for billing and corrects the real-time numbers (a lambda-style safety net).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ad servers log clicks → Kafka (partition by ad_id).</li>
+  <li>Flink: dedup by click_id (state with TTL) → tumbling 1-min windows by event time → counts per ad.</li>
+  <li>Results → ClickHouse/Druid/Pinot → dashboards and APIs.</li>
+  <li>Raw → S3 → daily Spark job → reconciliation → billing.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- ClickHouse query for an advertiser dashboard
+SELECT ad_id, toStartOfMinute(ts) AS minute, sum(clicks)
+FROM ad_clicks_1m WHERE advertiser_id = 77 AND ts &gt;= now() - INTERVAL 1 HOUR
+GROUP BY ad_id, minute ORDER BY minute;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Processing-time windows.</li>
+  <li>No deduplication.</li>
+  <li>Treating the streaming result as the final billing number without reconciliation.</li>
+  <li>Hot partitions for viral ads (pre-aggregate or salt keys).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Clicks land in Kafka partitioned by ad ID and are archived raw. Flink deduplicates by click ID and counts per ad per minute using event time, with watermarks for late events, writing exactly-once to an OLAP store like ClickHouse for dashboards. Since this drives billing, a daily batch job recomputes totals from raw logs and reconciles any differences, and fraud filtering runs before counting.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detect click fraud?</strong> Rate per IP/device, impossible patterns, ML scoring, blocklists.</li>
+  <li><strong>Very hot ads?</strong> Two-stage aggregation with salted keys.</li>
+  <li><strong>Why OLAP store?</strong> Fast group-bys and filters over large aggregates.</li>
+</ul>
+</article>
+</body>
+</html>

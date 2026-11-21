@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-038 · A Helm upgrade failed and now every new upgrade says another operation is in progress. How do you recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-038" data-topic="Kubernetes">
+<h1>A Helm upgrade failed and now every new upgrade says another operation is in progress. How do you recover?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The previous operation was interrupted and left the release in <strong>pending-upgrade</strong>, <strong>pending-install</strong> or <strong>pending-rollback</strong>, so Helm refuses new operations; inspect with <code>helm history</code>, <strong>roll back to the last deployed revision</strong>, fix the root cause and use <strong>--rollback-on-failure</strong> (formerly <strong>--atomic</strong>) with <code>--wait</code> in pipelines.</p>
+
+<h2>Detailed explanation</h2>
+<p>Helm 3 and 4 store each release revision as a <strong>Secret</strong> in the release namespace (named like <code>sh.helm.release.v1.&lt;release&gt;.v&lt;revision&gt;</code>), labelled with a <strong>status</strong>. When an upgrade starts, Helm writes a new revision with status <code>pending-upgrade</code>; only when it finishes does it mark it <code>deployed</code> and the previous one <code>superseded</code>. If the CI job is cancelled, the runner dies or a timeout kills the process, nobody updates that status. The next <code>helm upgrade</code> sees a pending revision and fails with &quot;another operation (install/upgrade/rollback) is in progress&quot;, which is a deliberate lock against two concurrent operations.</p>
+<p>The clean recovery is <code>helm rollback</code> to the last revision whose status is <code>deployed</code>. A rollback creates a <strong>new revision</strong> with the old manifest and moves the stuck one out of the pending state. If the very first install got stuck (<code>pending-install</code>) there is nothing to roll back to, so <code>helm uninstall</code> and reinstall is usually simplest. Only if rollback itself fails should you edit or delete the stuck release Secret, after backing it up, because you are editing Helm's source of truth by hand.</p>
+<p>Recovery is only half the job: find out <strong>why</strong> the upgrade hung. Typical causes are a pre-upgrade or post-upgrade <strong>hook Job</strong> that never completes, pods that never become ready (bad image, failing probes, missing config), PVC or quota problems, or a <code>--timeout</code> shorter than a realistic rollout.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>helm status &lt;rel&gt;</code> and <code>helm history &lt;rel&gt;</code> show the pending revision and the last <code>deployed</code> one.</li>
+  <li>Check what is actually running: <code>kubectl get pods,jobs</code> and events in the namespace.</li>
+  <li><code>helm rollback &lt;rel&gt; &lt;last-good-rev&gt; --wait</code> clears the lock with a new revision.</li>
+  <li>If rollback fails, back up and fix or remove the stuck <code>sh.helm.release.v1</code> Secret.</li>
+  <li>Fix the root cause (hook, image, probe, timeout) and upgrade again.</li>
+  <li>Make pipelines safe: <code>--rollback-on-failure</code> (or <code>--atomic</code> on Helm 3), <code>--wait</code>, realistic <code>--timeout</code>, and no parallel deploys of one release.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">helm history payments -n prod
+# REVISION  STATUS           DESCRIPTION
+# 41        deployed         Upgrade complete
+# 42        pending-upgrade  Preparing upgrade
+
+helm rollback payments 41 -n prod --wait --timeout 10m
+
+# last resort only, after a backup
+kubectl -n prod get secret -l owner=helm,name=payments,status=pending-upgrade
+kubectl -n prod get secret sh.helm.release.v1.payments.v42 -o yaml &gt; rev42-backup.yaml
+kubectl -n prod delete secret sh.helm.release.v1.payments.v42
+
+helm upgrade payments ./chart -n prod --rollback-on-failure --wait --timeout 10m</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting release Secrets first instead of trying <code>helm rollback</code>.</li>
+  <li>Recovering the lock but never fixing the hook or probe that caused the hang.</li>
+  <li>Pipeline timeouts shorter than Helm's <code>--timeout</code>, so the runner is killed mid-operation.</li>
+  <li>Allowing two pipelines to deploy the same release concurrently.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;That error means a previous operation was interrupted, usually a cancelled or timed-out pipeline, and Helm left the release in pending-upgrade. I'd run helm history to find the last deployed revision and roll back to it, which creates a new revision and clears the pending state. Only if that fails would I back up and fix the release Secret by hand. Then I'd find the root cause, often a hook job that never finishes or pods that never become ready. In CI I use rollback-on-failure, or atomic on Helm 3, with --wait, a realistic timeout and a lock so only one deploy runs per release.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is GitOps less prone to this?</strong> Argo CD or Flux reconcile continuously from Git and simply retry; there is no client process that can be killed halfway through holding a lock.</li>
+  <li><strong>What if the stuck revision is the first install?</strong> Uninstall (keeping any PVCs you need) and install again.</li>
+  <li><strong>How do hooks cause hangs?</strong> Helm waits for hook Jobs to complete; a failing or never-ending hook blocks the release until timeout.</li>
+</ul>
+</article>
+</body>
+</html>

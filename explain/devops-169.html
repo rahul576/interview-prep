@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-169 · Users get intermittent DNS resolution failures inside a Kubernetes cluster. How do you troubleshoot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-169" data-topic="Troubleshooting">
+<h1>Users get intermittent DNS resolution failures inside a Kubernetes cluster. How do you troubleshoot?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Reproduce from a <strong>debug pod</strong> with <code>dig</code>/<code>nslookup</code>, check <strong>CoreDNS pods, logs and metrics</strong>, and look for the classic causes: <strong>ndots:5 and search domains</strong> multiplying queries, <strong>conntrack races on UDP</strong> causing <strong>5-second timeouts</strong>, overloaded CoreDNS, and <strong>network policies</strong> blocking port 53; fix with <strong>scaling CoreDNS, NodeLocal DNSCache, lower ndots or FQDNs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Intermittent DNS failures are hard because most lookups work. Start by <strong>reproducing</strong>: run a debug pod (for example <code>nicolaka/netshoot</code>) in the affected namespace and node, and loop <code>dig</code> against a service name (<code>orders.shop.svc.cluster.local</code>) and an external domain, recording failures and latency. Then check <strong>CoreDNS</strong>: are all replicas Running, restarting or OOMKilled; do logs show <code>SERVFAIL</code>, upstream timeouts or <code>i/o timeout</code>; and do metrics such as <code>coredns_dns_request_duration_seconds</code> and <code>coredns_forward_responses_total</code> show saturation?</p>
+<p><strong>ndots and search domains.</strong> Pods get <code>options ndots:5</code> and several search domains in <code>/etc/resolv.conf</code>. A name with fewer than five dots, like <code>api.stripe.com</code>, is first tried with every search suffix — <code>api.stripe.com.shop.svc.cluster.local</code>, <code>...svc.cluster.local</code>, <code>...cluster.local</code>, plus cloud domains — each for A and AAAA. One lookup becomes eight to ten queries, multiplying CoreDNS load.</p>
+<p><strong>Conntrack races.</strong> glibc sends A and AAAA queries in parallel from the same UDP socket. A known Linux <strong>conntrack race</strong> can drop one of them under DNAT to the CoreDNS service IP, so the resolver waits for its <strong>5-second timeout</strong> and retries. This produces the signature &quot;sometimes exactly five seconds&quot;.</p>
+<p><strong>Fixes:</strong> scale CoreDNS (more replicas, or the cluster-proportional autoscaler) and give it adequate resources; deploy <strong>NodeLocal DNSCache</strong>, which runs a cache on every node, avoids conntrack for pod-to-cache traffic and uses TCP upstream; lower <code>ndots</code> via <code>dnsConfig</code> or use <strong>FQDNs with a trailing dot</strong> for external names; use <code>single-request-reopen</code> for glibc images; and verify <strong>NetworkPolicies</strong> allow egress to kube-dns on UDP and TCP 53.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce with dig loops from a debug pod on the affected node.</li>
+  <li>Check CoreDNS replicas, restarts, logs and latency metrics.</li>
+  <li>Inspect <code>/etc/resolv.conf</code> in the app pod for ndots and search list.</li>
+  <li>Look for 5-second latency patterns pointing to conntrack drops.</li>
+  <li>Check node conntrack table usage and NetworkPolicies.</li>
+  <li>Apply fixes: scale, NodeLocal DNSCache, ndots, FQDNs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl run dnstest --rm -it --image=nicolaka/netshoot -- bash
+for i in $(seq 1 200); do dig +short +tries=1 +time=2 api.stripe.com &gt;/dev/null || echo fail; done
+cat /etc/resolv.conf   # search shop.svc.cluster.local svc.cluster.local cluster.local; options ndots:5
+kubectl -n kube-system logs -l k8s-app=kube-dns --tail=100</code></pre>
+<pre><code class="language-yaml">spec:
+  dnsConfig:
+    options:
+      - name: ndots
+        value: &quot;2&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing once from a laptop and concluding DNS is fine.</li>
+  <li>Restarting CoreDNS without understanding the load source.</li>
+  <li>Lowering ndots globally without testing short internal names.</li>
+  <li>NetworkPolicies allowing UDP 53 but not TCP 53.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start a debug pod and loop dig or nslookup against service names and external domains to reproduce, then look at CoreDNS pods, logs and metrics for errors, latency and saturation. A common cause is ndots 5 with long search lists, so each external lookup turns into several extra queries and multiplies load. Another is the conntrack race with parallel UDP A and AAAA queries, which causes intermittent exactly-five-second timeouts. Fixes include scaling CoreDNS, deploying NodeLocal DNSCache, lowering ndots or using FQDNs with a trailing dot, and checking network policies allow port 53.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does curl sometimes take exactly five seconds?</strong> A dropped UDP DNS packet; the resolver waits its 5-second timeout and retries.</li>
+  <li><strong>What does NodeLocal DNSCache change?</strong> Pods query a local cache on the node, avoiding conntrack and reducing CoreDNS load.</li>
+  <li><strong>Why does a trailing dot help?</strong> It marks the name fully qualified, skipping search domain expansion.</li>
+</ul>
+</article>
+</body>
+</html>

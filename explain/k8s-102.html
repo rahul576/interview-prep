@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-102 · A stateful application on Kubernetes must keep its data when pods are rescheduled or updated. How do you design its storage?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-102" data-topic="Kubernetes">
+<h1>A stateful application on Kubernetes must keep its data when pods are rescheduled or updated. How do you design its storage?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep data on <strong>PersistentVolumes</strong> via <strong>PVCs</strong>, run the app as a <strong>StatefulSet with volumeClaimTemplates</strong> for stable identity and one volume per pod, use a <strong>CSI StorageClass</strong> with <strong>WaitForFirstConsumer</strong> and <strong>Retain</strong>, add <strong>backups and snapshots</strong>, and consider an <strong>operator or managed database</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A container's writable layer and <strong>emptyDir</strong> volumes live and die with the pod. Data that must survive rescheduling and updates needs a <strong>PersistentVolume</strong>, requested through a <strong>PersistentVolumeClaim</strong>, so storage has its own lifecycle independent of pods.</p>
+<p>A <strong>StatefulSet</strong> with <code>volumeClaimTemplates</code> gives each replica a <strong>stable identity</strong> (<code>db-0</code>, <code>db-1</code>), a stable DNS name through a headless Service, ordered rollout, and <strong>its own PVC</strong> (<code>data-db-0</code>). When <code>db-0</code> is rescheduled or updated, it reattaches to the same claim, so its data follows it. A Deployment sharing one ReadWriteOnce PVC cannot do this safely.</p>
+<p>A <strong>StorageClass</strong> drives <strong>dynamic provisioning</strong> through the cloud <strong>CSI driver</strong>: disk type, IOPS, encryption. In multi-zone clusters set <code>volumeBindingMode: WaitForFirstConsumer</code>, so the disk is created in the zone where the pod is scheduled, not in a random zone where the pod could never run. For important data use <code>reclaimPolicy: Retain</code>, so deleting a PVC does not destroy the disk, and <code>allowVolumeExpansion: true</code> for growth. Remember that block volumes are zonal: a pod can only move to nodes in that zone.</p>
+<p><strong>Volumes are not backups</strong>: corruption and accidental deletes replicate happily. Schedule <strong>CSI VolumeSnapshots</strong> or <strong>Velero</strong> backups and test restores. For databases, an <strong>operator</strong> such as CloudNativePG, or a <strong>managed cloud database</strong>, usually beats a hand-built StatefulSet because it handles replication, failover, backups and upgrades.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a StorageClass with CSI driver, WaitForFirstConsumer, Retain, expansion.</li>
+  <li>Create a headless Service and a StatefulSet with volumeClaimTemplates.</li>
+  <li>Each pod gets its own PVC, bound to a PV in its zone.</li>
+  <li>Rescheduled pods reattach to the same PVC.</li>
+  <li>Snapshots and backups run on a schedule; restores are tested.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: { name: ssd-retain }
+provisioner: ebs.csi.aws.com
+parameters: { type: gp3, encrypted: &quot;true&quot; }
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: db }
+spec:
+  serviceName: db
+  replicas: 3
+  selector: { matchLabels: { app: db } }
+  template:
+    metadata: { labels: { app: db } }
+    spec:
+      containers:
+        - name: db
+          image: postgres:17
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [&quot;ReadWriteOnce&quot;]
+        storageClassName: ssd-retain
+        resources: { requests: { storage: 100Gi } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing data in emptyDir or the container filesystem.</li>
+  <li>Immediate binding in multi-zone clusters, leaving pods unschedulable.</li>
+  <li>Treating replicated volumes as backups.</li>
+  <li>Hand-building database clustering that an operator already solves.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Anything in the container filesystem or an emptyDir disappears with the pod, so data goes on PersistentVolumes via PVCs. I use a StatefulSet with volumeClaimTemplates, so each replica has a stable name like db-0 and its own PVC, and reattaches to it when rescheduled. A StorageClass with the CSI driver provisions disks dynamically; I use WaitForFirstConsumer so the disk is created in the pod's zone, Retain for important data and allow expansion. Volumes are not backups, so I add snapshots or Velero and test restores. For databases I'd prefer an operator like CloudNativePG or a managed database.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is WaitForFirstConsumer important in multi-zone clusters?</strong> It delays disk creation until scheduling, so the disk lands in the pod's zone.</li>
+  <li><strong>What happens to PVCs when you scale a StatefulSet down?</strong> They are kept by default; the retention policy can change that.</li>
+  <li><strong>ReadWriteMany?</strong> Needs file storage such as EFS or Azure Files; slower, but shareable.</li>
+</ul>
+</article>
+</body>
+</html>

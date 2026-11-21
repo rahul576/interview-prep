@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-013 · An App Service or VM workload makes many outbound calls and starts failing with intermittent connection timeouts. You suspect SNAT port exhaustion. How do you confirm and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-013" data-topic="Azure">
+<h1>An App Service or VM workload makes many outbound calls and starts failing with intermittent connection timeouts. You suspect SNAT port exhaustion. How do you confirm and fix it?</h1>
+<p class="ex-meta">Azure · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Outbound internet connections from resources without their own public IP share a limited pool of <strong>SNAT ports</strong>; confirm exhaustion with <strong>SNAT metrics</strong> or App Service <strong>Diagnose and solve problems</strong>, then fix it with <strong>connection reuse (pooling, keep-alive)</strong>, a <strong>NAT Gateway</strong>, and <strong>private endpoints</strong> so Azure service traffic skips SNAT.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Source NAT</strong> maps each outbound flow (private IP and port) to a public IP and a <strong>SNAT port</strong>. A port is consumed per unique destination IP and port, and after a connection closes it stays reserved for a while (TCP TIME_WAIT / idle timeout) before reuse. Load balancer outbound rules, default outbound access, and App Service multi-tenant workers all give each instance a <strong>pre-allocated, limited</strong> number of ports, often only a few hundred to around 1,000 depending on configuration. An app that opens a new connection per request to the same API quickly runs out; new connections then wait and time out, typically <strong>intermittently</strong> and under load, which is the classic symptom.</p>
+<p>The <strong>application fix is usually the most important</strong>. In .NET, creating <code>new HttpClient()</code> per request opens a new socket each time and leaves sockets in TIME_WAIT; use <code>IHttpClientFactory</code> or a single static <code>HttpClient</code> with <code>SocketsHttpHandler</code> pooling. Database drivers should use connection pools, and HTTP keep-alive should be on.</p>
+<p>Infrastructure fixes: a <strong>NAT Gateway</strong> on the subnet allocates ports <strong>dynamically on demand</strong>, with <strong>64,512 ports per public IP</strong> and up to <strong>16 public IPs</strong> (about one million ports). App Service can use it through <strong>VNet integration</strong> with outbound routing through the VNet. <strong>Private endpoints</strong> (or service endpoints) for SQL, Storage, Key Vault and others keep that traffic off SNAT entirely. Note that Azure is retiring default outbound access for new VNets, so an explicit outbound method is now best practice anyway.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check symptoms: intermittent timeouts to external endpoints, correlated with load.</li>
+  <li>App Service: Diagnose and solve problems → &quot;SNAT Port Exhaustion&quot; detector.</li>
+  <li>Load balancer: <strong>SNAT Connection Count</strong> (filter state = Failed) and <strong>Allocated/Used SNAT Ports</strong> metrics.</li>
+  <li>Fix code: pooled clients, keep-alive, avoid per-request connections.</li>
+  <li>Add NAT Gateway to the subnet; use private endpoints for Azure PaaS.</li>
+  <li>Re-measure and alert on failed SNAT connections.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-csharp">// Bad: new socket per request
+// using var client = new HttpClient();
+
+// Good: pooled connections via IHttpClientFactory
+builder.Services.AddHttpClient(&quot;payments&quot;, c =&gt;
+    c.BaseAddress = new Uri(&quot;https://api.payments.example&quot;))
+  .ConfigurePrimaryHttpMessageHandler(() =&gt; new SocketsHttpHandler {
+      PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+      MaxConnectionsPerServer = 50 });</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scaling out instead of fixing connection reuse (each instance still exhausts its own pool).</li>
+  <li>Assuming the issue is in the remote API because timeouts look like its fault.</li>
+  <li>Adding public IPs to the load balancer without understanding port allocation.</li>
+  <li>Leaving SQL and Storage traffic on public endpoints through SNAT.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Intermittent outbound timeouts under load make me suspect SNAT port exhaustion, because each instance only has a limited number of SNAT ports per destination. I'd confirm with the SNAT exhaustion detector in App Service or the failed SNAT connection metrics on the load balancer. The first fix is in code: reuse connections with pooling and keep-alive, for example IHttpClientFactory instead of a new HttpClient per call. Then I'd attach a NAT Gateway, which allocates ports dynamically with about 64,000 per public IP, and use private endpoints for Azure services so they don't use SNAT at all.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a new HttpClient per request harmful?</strong> Each opens a new socket and SNAT port, and closed sockets linger in TIME_WAIT, so ports are not reused.</li>
+  <li><strong>Does NAT Gateway work with a load balancer's outbound rules?</strong> NAT Gateway takes precedence for outbound from that subnet.</li>
+  <li><strong>How do you get stable egress IPs for allow-listing?</strong> NAT Gateway public IPs or a firewall.</li>
+</ul>
+</article>
+</body>
+</html>

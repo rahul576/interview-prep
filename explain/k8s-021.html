@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-021 · How does the Kubernetes controller pattern work, and why is it described as level-triggered?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-021" data-topic="Kubernetes">
+<h1>How does the Kubernetes controller pattern work, and why is it described as level-triggered?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A controller runs a <strong>reconcile loop</strong>: watch the <strong>desired state</strong> in the API, observe the <strong>actual state</strong>, take the next action to close the gap, repeat. It is <strong>level-triggered</strong> because it acts on the <strong>current state</strong>, not on individual events, so missed events or restarts don't matter; it uses <strong>informers</strong>, <strong>work queues with retries</strong>, and <strong>idempotent</strong> actions.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes has no central orchestrator issuing commands. Instead, dozens of controllers each own one concern: the Deployment controller manages ReplicaSets, the ReplicaSet controller manages pods, the EndpointSlice controller tracks Service backends, the node controller handles unhealthy nodes. Each compares the <code>spec</code> (desired) with the world (actual) and acts, writing results to <code>status</code>.</p>
+<p><strong>Edge-triggered</strong> systems react to events: &quot;a pod was deleted, so create one&quot;. If an event is lost, the system is wrong forever. <strong>Level-triggered</strong> systems look at the current level: &quot;I want 3 pods and see 2, so create 1&quot;. The event is just a hint to look again. If the controller crashes, misses notifications or two events collapse into one, the next reconcile still sees the difference and fixes it. Controllers also run periodic <strong>resyncs</strong> as a safety net. This design is why Kubernetes self-heals and tolerates partial failures and why multiple controllers can cooperate without coordination.</p>
+<p>Internally (client-go, controller-runtime):</p>
+<ul>
+  <li><strong>Informers</strong> list and watch resources, maintaining a local <strong>cache</strong> so reads don't hit the API server, and call handlers on add, update or delete.</li>
+  <li>Handlers push only a <strong>key</strong> (namespace/name) into a <strong>rate-limited work queue</strong>, which deduplicates keys, so ten updates cause one reconcile.</li>
+  <li>Workers pop keys, read the latest object from the cache, and reconcile. Errors re-queue the key with <strong>exponential backoff</strong>.</li>
+  <li>Because reconcile may run many times for the same state, every action must be <strong>idempotent</strong>: &quot;create if missing, patch if different&quot; rather than &quot;always create&quot;. Optimistic concurrency (resourceVersion conflicts) handles races.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Informer watches objects and updates the cache.</li>
+  <li>Change → key enqueued (deduplicated).</li>
+  <li>Worker reads current desired and actual state.</li>
+  <li>Computes the difference; creates, updates or deletes as needed.</li>
+  <li>Updates status; returns success or error.</li>
+  <li>Error or pending work → requeue with backoff.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-go">func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    var app v1.App
+    if err := r.Get(ctx, req.NamespacedName, &amp;app); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+    deploy := desiredDeployment(&amp;app)                       // compute desired child
+    if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+        return controllerutil.SetControllerReference(&amp;app, deploy, r.Scheme)
+    }); err != nil {
+        return ctrl.Result{}, err                           // requeue with backoff
+    }
+    return ctrl.Result{}, nil
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing logic that depends on the specific event type.</li>
+  <li>Non-idempotent actions, creating duplicates on each reconcile.</li>
+  <li>Calling the API directly instead of the informer cache, overloading it.</li>
+  <li>Storing state only in memory, lost on restart.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every controller runs a reconcile loop: it watches desired state in the API server, observes actual state, and takes the next step to make them match, then repeats. It's level-triggered because it acts on current state rather than individual events, so if it misses an event or restarts, the next reconcile still sees the difference and fixes it. Internally, informers cache objects and push keys into a rate-limited work queue with retries and backoff. Because reconcile can run many times for the same object, every action must be idempotent, like create if missing instead of always create.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if reconcile isn't idempotent?</strong> Duplicate resources, repeated external side effects, endless churn.</li>
+  <li><strong>Why enqueue keys, not objects?</strong> Deduplication and always reading the latest state.</li>
+  <li><strong>What are resyncs?</strong> Periodic re-enqueueing of all objects as a safety net.</li>
+</ul>
+</article>
+</body>
+</html>

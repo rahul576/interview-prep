@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-019 · When do virtual threads help, and what are their pitfalls?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-019" data-topic="Concurrency">
+<h1>When do virtual threads help, and what are their pitfalls?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Virtual threads</strong> (final in <strong>Java 21</strong>) are cheap JVM-scheduled threads that <strong>unmount from carrier threads</strong> when they block, so they shine for <strong>high-concurrency blocking I/O</strong>; they don't speed up <strong>CPU-bound</strong> work, can be <strong>pinned</strong> (synchronized pinning was fixed in <strong>Java 24</strong>, native calls still pin), should <strong>not be pooled</strong>, and need <strong>Semaphores</strong> to protect scarce resources.</p>
+
+<h2>Detailed explanation</h2>
+<p>A platform thread maps one-to-one to an OS thread, with a large stack and expensive context switches, so servers cap pools at hundreds of threads. A <strong>virtual thread</strong> is a lightweight <code>Thread</code> managed by the JVM whose stack lives on the heap and grows as needed. Millions can exist. They run on a small pool of <strong>carrier threads</strong>, one per core by default.</p>
+<p>When a virtual thread performs a blocking operation that the JDK supports (socket I/O, <code>sleep</code>, <code>BlockingQueue.take</code>, <code>ReentrantLock</code>, JDBC drivers using JDK sockets), it <strong>unmounts</strong>: its stack is parked on the heap and the carrier runs another virtual thread. When the I/O completes it is remounted, possibly on a different carrier. So simple <strong>thread-per-request</strong> blocking code scales like async code, as long as the workload mostly <strong>waits</strong>.</p>
+<p>They do <strong>not</strong> make <strong>CPU-bound</strong> work faster: there are still only as many carriers as cores. For number crunching use platform thread pools or parallel streams.</p>
+<p>Pitfalls:</p>
+<ul>
+  <li><strong>Pinning</strong>: if a virtual thread blocks while it can't unmount, it holds its carrier. Before <strong>Java 24</strong>, blocking inside <code>synchronized</code> pinned; <strong>JEP 491 in Java 24</strong> removed that for monitors. Native frames (JNI, some foreign calls) and certain class initialisation still pin. On Java 21 use <code>ReentrantLock</code> around blocking calls and diagnose with <code>-Djdk.tracePinnedThreads</code> or JFR <code>jdk.VirtualThreadPinned</code> events.</li>
+  <li><strong>Don't pool them</strong>: they are cheap; create one per task with <code>Executors.newVirtualThreadPerTaskExecutor()</code>.</li>
+  <li><strong>Limit resources explicitly</strong>: a pool used to bound concurrency implicitly; now 10,000 virtual threads can all hit the DB. Use a <strong>Semaphore</strong> or the connection pool's limit.</li>
+  <li><strong>ThreadLocal</strong> heavy objects per thread multiply memory; prefer <strong>ScopedValue</strong> (final in Java 25).</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>Thread.ofVirtual().start(task)</code> or a per-task executor creates a virtual thread.</li>
+  <li>Scheduler mounts it on a carrier.</li>
+  <li>On blocking I/O, its continuation is saved and it unmounts.</li>
+  <li>Carrier runs other virtual threads.</li>
+  <li>On completion it is rescheduled and remounted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Semaphore dbPermits = new Semaphore(50);           // match connection pool
+
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (Request r : requests) {
+        exec.submit(() -&gt; {
+            String profile = http.send(r.profileCall(), ofString()).body(); // unmounts
+            dbPermits.acquire();
+            try { return repo.save(r, profile); }
+            finally { dbPermits.release(); }
+        });
+    }
+}</code></pre>
+<pre><code class="language-properties"># Spring Boot 3.2+
+spring.threads.virtual.enabled=true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting virtual threads to speed up CPU-heavy computation.</li>
+  <li>Putting them in a fixed-size pool.</li>
+  <li>Removing all concurrency limits and overwhelming databases.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Virtual threads are cheap JVM-managed threads, so I can run one per request even with hundreds of thousands of concurrent requests. They help most for blocking I/O: when a virtual thread blocks it unmounts from its carrier, which runs other virtual threads. They don't make CPU-bound work faster because carriers equal the number of cores. The pitfalls are pinning, where blocking inside synchronized or native code holds the carrier, mostly fixed for synchronized in Java 24; heavy ThreadLocal use; and the fact that you shouldn't pool them, but create one per task and use a Semaphore to limit access to scarce resources like database connections.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Enable in Spring Boot 3?</strong> Set <code>spring.threads.virtual.enabled=true</code> (Boot 3.2+, Java 21+).</li>
+  <li><strong>How do you detect pinning?</strong> JFR <code>jdk.VirtualThreadPinned</code> events, or <code>-Djdk.tracePinnedThreads</code> on older JDKs.</li>
+  <li><strong>Reactive vs virtual threads?</strong> Virtual threads give similar scalability with simpler blocking code; reactive still helps for streaming and back-pressure.</li>
+</ul>
+</article>
+</body>
+</html>

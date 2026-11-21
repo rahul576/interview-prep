@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-024 · What do Ansible check mode and diff mode do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-024" data-topic="Configuration Management">
+<h1>What do Ansible check mode and diff mode do?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>--check</strong> runs a <strong>dry run</strong> where modules report what they <strong>would</strong> change without changing anything, and <strong>--diff</strong> shows <strong>before/after content</strong>; useful for review and <strong>drift detection</strong>, but limited by <strong>module support</strong> and <strong>tasks depending on earlier changes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Check mode asks each module to evaluate the current state and report whether it would change it, without acting. Diff mode makes modules that support it, like <code>template</code>, <code>copy</code>, <code>lineinfile</code> and <code>file</code>, print a unified diff of what would change. Run together, <code>ansible-playbook site.yml --check --diff</code> lets you see exactly what a playbook would do to production before running it for real, which is ideal for change reviews and for gaining confidence in an inherited playbook.</p>
+<p>Run on a <strong>schedule</strong>, check mode turns Ansible into a <strong>drift detector</strong>: any task that reports &quot;changed&quot; in check mode means a host no longer matches the code. Because <code>changed</code> counts appear in the play recap, a CI job can parse them or use a callback to alert.</p>
+<p>The limits are important:</p>
+<ul>
+  <li><strong>Module support</strong>: modules that don't support check mode are <strong>skipped</strong>. <code>command</code> and <code>shell</code> cannot know what an arbitrary command would do, so they skip unless <code>creates</code>/<code>removes</code> let them decide.</li>
+  <li><strong>Dependent tasks</strong>: if task 1 would install a package and task 2 configures it, task 2 may fail or report misleading results because the package was not really installed. Registered results from skipped tasks are also missing.</li>
+  <li><strong>Overrides</strong>: <code>check_mode: false</code> on a task forces it to run for real even in check mode, useful for read-only commands whose output later tasks need; <code>check_mode: true</code> forces a task to always be a dry run. The variable <code>ansible_check_mode</code> lets tasks behave differently.</li>
+  <li><code>diff: false</code> on a task hides sensitive content from diffs.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each module receives a check-mode flag.</li>
+  <li>Supporting modules compute the difference and return changed/ok without acting.</li>
+  <li>Unsupported modules are skipped.</li>
+  <li>With <code>--diff</code>, modules return before/after content.</li>
+  <li>The recap summarises what would change per host.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ansible-playbook site.yml -i inventory/prod --check --diff --limit web</code></pre>
+<pre><code class="language-yaml">- name: Read current app version (safe, needed by later tasks)
+  ansible.builtin.command: /opt/app/bin/app --version
+  register: app_version
+  changed_when: false
+  check_mode: false
+
+- name: Render secrets file
+  ansible.builtin.template:
+    src: secrets.env.j2
+    dest: /etc/app/secrets.env
+  diff: false</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating a clean check run as proof the real run will succeed.</li>
+  <li>Forgetting <code>check_mode: false</code> on read-only commands, breaking later tasks in check mode.</li>
+  <li>Showing secret file contents in diffs in CI logs.</li>
+  <li>Assuming shell tasks were validated when they were actually skipped.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With --check, a playbook does a dry run: modules report what they would change but change nothing, and --diff shows before and after content of files and templates. Together they let me review the effect on production before running it, and running them on a schedule makes Ansible a drift detector. The limits are that modules must support check mode, so shell and command tasks are skipped unless guarded, and tasks that depend on earlier changes can give misleading results because those changes didn't happen. I set check_mode: false on read-only tasks whose output is needed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you use check mode in a CI pipeline?</strong> Run <code>--check --diff</code> on pull requests against staging/prod inventories and post the summary for review; schedule nightly runs for drift.</li>
+  <li><strong>How do you hide secrets from diffs?</strong> <code>diff: false</code> and <code>no_log: true</code> on those tasks.</li>
+  <li><strong>What is ansible_check_mode?</strong> A boolean telling tasks whether they run in check mode.</li>
+</ul>
+</article>
+</body>
+</html>

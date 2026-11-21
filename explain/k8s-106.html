@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-106 · Several pods across your worker nodes show very high CPU usage and latency is rising. How do you investigate and mitigate it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-106" data-topic="Kubernetes">
+<h1>Several pods across your worker nodes show very high CPU usage and latency is rising. How do you investigate and mitigate it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Identify the hot pods and nodes, separate <strong>real load from CPU limit throttling</strong>, <strong>correlate</strong> with traffic, releases or noisy neighbours, <strong>profile</strong> the code, and mitigate by <strong>scaling, rolling back and right-sizing requests and limits</strong>, with LimitRanges and quotas for governance.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start with scope: <code>kubectl top pods -A --sort-by=cpu</code> and <code>kubectl top nodes</code> show current usage, and Prometheus/Grafana history shows <strong>when</strong> it started, which is often the strongest clue.</p>
+<p>Next, distinguish two very different situations. If a container's CPU usage is <strong>flat at its limit</strong>, the kernel's CFS quota is <strong>throttling</strong> it: within each 100 ms period it uses its quota and then waits, which adds latency even while the node has idle CPU. Metrics <code>container_cpu_cfs_throttled_periods_total</code> and <code>container_cpu_cfs_periods_total</code> show the throttled share. The fix is a higher limit or removing the CPU limit and relying on requests. If instead the <strong>node</strong> is saturated, pods compete for real CPU, and the fix is more capacity or better placement.</p>
+<p>Then <strong>correlate</strong>: a traffic increase, a new deployment that introduced an inefficient query or loop, a batch job or a <strong>noisy neighbour</strong> on the same node, garbage collection churn, or a <strong>retry storm</strong> where clients hammer a slow service. <strong>Profile</strong> the application to find hot paths: async-profiler or JFR for Java, pprof for Go, py-spy for Python.</p>
+<p><strong>Mitigation</strong>: scale horizontally with more replicas or an HPA, with node autoscaling behind it; <strong>roll back</strong> a bad release; <strong>right-size requests</strong> so the scheduler spreads load properly and limits do not throttle. <strong>LimitRanges</strong> set defaults and <strong>ResourceQuotas</strong> cap namespaces; they improve governance but do not make a busy app faster.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find affected pods and nodes with <code>kubectl top</code> and metrics history.</li>
+  <li>Check throttling metrics versus node saturation.</li>
+  <li>Correlate with traffic, deployments and co-located workloads.</li>
+  <li>Profile the application for hot code paths.</li>
+  <li>Mitigate: scale, roll back, adjust requests and limits.</li>
+  <li>Prevent: HPA, alerts on throttling, load testing.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql">sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=&quot;shop&quot;}[5m]))
+/
+sum by (pod) (rate(container_cpu_cfs_periods_total{namespace=&quot;shop&quot;}[5m]))</code></pre>
+<pre><code class="language-bash">kubectl top pods -n shop --sort-by=cpu | head
+kubectl rollout history deploy/search -n shop
+kubectl rollout undo deploy/search -n shop</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding nodes when the real problem is a low CPU limit causing throttling.</li>
+  <li>Scaling out a retry storm, which multiplies the load.</li>
+  <li>Ignoring the timeline and missing that a release started it.</li>
+  <li>Expecting quotas and LimitRanges to fix performance.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I find which pods and nodes are affected with kubectl top and look at the history in Grafana to see when it started. Then I separate real load from throttling: if usage sits at the limit, CFS throttling raises latency even when the node is idle, so the fix is a higher limit or none. I correlate with traffic, a new release, batch jobs or noisy neighbours, and profile the app, for example with async-profiler for Java. To mitigate I scale out with an HPA and node capacity, roll back a bad release and right-size requests and limits. LimitRanges and quotas help governance, not performance.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you tell throttling from a busy node?</strong> High throttled-period ratio with idle node CPU means throttling; node CPU near 100% means saturation.</li>
+  <li><strong>Should you set CPU limits at all?</strong> Many teams set requests only for latency-sensitive services and use limits for multi-tenant fairness.</li>
+  <li><strong>What is CPU steal?</strong> Time the hypervisor gave to other VMs, visible in top's st column.</li>
+</ul>
+</article>
+</body>
+</html>

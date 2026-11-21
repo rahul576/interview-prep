@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-050 · A node shows NotReady. How do you investigate, and what happens to its pods?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-050" data-topic="Kubernetes">
+<h1>A node shows NotReady. How do you investigate, and what happens to its pods?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>NotReady</strong> means the node controller stopped receiving healthy <strong>status or Lease updates</strong> from the kubelet; investigate the <strong>kubelet, container runtime, network and resource pressure</strong>, and expect pods to be <strong>evicted after about 300 seconds</strong> via taint-based eviction, then <strong>cordon, drain or replace</strong> the node.</p>
+
+<h2>Detailed explanation</h2>
+<p>The kubelet reports node health by updating a <strong>Lease</strong> object in <code>kube-node-lease</code> (every 10 seconds) and the node status. If the node controller sees no update within the grace period (40 seconds by default), it sets the <code>Ready</code> condition to <strong>Unknown</strong> (NotReady). If the kubelet does report but says it is unhealthy, the condition is <strong>False</strong>, often with a reason such as container runtime not ready or the CNI not initialised. So NotReady can mean &quot;kubelet cannot talk to us&quot; or &quot;kubelet talks but is sick&quot;.</p>
+<p>Typical causes: the kubelet or containerd crashed or was OOM-killed; the disk is full (DiskPressure, images and logs); memory or PID exhaustion; an expired kubelet certificate; the CNI plugin is broken; or a network or security group change cut the node off from the API server. Cloud issues such as a failing VM or a hung kernel also show up this way.</p>
+<p>Meanwhile the node gets taints <code>node.kubernetes.io/unreachable</code> or <code>not-ready</code> with effect <strong>NoExecute</strong>. Pods get a default toleration of <strong>300 seconds</strong> for these taints, so after five minutes they are evicted and controllers recreate them elsewhere. DaemonSet pods tolerate these taints and stay. StatefulSet pods are a special case because their replacement waits until the old pod is confirmed gone. Pods on an unreachable node may actually still be running and serving traffic if only the node-to-API link is broken.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe node</code>: conditions, last heartbeat, events, taints.</li>
+  <li>Access the node (SSH, serial console, or <code>kubectl debug node/...</code> if the kubelet still works).</li>
+  <li><code>systemctl status kubelet containerd</code>, <code>journalctl -u kubelet</code>.</li>
+  <li>Check <code>df -h</code>, memory, PIDs, kubelet certificate and connectivity to the API server.</li>
+  <li>Fix the cause, or cordon and drain, then replace the node.</li>
+  <li>Confirm workloads rescheduled and investigate why the node failed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe node ip-10-0-3-17 | sed -n '/Conditions/,/Addresses/p'
+kubectl get lease -n kube-node-lease ip-10-0-3-17 -o jsonpath='{.spec.renewTime}'
+
+# on the node
+sudo systemctl status kubelet containerd
+sudo journalctl -u kubelet --since &quot;30 min ago&quot; | tail -50
+df -h /var/lib/containerd /var/log
+curl -sk https://&lt;api-server&gt;:6443/healthz
+
+kubectl cordon ip-10-0-3-17
+kubectl drain ip-10-0-3-17 --ignore-daemonsets --delete-emptydir-data</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming pods move immediately; the default delay is five minutes.</li>
+  <li>Draining before checking whether it is a cluster-wide network problem.</li>
+  <li>Ignoring disk pressure from images and logs as a root cause.</li>
+  <li>Rebooting without collecting logs, so the cause recurs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;NotReady means the node controller hasn't had a healthy status or lease from the kubelet. I start with kubectl describe node to see conditions like DiskPressure or MemoryPressure and when it last reported. Then on the node I check the kubelet and container runtime with systemctl and journalctl, disk space, the kubelet certificate and connectivity to the API server, because network or security group changes are common. Meanwhile the node is tainted and, after the default 300 seconds, pods are evicted and recreated elsewhere if a controller owns them. If I can't fix it quickly, I cordon, drain and replace it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might pods on a NotReady node still serve traffic?</strong> Only the kubelet-to-API link may be broken; containers keep running and may still get traffic.</li>
+  <li><strong>How do you speed up eviction?</strong> Set lower <code>tolerationSeconds</code> for unreachable/not-ready on critical pods.</li>
+  <li><strong>What is node auto-repair?</strong> Managed services or node problem detector with automation replace unhealthy nodes.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-296 · How would you investigate an API that works correctly in development but is slow in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-296" data-topic="Troubleshooting">
+<h1>How would you investigate an API that works correctly in development but is slow in production?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The code is the same, so look for <strong>what differs</strong>: <strong>data volume and distribution</strong> (execution plans on production-sized data, missing indexes, stale statistics), <strong>real load and concurrency</strong> (pool exhaustion, GC, <strong>CPU throttling</strong>), <strong>network path and infrastructure</strong> (cross-zone latency, DNS, TLS, proxies, WAF), <strong>downstream services</strong> and <strong>configuration</strong>, located with <strong>tracing and APM</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Works on my machine but slow in production&quot; is almost never about the code itself. Development environments typically have a thousand rows, one user, local services and generous resources. Production has fifty million rows, five hundred concurrent requests, real network hops and tight container limits.</p>
+<p><strong>Data:</strong> the most common cause. A query that does a sequential scan over 1,000 rows in 1 ms takes seconds over 50 million. Run <code>EXPLAIN (ANALYZE, BUFFERS)</code> against production-sized data (a read replica or anonymised copy) and compare with development. Look for missing indexes, indexes not used because of functions or type mismatches, <strong>stale statistics</strong> after large data loads, data <strong>skew</strong>, N+1 queries that multiply with collection sizes, and endpoints returning unbounded results.</p>
+<p><strong>Tracing and APM:</strong> find which span is slow in production: database, a downstream call, application code, or time spent waiting before work even started (queueing, pool acquisition).</p>
+<p><strong>Network and infrastructure:</strong> the app and database may be in different availability zones; each round trip adds latency, multiplied by chatty access patterns. Check DNS resolution time (no caching, <code>ndots</code> search domains in Kubernetes), TLS handshakes on every call because connection pooling or keep-alive is off, service mesh sidecars, WAFs, API gateways and proxies that exist only in production.</p>
+<p><strong>Concurrency and resources:</strong> under real load, Hikari or HTTP client pools may be exhausted, thread pools queue, GC runs more often with production heap sizes and allocation rates, and Kubernetes <strong>CPU limits</strong> cause <strong>CFS throttling</strong>, adding tens or hundreds of milliseconds even at moderate average CPU. Check <code>container_cpu_cfs_throttled_periods_total</code>.</p>
+<p><strong>Configuration:</strong> different log levels (DEBUG logging synchronously), pool sizes, timeouts, JVM flags, feature flags, disabled caches, connection to a remote rather than local cache.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm where time is spent with production traces.</li>
+  <li>Compare execution plans with production-like data.</li>
+  <li>Check network path: zones, DNS, TLS reuse, proxies.</li>
+  <li>Check saturation: pools, threads, GC, CPU throttling.</li>
+  <li>Diff configuration between environments.</li>
+  <li>Reproduce with production-like data and load in staging.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Dev (2k rows): Index Scan, 0.4 ms. Prod (48M rows):
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE lower(email) = 'asha@example.com';
+-- Seq Scan on events (actual time=0.03..3120.5 rows=3) Buffers: read=612,004
+-- the index is on email, not lower(email)
+CREATE INDEX CONCURRENTLY idx_events_email_lower ON events (lower(email));
+ANALYZE events;</code></pre>
+<pre><code class="language-promql"># CPU throttling ratio per pod
+rate(container_cpu_cfs_throttled_periods_total{pod=~&quot;orders-.*&quot;}[5m])
+  / rate(container_cpu_cfs_periods_total{pod=~&quot;orders-.*&quot;}[5m])</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Profiling locally with tiny data and concluding the code is fine.</li>
+  <li>Ignoring the network: chatty calls across zones or without connection reuse.</li>
+  <li>Assuming low average CPU means no CPU problem, missing throttling.</li>
+  <li>Running production with DEBUG logging or development-sized pools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since the code is identical, I look for what's different. Production usually has far more data, so a query that's instant on a thousand rows does a full scan on fifty million; I compare the execution plan on production-sized data and check for missing indexes and stale statistics. I use tracing or APM to find the slow span: database, downstream service or the app. I check network latency between zones, DNS and TLS handshakes, and production-only components like a WAF or proxy. Then concurrency under real load: exhausted connection or thread pools, GC pressure, and CPU throttling from Kubernetes limits. Configuration differences like log levels and pool sizes matter too.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to reproduce production-like data safely?</strong> Anonymised or masked snapshots, or synthetic generators matching production distributions.</li>
+  <li><strong>What is CPU throttling?</strong> The CFS quota stops a container's threads for the rest of each period once its CPU limit is used up.</li>
+  <li><strong>Why might a plan differ across environments?</strong> Different data volumes, statistics, configuration and parameter values.</li>
+</ul>
+</article>
+</body>
+</html>

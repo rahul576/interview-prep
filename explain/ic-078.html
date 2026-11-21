@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-078 · How do you protect secrets and sensitive data stored in Terraform state?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-078" data-topic="Infrastructure as Code">
+<h1>How do you protect secrets and sensitive data stored in Terraform state?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p><strong>Assume state contains secrets</strong>: use an <strong>encrypted backend</strong> (KMS at rest, TLS in transit) with <strong>versioning</strong>, <strong>strict per-environment access</strong> and <strong>access logging</strong>, and <strong>keep secrets out of state</strong> with service-managed credentials, a vault, <strong>ephemeral resources and write-only arguments</strong>; OpenTofu also offers <strong>client-side state encryption</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform state stores every attribute of every resource in plain JSON, including generated passwords (<code>random_password.result</code>), database master passwords, private keys from <code>tls_private_key</code>, access keys and connection strings. Marking variables or outputs <code>sensitive</code> only hides them in CLI output; <strong>they are still in state</strong>. Anyone who can read the state file can read the secrets.</p>
+<p><strong>Protect the state.</strong></p>
+<ul>
+  <li>Backend encrypted at rest with a customer-managed <strong>KMS</strong> key (S3 SSE-KMS, Azure Storage encryption, GCS CMEK), TLS in transit, public access blocked.</li>
+  <li><strong>Versioning</strong> for recovery; remember old versions contain old secrets too.</li>
+  <li><strong>Separate buckets or containers per environment</strong>; access only for that environment's pipeline role and a small break-glass group. Developers should not need production state.</li>
+  <li><strong>Access logging</strong> (CloudTrail data events, storage logs) and alerts on unusual reads.</li>
+  <li>In HCP Terraform, state is encrypted and access is controlled per workspace; restrict who can read state.</li>
+</ul>
+<p><strong>Keep secrets out of it.</strong></p>
+<ul>
+  <li>Let services manage credentials: for RDS, <code>manage_master_user_password = true</code> stores the master password in Secrets Manager instead of state.</li>
+  <li>Generate secrets in a <strong>vault</strong> or secrets manager and have applications read them at runtime; Terraform only references the secret's name or ARN.</li>
+  <li>Newer Terraform (1.10+) has <strong>ephemeral resources</strong> and values that are never persisted, and (1.11+) <strong>write-only arguments</strong>, such as a database password passed via a <code>_wo</code> argument with a version number to trigger updates.</li>
+  <li><strong>OpenTofu</strong> supports <strong>client-side state and plan encryption</strong>, so the backend only ever sees ciphertext.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify state as confidential data.</li>
+  <li>Configure encrypted, versioned, per-environment backend with tight IAM.</li>
+  <li>Replace <code>random_password</code> patterns with service-managed or vault-generated secrets.</li>
+  <li>Use ephemeral/write-only features where providers support them.</li>
+  <li>Audit access and rotate any secret that has lived in state.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_db_instance&quot; &quot;app&quot; {
+  identifier                  = &quot;app-prod&quot;
+  engine                      = &quot;postgres&quot;
+  username                    = &quot;app_admin&quot;
+  manage_master_user_password = true   # password lives in Secrets Manager, not state
+}
+
+terraform {
+  backend &quot;s3&quot; {
+    bucket       = &quot;acme-tfstate-prod&quot;
+    key          = &quot;app/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    encrypt      = true
+    kms_key_id   = &quot;alias/tfstate-prod&quot;
+    use_lockfile = true
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking <code>sensitive = true</code> keeps values out of state.</li>
+  <li>One state bucket readable by every engineer.</li>
+  <li>Committing <code>terraform.tfstate</code> or plan files to Git, or publishing them as CI artifacts.</li>
+  <li>Never rotating secrets that were exposed in state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I assume every state file contains secrets, because providers store generated passwords, keys and connection strings in plain JSON, and sensitive only hides them in output. So the backend is encrypted with KMS, versioned, separated per environment, readable only by that environment's pipeline role and a small break-glass group, with access logging. Beyond that I keep secrets out of state: services manage their own credentials, like RDS storing the master password in Secrets Manager, secrets are generated in a vault rather than with random_password, and newer Terraform has ephemeral resources and write-only arguments. OpenTofu can also encrypt state client-side.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is <code>random_password</code> a secret-in-state problem?</strong> Its <code>result</code> is stored in plain text in state.</li>
+  <li><strong>Are plan files sensitive too?</strong> Yes; saved plans contain the same values and must be protected.</li>
+  <li><strong>What if state leaked?</strong> Rotate every secret in it and review access logs.</li>
+</ul>
+</article>
+</body>
+</html>

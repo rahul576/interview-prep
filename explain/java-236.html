@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-236 · What are the pitfalls of Collectors.toMap and how do you handle duplicates?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-236" data-topic="Java 8+ Features">
+<h1>What are the pitfalls of Collectors.toMap and how do you handle duplicates?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>Collectors.toMap</code> throws <strong><code>IllegalStateException</code> on duplicate keys</strong> unless you provide a <strong>merge function</strong>, throws <strong><code>NullPointerException</code> for null values</strong>, and returns an <strong>unordered HashMap</strong> unless you pass a <strong>map supplier</strong>; use <strong><code>groupingBy</code></strong> when several values per key are expected.</p>
+
+<h2>Detailed explanation</h2>
+<p>The two-argument form <code>toMap(keyMapper, valueMapper)</code> assumes keys are unique. As soon as two elements produce the same key, it fails with <code>IllegalStateException: Duplicate key ... (attempted merging values ...)</code>. This often passes tests with small data and breaks in production. The fix is the three-argument form with a <strong><code>BinaryOperator</code> merge function</strong> that decides what to do: keep the first <code>(a, b) -&gt; a</code>, keep the latest <code>(a, b) -&gt; b</code>, keep the max by some field, or combine like <code>Integer::sum</code> or <code>BigDecimal::add</code>.</p>
+<p><strong>Null values</strong> are a second trap. <code>toMap</code> accumulates via <code>Map.merge</code> semantics (and the unique-key accumulator explicitly checks for null), so a value mapper that returns null throws <code>NullPointerException</code>, even though <code>HashMap</code> itself allows null values. Filter nulls out first, map them to a sentinel or <code>Optional</code>, or collect with a manual <code>collect(HashMap::new, (m, e) -&gt; m.put(...), Map::putAll)</code>.</p>
+<p><strong>Ordering</strong>: the default result is a <code>HashMap</code> with no ordering guarantee. The four-argument overload adds a <strong>map supplier</strong>: <code>LinkedHashMap::new</code> keeps encounter order, <code>TreeMap::new</code> sorts by key, <code>EnumMap</code> for enum keys. For unmodifiable results use <code>Collectors.toUnmodifiableMap</code> (also rejects nulls). For concurrent collection in parallel streams there is <code>toConcurrentMap</code>.</p>
+<p>If a key naturally has several values, <code>toMap</code> with a merge function is the wrong tool; <strong><code>groupingBy</code></strong> with a downstream collector expresses the intent better.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>For each element, compute key and value.</li>
+  <li>If the key is absent, put the value (null check first).</li>
+  <li>If present, call the merge function or throw if none was supplied.</li>
+  <li>The map supplier determines the concrete map type.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Fails if a customer has two orders:
+// Map&lt;String, Order&gt; m = orders.stream().collect(toMap(Order::customerId, o -&gt; o));
+
+// Latest order per customer
+Map&lt;String, Order&gt; latest = orders.stream().collect(Collectors.toMap(
+    Order::customerId,
+    Function.identity(),
+    BinaryOperator.maxBy(Comparator.comparing(Order::createdAt)),
+    LinkedHashMap::new));
+
+// Total value per customer
+Map&lt;String, BigDecimal&gt; totals = orders.stream().collect(
+    Collectors.toMap(Order::customerId, Order::total, BigDecimal::add, TreeMap::new));
+
+// Multiple values per key: use groupingBy
+Map&lt;String, List&lt;Order&gt;&gt; byCustomer = orders.stream()
+    .collect(Collectors.groupingBy(Order::customerId));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Omitting the merge function on data that can contain duplicates.</li>
+  <li>Value mappers that may return null (e.g. an optional email field).</li>
+  <li>Relying on iteration order of the default HashMap.</li>
+  <li>Using <code>(a, b) -&gt; a</code> silently when duplicates indicate a data bug that should fail loudly.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;toMap throws IllegalStateException on duplicate keys unless I pass a merge function, such as keeping the first, the latest, or summing values. It also throws NullPointerException if the value mapper returns null, even though HashMap allows nulls, because of how it merges. The default result is a HashMap with no order, so I use the four-argument overload with LinkedHashMap or TreeMap when order matters. If several values per key are expected, groupingBy is the better collector.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you build a map from customer id to their latest order?</strong> <code>toMap</code> with <code>BinaryOperator.maxBy(comparing(Order::createdAt))</code>.</li>
+  <li><strong>What does toUnmodifiableMap do differently?</strong> Returns an unmodifiable map and rejects null keys and values.</li>
+  <li><strong>When would you use toConcurrentMap?</strong> For unordered parallel streams to avoid merging partial maps.</li>
+</ul>
+</article>
+</body>
+</html>

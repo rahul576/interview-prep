@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-150 · How would you design a scalable e-commerce order service that must not oversell inventory?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-150" data-topic="System Design">
+<h1>How would you design a scalable e-commerce order service that must not oversell inventory?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>To avoid overselling, <strong>reserve stock with an atomic conditional update</strong> (or optimistic locking), coordinate order, payment and inventory with a <strong>saga</strong> with <strong>compensations and expiring reservations</strong>, make every step <strong>idempotent</strong>, publish events via <strong>outbox + Kafka</strong>, and handle hot items with <strong>Redis pre-allocation, queuing and sharding</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Overselling happens when two buyers read &quot;1 left&quot; and both decrement. The fix is to make check-and-decrement <strong>one atomic operation</strong> at the source of truth: <code>UPDATE inventory SET available = available - :qty WHERE sku = :sku AND available &gt;= :qty</code>; if zero rows change, the item is out of stock. Alternatively, <strong>optimistic locking</strong> with a <code>@Version</code> column and retry, or <code>SELECT ... FOR UPDATE</code> for short transactions.</p>
+<p>The order flow spans services, so there is no single ACID transaction. A <strong>saga</strong> coordinates it: order created (PENDING) -&gt; inventory reserved -&gt; payment authorised -&gt; order CONFIRMED. If payment fails, a <strong>compensating action</strong> releases the reservation and the order is CANCELLED. Reservations have an <strong>expiry</strong> (e.g. 15 minutes), so abandoned checkouts return stock automatically. Orchestrated sagas (a coordinator or a workflow engine like Temporal) are easier to reason about than pure choreography for this flow.</p>
+<p>Every message can be delivered twice, so each step is <strong>idempotent</strong>: reservations keyed by order ID, payments by idempotency key. Events use the <strong>transactional outbox</strong> so the database change and the event are never out of sync.</p>
+<p><strong>Flash sales</strong> concentrate writes on one row. Options: pre-load stock into <strong>Redis</strong> and decrement atomically with <code>DECRBY</code>/Lua as a gatekeeper, then persist asynchronously; <strong>queue</strong> purchase requests per SKU; split stock into <strong>sub-buckets</strong> (shards) across rows; use a virtual waiting room.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client places order with an idempotency key; order saved as PENDING with outbox event.</li>
+  <li>Inventory service reserves stock atomically and records reservation (order ID, expiry).</li>
+  <li>Payment service authorises; emits success or failure.</li>
+  <li>On success: confirm reservation (commit stock), order CONFIRMED.</li>
+  <li>On failure or timeout: release reservation, order CANCELLED.</li>
+  <li>Expiry job releases stale reservations.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Modifying
+@Query(&quot;&quot;&quot;
+   UPDATE Inventory i SET i.available = i.available - :qty, i.reserved = i.reserved + :qty
+   WHERE i.sku = :sku AND i.available &gt;= :qty&quot;&quot;&quot;)
+int reserve(@Param(&quot;sku&quot;) String sku, @Param(&quot;qty&quot;) int qty);
+
+@Transactional
+public ReservationResult reserve(String orderId, String sku, int qty) {
+    if (reservations.existsByOrderId(orderId)) return ReservationResult.ALREADY_DONE; // idempotent
+    if (inventoryRepo.reserve(sku, qty) == 0) return ReservationResult.OUT_OF_STOCK;
+    reservations.save(new Reservation(orderId, sku, qty, Instant.now().plus(15, MINUTES)));
+    outbox.save(new OutboxEvent(&quot;StockReserved&quot;, orderId));
+    return ReservationResult.RESERVED;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Read-then-write stock checks in application code.</li>
+  <li>Distributed 2PC across services instead of a saga.</li>
+  <li>Reservations that never expire.</li>
+  <li>Publishing to Kafka outside the DB transaction (lost or phantom events).</li>
+  <li>Using a cache as the source of truth without reconciliation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The order starts as pending and reserves stock with an atomic conditional update, so concurrent buyers can't both take the last unit; optimistic locking is the alternative. Payment and inventory are coordinated with a saga: if payment fails, a compensation releases the reservation, and reservations expire anyway. Every step is idempotent and events go through an outbox to Kafka. For flash sales I'd gate demand with Redis atomic counters pre-loaded with stock, queue requests per SKU, and shard hot stock rows.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>1,000 units, a million users?</strong> Waiting room, Redis counter as gatekeeper, async order creation, reconcile with DB.</li>
+  <li><strong>Orchestration or choreography?</strong> Orchestration for multi-step flows with clear ownership and visibility.</li>
+  <li><strong>Multiple warehouses?</strong> Reserve per warehouse location, choose by proximity, split shipments if needed.</li>
+</ul>
+</article>
+</body>
+</html>

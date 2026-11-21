@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-249 · What are the disadvantages of adding too many indexes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-249" data-topic="Databases &amp; SQL">
+<h1>What are the disadvantages of adding too many indexes?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Too many indexes <strong>slow every write</strong> (each must be maintained), consume <strong>disk and buffer-cache memory</strong>, can lead to <strong>worse plans and redundant choices</strong>, and add <strong>maintenance, locking and replication overhead</strong>, so index only what real queries need and drop <strong>unused or redundant</strong> indexes.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Write amplification</strong>: an <code>INSERT</code> into a table with ten indexes performs one heap or clustered-index write plus ten index insertions, each possibly causing page splits, plus write-ahead log records for all of them. <code>UPDATE</code> and <code>DELETE</code> are similar. In PostgreSQL, updating an indexed column prevents <strong>HOT (heap-only tuple) updates</strong>, so every index gets a new entry even for unrelated columns. Write-heavy tables like events, orders or audit logs feel this first, and the extra WAL also increases <strong>replication lag</strong> and backup size.</p>
+<p><strong>Storage and memory</strong>: indexes can easily exceed the table size. They compete with table data for the <strong>buffer pool / shared buffers</strong>; when hot indexes and data no longer fit in RAM, reads start hitting disk and everything slows.</p>
+<p><strong>Optimizer side effects</strong>: more indexes mean more plans to evaluate, and with overlapping indexes the planner may choose a less suitable one, especially if statistics are off. Redundant indexes, such as <code>(customer_id)</code> next to <code>(customer_id, created_at)</code>, add cost with no benefit because the composite already serves the leading-column queries.</p>
+<p><strong>Operations</strong>: more indexes mean longer <code>VACUUM</code>, <code>ANALYZE</code>, rebuilds and index bloat in PostgreSQL; slower bulk loads; longer schema migrations; and in some engines more lock contention on hot index pages, for example monotonically increasing keys all inserting into the rightmost leaf.</p>
+<p>The approach: design indexes from actual query patterns, prefer a few well-chosen <strong>composite and covering</strong> indexes over many single-column ones, and periodically review usage statistics.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each write must update all indexes on the table.</li>
+  <li>Each index update writes pages and WAL/redo.</li>
+  <li>Index pages occupy cache memory, evicting other data.</li>
+  <li>The planner considers each index when building plans.</li>
+  <li>Maintenance tasks scale with index count and size.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- PostgreSQL: indexes never scanned since stats reset
+SELECT relname AS table_name, indexrelname AS index_name,
+       idx_scan, pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0 AND indexrelname NOT LIKE '%_pkey'
+ORDER BY pg_relation_size(indexrelid) DESC;
+
+-- MySQL 8: sys schema
+SELECT * FROM sys.schema_unused_indexes;
+-- Oracle: ALTER INDEX idx_name MONITORING USAGE; then check DBA_INDEX_USAGE
+
+-- Redundant: idx_orders_customer (customer_id) is covered by
+-- idx_orders_customer_created (customer_id, created_at)
+DROP INDEX CONCURRENTLY idx_orders_customer;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Dropping an index flagged unused without checking replicas, monthly jobs or unique constraints.</li>
+  <li>Indexing every foreign key and filter column individually instead of designing composites.</li>
+  <li>Ignoring the write cost on high-ingest tables.</li>
+  <li>Forgetting that usage statistics reset on restart or stats reset.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Indexes aren't free. Every insert, update and delete must also modify each affected index, so write-heavy tables slow down and produce more I/O and log volume, which also increases replication lag. Each index takes disk space and competes for buffer cache memory, pushing out useful data. Many overlapping indexes can lead the optimizer to a worse plan, and they add maintenance like rebuilds, statistics and vacuum, plus some lock contention. So I index from actual query patterns, prefer a few well-designed composite indexes over many single-column ones, remove redundant ones, and use pg_stat_user_indexes or the sys schema to find unused indexes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to find unused indexes?</strong> <code>pg_stat_user_indexes</code> with <code>idx_scan = 0</code>, MySQL <code>sys.schema_unused_indexes</code>, Oracle index usage monitoring.</li>
+  <li><strong>What is a redundant index?</strong> One whose columns are a leading prefix of another index.</li>
+  <li><strong>Safe way to drop an index?</strong> Make it invisible first (MySQL/Oracle) or monitor, then <code>DROP INDEX CONCURRENTLY</code>.</li>
+</ul>
+</article>
+</body>
+</html>

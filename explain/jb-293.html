@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-293 · What is structured logging, and why is it useful?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-293" data-topic="Observability">
+<h1>What is structured logging, and why is it useful?</h1>
+<p class="ex-meta">Observability · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Structured logging</strong> writes each log event as <strong>machine-readable data</strong>, typically <strong>one JSON object per line</strong> with <strong>consistent named fields</strong> (timestamp, level, service, trace id, business keys), so logs can be <strong>searched, filtered and aggregated</strong> reliably instead of parsed with fragile regexes.</p>
+
+<h2>Detailed explanation</h2>
+<p>A traditional log line is a sentence: <code>2026-01-10 10:00:01 INFO Payment of 40.00 for order 42 failed after 3 retries</code>. Humans can read it, but tools must parse it with patterns that break whenever a developer rewords the message. Across fifty services with different formats, finding &quot;all failed payments for customer 7 in the last hour&quot; becomes guesswork.</p>
+<p>A structured log line carries the same information as fields: <code>{&quot;@timestamp&quot;:&quot;2026-01-10T10:00:01Z&quot;,&quot;log.level&quot;:&quot;INFO&quot;,&quot;service.name&quot;:&quot;payments&quot;,&quot;trace.id&quot;:&quot;4bf9...&quot;,&quot;message&quot;:&quot;Payment failed&quot;,&quot;orderId&quot;:&quot;42&quot;,&quot;customerId&quot;:&quot;7&quot;,&quot;retries&quot;:3}</code></p>
+<p>Benefits:</p>
+<ul>
+  <li><strong>Search and filter</strong> by any field in Kibana, OpenSearch, Grafana Loki or a vendor: <code>orderId:42</code>, <code>level:ERROR AND service:payments</code>.</li>
+  <li><strong>Aggregate</strong>: count failures per endpoint or tenant, chart them, alert on them.</li>
+  <li><strong>Correlate</strong>: the trace id links log lines to distributed traces and across services.</li>
+  <li><strong>Consistency</strong>: standard schemas such as <strong>Elastic Common Schema (ECS)</strong> or OpenTelemetry semantic conventions make every service's logs look the same.</li>
+</ul>
+<p><strong>In Java:</strong> contextual fields come from the <strong>MDC</strong> (set in a servlet filter or interceptor; Micrometer Tracing adds trace and span ids automatically) or from SLF4J 2 key-value pairs (<code>log.atInfo().addKeyValue(...)</code>). Output is JSON via the <strong>Logstash Logback encoder</strong> or, since <strong>Spring Boot 3.4</strong>, built-in structured logging with <code>logging.structured.format.console=ecs|logstash|gelf</code>. In containers, write to stdout and let Fluent Bit or the OTel Collector ship logs.</p>
+<p>Caveats: JSON is larger, so manage <strong>volume and cost</strong> (levels, sampling, retention); never include <strong>passwords, tokens or unnecessary personal data</strong>; local developers may prefer plain text, which profiles can enable.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A filter puts trace id, user or tenant into the MDC.</li>
+  <li>Code logs messages with key-value context.</li>
+  <li>The encoder serialises event, MDC and key-values to one JSON line.</li>
+  <li>A shipper forwards stdout to the log store, which indexes fields.</li>
+  <li>Queries, dashboards and alerts work on fields.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class TenantMdcFilter extends OncePerRequestFilter {
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res,
+                                    FilterChain chain) throws IOException, ServletException {
+        MDC.put(&quot;tenantId&quot;, req.getHeader(&quot;X-Tenant-Id&quot;));
+        try { chain.doFilter(req, res); } finally { MDC.remove(&quot;tenantId&quot;); }
+    }
+}
+
+log.atWarn().setMessage(&quot;Payment failed&quot;)
+   .addKeyValue(&quot;orderId&quot;, orderId).addKeyValue(&quot;retries&quot;, 3).log();</code></pre>
+<pre><code class="language-yaml">logging:
+  structured:
+    format:
+      console: ecs        # Spring Boot 3.4+</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting all data in the message string, losing the benefit of fields.</li>
+  <li>Inconsistent field names (<code>order_id</code>, <code>orderID</code>, <code>orderId</code>) across services.</li>
+  <li>Not clearing the MDC, leaking values into other requests on pooled threads.</li>
+  <li>Logging secrets or whole request bodies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Structured logging means writing each log entry as data, usually one JSON object per line with named fields, instead of free text. Every line has consistent fields such as timestamp, level, service, trace id and business keys like orderId, so in ELK or Loki I can filter all errors for one customer or count failures per endpoint without regex parsing, and jump from a log line to its trace. In Java I add context through the MDC and SLF4J key-values and output JSON with the Logstash encoder or Spring Boot 3.4's built-in ECS format. I keep field names consistent across services and never log secrets or personal data.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you control log volume and cost?</strong> Appropriate levels, sampling of noisy events, shorter retention for debug data, dropping fields at the shipper.</li>
+  <li><strong>What is ECS?</strong> Elastic Common Schema, a standard set of field names for logs.</li>
+  <li><strong>Why clear the MDC?</strong> Threads are pooled, so stale values would appear on unrelated requests.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-208 · When should you use PATCH instead of PUT?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-208" data-topic="REST &amp; API Design">
+<h1>When should you use PATCH instead of PUT?</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>PATCH</strong> to change <strong>only some fields</strong> without sending (or knowing) the full resource; use <strong>PUT</strong> when the client sends the <strong>complete new state</strong> to <strong>replace</strong> it (idempotent but risks <strong>overwriting fields</strong>); PATCH uses <strong>JSON Merge Patch</strong> or <strong>JSON Patch</strong>, is <strong>not guaranteed idempotent</strong>, and should be combined with <strong>ETag/If-Match</strong> to avoid lost updates.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>PUT semantics.</strong> The body is the <strong>entire representation</strong>. The server replaces what it has. If the client omits <code>phone</code>, the server should clear it. That is simple and <strong>idempotent</strong>, but it requires the client to have the full, current resource. If two clients edit different fields at once, each PUT overwrites the other's change: a <strong>lost update</strong>.</p>
+<p><strong>PATCH semantics</strong> (RFC 5789). The body describes <strong>changes</strong> to apply. Typical uses: updating an order status, a user's phone number, toggling a flag, or mobile clients that should not send large objects. Two standard formats:</p>
+<ul>
+  <li><strong>JSON Merge Patch</strong> (RFC 7396, <code>application/merge-patch+json</code>): send a partial document. Present fields are set, <strong><code>null</code> removes</strong> a field, absent fields are unchanged. Simple, but cannot express &quot;set to null&quot; separately from &quot;remove&quot;, and arrays are replaced wholesale.</li>
+  <li><strong>JSON Patch</strong> (RFC 6902, <code>application/json-patch+json</code>): an array of operations: <code>add</code>, <code>remove</code>, <code>replace</code>, <code>move</code>, <code>copy</code>, <code>test</code>. Precise and supports array element changes and <strong><code>test</code></strong> preconditions, but more complex.</li>
+</ul>
+<p><strong>Idempotency.</strong> A merge patch setting <code>status</code> to <code>SHIPPED</code> is effectively idempotent, but JSON Patch <code>add</code> to an array end is not. So PATCH is <strong>not guaranteed</strong> idempotent and should not be retried blindly.</p>
+<p><strong>Concurrency.</strong> Because PATCH modifies existing state, use <strong>optimistic concurrency</strong>: return an <strong>ETag</strong> (for example from a JPA <code>@Version</code>), require clients to send <strong>If-Match</strong>, and answer <strong>412 Precondition Failed</strong> if the resource changed.</p>
+<p><strong>Implementing safely in Spring Boot.</strong> Do not bind the PATCH body directly onto the JPA entity, which allows <strong>mass assignment</strong> of fields like <code>role</code> or <code>price</code>. Use a dedicated DTO with optional fields (or <code>JsonNullable</code> from openapi-generator to distinguish absent from null), whitelist patchable fields, <strong>validate</strong> the merged result, and apply business rules (e.g. status transitions only along allowed paths).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client GETs the resource and its ETag.</li>
+  <li>Client sends PATCH with only changed fields and If-Match.</li>
+  <li>Server checks the version (else 412).</li>
+  <li>Server applies allowed changes to the entity, validates the result.</li>
+  <li>Server saves, returns 200 with the resource and new ETag.</li>
+</ol>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>PUT</th><th>PATCH</th></tr></thead>
+<tbody>
+<tr><td>Body</td><td>Full representation</td><td>Changes only</td></tr>
+<tr><td>Missing fields</td><td>Cleared/reset</td><td>Unchanged</td></tr>
+<tr><td>Idempotent</td><td>Yes</td><td>Not guaranteed</td></tr>
+<tr><td>Lost update risk</td><td>High without If-Match</td><td>Lower, still use If-Match</td></tr>
+<tr><td>Formats</td><td>Resource media type</td><td>Merge Patch, JSON Patch</td></tr>
+</tbody>
+</table>
+
+<h2>Example</h2>
+<pre><code class="language-http">PATCH /users/42
+Content-Type: application/merge-patch+json
+If-Match: &quot;7&quot;
+
+{ &quot;phone&quot;: &quot;+91-98450-00000&quot;, &quot;nickname&quot;: null }</code></pre>
+<pre><code class="language-http">PATCH /users/42
+Content-Type: application/json-patch+json
+
+[ { &quot;op&quot;: &quot;test&quot;, &quot;path&quot;: &quot;/status&quot;, &quot;value&quot;: &quot;ACTIVE&quot; },
+  { &quot;op&quot;: &quot;replace&quot;, &quot;path&quot;: &quot;/email&quot;, &quot;value&quot;: &quot;asha@example.com&quot; } ]</code></pre>
+<pre><code class="language-java">record UserPatch(Optional&lt;String&gt; phone, Optional&lt;String&gt; nickname) {}
+
+@PatchMapping(path = &quot;/users/{id}&quot;, consumes = &quot;application/merge-patch+json&quot;)
+ResponseEntity&lt;UserDto&gt; patch(@PathVariable long id, @RequestHeader(&quot;If-Match&quot;) String ifMatch,
+                              @RequestBody UserPatch p) {
+    User u = repo.findById(id).orElseThrow(NotFoundException::new);
+    if (!ifMatch.equals(&quot;\&quot;&quot; + u.getVersion() + &quot;\&quot;&quot;)) return ResponseEntity.status(412).build();
+    if (p.phone() != null) u.setPhone(p.phone().orElse(null));     // null field = absent
+    if (p.nickname() != null) u.setNickname(p.nickname().orElse(null));
+    validator.validate(u);
+    User saved = repo.save(u);
+    return ResponseEntity.ok().eTag(&quot;\&quot;&quot; + saved.getVersion() + &quot;\&quot;&quot;).body(UserDto.from(saved));
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Partial bodies sent with PUT, wiping data.</li>
+  <li>Binding PATCH JSON directly to entities (mass assignment).</li>
+  <li>Not distinguishing absent from null fields.</li>
+  <li>Retrying non-idempotent JSON Patch operations.</li>
+  <li>No concurrency control.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use PATCH when the client only wants to change some fields, like an order status or a phone number, without sending or even knowing the whole resource. PUT is for when the client sends the complete new state and the server replaces it; it's idempotent and simple, but risks overwriting fields the client didn't mean to touch. PATCH bodies follow a format: JSON Merge Patch, a partial document where null removes a field, or JSON Patch, a list of operations. PATCH isn't guaranteed idempotent, so I combine it with ETag and If-Match to avoid lost updates, and in Spring I apply it through a DTO with whitelisted fields and validate the result.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you implement PATCH in Spring Boot safely?</strong> DTO with optional fields, whitelist, apply to the loaded entity, validate, version check via If-Match.</li>
+  <li><strong>Merge Patch vs JSON Patch?</strong> Merge Patch is simpler; JSON Patch handles arrays and test preconditions.</li>
+  <li><strong>Which status if the ETag doesn't match?</strong> 412 Precondition Failed.</li>
+</ul>
+</article>
+</body>
+</html>

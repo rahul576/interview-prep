@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-033 · How does an Application Load Balancer health check work, and what happens to unhealthy targets?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-033" data-topic="Cloud (AWS)">
+<h1>How does an Application Load Balancer health check work, and what happens to unhealthy targets?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>An <strong>ALB</strong> sends <strong>periodic requests to a health check path</strong> on each target; after <strong>consecutive successes or failures</strong> (healthy/unhealthy thresholds, interval, timeout, expected codes) it marks targets <strong>healthy or unhealthy</strong> and <strong>stops routing to unhealthy ones</strong>; with the <strong>ELB health check type</strong>, the <strong>Auto Scaling group replaces</strong> them, and <strong>deregistration delay</strong> drains in-flight requests.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each <strong>target group</strong> defines a health check: <strong>protocol and path</strong> (for example <code>/actuator/health</code>), <strong>port</strong>, <strong>interval</strong> (5 to 300 seconds, default 30), <strong>timeout</strong>, <strong>healthy threshold</strong> (consecutive successes, default 5), <strong>unhealthy threshold</strong> (consecutive failures, default 2) and <strong>success codes</strong> (default 200, configurable such as <code>200-299</code>). Each ALB node checks each registered target independently.</p>
+<p>A new target starts in <code>initial</code> state and receives traffic only after passing the healthy threshold. When a target fails the unhealthy threshold, it becomes <code>unhealthy</code> and the ALB <strong>stops sending it new requests</strong>, distributing traffic among the healthy targets. If <strong>all</strong> targets are unhealthy, the ALB <strong>fails open</strong> and sends traffic to all of them, on the theory that partial service beats none.</p>
+<p>The load balancer only stops routing; it does not fix anything. <strong>Auto Scaling groups</strong> use EC2 status checks by default, so an instance whose app has crashed but whose OS is fine stays in service forever. Setting the ASG <strong>health check type to ELB</strong> makes it <strong>terminate and replace</strong> instances the load balancer reports unhealthy, with a <strong>grace period</strong> for startup. ECS services and EKS (via the AWS Load Balancer Controller) behave similarly with their own replacement logic.</p>
+<p>When a target is deregistered, during scale-in or deployment, it enters <code>draining</code>: the <strong>deregistration delay</strong> (default 300 seconds) lets in-flight requests finish while no new ones arrive. Tune it to your longest typical request.</p>
+<p>Design the endpoint carefully. It should be <strong>fast and cheap</strong>, reflect whether <strong>this instance can serve requests</strong>, and generally <strong>not fail because a shared downstream dependency is slow</strong>, otherwise one database hiccup marks every target unhealthy at once.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Target registers; health checks start.</li>
+  <li>Passes N consecutive checks: healthy, receives traffic.</li>
+  <li>Fails M consecutive checks: unhealthy, no new traffic.</li>
+  <li>ASG with ELB health checks replaces the instance.</li>
+  <li>Deregistration drains connections before removal.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws elbv2 modify-target-group --target-group-arn arn:aws:elasticloadbalancing:...:targetgroup/orders/abc \
+  --health-check-path /actuator/health/readiness --health-check-interval-seconds 10 \
+  --healthy-threshold-count 3 --unhealthy-threshold-count 3 --matcher HttpCode=200
+aws elbv2 modify-target-group-attributes --target-group-arn arn:...:targetgroup/orders/abc \
+  --attributes Key=deregistration_delay.timeout_seconds,Value=30
+aws autoscaling update-auto-scaling-group --auto-scaling-group-name orders-asg \
+  --health-check-type ELB --health-check-grace-period 120
+aws elbv2 describe-target-health --target-group-arn arn:...:targetgroup/orders/abc</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Health checks that call the database, failing all targets together.</li>
+  <li>Timeouts too short, so a traffic spike makes healthy but busy targets &quot;unhealthy&quot;.</li>
+  <li>ASG still using EC2 health checks only.</li>
+  <li>Default 300-second deregistration delay slowing deployments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The ALB periodically calls a health check path, say /actuator/health, on each target. After a configured number of consecutive successes within the timeout a target is healthy; after a number of failures it's unhealthy and stops receiving traffic, which goes to the healthy targets. If the Auto Scaling group uses the ELB health check type, it also terminates and replaces unhealthy instances, after a grace period. When targets are removed, the deregistration delay lets in-flight requests finish. I keep the health endpoint fast and focused on whether that instance can serve, not on shared dependencies.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a strict health check cause an outage in a spike?</strong> Busy targets time out, get removed, overloading the rest in a cascade.</li>
+  <li><strong>What if all targets are unhealthy?</strong> The ALB fails open and routes to all of them.</li>
+  <li><strong>Liveness vs readiness?</strong> Readiness says &quot;can take traffic&quot;; liveness says &quot;process is alive&quot;; ALB checks should use readiness.</li>
+</ul>
+</article>
+</body>
+</html>

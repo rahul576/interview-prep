@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-095 · kubectl apply fails on a large CRD with metadata.annotations Too long. Why, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-095" data-topic="Kubernetes">
+<h1>kubectl apply fails on a large CRD with metadata.annotations Too long. Why, and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Client-side <code>kubectl apply</code> stores the whole object in the <strong>last-applied-configuration annotation</strong>, and annotations are capped at <strong>256 KB in total</strong>, so big CRDs overflow it; use <strong>server-side apply</strong> (or create/replace) instead.</p>
+
+<h2>Detailed explanation</h2>
+<p>Classic <strong>client-side apply</strong> performs a three-way merge between your manifest, the live object and the configuration you applied last time. To remember the last one, kubectl writes the full object as JSON into the annotation <code>kubectl.kubernetes.io/last-applied-configuration</code>. The API server limits the <strong>combined size of all annotations on an object to 256 KB</strong> (262,144 bytes).</p>
+<p>CustomResourceDefinitions with long <strong>OpenAPI v3 schemas</strong>, such as the Prometheus Operator's <code>prometheuses</code> or <code>alertmanagers</code> CRDs, or many CRDs from Crossplane providers, are larger than that. The object itself is within the etcd size limit, but the duplicate copy in the annotation is not, so you get <code>metadata.annotations: Too long: must have at most 262144 bytes</code>.</p>
+<p><strong>Server-side apply</strong> solves it properly: <code>kubectl apply --server-side</code> sends the manifest to the API server, which performs the merge and records <strong>field ownership in <code>managedFields</code></strong> instead of storing a full copy. It also gives clear conflict detection between managers. Alternatives are <code>kubectl create</code> for the first install and <code>kubectl replace</code> for updates. In <strong>Argo CD</strong>, set the <code>ServerSideApply=true</code> sync option on those resources (or <code>Replace=true</code>); <strong>Helm</strong> installs CRDs from its <code>crds/</code> directory without the annotation but does not upgrade them, which is why many teams manage CRDs separately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client-side apply serialises the manifest into the last-applied annotation.</li>
+  <li>The API server validates total annotation size and rejects anything over 256 KB.</li>
+  <li>With server-side apply, the server merges and tracks owners in managedFields.</li>
+  <li>No full-copy annotation is written, so size is no longer an issue.</li>
+  <li>Use <code>--force-conflicts</code> once when migrating fields previously owned by client-side apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl apply -f prometheus-operator-crds/
+# The CustomResourceDefinition &quot;prometheuses.monitoring.coreos.com&quot; is invalid:
+#   metadata.annotations: Too long: must have at most 262144 bytes
+kubectl apply --server-side --force-conflicts -f prometheus-operator-crds/</code></pre>
+<pre><code class="language-yaml"># Argo CD Application
+spec:
+  syncPolicy:
+    syncOptions:
+      - ServerSideApply=true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Stripping the schema from the CRD to make it fit, which removes validation.</li>
+  <li>Using <code>kubectl replace</code> on objects other tools also modify, overwriting their changes.</li>
+  <li>Forgetting that Helm does not upgrade CRDs from <code>crds/</code> on <code>helm upgrade</code>.</li>
+  <li>Deploying the operator before its CRDs exist.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Client-side apply keeps the whole object as JSON in the last-applied-configuration annotation for its three-way merge, and all annotations on an object are limited to 256 kilobytes. Large CRDs with big OpenAPI schemas, like the Prometheus operator ones, exceed that, so apply fails with Too long. The clean fix is server-side apply, which tracks field ownership in managedFields instead of that annotation. Otherwise create for the first install and replace for updates. In Argo CD I enable the ServerSideApply sync option, and I usually manage CRDs as their own application so they update before the operator.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why manage CRDs separately from the operator?</strong> CRDs are cluster-wide, must exist and be upgraded before the operator, and deleting them deletes all custom resources.</li>
+  <li><strong>What are managedFields?</strong> Per-field records of which manager set which value, used for conflict detection.</li>
+  <li><strong>Can you switch a resource from client-side to server-side apply?</strong> Yes; kubectl migrates ownership, sometimes needing --force-conflicts.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-015 · What happened to the original HTTP+SSE transport in MCP?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-015" data-topic="MCP Servers">
+<h1>What happened to the original HTTP+SSE transport in MCP?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The original <strong>HTTP+SSE transport</strong> (2024-11-05) used <strong>two endpoints</strong>, a long-lived <strong>SSE stream</strong> for server messages plus a <strong>POST endpoint</strong> for client messages; it was hard to scale and proxy, so <strong>2025-03-26 replaced it with Streamable HTTP</strong>, where SSE survives only as an <strong>optional response format</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The first MCP specification, <strong>2024-11-05</strong>, defined two transports: stdio and <strong>HTTP with Server-Sent Events</strong>. With HTTP+SSE, the client first opened a <strong>GET</strong> request to an SSE endpoint and kept that connection open indefinitely. The server's first event told the client the URL of a second endpoint, and the client then sent all its messages as <strong>POST</strong> requests to that URL. Responses did not come back on the POST; they arrived asynchronously on the long-lived SSE stream.</p>
+<p>This design had practical problems:</p>
+<ul>
+  <li><strong>Persistent connections per client</strong>, limiting scale.</li>
+  <li><strong>Sticky routing</strong>: the POST and the SSE stream had to reach the same instance.</li>
+  <li><strong>Proxies and load balancers</strong> often buffer or time out long-lived streams.</li>
+  <li><strong>Serverless platforms</strong> fitted poorly, and dropped streams could not be resumed cleanly.</li>
+</ul>
+<p>The <strong>2025-03-26</strong> revision replaced it with <strong>Streamable HTTP</strong>: a <strong>single endpoint</strong> where each client message is a <strong>POST</strong>, and the server decides <strong>per request</strong> whether to return a plain <strong>JSON</strong> response or to stream that request's messages over <strong>SSE</strong>. A simple server can be completely request/response, scale like any HTTP API and run on serverless platforms.</p>
+<p>So <strong>SSE still exists</strong>, but only as a response format within Streamable HTTP, not as a standalone transport. The old transport is <strong>deprecated</strong>: new servers should implement Streamable HTTP. Clients that must talk to legacy servers can keep <strong>fallback support</strong>: the specification describes trying a POST to the URL first and, if that fails with an error like 404 or 405, falling back to a GET expecting the old SSE handshake.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Old: GET /sse → stream opens → server sends <code>endpoint</code> event → client POSTs to /messages → responses arrive on stream.</li>
+  <li>New: POST /mcp with JSON-RPC → server returns JSON or an SSE stream for that request.</li>
+  <li>Compatibility: client tries Streamable HTTP; on failure, falls back to legacy SSE.</li>
+  <li>Servers may host both temporarily for old clients.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Legacy (2024-11-05)
+  GET  /sse                 -&gt; event: endpoint  data: /messages?sessionId=abc
+  POST /messages?sessionId=abc  {&quot;id&quot;:1,&quot;method&quot;:&quot;tools/list&quot;}   -&gt; 202 Accepted
+  (response arrives later on the /sse stream)
+
+Streamable HTTP (2025-03-26+)
+  POST /mcp {&quot;id&quot;:1,&quot;method&quot;:&quot;tools/list&quot;}  -&gt; 200 application/json {&quot;id&quot;:1,&quot;result&quot;:{...}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Building new servers with the deprecated SSE transport from old tutorials.</li>
+  <li>Thinking &quot;SSE is gone&quot; and not supporting streamed responses at all.</li>
+  <li>Forgetting to disable proxy buffering for SSE responses.</li>
+  <li>Dropping legacy support in clients before important servers have migrated.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The first spec, 2024-11-05, had an HTTP+SSE transport with two endpoints: the client kept a long-lived SSE stream open to receive messages and posted its own messages to a second endpoint. That meant a persistent connection per client, sticky routing, trouble with proxies and load balancers, and a poor fit for serverless. The 2025-03-26 revision replaced it with Streamable HTTP: one endpoint, each message is a POST, and the server chooses per request to reply with JSON or stream with SSE. So SSE survives only as a response format. The old transport is deprecated; new servers should use Streamable HTTP, and clients can keep a fallback for old servers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Client compatibility strategy?</strong> Try POST first; on 4xx fall back to legacy GET/SSE; log which servers still need it.</li>
+  <li><strong>Why not WebSockets?</strong> They need more infrastructure support and do not fit plain request/response or serverless well.</li>
+  <li><strong>How do you migrate a server?</strong> Serve both endpoints during transition, then remove the legacy one.</li>
+</ul>
+</article>
+</body>
+</html>

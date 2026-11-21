@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-035 · What is the difference between the shell form and exec form of CMD and ENTRYPOINT?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-035" data-topic="Docker">
+<h1>What is the difference between the shell form and exec form of CMD and ENTRYPOINT?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The <strong>exec form</strong> (<code>CMD [&quot;java&quot;,&quot;-jar&quot;,&quot;app.jar&quot;]</code>) runs the program <strong>directly as PID 1</strong> so it receives signals; the <strong>shell form</strong> (<code>CMD java -jar app.jar</code>) runs via <strong><code>/bin/sh -c</code></strong>, making the shell PID 1 and blocking signals but allowing <strong>variable expansion</strong>; prefer exec form.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>CMD</code>, <code>ENTRYPOINT</code> and <code>RUN</code> accept two syntaxes. The <strong>exec form</strong> is a <strong>JSON array</strong> of the executable and its arguments. Docker calls the program directly, without a shell, so it becomes <strong>PID 1</strong> and receives <code>SIGTERM</code> from <code>docker stop</code>. Note it must be valid JSON with <strong>double quotes</strong>; single quotes silently turn it into shell form.</p>
+<p>The <strong>shell form</strong> is a plain string. Docker wraps it as <code>/bin/sh -c &quot;java -jar app.jar&quot;</code>. The shell becomes PID 1 and, by default, does <strong>not forward signals</strong> to its child, so the application never sees SIGTERM and is killed with SIGKILL after the timeout. The image also needs a shell, which distroless and scratch images lack. Some shells exec the last command automatically, but you cannot rely on this.</p>
+<p>The shell form's advantage is <strong>shell features</strong>: environment variable expansion (<code>$PORT</code>), pipes, <code>&amp;&amp;</code> and globbing. The exec form does <strong>not</strong> expand variables, because no shell runs (Dockerfile-level <code>ENV</code> values are not substituted into exec-form arrays at run time).</p>
+<p><strong>ENTRYPOINT and CMD combine</strong>: with both in exec form, CMD supplies <strong>default arguments</strong> to ENTRYPOINT, and <code>docker run image arg1</code> replaces CMD. If ENTRYPOINT is shell form, CMD and run arguments are ignored. The best pattern when you need variables is an exec-form ENTRYPOINT script that ends with <code>exec &quot;$@&quot;</code>, so the shell is replaced by the application.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Exec form: Docker calls <code>execve(&quot;java&quot;, [&quot;java&quot;,&quot;-jar&quot;,&quot;app.jar&quot;])</code>.</li>
+  <li>Shell form: Docker calls <code>execve(&quot;/bin/sh&quot;, [&quot;sh&quot;,&quot;-c&quot;,&quot;java -jar app.jar&quot;])</code>.</li>
+  <li>The resulting PID 1 receives signals from <code>docker stop</code>.</li>
+  <li>With ENTRYPOINT + CMD (exec), the final argv is ENTRYPOINT + CMD.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># Good
+ENTRYPOINT [&quot;/entrypoint.sh&quot;]
+CMD [&quot;java&quot;, &quot;-jar&quot;, &quot;/app.jar&quot;]</code></pre>
+<pre><code class="language-bash">#!/bin/sh
+# entrypoint.sh
+set -e
+# JAVA_TOOL_OPTIONS is read by the JVM itself
+export JAVA_TOOL_OPTIONS=&quot;${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75}&quot;
+exec &quot;$@&quot;</code></pre>
+<pre><code class="language-bash">docker run myimg                 # runs /entrypoint.sh java -jar /app.jar
+docker run myimg java -version   # CMD replaced</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Exec form</th><th>Shell form</th></tr></thead>
+<tbody>
+<tr><td>Syntax</td><td>JSON array</td><td>String</td></tr>
+<tr><td>PID 1</td><td>Application</td><td>/bin/sh</td></tr>
+<tr><td>Signals</td><td>Received</td><td>Not forwarded</td></tr>
+<tr><td>Variable expansion</td><td>No</td><td>Yes</td></tr>
+<tr><td>Needs shell</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Single quotes in the JSON array, which falls back to shell form.</li>
+  <li>Expecting <code>$VAR</code> to expand in exec form.</li>
+  <li>Shell-form ENTRYPOINT, which ignores CMD and run arguments.</li>
+  <li>Entrypoint scripts that do not <code>exec</code> the final command.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The exec form is a JSON array like CMD [&quot;java&quot;, &quot;-jar&quot;, &quot;app.jar&quot;]; Docker runs that program directly, so it's PID 1 and receives SIGTERM. The shell form is a plain string that Docker wraps in /bin/sh -c, so the shell is PID 1, doesn't forward signals, and graceful shutdown breaks; the image also needs a shell. The shell form's advantage is variable expansion and pipes. I use the exec form, and when I need variables I use an entrypoint script that ends with exec &quot;$@&quot; so the application replaces the shell.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do ENTRYPOINT and CMD combine in exec form?</strong> CMD becomes the default arguments to ENTRYPOINT.</li>
+  <li><strong>How do you override ENTRYPOINT?</strong> <code>docker run --entrypoint</code>.</li>
+  <li><strong>Does RUN have the same two forms?</strong> Yes; for RUN the shell form is normal and harmless.</li>
+</ul>
+</article>
+</body>
+</html>

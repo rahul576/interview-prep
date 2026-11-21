@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-026 · An infrastructure agent deleted production resources while cleaning up test environments. How do you respond and prevent a repeat?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-026" data-topic="AI Agents &amp; AIOps">
+<h1>An infrastructure agent deleted production resources while cleaning up test environments. How do you respond and prevent a repeat?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>First <strong>contain and recover</strong>: stop the agent, revoke its credentials, assess damage and <strong>restore from IaC and backups</strong>; then run a <strong>blameless postmortem</strong> on root causes such as <strong>ambiguous scope, broad permissions and missing checks</strong>; prevent repeats with <strong>least privilege (no production access)</strong>, <strong>dry runs and approvals</strong> for destructive actions, <strong>policy guardrails in code</strong> (tag allowlists, deletion locks) and new <strong>evaluation cases</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Incident response</strong> comes first, exactly as for a human-caused outage. Disable the agent and <strong>revoke its credentials</strong> so it cannot continue. Declare an incident, assess what was deleted using cloud activity logs (CloudTrail, Azure Activity Log) and the agent's own trace, and <strong>restore</strong>: recreate infrastructure from <strong>Terraform or Bicep</strong>, restore data from <strong>backups</strong>, point-in-time recovery or soft-deleted resources (many services support soft delete or recycle bins). Communicate with affected teams.</p>
+<p>Then a <strong>blameless postmortem</strong> focused on the system. The agent did what the system allowed. Typical root causes:</p>
+<ul>
+  <li>The cleanup agent's credentials <strong>could reach production at all</strong>.</li>
+  <li>The instruction &quot;clean up old test environments&quot; was <strong>ambiguous</strong>: old by what measure, test by what definition?</li>
+  <li>Targets were chosen by <strong>name patterns</strong> like <code><em>-test-</em></code> that also matched production resources.</li>
+  <li>Nothing <strong>checked the target list</strong> before deletion, and there was no approval for bulk deletes.</li>
+  <li>No deletion protection on critical resources.</li>
+</ul>
+<p><strong>Prevention is mostly architectural.</strong> A cleanup agent gets <strong>least-privilege credentials scoped to test subscriptions or accounts only</strong>, so production deletion is technically impossible. Destructive actions run first as a <strong>dry run</strong> that lists exactly what will be deleted, and require <strong>human approval</strong> above a threshold, such as more than five resources. <strong>Guardrails in code, not prompts</strong>, enforce rules: only delete resources tagged <code>env=test</code> with an expired <code>ttl</code> tag, never resources tagged <code>env=prod</code>. Critical resources get <strong>deletion locks</strong> (Azure resource locks, AWS termination protection, Terraform <code>prevent_destroy</code>), and organisation policies (SCPs or Azure Policy) add a backstop. Finally, the scenario becomes an <strong>evaluation case</strong>, and the agent's change goes through review like any automation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stop the agent; revoke credentials; declare an incident.</li>
+  <li>Determine what was deleted from cloud logs and traces.</li>
+  <li>Restore from IaC, backups and soft delete; verify services.</li>
+  <li>Blameless postmortem: timeline, root causes, contributing factors.</li>
+  <li>Implement least privilege, dry run plus approval, tag-based policy, locks.</li>
+  <li>Add eval cases and monitoring; review other agents for the same risk.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def delete_resources(candidates, approver=None):
+    allowed, refused = [], []
+    for r in candidates:
+        if r.subscription not in TEST_SUBSCRIPTIONS or r.tags.get(&quot;env&quot;) != &quot;test&quot;:
+            refused.append((r.id, &quot;not a test resource&quot;))
+        elif r.locked or r.tags.get(&quot;protected&quot;) == &quot;true&quot;:
+            refused.append((r.id, &quot;protected&quot;))
+        elif not ttl_expired(r.tags.get(&quot;ttl&quot;)):
+            refused.append((r.id, &quot;ttl not expired&quot;))
+        else:
+            allowed.append(r)
+    plan = {&quot;delete&quot;: [r.id for r in allowed], &quot;refused&quot;: refused}
+    if len(allowed) &gt; 5 and approver is None:
+        return {&quot;ok&quot;: False, &quot;status&quot;: &quot;approval_required&quot;, &quot;plan&quot;: plan}
+    for r in allowed:
+        cloud.delete(r.id)
+    return {&quot;ok&quot;: True, &quot;deleted&quot;: plan[&quot;delete&quot;], &quot;refused&quot;: refused}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Blaming the model and just rewording the prompt.</li>
+  <li>Keeping production access &quot;for convenience&quot;.</li>
+  <li>Relying on name patterns instead of authoritative tags and account boundaries.</li>
+  <li>No dry run or approval for bulk deletions.</li>
+  <li>Not checking other agents and automations for the same weakness.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First incident response: disable the agent and revoke its credentials, find out what was deleted from cloud logs and the agent trace, and restore infrastructure from code and data from backups or soft delete. Then a blameless postmortem on the system. Usually the agent's credentials could reach production at all, the instruction was ambiguous, targets were matched by name patterns, and nothing checked the list before deletion. Prevention is architectural: the cleanup agent only gets credentials for test accounts, so production deletion is impossible; deletes run as a dry run first and need approval above a threshold; code-level guardrails only allow resources tagged env=test, and critical resources have deletion locks. And the scenario becomes an eval case.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which control first?</strong> Removing production access, because it eliminates the failure mode regardless of model behaviour.</li>
+  <li><strong>Why not just improve the prompt?</strong> Prompts are not enforcement; a different input or injection could cause the same result.</li>
+  <li><strong>How do you prove recovery is possible?</strong> Regularly test restores and IaC rebuilds.</li>
+</ul>
+</article>
+</body>
+</html>

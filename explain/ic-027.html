@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-027 · What is privilege escalation (become) in Ansible?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-027" data-topic="Configuration Management">
+<h1>What is privilege escalation (become) in Ansible?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>become</strong> runs tasks as <strong>another user</strong>, usually <strong>root via sudo</strong>; set it per play or task, change the target with <strong>become_user</strong> and the mechanism with <strong>become_method</strong>, supply passwords via <strong>--ask-become-pass</strong> or vault, and apply <strong>least privilege</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Ansible connects over SSH as a normal, unprivileged user, which is good security practice: no root SSH logins. Many tasks still need elevated rights: installing packages, editing files in <code>/etc</code>, managing services. <strong>Privilege escalation</strong> handles this.</p>
+<p><code>become: true</code> on a play, block or task makes Ansible run the module through <strong>sudo</strong> as <strong>root</strong> by default. <code>become_user</code> changes the target user, for example <code>postgres</code> to run <code>psql</code> commands or <code>app</code> to deploy files as the application user. <code>become_method</code> changes the mechanism: <code>sudo</code> (default), <code>su</code>, <code>doas</code>, <code>pbrun</code>, <code>runas</code> on Windows and others. These can also be set in the inventory or <code>ansible.cfg</code>, or with <code>--become</code>/<code>-b</code> on the command line.</p>
+<p>If sudo requires a password, provide it with <code>--ask-become-pass</code> (<code>-K</code>), or store <code>ansible_become_password</code> encrypted with Vault per host or group. For automation accounts, a <strong>sudoers</strong> rule that allows <code>NOPASSWD</code> is common; ideally restricted to what automation needs, though in practice Ansible executes temporary Python modules, so tightly restricting commands is hard and the automation account effectively has broad rights. Protecting that account's SSH keys and auditing its use is therefore important.</p>
+<p>Following <strong>least privilege</strong>, escalate only the tasks that need it rather than putting <code>become: true</code> on everything. Files created by escalated tasks are owned by the become user (often root) unless you set <code>owner</code>/<code>group</code>/<code>mode</code> explicitly. Becoming an <strong>unprivileged</strong> user from another unprivileged user involves temporary file permission problems; Ansible handles this with POSIX ACLs (<code>setfacl</code>) where available, or configuration options otherwise.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Ansible connects as <code>ansible_user</code> via SSH.</li>
+  <li>For tasks with become, it wraps the module command with the become method.</li>
+  <li>sudo prompts are answered with the become password if needed.</li>
+  <li>The module runs as <code>become_user</code>.</li>
+  <li>Results return over the same connection.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- hosts: db
+  become: false
+  tasks:
+    - name: Install PostgreSQL (needs root)
+      ansible.builtin.package:
+        name: postgresql
+      become: true
+
+    - name: Create application database as postgres user
+      community.postgresql.postgresql_db:
+        name: orders
+      become: true
+      become_user: postgres
+
+    - name: Deploy config owned by app
+      ansible.builtin.template:
+        src: app.conf.j2
+        dest: /etc/app/app.conf
+        owner: app
+        group: app
+        mode: &quot;0640&quot;
+      become: true</code></pre>
+<pre><code class="language-bash">ansible-playbook site.yml -K          # prompts for sudo password</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>become: true</code> on every play by habit.</li>
+  <li>Forgetting <code>owner</code>/<code>group</code>, leaving root-owned files the app cannot read.</li>
+  <li>Storing the become password in plain text in inventory.</li>
+  <li>Allowing root SSH login instead of using become.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ansible connects over SSH as a normal user, and become escalates privileges for tasks that need it, by default with sudo to root. I can set become: true for a play or just specific tasks, change the target with become_user, for example the postgres user for database commands, and change the mechanism with become_method, like su or doas. If sudo needs a password I use --ask-become-pass or a vaulted variable; automation users often have a dedicated sudoers rule. I follow least privilege and only escalate the tasks that need it, and set owner and mode explicitly on files.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a file created with become end up owned by root?</strong> The task ran as root; set <code>owner</code>/<code>group</code> or use <code>become_user</code>.</li>
+  <li><strong>become vs remote_user?</strong> remote_user is who you log in as; become_user is who you act as afterwards.</li>
+  <li><strong>How do you escalate on Windows?</strong> <code>become_method: runas</code>.</li>
+</ul>
+</article>
+</body>
+</html>

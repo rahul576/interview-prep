@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-067 · Why might mapToDouble() be unnecessary if getPrice() already returns a double?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-067" data-topic="Coding Exercises">
+<h1>Why might mapToDouble() be unnecessary if getPrice() already returns a double?</h1>
+<p class="ex-meta">Coding Exercises · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Collectors like <strong><code>summingDouble(Product::getPrice)</code></strong> already accept a <strong><code>ToDoubleFunction</code></strong>, and a getter returning a <strong>primitive double</strong> fits it directly, so an extra <strong><code>mapToDouble</code></strong> is redundant there; <code>mapToDouble</code> is needed only when you want <strong>DoubleStream operations</strong> like <code>sum()</code>, <code>average()</code> or <code>summaryStatistics()</code>, and there is <strong>no boxing</strong> to remove.</p>
+
+<h2>Detailed explanation</h2>
+<p>There are two different ways to sum prices, and confusion comes from mixing them.</p>
+<p><strong>Collector-based.</strong> <code>Collectors.summingDouble(ToDoubleFunction&lt;? super T&gt; mapper)</code> takes a function from the element to a primitive <code>double</code>. <code>Product::getPrice</code>, returning <code>double</code>, is exactly such a function. The collector internally calls it per element and adds the results into a primitive accumulator (with compensated summation for accuracy). So writing <code>products.stream().mapToDouble(Product::getPrice).boxed().collect(summingDouble(d -&gt; d))</code> or similar adds steps that do nothing useful. Within <code>groupingBy</code>, <code>summingDouble</code> and <code>averagingDouble</code> are the natural choice anyway, because you cannot call <code>mapToDouble</code> on each group.</p>
+<p><strong>Primitive-stream based.</strong> <code>mapToDouble(Product::getPrice)</code> converts <code>Stream&lt;Product&gt;</code> into a <code>DoubleStream</code>. That stream has its own terminal operations: <code>sum()</code>, <code>average()</code> (returning <code>OptionalDouble</code>), <code>max()</code>, <code>min()</code> and <code>summaryStatistics()</code>. When you want a single overall total, <code>products.stream().mapToDouble(Product::getPrice).sum()</code> is concise and idiomatic, so <code>mapToDouble</code> is the right tool <strong>here</strong>.</p>
+<p><strong>Boxing.</strong> Boxing happens when a primitive is wrapped into an object such as <code>Double</code>. Since <code>getPrice()</code> returns a primitive and both <code>ToDoubleFunction</code> and <code>DoubleStream</code> work with primitives, no boxing occurs in either approach. <code>mapToDouble</code> would make a difference only if the getter returned a <strong><code>Double</code> object</strong> and you were using a boxed <code>Stream&lt;Double&gt;</code>; then unboxing into a <code>DoubleStream</code> avoids object overhead — and you would have to think about <strong>null values</strong>, which cause a NullPointerException on unboxing.</p>
+<p><strong>Readability</strong> is the real decision criterion: collectors for grouped or combined results, <code>mapToDouble(...).sum()</code> for a single total. Performance differences are negligible.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>summingDouble(mapper)</code> applies the mapper to each element and accumulates a primitive double.</li>
+  <li><code>mapToDouble(mapper)</code> creates a DoubleStream of primitive values.</li>
+  <li>DoubleStream terminals compute sum, average or statistics.</li>
+  <li>Neither boxes when the getter returns a primitive.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// overall total: mapToDouble is idiomatic
+double total = products.stream().mapToDouble(Product::getPrice).sum();
+OptionalDouble avg = products.stream().mapToDouble(Product::getPrice).average();
+
+// collector already takes a ToDoubleFunction: no mapToDouble needed
+double total2 = products.stream().collect(Collectors.summingDouble(Product::getPrice));
+
+// per category: only the collector form works
+Map&lt;String, Double&gt; perCat = products.stream()
+        .collect(Collectors.groupingBy(Product::getCategory,
+                 Collectors.summingDouble(Product::getPrice)));
+
+// redundant
+double clumsy = products.stream()
+        .mapToDouble(Product::getPrice).boxed()
+        .collect(Collectors.summingDouble(Double::doubleValue));</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Goal</th><th>Best choice</th></tr></thead>
+<tbody>
+<tr><td>One overall total/average</td><td><code>mapToDouble(...).sum()/average()</code></td></tr>
+<tr><td>Totals per group</td><td><code>groupingBy(..., summingDouble(...))</code></td></tr>
+<tr><td>Several stats at once</td><td><code>summaryStatistics()</code> or <code>summarizingDouble</code></td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding <code>mapToDouble</code> and then boxing back to use a collector.</li>
+  <li>Believing a primitive getter causes boxing in <code>summingDouble</code>.</li>
+  <li>Using <code>reduce(0.0, Double::sum)</code> on a boxed stream when <code>sum()</code> exists.</li>
+  <li>Forgetting nulls when the getter returns <code>Double</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Collectors like summingDouble or averagingDouble already accept a ToDoubleFunction, and getPrice returning a primitive double fits it directly, so an extra mapToDouble step before collecting is redundant. mapToDouble is useful when I want to stay on a DoubleStream and call its own operations, like sum, average or summaryStatistics, for example a single overall total. And since getPrice already returns a primitive, there's no boxing to remove; mapToDouble would only matter if the getter returned a Double object. So I choose based on readability.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which is clearer, and does performance differ?</strong> mapToDouble().sum() for one total, collectors for groups; performance is effectively the same.</li>
+  <li><strong>Why does DoubleStream.average() return OptionalDouble?</strong> The stream may be empty.</li>
+  <li><strong>Is double summation exact?</strong> No; both use compensated summation but still have floating-point limits.</li>
+</ul>
+</article>
+</body>
+</html>

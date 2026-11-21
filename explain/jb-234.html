@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-234 · How would you handle partial failures when one microservice becomes unavailable?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-234" data-topic="Microservices">
+<h1>How would you handle partial failures when one microservice becomes unavailable?</h1>
+<p class="ex-meta">Microservices · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Contain</strong> the failure with <strong>timeouts and circuit breakers</strong>, <strong>degrade gracefully</strong> with fallbacks or cached data, <strong>defer</strong> writes through <strong>queues or the outbox</strong> for later retry, <strong>repair</strong> half-done work with <strong>idempotent retries and compensation</strong>, and <strong>communicate</strong> clearly with good errors and alerts.</p>
+
+<h2>Detailed explanation</h2>
+<p>Suppose the recommendation, loyalty or even payment service becomes unavailable. The goal is that the rest of the system keeps working and nothing ends in an inconsistent state.</p>
+<p><strong>1. Stop the spread.</strong> Every call to the failing service has a <strong>timeout</strong>, so requests do not pile up. A <strong>circuit breaker</strong> opens once failures exceed a threshold, so callers fail fast instead of tying up threads, and a <strong>bulkhead</strong> caps how many threads that dependency can consume. Retries are limited and backed off so we do not hammer a recovering service.</p>
+<p><strong>2. Degrade per feature.</strong> Decide, with the product owner, what each feature does when its dependency is missing. Non-critical data uses a <strong>fallback</strong>: hide the recommendations widget, show cached prices with a notice, use default delivery estimates. Critical features may need to fail honestly, for example &quot;payments are temporarily unavailable&quot;.</p>
+<p><strong>3. Defer what can wait.</strong> Writes that do not need an immediate answer are accepted and put on a <strong>queue</strong>, or recorded via the <strong>outbox</strong>, and processed when the service recovers. The user sees &quot;order received, confirmation will follow&quot; rather than an error. Brokers naturally buffer when a consumer service is down.</p>
+<p><strong>4. Repair half-finished work.</strong> If a multi-step operation failed midway (order created, payment unknown), use <strong>idempotent retries</strong> with the same idempotency key to find out or complete it, and <strong>saga compensation</strong> to undo steps if it cannot complete. Reconciliation jobs catch anything missed.</p>
+<p><strong>5. Communicate and observe.</strong> Return clear statuses to clients, <code>503</code> with <code>Retry-After</code>, or <code>202 Accepted</code> with a pending status, not generic 500s. Dashboards and alerts on error rates, breaker state and queue depth notify the owning team, and runbooks describe the degradation modes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Timeout fires or breaker is open.</li>
+  <li>Fallback logic chooses: cached data, default, hide feature, or queue.</li>
+  <li>Deferred work stored durably for retry.</li>
+  <li>Partially completed workflows are retried or compensated.</li>
+  <li>Client receives a clear status; alerts fire.</li>
+  <li>On recovery, queues drain and breakers close.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@CircuitBreaker(name = &quot;loyalty&quot;, fallbackMethod = &quot;pointsLater&quot;)
+public CheckoutResult applyPoints(Order order) {
+    return new CheckoutResult(loyaltyClient.redeem(order.customerId(), order.points()));
+}
+
+// Degrade: complete checkout without points, settle them asynchronously
+CheckoutResult pointsLater(Order order, Throwable t) {
+    outbox.save(OutboxEvent.of(&quot;RedeemPointsRequested&quot;, order.id(), order));
+    return CheckoutResult.pendingPoints(&quot;Points will be applied shortly&quot;);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature in checkout</th><th>Can degrade?</th><th>Strategy</th></tr></thead>
+<tbody>
+<tr><td>Recommendations</td><td>Yes</td><td>Hide widget</td></tr>
+<tr><td>Delivery estimate</td><td>Yes</td><td>Default estimate</td></tr>
+<tr><td>Loyalty points</td><td>Yes</td><td>Apply later via queue</td></tr>
+<tr><td>Payment authorisation</td><td>Usually no</td><td>Clear error, retry later</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No timeouts, so one dead service freezes all callers.</li>
+  <li>Fallbacks that silently produce wrong business results.</li>
+  <li>Losing deferred work by keeping it only in memory.</li>
+  <li>Generic 500 errors that clients retry aggressively.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I contain it: every call to that service has a timeout and goes through a circuit breaker and bulkhead, so once it is clearly down we fail fast instead of piling up threads. Then I degrade per feature: non-critical data uses fallbacks like cached data or hiding a widget, while the rest of the page works. Writes that can wait go onto a queue or the outbox and are retried when the service recovers. If a multi-step operation was half done, idempotent retries and saga compensation bring it back to a consistent state. Clients get a clear 503 or a pending status, and monitoring alerts the owning team.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which checkout features can degrade and which must fail?</strong> Recommendations, estimates and loyalty can degrade; payment and stock reservation usually must succeed or fail clearly.</li>
+  <li><strong>How do you test this?</strong> Chaos or fault-injection tests in staging, such as stopping a dependency or adding latency.</li>
+  <li><strong>What is a reconciliation job?</strong> A periodic check that compares systems and fixes inconsistencies missed by real-time flows.</li>
+</ul>
+</article>
+</body>
+</html>

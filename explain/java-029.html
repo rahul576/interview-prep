@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-029 · What is the difference between lazy and eager fetching in JPA, and what is a LazyInitializationException?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-029" data-topic="Spring Data &amp; JPA">
+<h1>What is the difference between lazy and eager fetching in JPA, and what is a LazyInitializationException?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Lazy</strong> fetching loads an association <strong>on first access</strong> through a <strong>proxy</strong>, <strong>eager</strong> loads it <strong>immediately with the parent</strong>; JPA defaults are <strong>eager for @ManyToOne/@OneToOne</strong> and <strong>lazy for @OneToMany/@ManyToMany</strong>, and a <strong>LazyInitializationException</strong> occurs when a lazy association is accessed <strong>after the persistence context is closed</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>With <strong>lazy fetching</strong>, Hibernate doesn't load the association when it loads the entity. For a single-valued association it places a <strong>proxy</strong> (a generated subclass holding only the id); for a collection, an uninitialised <strong>PersistentBag/PersistentSet</strong>. The first time you call a method on it, Hibernate runs a query using the session that loaded the entity.</p>
+<p>With <strong>eager fetching</strong>, the association is always loaded together with the parent, either via a join or an immediate extra query. That sounds convenient, but it is <strong>static</strong>: every use case pays for it, eager associations chain (A eager to B eager to C), and with JPQL queries eager associations are often loaded with separate queries, causing N+1.</p>
+<p>The JPA defaults are <strong>EAGER for <code>@ManyToOne</code> and <code>@OneToOne</code></strong> and <strong>LAZY for <code>@OneToMany</code> and <code>@ManyToMany</code></strong>. Recommended practice is to declare <strong>everything LAZY</strong> (<code>@ManyToOne(fetch = FetchType.LAZY)</code>) and decide the <strong>fetch plan per use case</strong> with join fetch, entity graphs or DTO projections.</p>
+<p>A <strong>LazyInitializationException</strong> (&quot;could not initialize proxy - no Session&quot;) happens when you touch a lazy association <strong>after</strong> the session or persistence context that loaded the entity has closed. Typical scenario: a <code>@Transactional</code> service returns an entity, the transaction ends, and the controller or Jackson then accesses <code>order.getLines()</code>. The correct fixes are to <strong>fetch what you need inside the transaction</strong> (join fetch, entity graph, <code>Hibernate.initialize</code>) or <strong>map to a DTO</strong> inside the service. Avoid workarounds like enabling <strong>open-session-in-view</strong> (hides the problem and holds connections), switching to EAGER, or <code>hibernate.enable_lazy_load_no_trans</code> (opens a new session per lazy load, a hidden N+1 anti-pattern).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Service method starts a transaction and loads <code>Order</code>; <code>lines</code> is an uninitialised collection.</li>
+  <li>Inside the transaction, accessing <code>lines</code> triggers a SELECT.</li>
+  <li>The transaction commits; the persistence context closes; entities are detached.</li>
+  <li>Accessing an uninitialised lazy association now throws LazyInitializationException.</li>
+  <li>Fix by initialising or mapping before step 3.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class Order {
+    @ManyToOne(fetch = FetchType.LAZY)        // override eager default
+    private Customer customer;
+
+    @OneToMany(mappedBy = &quot;order&quot;)            // lazy by default
+    private List&lt;OrderLine&gt; lines;
+}
+
+@Service
+class OrderQueryService {
+    @Transactional(readOnly = true)
+    public OrderDto get(long id) {
+        Order o = repo.findWithLinesById(id)  // @EntityGraph(attributePaths = &quot;lines&quot;)
+                      .orElseThrow();
+        return OrderDto.from(o);              // mapping happens inside the transaction
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Lazy</th><th>Eager</th></tr></thead>
+<tbody>
+<tr><td>When loaded</td><td>On first access</td><td>With the parent</td></tr>
+<tr><td>Default for</td><td>OneToMany, ManyToMany</td><td>ManyToOne, OneToOne</td></tr>
+<tr><td>Risk</td><td>LazyInitializationException, N+1</td><td>Over-fetching, N+1, chains</td></tr>
+<tr><td>Flexibility</td><td>Fetch plan per query</td><td>Fixed for every query</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Switching to EAGER to fix LazyInitializationException.</li>
+  <li>Returning entities from services and serialising them in controllers.</li>
+  <li>Relying on open-session-in-view.</li>
+  <li>Forgetting that <code>@ManyToOne</code> is eager unless you say otherwise.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With lazy fetching the association isn't loaded with the entity; Hibernate puts a proxy or uninitialised collection there and loads it on access. With eager fetching it's loaded immediately with the parent. JPA defaults are eager for ManyToOne and OneToOne and lazy for the to-many associations, but I make everything lazy and fetch explicitly per use case. LazyInitializationException happens when I access a lazy association after the persistence context is closed, for example in a controller. I fix it by fetching inside the transaction with a join fetch or entity graph, or mapping to a DTO, not by enabling open-session-in-view.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why disable open-in-view?</strong> It holds connections for the whole request and hides lazy loading and N+1.</li>
+  <li><strong>Can lazy work on @OneToOne?</strong> On the owning side yes; on the inverse side Hibernate often can't proxy it without bytecode enhancement.</li>
+  <li><strong>Hibernate.initialize?</strong> Forces loading of a proxy or collection inside the session.</li>
+</ul>
+</article>
+</body>
+</html>

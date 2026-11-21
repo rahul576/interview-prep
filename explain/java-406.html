@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-406 · What is the difference between partitioning and sharding, and how do you choose a shard key?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-406" data-topic="Databases &amp; SQL">
+<h1>What is the difference between partitioning and sharding, and how do you choose a shard key?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Partitioning</strong> splits a big table into pieces <strong>inside one database</strong>, while <strong>sharding</strong> spreads data across <strong>multiple database servers</strong>; a good <strong>shard key</strong> has high cardinality, spreads load evenly and keeps most queries on a single shard.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Partitioning</strong> (for example PostgreSQL declarative partitioning or MySQL partitioning) divides a table by range, list or hash of a key. The table still looks like one table, and the engine uses <strong>partition pruning</strong> to scan only relevant partitions. It is mainly a manageability and query-pruning tool: dropping a month of old data becomes <code>DROP PARTITION</code> instead of a huge <code>DELETE</code>. It does not add CPU, memory or disk beyond one server.</p>
+<p><strong>Sharding</strong> puts subsets of rows on separate database instances, each with its own resources, to scale <strong>write throughput and storage</strong> horizontally. Something must route queries: the application, a proxy such as Vitess, or the database itself (Citus, MongoDB, Cassandra, DynamoDB).</p>
+<p>Choosing the <strong>shard key</strong> is the most important and least reversible decision:</p>
+<ul>
+  <li><strong>High cardinality</strong> so data can be split finely (user id, not country).</li>
+  <li><strong>Even distribution</strong> of both data and traffic, avoiding hot shards (a celebrity user, a big tenant).</li>
+  <li><strong>Query locality</strong>: most queries and transactions include the key, so they stay on one shard. In multi-tenant SaaS, <code>tenant_id</code> is often ideal.</li>
+  <li><strong>Stability</strong>: the key value should not change.</li>
+</ul>
+<p>Placement strategies are <strong>range</strong> (simple, but hot spots on recent data), <strong>hash / consistent hashing</strong> (even, but range scans touch all shards) and a <strong>directory</strong> lookup (flexible, but another component). Cross-shard joins, global unique constraints, distributed transactions and <strong>rebalancing</strong> are hard, so I exhaust query tuning, vertical scaling, caching, read replicas and partitioning first.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure whether one primary really cannot handle the data or write load.</li>
+  <li>Analyse the main access patterns to find a key present in most queries.</li>
+  <li>Check distribution of that key for skew.</li>
+  <li>Choose placement: hash with many logical shards mapped to fewer physical nodes.</li>
+  <li>Build routing, and handle cross-shard reporting through a warehouse or scatter-gather.</li>
+  <li>Plan rebalancing by moving logical shards between nodes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Partitioning within one PostgreSQL instance
+CREATE TABLE orders (id BIGINT, tenant_id BIGINT, created_at DATE, total NUMERIC)
+  PARTITION BY RANGE (created_at);
+CREATE TABLE orders_2026_11 PARTITION OF orders
+  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+
+-- Sharding with Citus: distribute by tenant across worker nodes
+SELECT create_distributed_table('orders', 'tenant_id');</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Partitioning</th><th>Sharding</th></tr></thead>
+<tbody>
+<tr><td>Location</td><td>One instance</td><td>Many servers</td></tr>
+<tr><td>Goal</td><td>Pruning, maintenance</td><td>Scale-out capacity</td></tr>
+<tr><td>Transactions</td><td>Normal</td><td>Cross-shard is hard</td></tr>
+<tr><td>Transparency</td><td>Fully transparent</td><td>Needs routing</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sharding by a low-cardinality key such as country or status.</li>
+  <li>Sharding by a timestamp, so all new writes hit one shard.</li>
+  <li>Choosing a key that most queries do not include, forcing scatter-gather.</li>
+  <li>Fixing shard count to physical servers with no logical shards for rebalancing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Partitioning splits a table inside one database, for example by month, which gives partition pruning and cheap archiving but no extra hardware. Sharding spreads rows across several database servers to scale writes and storage. For the shard key I want high cardinality, an even spread of data and traffic, and locality, meaning most queries and transactions include it, so tenant id or user id are typical. Cross-shard queries, transactions and rebalancing are painful, so I'd use consistent hashing or a directory with many logical shards, and I'd only shard after vertical scaling, replicas, caching and partitioning are exhausted.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if you shard by country?</strong> Few, very uneven shards; one big country becomes a hotspot you cannot split.</li>
+  <li><strong>How do you rebalance?</strong> Move logical shards between nodes, or use consistent hashing so only a fraction of keys move.</li>
+  <li><strong>How do you run a report across shards?</strong> Scatter-gather for small queries, otherwise replicate into a data warehouse.</li>
+</ul>
+</article>
+</body>
+</html>

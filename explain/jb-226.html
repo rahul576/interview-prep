@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-226 · How would you propagate correlation IDs across multiple services?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-226" data-topic="Microservices">
+<h1>How would you propagate correlation IDs across multiple services?</h1>
+<p class="ex-meta">Microservices · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Generate the id <strong>at the edge</strong> if missing, carry it in <strong>headers</strong> on every hop (the W3C <strong><code>traceparent</code></strong>, optionally <code>X-Correlation-Id</code>), put it in the logging <strong>MDC</strong>, propagate it through <strong>HTTP clients and Kafka headers</strong>, and let <strong>Micrometer Tracing / OpenTelemetry</strong> automate this, including <strong>async context</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When one user request touches ten services, you need a single identifier to find all related logs and spans.</p>
+<p><strong>Creation.</strong> The <strong>API gateway</strong> (or the first service) checks the incoming request. If it carries a <code>traceparent</code> or correlation header from a trusted source, it reuses it; otherwise it creates a new one. Untrusted external values can be replaced to avoid log injection.</p>
+<p><strong>Transport.</strong> The id travels in <strong>headers</strong> on every hop. The standard today is the <strong>W3C Trace Context</strong> <code>traceparent</code> header (version, 16-byte trace id, 8-byte parent span id, flags), understood by OpenTelemetry, Micrometer Tracing, service meshes and cloud APM tools. Many teams additionally send a business-friendly <code>X-Correlation-Id</code> or <code>X-Request-Id</code>, and return it to clients so support staff can search for it.</p>
+<p><strong>Logging.</strong> In each service, a filter (or the tracing library) extracts the id and stores it in the <strong>MDC</strong> (Mapped Diagnostic Context) of SLF4J/Logback, so every log line includes <code>traceId</code> and <code>spanId</code>. Spring Boot with Micrometer Tracing adds these to the log pattern and structured logs automatically.</p>
+<p><strong>Outgoing calls.</strong> HTTP clients (RestClient, RestTemplate, WebClient, Feign) add the header through interceptors, <strong>if they are built from Spring's auto-configured builders</strong>. Kafka producers write the context into <strong>record headers</strong>, and listeners restore it, when observation is enabled on <code>KafkaTemplate</code> and the listener container. The same applies to RabbitMQ.</p>
+<p><strong>Async boundaries.</strong> MDC and tracing context are thread-local, so moving work to an executor, <code>@Async</code>, <code>CompletableFuture</code> or reactive operators can lose them. Use context-propagating executors (<code>ContextExecutorService</code>, Spring's <code>ContextPropagatingTaskDecorator</code>) or Reactor's automatic context propagation (<code>Hooks.enableAutomaticContextPropagation()</code>).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gateway receives request; reuses or generates trace id.</li>
+  <li>Service filter extracts context; MDC now holds <code>traceId</code>.</li>
+  <li>Logs include the id; spans are exported to Tempo, Jaeger or Zipkin.</li>
+  <li>Outgoing HTTP and Kafka calls inject <code>traceparent</code>.</li>
+  <li>Downstream services continue the same trace.</li>
+  <li>Search logs by trace id, or open the trace in the tracing UI.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">management:
+  tracing:
+    sampling:
+      probability: 0.1
+spring:
+  kafka:
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+logging:
+  pattern:
+    correlation: &quot;[${spring.application.name:},%X{traceId:-},%X{spanId:-}] &quot;</code></pre>
+<pre><code class="language-java">@Bean
+RestClient inventoryClient(RestClient.Builder builder) {   // auto-configured builder =&gt; propagation
+    return builder.baseUrl(&quot;http://inventory&quot;).build();
+}
+
+@Bean
+ThreadPoolTaskExecutor appExecutor() {
+    var ex = new ThreadPoolTaskExecutor();
+    ex.setTaskDecorator(new ContextPropagatingTaskDecorator()); // keeps MDC/trace on worker threads
+    return ex;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating clients with <code>new RestTemplate()</code> instead of the builder, losing instrumentation.</li>
+  <li>Losing context at <code>@Async</code> or thread-pool boundaries.</li>
+  <li>Forgetting Kafka headers, so the trace stops at the broker.</li>
+  <li>Inventing custom headers when <code>traceparent</code> is the standard.</li>
+  <li>Logging the id only in some services.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The id is created at the edge, usually the gateway, if the request does not already have one, and it travels in headers on every hop; today that is the W3C <code>traceparent</code> header, sometimes with an extra <code>X-Correlation-Id</code> we return to clients. Each service puts it into the logging MDC so every log line carries it. Outgoing HTTP clients add it through interceptors and Kafka producers add it to record headers, so consumers continue the chain. In Spring Boot, Micrometer Tracing with OpenTelemetry does most of this automatically, and I use context-propagating executors so the id survives thread switches.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep the id when work moves to another thread?</strong> Context-propagating task decorators or executors, or Reactor's automatic context propagation.</li>
+  <li><strong>Correlation id vs trace id?</strong> A trace id is the tracing standard with spans; a correlation id is a simpler log-search key.</li>
+  <li><strong>Why sample traces but not logs?</strong> Traces are expensive to store; logs still include the id for every request.</li>
+</ul>
+</article>
+</body>
+</html>

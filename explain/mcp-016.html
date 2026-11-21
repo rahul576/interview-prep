@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-016 · What security requirements apply to Streamable HTTP MCP servers, including local ones?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-016" data-topic="MCP Servers">
+<h1>What security requirements apply to Streamable HTTP MCP servers, including local ones?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Streamable HTTP servers must <strong>validate the <code>Origin</code> header</strong> (against <strong>DNS rebinding</strong>), local servers should <strong>bind to 127.0.0.1</strong> and <strong>require authentication</strong> even locally, remote servers need <strong>TLS, OAuth 2.1, rate limiting and input validation</strong>, and in the 2026-07-28 revision servers must <strong>reject requests whose routing headers do not match the body</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An HTTP MCP server is a web service that can trigger real actions, so it inherits all web threats plus some specific ones.</p>
+<p><strong>DNS rebinding.</strong> A malicious website can make its domain resolve to <code>127.0.0.1</code> after the page loads, so the victim's browser sends requests to a server running on the victim's machine while the browser believes it is talking to the attacker's origin. If a local MCP server accepts those requests, the website can call its tools. The specification therefore requires servers to <strong>validate the <code>Origin</code> header</strong> and reject unexpected origins.</p>
+<p><strong>Local binding.</strong> Local servers should <strong>bind to localhost (127.0.0.1)</strong>, not <code>0.0.0.0</code>, so other machines on the same café Wi-Fi or office network cannot reach them.</p>
+<p><strong>Authentication everywhere.</strong> Servers should implement <strong>authentication for all connections, even local ones</strong>. Any process or browser page that can reach an unauthenticated localhost port can use the server with the user's privileges.</p>
+<p><strong>Remote servers</strong> must use <strong>TLS</strong>, authenticate every request, normally with <strong>OAuth 2.1 bearer tokens</strong> issued for that server (audience-bound via resource indicators, validated on every call, never passed through to downstream APIs), and apply <strong>rate limiting</strong>, <strong>request size limits</strong>, timeouts, <strong>input validation</strong> and the usual OWASP controls.</p>
+<p><strong>Header/body consistency.</strong> Per the question's reference material, the <strong>2026-07-28</strong> revision has requests carry headers such as <strong><code>Mcp-Method</code></strong> and <strong><code>Mcp-Name</code></strong> mirroring the JSON-RPC body, so gateways and WAFs can route, authorise and rate-limit without parsing bodies. Servers <strong>must reject</strong> requests where headers and body disagree, otherwise an attacker could pass a harmless-looking header to a gateway policy while the body calls a dangerous tool.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terminate TLS; reject plain HTTP for remote servers.</li>
+  <li>Check <code>Origin</code> against an allowlist; reject mismatches with 403.</li>
+  <li>Validate the bearer token: signature, expiry, audience = this server, scopes.</li>
+  <li>Check routing headers match the body's method and tool name.</li>
+  <li>Enforce rate limits, size limits and schema validation; then dispatch.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-javascript">app.post(&quot;/mcp&quot;, (req, res, next) =&gt; {
+  const origin = req.get(&quot;Origin&quot;);
+  if (origin &amp;&amp; !ALLOWED_ORIGINS.has(origin)) return res.status(403).end();
+  const claims = verifyJwt(req.get(&quot;Authorization&quot;), { audience: &quot;https://mcp.example.com&quot; });
+  if (!claims) return res.status(401).set(&quot;WWW-Authenticate&quot;, 'Bearer resource_metadata=&quot;...&quot;').end();
+  const hdrMethod = req.get(&quot;Mcp-Method&quot;);
+  if (hdrMethod &amp;&amp; hdrMethod !== req.body.method) return res.status(400).end();
+  next();
+});
+app.listen(8080, &quot;127.0.0.1&quot;);   // local development: never 0.0.0.0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No authentication on a &quot;local only&quot; server.</li>
+  <li>Binding to all interfaces during development and forgetting.</li>
+  <li>Accepting tokens issued for other services (no audience check).</li>
+  <li>Trusting gateway-visible headers without checking the body.</li>
+  <li>Skipping rate limits because &quot;only agents call it&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The spec requires validating the Origin header to stop DNS rebinding, where a malicious website gets the browser to send requests to a server on my machine. Local servers should bind to 127.0.0.1, not all interfaces, and should still require authentication, because any local process or web page reaching that port could otherwise use it. Remote servers need TLS, OAuth 2.1 bearer tokens validated for audience and scope on every request, rate limiting, size limits and input validation like any web API. And in the 2026-07-28 revision, routing headers like Mcp-Method mirror the body so gateways can act on them, so servers must reject requests where headers and body don't match.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is unauthenticated localhost dangerous?</strong> Malicious pages (via rebinding) or local malware can invoke tools with the user's privileges.</li>
+  <li><strong>What is token passthrough and why avoid it?</strong> Forwarding the client's token to downstream APIs breaks audience checks and auditing; use separate tokens.</li>
+  <li><strong>Where to rate limit?</strong> At a gateway per client and per tool, plus inside the server for expensive tools.</li>
+</ul>
+</article>
+</body>
+</html>

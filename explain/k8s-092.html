@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-092 · How do you handle spot or preemptible node interruptions for workloads on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-092" data-topic="Kubernetes">
+<h1>How do you handle spot or preemptible node interruptions for workloads on Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Handle spot interruptions by <strong>detecting the notice and draining fast</strong> (Karpenter interruption handling, AWS Node Termination Handler or the provider's integration), and by putting only <strong>fault-tolerant, diversified, gracefully-stopping workloads</strong> on spot, with an <strong>on-demand base</strong> for critical replicas.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spot (AWS), Spot VMs (Azure) and Spot or preemptible VMs (GCP) are much cheaper because the provider can reclaim them. Notice is short: about <strong>two minutes on AWS</strong>, roughly <strong>30 seconds on Azure and GCP</strong>. AWS also sends a <strong>rebalance recommendation</strong> earlier when a pool is at elevated risk.</p>
+<p>The cluster must react inside that window. <strong>Karpenter</strong> watches an SQS queue of interruption events, cordons and drains the node and launches a replacement; the <strong>AWS Node Termination Handler</strong> does the cordon and drain for managed node groups; GKE and AKS integrate with their own preemption signals and the kubelet's <strong>graceful node shutdown</strong>. Pods then receive SIGTERM and must stop quickly, so <code>terminationGracePeriodSeconds</code> must fit within the notice.</p>
+<p>Workload choice matters most. Good spot candidates are stateless services with several replicas, CI runners, and <strong>batch jobs that checkpoint</strong> progress. Databases, stateful singletons and controllers with long shutdowns stay on <strong>on-demand</strong> nodes, enforced with taints, tolerations and node affinity. Diversify across <strong>many instance types and zones</strong>, because reclaims usually hit one capacity pool at a time, and keep enough on-demand capacity that critical replicas survive even if all spot disappears. PDBs and topology spread constraints stop all replicas landing on the same spot pool.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Provider issues the interruption notice (or rebalance recommendation).</li>
+  <li>Handler (Karpenter, NTH, cloud integration) cordons the node.</li>
+  <li>Node is drained; pods get SIGTERM and shut down gracefully.</li>
+  <li>Controllers reschedule pods; the autoscaler launches replacement capacity.</li>
+  <li>Batch jobs resume from their last checkpoint.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: { name: spot-general }
+spec:
+  template:
+    spec:
+      requirements:
+        - { key: karpenter.sh/capacity-type, operator: In, values: [&quot;spot&quot;] }
+        - { key: karpenter.k8s.aws/instance-category, operator: In, values: [&quot;c&quot;,&quot;m&quot;,&quot;r&quot;] }
+        - { key: topology.kubernetes.io/zone, operator: In, values: [&quot;eu-west-1a&quot;,&quot;eu-west-1b&quot;,&quot;eu-west-1c&quot;] }
+      taints:
+        - { key: spot, value: &quot;true&quot;, effect: NoSchedule }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Allowing only one or two instance types, so a single pool reclaim removes everything.</li>
+  <li>Grace periods longer than the interruption notice.</li>
+  <li>Running all replicas of a critical service on spot.</li>
+  <li>Long batch jobs with no checkpointing that restart from zero.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spot nodes can be reclaimed with about two minutes' notice on AWS and around thirty seconds on Azure and GCP, so something must catch that notice, cordon and drain the node: Karpenter's interruption handling, the AWS node termination handler or the provider integration. Then pods need fast graceful shutdown. I only put fault-tolerant work on spot: stateless services with several replicas, CI runners and checkpointing batch jobs. Databases and singletons stay on on-demand nodes using taints and affinity. I diversify instance types and zones, keep an on-demand base for critical replicas and use PDBs and topology spread.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if many spot nodes are reclaimed at the same moment?</strong> PDBs cannot stop involuntary loss, so the on-demand base and diversification carry the load while the autoscaler refills, possibly falling back to on-demand.</li>
+  <li><strong>How do you checkpoint batch work?</strong> Save progress to object storage regularly and make jobs resumable and idempotent.</li>
+  <li><strong>Spot for GPU training?</strong> Yes with frequent checkpoints, but capacity is scarcer.</li>
+</ul>
+</article>
+</body>
+</html>

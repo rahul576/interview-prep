@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-280 · How do you validate success and failure scenarios in integration tests?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-280" data-topic="Testing">
+<h1>How do you validate success and failure scenarios in integration tests?</h1>
+<p class="ex-meta">Testing · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>For each scenario, <strong>arrange</strong> real or stubbed dependencies explicitly (Testcontainers data, WireMock responses), call the API, <strong>assert the HTTP status, body and headers</strong>, and above all <strong>assert side effects</strong>: database state, published messages, <strong>no partial writes</strong>, retry counts and <strong>consistent error formats</strong>, with <strong>isolated, repeatable</strong> test data.</p>
+
+<h2>Detailed explanation</h2>
+<p>An integration test is only as good as its assertions. Checking &quot;200 OK&quot; proves little; bugs hide in what happened behind the response.</p>
+<p><strong>Arrange the world per scenario.</strong> Insert the data the scenario needs in the Testcontainers database (via repositories, <code>@Sql</code> scripts or builders), and configure <strong>WireMock</strong> stubs for downstream systems: a normal success; a <strong>4xx</strong> such as 404 or 409; a <strong>5xx</strong>; a <strong>delay</strong> beyond the client timeout; a malformed body. Each test sets up exactly what it needs, which also documents the scenario.</p>
+<p><strong>Act through the real entry point:</strong> MockMvc or MockMvcTester for the MVC stack, WebTestClient or REST Assured against a running server, or KafkaTemplate for message-driven flows.</p>
+<p><strong>Assert the response:</strong> status code, body fields, headers such as <code>Location</code> or <code>Retry-After</code>, and that errors follow the agreed format (for example RFC 9457 <strong>Problem Details</strong> with <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code>), with no stack traces leaking.</p>
+<p><strong>Assert side effects</strong>, the most important part:</p>
+<ul>
+  <li><strong>Success:</strong> the expected rows exist with correct values; the expected event was published to Kafka (read with a test consumer and <strong>Awaitility</strong>); downstream calls were made with the right payload (<code>wireMock.verify(...)</code>).</li>
+  <li><strong>Failure:</strong> nothing partial was committed (transaction rolled back, or compensation executed); no event was published, or an outbox row was not created; retries happened the <strong>configured number of times</strong>; the circuit breaker or fallback engaged; invalid input was rejected before any downstream call.</li>
+  <li><strong>Duplicates:</strong> repeating a request with the same idempotency key creates only one record.</li>
+</ul>
+<p><strong>Isolation:</strong> use unique ids per test, clean tables in <code>@AfterEach</code> or rely on rollback (careful: with a real server, the HTTP request runs in a different transaction, so test-level rollback does not apply). Reset WireMock between tests.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Seed data and configure stubs for the scenario.</li>
+  <li>Call the API or publish the message.</li>
+  <li>Assert status, body, headers and error format.</li>
+  <li>Assert DB state, events and downstream calls.</li>
+  <li>For failures, assert absence of partial effects.</li>
+  <li>Clean up or isolate data for the next test.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Test
+void returns502AndPersistsNothingWhenInventoryFails() {
+    inventory.stubFor(post(&quot;/reservations&quot;).willReturn(serverError()));
+
+    given().port(port).contentType(JSON)
+           .body(&quot;&quot;&quot;
+                 {&quot;sku&quot;:&quot;A1&quot;,&quot;quantity&quot;:2,&quot;customerId&quot;:7}&quot;&quot;&quot;)
+    .when().post(&quot;/orders&quot;)
+    .then().statusCode(502)
+           .contentType(&quot;application/problem+json&quot;)
+           .body(&quot;title&quot;, equalTo(&quot;Inventory unavailable&quot;));
+
+    assertThat(orderRepository.count()).isZero();                       // no partial write
+    inventory.verify(3, postRequestedFor(urlEqualTo(&quot;/reservations&quot;)));  // retries
+    assertThat(testConsumer.poll(&quot;order-created&quot;, Duration.ofSeconds(2))).isEmpty();
+}
+
+@Test
+void createsOrderAndPublishesEvent() {
+    inventory.stubFor(post(&quot;/reservations&quot;).willReturn(okJson(&quot;{\&quot;id\&quot;:\&quot;r-1\&quot;}&quot;)));
+    String id = createOrder(&quot;A1&quot;, 2);
+    assertThat(orderRepository.findById(id)).get().extracting(Order::status).isEqualTo(CONFIRMED);
+    await().atMost(Duration.ofSeconds(10)).untilAsserted(() -&gt;
+        assertThat(testConsumer.records(&quot;order-created&quot;)).anyMatch(r -&gt; r.key().equals(id)));
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Asserting only the status code.</li>
+  <li>Not checking that failures leave no partial data.</li>
+  <li>Tests depending on data from other tests.</li>
+  <li>Assuming <code>@Transactional</code> on a test rolls back changes made by a real HTTP server thread.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For each scenario I set the world up explicitly: data in the Testcontainers database and WireMock stubs returning success, a 500, a 404 or a delay beyond the timeout. Then I call the API through MockMvc or REST Assured and assert status, body, headers and that errors follow our problem-details format. Most importantly I assert side effects: the right rows were written, or for failures that nothing partial was committed; the Kafka event was or wasn't published; retries happened the configured number of times. Each test uses its own data or cleans up, so tests are independent and repeatable.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you assert a Kafka event was published?</strong> A test consumer on the topic plus Awaitility, matching by key.</li>
+  <li><strong>Why doesn't test rollback work with RANDOM_PORT?</strong> The request runs on a server thread in its own transaction.</li>
+  <li><strong>How do you test idempotency?</strong> Send the same request with the same idempotency key twice and assert one record.</li>
+</ul>
+</article>
+</body>
+</html>

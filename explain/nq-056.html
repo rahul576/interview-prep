@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-056 · Why might you use forEach() instead of map() to apply a discount?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-056" data-topic="Coding Exercises">
+<h1>Why might you use forEach() instead of map() to apply a discount?</h1>
+<p class="ex-meta">Coding Exercises · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>forEach</code></strong> when the goal is a <strong>side effect</strong> — updating existing objects in place, such as entities to be saved — because <strong><code>map</code> is meant to return transformed values</strong>; mutating inside <code>map</code> is misleading and depends on a terminal operation, so with immutability prefer <strong><code>map</code> to new objects</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Stream API distinguishes <strong>transformations</strong> from <strong>actions</strong>. <code>map(Function&lt;T,R&gt;)</code> is an <strong>intermediate operation</strong> whose contract is: for each element, produce a value that flows to the next stage. It is expected to be <strong>stateless and non-interfering</strong>, and ideally free of side effects. <code>forEach(Consumer&lt;T&gt;)</code> is a <strong>terminal operation</strong> designed precisely for side effects: it returns nothing and exists to <em>do</em> something with each element.</p>
+<p>So if the task is &quot;apply a 15% discount to these existing Product objects&quot; — for example JPA entities that the transaction will flush, or objects other parts of the program hold references to — the honest code is:</p>
+<p><code>products.stream().filter(cond).forEach(p -&gt; p.setPrice(p.getPrice() * 0.85));</code></p>
+<p>Writing <code>map(p -&gt; { p.setPrice(...); return p; })</code> followed by <code>collect</code> technically works, but it has problems:</p>
+<ul>
+  <li>It <strong>misleads readers</strong>: <code>map</code> suggests a new value, yet the original objects changed.</li>
+  <li>Without a terminal operation, <strong>nothing runs</strong>, because intermediate operations are lazy; the discount silently never happens.</li>
+  <li>With <code>peek</code> or certain short-circuiting terminals, the mutation may run for only <strong>some elements</strong>.</li>
+  <li>It breaks the assumption that the pipeline is safe to run in <strong>parallel</strong>.</li>
+</ul>
+<p>If no stream operations are needed, <code>products.forEach(...)</code> (Iterable.forEach) or <code>products.replaceAll(...)</code> (for replacing elements of a mutable list) are even simpler.</p>
+<p>When <strong>immutability</strong> matters — records, value objects, shared data, concurrency — the better design is <code>map</code> returning <strong>new objects</strong> with the discounted price and collecting them into a new list.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide: are you changing existing objects, or producing new ones?</li>
+  <li>Changing existing objects → <code>forEach</code> with setters.</li>
+  <li>Producing new values → <code>map</code> returning new instances, then collect.</li>
+  <li>Replacing elements in a mutable list → <code>replaceAll</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// side effect on existing mutable entities: forEach
+products.stream()
+        .filter(p -&gt; p.getCategory().equals(&quot;Electronics&quot;))
+        .forEach(p -&gt; p.setPrice(p.getPrice() * 0.85));
+
+// misleading: mutation hidden in map, and does nothing without a terminal op
+products.stream().map(p -&gt; { p.setPrice(p.getPrice() * 0.85); return p; });
+
+// immutable alternative: map to new objects
+List&lt;Product&gt; discounted = products.stream()
+        .map(p -&gt; new Product(p.getName(), p.getCategory(), p.getPrice() * 0.85, p.getStock()))
+        .toList();
+
+// replace elements of a mutable list in place
+products.replaceAll(p -&gt; p.withPrice(p.getPrice() * 0.85));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Mutating state inside <code>map</code> or <code>filter</code> lambdas.</li>
+  <li>Forgetting that a pipeline without a terminal operation does nothing.</li>
+  <li>Using <code>stream().forEach</code> where <code>list.forEach</code> is simpler.</li>
+  <li>Updating shared mutable objects from a parallel stream.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;map is meant to produce a new value for each element that flows into the next stage. If my goal is to change existing Product objects, say entities that will be saved, that's a side effect, and forEach is the operation designed for side effects: filter, then forEach calling setPrice. Doing the mutation inside map and returning the same object works, but it's misleading, it breaks the expectation that map is pure, and it doesn't run at all without a terminal operation. If immutability matters, I'd use map to create new objects instead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would List.forEach or replaceAll be simpler?</strong> Yes: <code>list.forEach</code> for setters without filtering, <code>replaceAll</code> to swap elements for new objects.</li>
+  <li><strong>What does peek do?</strong> A debugging hook; it should not be used for business side effects.</li>
+  <li><strong>Is forEach ordered?</strong> Not on parallel streams; use <code>forEachOrdered</code> if order matters.</li>
+</ul>
+</article>
+</body>
+</html>

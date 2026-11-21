@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-035 · How would you add caching to a Spring Boot service using Redis, and how do you keep it consistent?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-035" data-topic="Caching">
+<h1>How would you add caching to a Spring Boot service using Redis, and how do you keep it consistent?</h1>
+<p class="ex-meta">Caching · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>cache-aside</strong> via the <strong>Spring Cache abstraction</strong> (<code>@Cacheable</code>, <code>@CacheEvict</code>, <code>@CachePut</code>) backed by <strong>Redis</strong> with a <strong>TTL per cache</strong>, a JSON serializer and a bounded <strong>eviction policy</strong>; keep it consistent by <strong>updating the DB first then evicting</strong>, with short TTLs or <strong>event/CDC-driven invalidation</strong>, and protect against <strong>stampedes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pattern.</strong> With <strong>cache-aside</strong>, the application reads Redis first; on a miss it loads from the database and populates the cache. Writes go to the database, then the key is <strong>deleted</strong> rather than updated, which avoids racing writers putting stale values in. If Redis is down, the service degrades to DB speed instead of failing.</p>
+<p><strong>Spring setup.</strong> Add <code>spring-boot-starter-data-redis</code> and <code>spring-boot-starter-cache</code>, enable <code>@EnableCaching</code>, and configure a <code>RedisCacheManager</code> with:</p>
+<ul>
+  <li>a <strong>JSON serializer</strong> (<code>GenericJackson2JsonRedisSerializer</code>) instead of JDK serialization, which is fragile and insecure;</li>
+  <li>a <strong>TTL</strong> per cache (products 10 minutes, exchange rates 1 minute);</li>
+  <li>a key prefix per service and version, so deployments with changed classes don't read incompatible entries.</li>
+</ul>
+<p><code>@Cacheable(&quot;products&quot;)</code> caches return values; <code>@CacheEvict</code> removes on update/delete; <code>@CachePut</code> writes the new value. Remember these are <strong>proxy-based</strong>: self-invocation inside the same bean bypasses caching, and <code>@CacheEvict</code> runs after the method by default.</p>
+<p><strong>Memory.</strong> Set <code>maxmemory</code> and an eviction policy such as <code>allkeys-lru</code> or <code>allkeys-lfu</code> in Redis, so the cache stays bounded.</p>
+<p><strong>Consistency.</strong> Cache-aside gives <strong>eventual consistency</strong>: a brief window of staleness exists. Tighten it with:</p>
+<ul>
+  <li>evict <strong>after the transaction commits</strong> (<code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> or a transaction-aware cache manager), otherwise a reader can repopulate the old value before commit;</li>
+  <li><strong>short TTLs</strong> as a safety net;</li>
+  <li><strong>event-driven invalidation</strong> via domain events or <strong>change data capture</strong> (Debezium reading the DB log) when other services write the same data;</li>
+  <li><strong>delayed double delete</strong> for hot keys;</li>
+  <li>never cache data that must be strongly consistent (balances at payment time).</li>
+</ul>
+<p><strong>Stampede protection.</strong> When a hot key expires, many requests hit the DB at once. Use <code>@Cacheable(sync = true)</code> (per-instance coalescing), distributed locks or single-flight refresh, <strong>TTL jitter</strong>, and stale-while-revalidate or pre-warming for very hot keys. Cache <strong>null/not-found</strong> results briefly to stop penetration.</p>
+<p>Monitor <strong>hit ratio</strong>, latency, evictions and memory through Micrometer metrics.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request calls a <code>@Cacheable</code> method; the proxy computes the key.</li>
+  <li>Redis hit: return the cached value.</li>
+  <li>Miss: invoke the method, load from DB, store with TTL.</li>
+  <li>Update: write DB, commit, then evict the key.</li>
+  <li>TTL and eviction policies bound staleness and memory.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Configuration @EnableCaching
+class CacheConfig {
+    @Bean RedisCacheManager cacheManager(RedisConnectionFactory cf) {
+        var base = RedisCacheConfiguration.defaultCacheConfig()
+            .serializeValuesWith(RedisSerializationContext.SerializationPair
+                .fromSerializer(new GenericJackson2JsonRedisSerializer()))
+            .prefixCacheNameWith(&quot;catalog:v2:&quot;)
+            .entryTtl(Duration.ofMinutes(10));
+        return RedisCacheManager.builder(cf).cacheDefaults(base)
+            .withCacheConfiguration(&quot;rates&quot;, base.entryTtl(Duration.ofMinutes(1)))
+            .transactionAware().build();
+    }
+}
+
+@Service
+class ProductService {
+    @Cacheable(cacheNames = &quot;products&quot;, key = &quot;#id&quot;, sync = true)
+    public ProductDto get(long id) { return repo.findDto(id).orElseThrow(); }
+
+    @Transactional
+    @CacheEvict(cacheNames = &quot;products&quot;, key = &quot;#cmd.id&quot;)
+    public void update(UpdateProduct cmd) { repo.apply(cmd); }
+}</code></pre>
+<pre><code class="language-bash">redis-cli CONFIG SET maxmemory-policy allkeys-lru</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using JDK serialization for cached values.</li>
+  <li>No TTL, so stale data lives forever.</li>
+  <li>Updating the cache instead of evicting, causing races.</li>
+  <li>Evicting before the transaction commits.</li>
+  <li>Expecting caching on self-invocation or on private methods.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use cache-aside: read Redis first, on a miss load from the database and populate the cache. In Spring that's the cache abstraction with @Cacheable on reads and @CacheEvict or @CachePut on writes, backed by a RedisCacheManager with a JSON serializer and per-cache TTLs, and Redis configured with maxmemory and allkeys-lru. For consistency I write the database first and then evict after commit, accepting brief staleness; where stronger consistency is needed I use short TTLs or event-driven invalidation through CDC. Against stampedes I use sync = true or locking and jittered TTLs, and I monitor the hit ratio.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you choose a local cache like Caffeine instead of Redis?</strong> For small, read-heavy, rarely changing data where sub-millisecond reads matter and per-instance staleness is fine; often as an L1 in front of Redis.</li>
+  <li><strong>Why evict rather than update on writes?</strong> Concurrent writers can otherwise leave an older value in the cache.</li>
+  <li><strong>What is cache penetration?</strong> Repeated misses for non-existent keys; cache null results briefly or use a Bloom filter.</li>
+</ul>
+</article>
+</body>
+</html>

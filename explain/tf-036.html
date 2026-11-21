@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-036 · An autoscaling group or node pool keeps having its instance count reset by Terraform after the autoscaler changes it. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-036" data-topic="Terraform">
+<h1>An autoscaling group or node pool keeps having its instance count reset by Terraform after the autoscaler changes it. How do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The autoscaler changes the instance count at runtime, Terraform sees that as <strong>drift</strong> and reverts it; fix it by giving each attribute <strong>one owner</strong>: Terraform owns <strong>min/max and scaling policy</strong>, the autoscaler owns the <strong>actual count</strong>, enforced with <code>lifecycle { ignore_changes = [...] }</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform compares three things on every plan: the configuration, the state and the real object. When an <strong>AWS Auto Scaling group</strong>, an <strong>EKS managed node group</strong> or an <strong>AKS node pool</strong> with autoscaling enabled scales from 3 to 7 nodes, the real object now says 7 while the code still says 3. Terraform treats that as drift and the plan proposes setting the count back to 3. An apply at peak time terminates four nodes: a real outage pattern, not just plan noise.</p>
+<p>The root cause is <strong>shared ownership</strong> of a single attribute. The clean rule is that every attribute is managed by exactly one system. Terraform should manage the <strong>boundaries and behaviour</strong>: <code>min_size</code>, <code>max_size</code>, instance types, launch template, scaling policies, and for AKS <code>min_count</code>, <code>max_count</code> and <code>auto_scaling_enabled</code>. The autoscaler owns the current count. You still set an <strong>initial value</strong> so the first create works, then tell Terraform to stop tracking it with <strong><code>ignore_changes</code></strong>.</p>
+<p>Note that <code>ignore_changes</code> only stops Terraform from proposing <strong>updates</strong> for that attribute; the value still lives in state, and a change elsewhere that forces replacement still recreates the resource. The same pattern applies to <code>replicas</code> managed by an <strong>HPA</strong> or tags added by policy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the attribute that flips in every plan (for example <code>desired_capacity</code> or <code>node_count</code>).</li>
+  <li>Decide the owner: the autoscaler owns the count; Terraform owns limits and configuration.</li>
+  <li>Keep a sensible initial value in code so creation works.</li>
+  <li>Add <code>lifecycle { ignore_changes = [that_attribute] }</code> to the resource.</li>
+  <li>Run a plan and confirm the count no longer appears as a change.</li>
+  <li>Document why the ignore exists with a comment, so nobody removes it later.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_autoscaling_group&quot; &quot;web&quot; {
+  name             = &quot;web-prod&quot;
+  min_size         = 3
+  max_size         = 20
+  desired_capacity = 3          # initial value only
+  # ...launch template, subnets, policies...
+
+  lifecycle {
+    # Owned by the scaling policies / cluster autoscaler at runtime
+    ignore_changes = [desired_capacity]
+  }
+}
+
+resource &quot;azurerm_kubernetes_cluster_node_pool&quot; &quot;user&quot; {
+  name                  = &quot;user&quot;
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+  vm_size               = &quot;Standard_D4s_v5&quot;
+  auto_scaling_enabled  = true
+  min_count             = 3
+  max_count             = 15
+  node_count            = 3
+
+  lifecycle {
+    ignore_changes = [node_count]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>ignore_changes = all</code>, which hides every future change, including ones you meant to make.</li>
+  <li>Ignoring <code>min_size</code> or <code>max_size</code> too, so Terraform can no longer change the limits.</li>
+  <li>Forgetting the default node pool in AKS, where the path is <code>default_node_pool[0].node_count</code>.</li>
+  <li>Removing the ignore during a refactor and resetting production capacity on the next apply.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;This is an ownership conflict. The autoscaler legitimately changes the desired count, Terraform sees it as drift, and an apply resets it, which can kill nodes during peak load. My rule is that each attribute has one owner. Terraform manages the min and max, instance types and scaling policies, and the autoscaler owns the current count. So I keep an initial value in code and add a lifecycle ignore_changes on desired_capacity, or node_count for an AKS pool with autoscaling. I add a comment explaining why, and I apply the same thinking to HPA replicas or policy-added tags.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the risk of overusing ignore_changes?</strong> Real drift and intended changes become invisible, so code stops describing reality.</li>
+  <li><strong>Does ignore_changes prevent replacement?</strong> No, it only suppresses updates to that attribute; use <code>prevent_destroy</code> to guard against deletion.</li>
+  <li><strong>How do you change the desired count deliberately later?</strong> Use the autoscaler or CLI, or temporarily remove the ignore in a reviewed change.</li>
+</ul>
+</article>
+</body>
+</html>

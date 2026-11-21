@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-320 · How can a queue and Lambda be combined to orchestrate asynchronous processing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-320" data-topic="Cloud (AWS)">
+<h1>How can a queue and Lambda be combined to orchestrate asynchronous processing?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The API <strong>accepts, persists and enqueues</strong> the request to <strong>SQS</strong>, returning <strong>202 Accepted</strong> with an id. <strong>Lambda consumers</strong> process messages in batches and hand off to the next step via queues, SNS or EventBridge, or a <strong>Step Functions</strong> state machine for complex flows. Reliability comes from <strong>DLQs, partial batch failures, idempotency and concurrency limits</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Synchronous request chains are fragile: one slow step blocks the user and failures cascade. Putting a queue between steps <strong>decouples</strong> them. The API stays fast, each step scales on its own, and a spike just becomes queue depth instead of an outage.</p>
+<p>The typical flow: API Gateway plus a Lambda (or a container) validates the request and writes a record with status <code>RECEIVED</code>. It sends a message to SQS and returns <code>202</code> with a <code>requestId</code> the client can use to check status or receive a callback. The <strong>SQS event source mapping</strong> polls the queue and invokes the worker Lambda with batches (up to 10 for standard queues by default, more with a batching window). The worker calls downstream systems, updates the status, and publishes to the next queue or to an <strong>SNS topic / EventBridge bus</strong> for fan-out.</p>
+<p>When the flow needs branching, parallel steps, long waits, human approval or <strong>compensation (saga)</strong>, chained queues become hard to reason about. <strong>Step Functions</strong> gives an explicit state machine with built-in retries, catch blocks and visual execution history.</p>
+<p>Reliability details matter:</p>
+<ul>
+  <li><strong>Visibility timeout</strong> should be at least 6x the function timeout.</li>
+  <li><strong>ReportBatchItemFailures</strong> retries only the failed messages.</li>
+  <li>A <strong>redrive policy</strong> sends poison messages to a <strong>DLQ</strong> after N receives.</li>
+  <li><strong>Idempotent handlers</strong> keyed by request id are needed because delivery is at least once.</li>
+  <li><strong>Maximum concurrency</strong> on the event source protects downstream databases.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client <code>POST /orders</code>. The API stores the order as <code>RECEIVED</code>, sends to <code>orders-queue</code> and returns <code>202 {id}</code>.</li>
+  <li>Lambda polls the queue and processes a batch, returning failed message ids.</li>
+  <li>On success it updates the status and emits <code>OrderValidated</code> to EventBridge.</li>
+  <li>Rules route the event to the payment and notification queues.</li>
+  <li>Failures retry until <code>maxReceiveCount</code>, then land in the DLQ with an alarm.</li>
+  <li>CloudWatch watches <code>ApproximateNumberOfMessagesVisible</code>, <code>ApproximateAgeOfOldestMessage</code> and Lambda errors and throttles.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def handler(event, context):
+    failures = []
+    for record in event[&quot;Records&quot;]:
+        msg = json.loads(record[&quot;body&quot;])
+        try:
+            if already_processed(msg[&quot;requestId&quot;]):   # idempotency table
+                continue
+            process(msg)
+            mark_processed(msg[&quot;requestId&quot;])
+        except Exception:
+            failures.append({&quot;itemIdentifier&quot;: record[&quot;messageId&quot;]})
+    return {&quot;batchItemFailures&quot;: failures}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Chained queues</th><th>Step Functions</th></tr></thead>
+<tbody>
+<tr><td>Visibility</td><td>Spread across logs</td><td>One execution graph</td></tr>
+<tr><td>Branching/compensation</td><td>Hand-coded</td><td>Built in</td></tr>
+<tr><td>Cost at very high volume</td><td>Low</td><td>Higher (Express helps)</td></tr>
+<tr><td>Coupling</td><td>Loose, event-driven</td><td>Central orchestrator</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Visibility timeout shorter than processing time, which causes duplicate processing.</li>
+  <li>Failing the whole batch for one bad message.</li>
+  <li>No DLQ, or a DLQ with no alarm.</li>
+  <li>Unlimited Lambda concurrency overwhelming a relational database.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The API validates the request, stores it as RECEIVED, puts a message on SQS and returns 202 with an id. A Lambda triggered by the queue processes batches and updates the status. It passes work on through the next queue or an EventBridge event, so each step scales and fails independently. For branching, waits or compensation I'd switch to Step Functions. For reliability I'd use DLQs with alarms, partial batch failure reporting, idempotent handlers keyed by request id, and maximum concurrency to protect downstream systems. I'd monitor queue depth and the age of the oldest message.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When to switch to Step Functions?</strong> When you need branching, long waits, human steps or sagas, or when you need clear end-to-end visibility.</li>
+  <li><strong>FIFO queues with Lambda?</strong> They give ordering per message group id. Throughput scales with the number of groups.</li>
+  <li><strong>How does the client get the result?</strong> It polls a status endpoint with backoff, or gets a webhook or WebSocket notification.</li>
+</ul>
+</article>
+</body>
+</html>

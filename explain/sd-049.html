@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-049 · Design a flash sale system where 1 million users try to buy 10,000 discounted items at noon.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-049" data-topic="Classic Design Problems">
+<h1>Design a flash sale system where 1 million users try to buy 10,000 discounted items at noon.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A flash sale serves <strong>static pages from a CDN</strong>, keeps <strong>stock in Redis decremented atomically (Lua)</strong>, <strong>rejects early</strong> once sold out, meters users with <strong>tokens/waiting room</strong>, creates orders <strong>asynchronously from a queue</strong>, blocks <strong>bots</strong> with rate limits, and <strong>releases unpaid reservations</strong> after a timeout.</p>
+
+<h2>Detailed explanation</h2>
+<p>At 12:00:00, a million users click &quot;Buy&quot; for 10,000 items. 99% of requests must fail, quickly and cheaply. The database must see only ~10,000 order writes.</p>
+<p><strong>Before the sale:</strong> pre-render pages, push to CDN; load stock into Redis; scale gateways; warm caches.</p>
+<p><strong>At the sale:</strong> each attempt hits the gateway (rate-limited per user/device/IP) and runs a <strong>Lua script</strong> in Redis that checks the user hasn't already bought, checks stock, decrements and records the reservation <strong>atomically</strong>. Once stock hits zero, a &quot;sold out&quot; flag lets the edge reject immediately without touching Redis.</p>
+<p><strong>After a successful reservation:</strong> a message goes to a queue; order services consume at a controlled rate and create orders, take payment, etc. The user sees &quot;you got it, complete payment within 10 minutes&quot;. Unpaid reservations expire and stock is returned (possibly for a second wave).</p>
+<p><strong>Recovery:</strong> Redis is persisted/replicated, and reservations are also in the queue, so the DB can be reconciled if Redis fails.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CDN page with countdown (server time sync).</li>
+  <li><code>POST /flash/buy</code> → gateway rate-limit → Redis Lua reserve.</li>
+  <li>Success → enqueue <code>Reservation(user, sku, id)</code> → &quot;pending payment&quot; page.</li>
+  <li>Order workers → DB order + payment link.</li>
+  <li>Timeout job → release stock in Redis + cancel order.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-lua">-- KEYS[1]=stock key, KEYS[2]=buyers set; ARGV[1]=userId
+if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 1 then return -1 end
+local s = tonumber(redis.call('GET', KEYS[1]))
+if s &lt;= 0 then return 0 end
+redis.call('DECR', KEYS[1]); redis.call('SADD', KEYS[2], ARGV[1])
+return 1</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>SELECT stock</code> then <code>UPDATE</code> in the DB under load (race + DB overload).</li>
+  <li>Synchronous order creation for every attempt.</li>
+  <li>No per-user limit (one bot buys everything).</li>
+  <li>Clock skew on clients starting the sale early.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pages are static on the CDN. Stock is preloaded into Redis and each purchase runs a Lua script that checks and decrements atomically, so we never oversell and rejections cost microseconds; once sold out, the gateway rejects without even calling Redis. Winners get a reservation, and orders are created asynchronously from a queue at a safe rate. Rate limits and bot checks protect fairness, and unpaid reservations are released after a timeout.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Redis fails mid-sale?</strong> Replica failover; reconcile from the reservation queue/log.</li>
+  <li><strong>Fairness?</strong> Waiting room with randomised admission.</li>
+  <li><strong>Multiple SKUs?</strong> Separate keys; hash tags if one script touches several.</li>
+</ul>
+</article>
+</body>
+</html>

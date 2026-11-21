@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-226 · What is the Saga pattern?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-226" data-topic="Microservices">
+<h1>What is the Saga pattern?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>saga</strong> manages a business transaction across services as a <strong>sequence of local transactions</strong>, each triggering the next via <strong>events or commands</strong>, with <strong>compensating transactions</strong> undoing completed steps on failure; it is coordinated by <strong>orchestration or choreography</strong> and gives <strong>eventual consistency</strong> instead of <strong>two-phase commit</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a microservice architecture each service owns its database, so placing an order touches several databases: orders, payments, inventory, shipping. One ACID transaction cannot span them, and <strong>distributed two-phase commit</strong> is avoided because it couples availability, holds locks across services and is poorly supported by brokers and cloud databases.</p>
+<p>The <strong>saga pattern</strong>, first described by Garcia-Molina and Salem in 1987 for long-lived database transactions, splits the business transaction into <strong>local transactions</strong>. For an order:</p>
+<ol>
+  <li>Order service creates the order with status <code>PENDING</code>.</li>
+  <li>Payment service charges the card.</li>
+  <li>Inventory service reserves stock.</li>
+  <li>Shipping service schedules delivery.</li>
+  <li>Order service marks the order <code>CONFIRMED</code>.</li>
+</ol>
+<p>Each step <strong>commits locally</strong> and then publishes an event or sends a command that triggers the next step. If a step fails, earlier steps cannot be rolled back because they are already committed, so the saga runs <strong>compensating transactions</strong> in reverse order: release the stock, <strong>refund</strong> the payment, <strong>cancel</strong> the order. Compensation is a <strong>semantic undo</strong>, often visible to the user (a refund appears on the statement), and must be <strong>idempotent</strong> and retryable.</p>
+<p>Sagas are coordinated in two ways. <strong>Choreography</strong>: services react to each other's events with no central controller; good for short flows. <strong>Orchestration</strong>: a central orchestrator or workflow engine (Temporal, Camunda, AWS Step Functions) sends commands and tracks state; clearer for long flows.</p>
+<p>Sagas give <strong>eventual consistency</strong>: intermediate states such as <code>PENDING</code> are visible and must be acceptable to the business and UI. Because steps are not isolated, design against anomalies using <strong>semantic locks</strong> (status flags), and publish events reliably using the <strong>transactional outbox</strong>, with idempotent participants.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start: local transaction in the first service plus outbox event.</li>
+  <li>Each participant consumes, performs its local transaction, emits success or failure.</li>
+  <li>On success, the next step runs.</li>
+  <li>On failure, compensations run for completed steps in reverse.</li>
+  <li>Final state: <code>CONFIRMED</code> or <code>CANCELLED</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Happy path:
+OrderCreated(PENDING) -&gt; PaymentCharged -&gt; StockReserved -&gt; ShipmentScheduled -&gt; OrderConfirmed
+
+Failure at inventory:
+OrderCreated(PENDING) -&gt; PaymentCharged -&gt; StockUnavailable
+   compensate: RefundPayment -&gt; PaymentRefunded -&gt; CancelOrder -&gt; OrderCancelled</code></pre>
+<pre><code class="language-java">@KafkaListener(topics = &quot;inventory.events&quot;, groupId = &quot;payment-saga&quot;)
+public void onStockUnavailable(StockUnavailable e) {
+    if (!processed.markIfNew(e.eventId())) return;  // idempotent
+    paymentService.refund(e.orderId());              // compensating transaction
+    outbox.save(OutboxEvent.of(&quot;PaymentRefunded&quot;, e.orderId()));
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Two-phase commit</th><th>Saga</th></tr></thead>
+<tbody>
+<tr><td>Atomicity</td><td>Yes</td><td>No, compensations</td></tr>
+<tr><td>Consistency</td><td>Immediate</td><td>Eventual</td></tr>
+<tr><td>Locks across services</td><td>Yes</td><td>No</td></tr>
+<tr><td>Availability</td><td>All must be up</td><td>Steps proceed independently</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting compensations for some steps.</li>
+  <li>Non-idempotent participants, causing double refunds.</li>
+  <li>Hiding the <code>PENDING</code> state from the UI and confusing users.</li>
+  <li>Publishing saga events with dual writes instead of an outbox.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A saga manages a business transaction spanning several services, each with its own database, without two-phase commit. It is a sequence of local transactions: the order service creates a pending order, payment charges the card, inventory reserves stock, shipping schedules delivery. Each step commits locally and triggers the next through an event or command. If a step fails, the saga runs compensating transactions for the steps already done, such as refunding the payment and cancelling the order. Sagas are coordinated by orchestration or choreography and give eventual consistency, so intermediate states like PENDING must be acceptable, and participants must be idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid two-phase commit?</strong> It blocks on coordinator failure, holds locks across services and couples their availability.</li>
+  <li><strong>What if a compensation fails?</strong> Retry it idempotently; if it keeps failing, alert for manual intervention.</li>
+  <li><strong>What is a pivot transaction?</strong> The point of no return after which the saga must complete forward.</li>
+</ul>
+</article>
+</body>
+</html>

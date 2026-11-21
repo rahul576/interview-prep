@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-333 · How do you validate request input in Spring Boot, including custom rules?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-333" data-topic="Spring Boot">
+<h1>How do you validate request input in Spring Boot, including custom rules?</h1>
+<p class="ex-meta">Spring Boot · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Annotate DTO fields with <strong>Bean Validation constraints</strong> (<strong>@NotNull, @NotBlank, @Size, @Email, @Pattern</strong>), trigger them with <strong>@Valid</strong> on controller parameters or <strong>@Validated</strong> for method validation, write <strong>custom constraints with ConstraintValidator</strong> (including <strong>class-level</strong> cross-field rules), use <strong>validation groups</strong> for create vs update, and return <strong>clear 400 responses</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spring Boot uses <strong>Jakarta Bean Validation</strong> with Hibernate Validator through <code>spring-boot-starter-validation</code> (not included in the web starter since Boot 2.3). Constraints live on request DTOs or records: <code>@NotBlank</code> for strings that must contain text, <code>@NotNull</code>, <code>@Size(max = 100)</code>, <code>@Email</code>, <code>@Pattern</code>, <code>@Positive</code>, <code>@Past</code>, <code>@Future</code>, <code>@Min</code>/<code>@Max</code>, <code>@Digits</code>. Nested objects and lists need <code>@Valid</code> on the field to cascade.</p>
+<p><strong>Triggering:</strong> <code>@Valid @RequestBody CreateBooking req</code> validates before the method body; failures raise <strong>MethodArgumentNotValidException</strong>. For simple parameters, Spring 6.1+ validates constraints such as <code>@RequestParam @Min(1) int page</code> automatically and raises <code>HandlerMethodValidationException</code>. On service classes, <strong>@Validated</strong> at class level enables <strong>method validation</strong> of parameters and return values via AOP, raising <code>ConstraintViolationException</code>.</p>
+<p><strong>Custom rules</strong> that annotations cannot express: create an annotation with <code>@Constraint(validatedBy = ...)</code> and implement <strong>ConstraintValidator&lt;A, T&gt;</strong>. Put it on a field for single-value rules (a valid IBAN or SKU format) or on the <strong>class</strong> for <strong>cross-field</strong> rules such as &quot;end date after start date&quot;. Validators are Spring beans, so they can have dependencies, but keep database lookups light.</p>
+<p><strong>Groups</strong> let one DTO carry different rules for create and update: <code>@Null(groups = Create.class) Long id</code>, activated with <code>@Validated(Create.class)</code>. Often separate request DTOs per operation are simpler.</p>
+<p><strong>Errors:</strong> a <code>@RestControllerAdvice</code> converts the exceptions into <strong>400 Bad Request</strong> with a ProblemDetail listing each field and message. Messages can be externalised in <code>ValidationMessages.properties</code> for i18n.</p>
+<p>Keep a clear split: <strong>syntactic</strong> validation (format, required, length) belongs on the DTO; <strong>business</strong> validation (stock available, user may book) belongs in the service layer.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>JSON is deserialised into the DTO.</li>
+  <li>The validator evaluates field and class constraints, cascading with <code>@Valid</code>.</li>
+  <li>Violations become a binding result and an exception.</li>
+  <li>The advice maps them to a 400 response.</li>
+  <li>Service-layer method validation and business checks run next.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Target(ElementType.TYPE) @Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = DateRangeValidator.class)
+public @interface ValidDateRange {
+    String message() default &quot;end must be after start&quot;;
+    Class&lt;?&gt;[] groups() default {};
+    Class&lt;? extends Payload&gt;[] payload() default {};
+}
+
+public class DateRangeValidator implements ConstraintValidator&lt;ValidDateRange, CreateBooking&gt; {
+    public boolean isValid(CreateBooking b, ConstraintValidatorContext ctx) {
+        return b.start() == null || b.end() == null || b.end().isAfter(b.start());
+    }
+}
+
+@ValidDateRange
+public record CreateBooking(
+    @NotBlank @Size(max = 80) String guestName,
+    @Email @NotBlank String email,
+    @NotNull @FutureOrPresent LocalDate start,
+    @NotNull LocalDate end,
+    @Valid @NotEmpty List&lt;RoomRequest&gt; rooms) {}
+
+@PostMapping(&quot;/bookings&quot;)
+ResponseEntity&lt;BookingDto&gt; create(@Valid @RequestBody CreateBooking req) { ... }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Missing the validation starter, so annotations do nothing.</li>
+  <li>Forgetting <code>@Valid</code> on nested objects or collections.</li>
+  <li>Using <code>@NotNull</code> on strings where <code>@NotBlank</code> is meant.</li>
+  <li>Putting business rules requiring database state into DTO annotations.</li>
+  <li>Returning only the first error instead of all field errors.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I annotate DTO fields with Bean Validation constraints such as @NotBlank, @Size, @Email and @Pattern, and put @Valid on the request body parameter so validation runs before the controller method. @Validated on a service class enables method validation there too. For rules annotations can't express, like end date after start date, I write a custom constraint annotation with a ConstraintValidator, applied at class level. Validation groups can separate create and update rules, though often separate DTOs are clearer. Failures raise MethodArgumentNotValidException, and my @RestControllerAdvice turns that into a 400 ProblemDetail listing all field errors.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where should business validation live: DTO annotations or the service layer?</strong> Format rules on the DTO; rules needing state or other services in the service layer.</li>
+  <li><strong>@Valid vs @Validated?</strong> <code>@Valid</code> is standard and cascades; <code>@Validated</code> is Spring's, supports groups and enables method validation.</li>
+  <li><strong>How do you validate a list in the body?</strong> Put <code>@Valid</code> on the elements, e.g. <code>List&lt;@Valid Item&gt;</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-068 · A Docker host keeps running out of disk space. How do you investigate and prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-068" data-topic="Docker">
+<h1>A Docker host keeps running out of disk space. How do you investigate and prevent it?</h1>
+<p class="ex-meta">Docker · scenario · levels senior</p>
+
+<h2>In one line</h2>
+<p>Confirm which filesystem is full, then use <strong><code>docker system df -v</code></strong> and <strong><code>du</code> on <code>/var/lib/docker</code></strong> to find the culprit, usually <strong>unrotated container logs</strong>, <strong>old images</strong>, <strong>build cache</strong> or <strong>data written into containers' writable layers</strong>; prevent it with <strong>log limits, scheduled pruning, volumes, a dedicated disk and alerts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker keeps everything under its data root, normally <code>/var/lib/docker</code>: image layers and container writable layers (under <code>overlay2</code>), container logs (under <code>containers/&lt;id&gt;/&lt;id&gt;-json.log</code>), volumes and the BuildKit cache. On a busy host several of these grow without limit by default.</p>
+<p>The most common surprise is <strong>logs</strong>. The default <code>json-file</code> driver has <strong>no size limit</strong>, so a chatty container can write tens of gigabytes. Next come <strong>images</strong>: a host that deploys several times a day keeps every previous version, plus <strong>dangling</strong> (untagged) images. On build machines the <strong>BuildKit cache</strong> can grow very large. Finally, an app writing data, uploads or temp files into its <strong>writable layer</strong> instead of a volume grows the <code>overlay2</code> directory, and that data is hidden from a quick look at volumes.</p>
+<p>A full disk is serious: the daemon cannot create containers or pull images, running apps fail on writes, and databases may corrupt or stop. So the fix is not just a one-off cleanup but prevention.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>df -h</code> (and <code>df -i</code> for inodes) to confirm which mount is full.</li>
+  <li><code>docker system df -v</code> to split usage into images, containers, volumes and build cache.</li>
+  <li><code>du -sh /var/lib/docker/*</code> and <code>du</code> on <code>containers/</code> to find large log files.</li>
+  <li><code>docker ps -s</code> shows the size of each container's writable layer.</li>
+  <li>Clean safely: truncate or rotate huge logs, <code>docker image prune -a --filter until=168h</code>, <code>docker builder prune</code>.</li>
+  <li>Prevent: configure log rotation, scheduled prunes, volumes for data, monitoring.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker system df -v
+sudo du -sh /var/lib/docker/{overlay2,containers,volumes,buildkit} 2&gt;/dev/null
+sudo find /var/lib/docker/containers -name '*-json.log' -size +1G -exec ls -lh {} \;
+docker image prune -a -f --filter &quot;until=168h&quot;
+docker builder prune -f --filter &quot;until=168h&quot;</code></pre>
+<pre><code class="language-json">{
+  &quot;log-driver&quot;: &quot;json-file&quot;,
+  &quot;log-opts&quot;: { &quot;max-size&quot;: &quot;50m&quot;, &quot;max-file&quot;: &quot;3&quot; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting files inside <code>/var/lib/docker</code> by hand, which corrupts Docker's metadata.</li>
+  <li>Running <code>docker system prune --volumes</code> on a host with important volume data.</li>
+  <li>Setting log limits in <code>daemon.json</code> and forgetting they only apply to <strong>newly created</strong> containers.</li>
+  <li>Alerting only at 100% instead of at 80%.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I check with <code>df -h</code> which filesystem is actually full, then <code>docker system df -v</code> and <code>du</code> under <code>/var/lib/docker</code> to see whether it's images, containers, volumes or build cache. The usual culprits are json-file logs with no rotation, hundreds of old images from frequent deploys, a growing BuildKit cache, or a container writing data into its writable layer, which I spot with <code>docker ps -s</code>. I clean up with prune commands using age filters, never by deleting files manually. For prevention, I set <code>max-size</code> and <code>max-file</code> in <code>daemon.json</code>, schedule pruning, move data to volumes, put Docker on its own disk and alert at around 80%.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What breaks when the disk fills?</strong> Pulls and container starts fail, apps get write errors, logging may block, and databases can crash or corrupt.</li>
+  <li><strong>Why are log limits not applied to my old container?</strong> Log options are fixed at container creation; recreate the container.</li>
+  <li><strong>Alternative to local logs?</strong> Ship logs with the <code>local</code> driver plus a collector, or to a central system such as Loki or Elasticsearch.</li>
+</ul>
+</article>
+</body>
+</html>

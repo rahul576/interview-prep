@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-089 · Your production chatbot on Azure OpenAI returns 429 Too Many Requests at peak times. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-089" data-topic="Azure AI &amp; Foundry">
+<h1>Your production chatbot on Azure OpenAI returns 429 Too Many Requests at peak times. How do you fix it?</h1>
+<p class="ex-meta">Azure AI &amp; Foundry · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>429</strong> means the deployment exceeded its <strong>TPM or RPM quota</strong> (and TPM counts the requested <strong>max_tokens</strong>); fix it by <strong>retrying with backoff honouring retry-after</strong>, <strong>raising capacity</strong> (quota, <strong>Global</strong> deployments, <strong>APIM load balancing</strong> across regions), <strong>cutting tokens</strong>, and using <strong>provisioned throughput</strong> for steady peaks.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each deployment has a quota in <strong>tokens per minute (TPM)</strong> and a derived <strong>requests per minute (RPM)</strong> limit. The service estimates token usage <strong>when the request arrives</strong>, using prompt tokens plus <strong>max_tokens</strong> (or the default), and rejects requests once the per-minute budget is used. So a chatbot sending <code>max_tokens: 4000</code> for 300-token answers consumes its quota more than ten times faster than necessary.</p>
+<p><strong>Immediate fixes:</strong></p>
+<ul>
+  <li><strong>Client retries</strong> with <strong>exponential backoff and jitter</strong>, honouring the <code>retry-after</code> / <code>retry-after-ms</code> headers. The OpenAI SDKs do this with <code>max_retries</code>. Never retry in a tight loop; it makes throttling worse.</li>
+  <li><strong>Right-size max_tokens</strong> to realistic answer lengths.</li>
+</ul>
+<p><strong>Capacity:</strong></p>
+<ul>
+  <li>Request a <strong>quota increase</strong> in the portal.</li>
+  <li>Move to <strong>Global Standard</strong> (or Data Zone) deployments, which have much higher limits.</li>
+  <li>Put <strong>Azure API Management</strong> in front as an <strong>AI gateway</strong>: a <strong>backend pool</strong> of deployments in several regions or resources, with <strong>circuit breakers</strong> that skip a backend after 429s, plus <strong>token limit policies</strong> per consumer so one noisy client cannot starve the rest.</li>
+</ul>
+<p><strong>Reduce demand:</strong> shorter system prompts, fewer and smaller retrieved chunks, conversation history summarisation, <strong>prompt caching</strong> for stable prefixes, <strong>semantic caching</strong> at the gateway for repeated questions, and routing simple requests to a <strong>smaller model</strong> with its own quota.</p>
+<p><strong>Steady peaks:</strong> <strong>provisioned throughput</strong> with spillover gives guaranteed capacity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check metrics: which deployment, TPM vs RPM, which client.</li>
+  <li>Ensure clients back off correctly.</li>
+  <li>Lower max_tokens and prompt size.</li>
+  <li>Add capacity through quota, Global deployments or multiple backends behind APIM.</li>
+  <li>Add per-consumer token limits and caching.</li>
+  <li>Consider PTUs for predictable baseline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from openai import AzureOpenAI
+client = AzureOpenAI(azure_endpoint=ENDPOINT, azure_ad_token_provider=token_provider,
+                     api_version=&quot;2024-10-21&quot;, max_retries=5)   # backoff honours retry-after
+
+resp = client.chat.completions.create(
+    model=&quot;chat-global&quot;,
+    messages=messages,
+    max_tokens=500,           # realistic, not 4000
+)</code></pre>
+<pre><code class="language-xml">&lt;!-- APIM: limit tokens per subscription --&gt;
+&lt;azure-openai-token-limit counter-key=&quot;@(context.Subscription.Id)&quot;
+    tokens-per-minute=&quot;20000&quot; estimate-prompt-tokens=&quot;true&quot; /&gt;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying immediately without backoff, amplifying the problem.</li>
+  <li>Huge max_tokens values &quot;just in case&quot;.</li>
+  <li>One deployment for every app, so batch jobs starve the chatbot.</li>
+  <li>Treating 429 as an outage rather than a capacity design issue.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A 429 means we hit the deployment's TPM or RPM quota, and TPM counts the requested max_tokens, not just actual tokens. First, clients must retry with exponential backoff honouring retry-after. Then I add capacity: a quota increase, a Global Standard deployment with higher limits, or API Management as an AI gateway balancing across deployments in several regions with failover on 429. I also cut tokens: shorter prompts, less context, realistic max_tokens, caching and smaller models for simple requests. For steady peaks, provisioned throughput with spillover.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a high max_tokens hurt?</strong> Quota is reserved using max_tokens, so fewer requests fit per minute.</li>
+  <li><strong>How to isolate tenants?</strong> Separate deployments or APIM token limits per subscription.</li>
+  <li><strong>What about streaming?</strong> It improves perceived latency but not quota usage.</li>
+</ul>
+</article>
+</body>
+</html>

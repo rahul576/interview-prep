@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-319 · How would you avoid repeatedly polling a database for a downstream callback?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-319" data-topic="Cloud (AWS)">
+<h1>How would you avoid repeatedly polling a database for a downstream callback?</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Replace &quot;keep asking the database&quot; with <strong>&quot;the change announces itself&quot;</strong>: the callback handler publishes an <strong>event or message</strong>, or <strong>change data capture</strong> emits it, and the waiting process reacts. Workflows wait on a <strong>task token</strong> and browsers get a <strong>push</strong> (WebSocket/SSE). Any polling that has to stay uses <strong>backoff, limits and indexes</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A typical case: we call a payment provider or a partner API, and the result comes back later on a <strong>webhook callback</strong>. The naive design has workers or the UI query <code>SELECT status FROM payments WHERE id = ?</code> every two seconds. At scale that means thousands of wasted queries per second, extra load on the primary, and latency set by the polling interval.</p>
+<p>The cure is to turn the state change into a <strong>signal</strong>:</p>
+<ul>
+  <li><strong>Publish from the callback handler.</strong> After updating the row, the handler publishes <code>PaymentCompleted</code> to <strong>SNS, SQS, EventBridge or Kafka</strong>. Use the <strong>transactional outbox</strong> so the DB update and the event cannot drift apart.</li>
+  <li><strong>Change data capture.</strong> <strong>DynamoDB Streams</strong> trigger a Lambda, <strong>Debezium</strong> tails the PostgreSQL WAL or MySQL binlog into Kafka, or PostgreSQL <strong>LISTEN/NOTIFY</strong> works for small, single-database setups.</li>
+  <li><strong>Workflow wait states.</strong> In <strong>AWS Step Functions</strong>, a task using <code>.waitForTaskToken</code> pauses the execution (up to a year) at no compute cost. The callback calls <code>SendTaskSuccess</code> with the token, and the workflow resumes.</li>
+  <li><strong>Push to clients.</strong> Use <strong>WebSocket</strong> (API Gateway WebSocket, AppSync), <strong>server-sent events</strong>, or a webhook to the client system.</li>
+</ul>
+<p>If polling cannot be removed, for example with a partner who offers no callback, make it cheap. Use <strong>exponential backoff with jitter</strong> and a maximum wait. Run an <strong>indexed</strong> query on status, or read from a <strong>cache</strong>. A <strong>delayed message</strong> (SQS <code>DelaySeconds</code>, a scheduler) can trigger the next check, so no thread sits in a loop.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The client submits a request. The service stores it as <code>PENDING</code> and returns an id.</li>
+  <li>The external system later calls our webhook. The handler verifies the signature and updates the row.</li>
+  <li>In the same transaction, an outbox row is written. A relay (or CDC) publishes <code>StatusChanged</code>.</li>
+  <li>Consumers react: the Step Functions task token is completed, the next business step starts, or a notification service pushes to the browser via WebSocket.</li>
+  <li>A <strong>timeout path</strong> (Step Functions heartbeat/timeout or a scheduled check) handles callbacks that never arrive.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python"># Webhook handler resumes a Step Functions execution instead of anyone polling
+def on_payment_callback(event):
+    body = verify_signature(event)
+    order = db.update_status(body[&quot;orderId&quot;], body[&quot;status&quot;])   # commit
+    sfn.send_task_success(
+        taskToken=order.task_token,
+        output=json.dumps({&quot;status&quot;: body[&quot;status&quot;]}))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tight polling loops in many workers, all hitting the primary database.</li>
+  <li>Publishing the event outside the transaction, so it gets lost or arrives before the commit.</li>
+  <li>No timeout handling for callbacks that never come.</li>
+  <li>Using LISTEN/NOTIFY as a durable queue. Notifications are lost if no listener is connected.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd make the state change push a signal instead of having anyone poll. The callback handler updates the record and, through an outbox, publishes an event to SNS, EventBridge or Kafka. Or I'd use CDC, such as DynamoDB Streams or Debezium. A long-running process can wait on a Step Functions task token that the callback completes, and the browser gets the update over WebSocket or SSE. If some polling has to remain, I'd add exponential backoff, a time limit and an indexed query, and I'd always have a timeout path for callbacks that never arrive.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a Step Functions task token?</strong> It is a unique token passed to a waiting task. An external system calls SendTaskSuccess or SendTaskFailure with it to resume the workflow.</li>
+  <li><strong>Webhook security?</strong> Verify HMAC signatures, check timestamps for replay protection, and make the handler idempotent.</li>
+  <li><strong>CDC versus outbox?</strong> CDC captures every committed change with no app code. An outbox gives you explicit, well-shaped domain events.</li>
+</ul>
+</article>
+</body>
+</html>

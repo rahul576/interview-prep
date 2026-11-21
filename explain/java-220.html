@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-220 · What is the difference between sleep(), wait() and join()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-220" data-topic="Concurrency">
+<h1>What is the difference between sleep(), wait() and join()?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Thread.sleep</strong> pauses the current thread <strong>without releasing locks</strong>; <strong>Object.wait</strong> must be called <strong>inside synchronized</strong>, <strong>releases the monitor</strong> and waits for <strong>notify/notifyAll</strong>, always <strong>in a loop</strong>; <strong>join</strong> waits for <strong>another thread to finish</strong>. In modern code prefer <strong>higher-level utilities</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>Thread.sleep(ms)</code></strong> is a static method that puts the <strong>current</strong> thread in TIMED_WAITING for at least the given time. It has nothing to do with locks: any monitors or <code>ReentrantLock</code>s the thread holds <strong>stay held</strong>, so sleeping inside <code>synchronized</code> blocks every other thread that needs that lock. It throws <code>InterruptedException</code> if interrupted. Use it for simple delays or back-off, not for coordination.</p>
+<p><strong><code>Object.wait()</code></strong> is an instance method on the <strong>monitor object</strong>. You must own that object's monitor, i.e. be inside <code>synchronized (obj)</code>, otherwise you get <code>IllegalMonitorStateException</code>. <code>wait</code> atomically <strong>releases the monitor</strong> and suspends the thread until another thread calls <code>obj.notify()</code> or <code>notifyAll()</code> (or a timeout or interrupt). Before returning it <strong>re-acquires</strong> the monitor. Always call it in a <strong><code>while</code> loop</strong> that rechecks the condition, because of <strong>spurious wakeups</strong> (allowed by the spec), because <code>notifyAll</code> wakes threads whose condition may still be false, and because another thread may consume the state before you re-acquire the lock. Prefer <code>notifyAll</code> unless you're sure every waiter is interchangeable.</p>
+<p><strong><code>thread.join()</code></strong> makes the <strong>calling</strong> thread wait until <strong><code>thread</code> terminates</strong> (optionally with a timeout). It also establishes <strong>happens-before</strong>: everything the joined thread did is visible afterwards. Internally it is implemented with waiting on the thread object.</p>
+<p>In modern Java, raw <code>wait</code>/<code>notify</code> is rarely written by hand. Use <code>BlockingQueue</code> for producer-consumer, <code>CountDownLatch</code> or <code>Future.get</code> instead of join, <code>ReentrantLock</code> with <code>Condition</code> for multiple wait conditions, and <code>CompletableFuture</code> or structured concurrency to wait for results. With virtual threads, <code>sleep</code> and <code>join</code> unmount cheaply.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>sleep</code>: thread → TIMED_WAITING, locks untouched → RUNNABLE after the time.</li>
+  <li><code>wait</code>: release monitor → WAITING → notified → BLOCKED re-acquiring → RUNNABLE.</li>
+  <li><code>join</code>: caller WAITING until target TERMINATED.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Mailbox {
+    private String message;
+    synchronized void put(String m) {
+        message = m;
+        notifyAll();
+    }
+    synchronized String take() throws InterruptedException {
+        while (message == null) {     // while, not if
+            wait();                   // releases the monitor
+        }
+        String m = message; message = null;
+        return m;
+    }
+}
+
+Thread worker = Thread.ofPlatform().start(() -&gt; process());
+worker.join(5_000);                   // wait up to 5 s for it to finish</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>sleep</th><th>wait</th><th>join</th></tr></thead>
+<tbody>
+<tr><td>Called on</td><td>Thread (static)</td><td>monitor object</td><td>target thread</td></tr>
+<tr><td>Needs synchronized</td><td>no</td><td>yes</td><td>no</td></tr>
+<tr><td>Releases lock</td><td>no</td><td>yes (that monitor)</td><td>n/a</td></tr>
+<tr><td>Woken by</td><td>timeout/interrupt</td><td>notify/timeout/interrupt</td><td>thread end/timeout</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>if</code> instead of <code>while</code> around <code>wait</code>.</li>
+  <li>Calling <code>wait</code> outside synchronized.</li>
+  <li>Sleeping while holding a lock.</li>
+  <li>Calling <code>notify</code> when several kinds of waiters exist.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Thread.sleep pauses the current thread for a time and doesn't release any locks it holds. Object.wait must be called inside a synchronized block on that object; it releases the monitor and waits until another thread calls notify or notifyAll, and it should always be called in a loop that rechecks the condition because of spurious wakeups. join makes the current thread wait until another thread finishes. In modern code I prefer higher-level utilities like BlockingQueue, CountDownLatch, Condition or CompletableFuture over raw wait and notify.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why while and not if?</strong> Spurious wakeups and competing threads mean the condition may be false after waking.</li>
+  <li><strong>notify vs notifyAll?</strong> notify wakes one arbitrary waiter; notifyAll wakes all and is safer.</li>
+  <li><strong>Does sleep(0) do anything?</strong> It may yield; behaviour is platform dependent.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-063 · How would you design Terraform for an Azure hub-and-spoke network used by many application teams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-063" data-topic="Terraform">
+<h1>How would you design Terraform for an Azure hub-and-spoke network used by many application teams?</h1>
+<p class="ex-meta">Terraform · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>The <strong>platform team</strong> owns the <strong>hub</strong> (firewall, gateways, Bastion, central <strong>private DNS zones</strong>) in its own state; each application gets a <strong>spoke</strong> from a <strong>spoke vending module</strong> in a <strong>separate state</strong>, peered to the hub with <strong>routes through the firewall</strong>, central <strong>IPAM</strong> to avoid overlaps, and app teams deploying inside but not changing networking.</p>
+
+<h2>Detailed explanation</h2>
+<p>Hub-and-spoke centralises shared network services and security inspection while giving each application its own isolated VNet. The Terraform design should mirror <strong>ownership</strong>.</p>
+<p><strong>Hub state</strong> (platform team): the hub VNet, <strong>Azure Firewall</strong> or an NVA with firewall policy, VPN or ExpressRoute gateways, Azure Bastion, DNS Private Resolver, and the <strong>private DNS zones</strong> such as <code>privatelink.blob.core.windows.net</code>. Centralising those zones matters: if every spoke created its own zone, private endpoint name resolution would break across the organisation.</p>
+<p><strong>Spoke vending module</strong>: one call per application and environment, each in its <strong>own state</strong> (often in the application subscription). It creates the spoke VNet and subnets, <strong>peering in both directions</strong> (the hub side needs permissions in the hub subscription, typically via a second provider alias), route tables with <code>0.0.0.0/0</code> and cross-spoke traffic sent to the firewall's private IP, NSGs, and <strong>virtual network links</strong> to the central DNS zones. Per-spoke states keep blast radius small and let spokes be added without touching the hub's plan.</p>
+<p><strong>IP address management</strong> prevents overlapping ranges, which would make peering impossible. Options include IPAM pools in <strong>Azure Virtual Network Manager</strong> or a simple registry in code, such as a map of allocated CIDRs reviewed in PRs.</p>
+<p><strong>Boundaries</strong>: application teams deploy workloads into their spokes but cannot modify peering, routes or DNS links; Azure Policy and RBAC enforce it. <strong>Azure Verified Modules</strong> such as the hub networking pattern provide good building blocks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform state creates hub VNet, firewall, gateways, Bastion and DNS zones.</li>
+  <li>A team requests a spoke with name, environment and size.</li>
+  <li>IPAM allocates a non-overlapping CIDR.</li>
+  <li>Spoke module creates VNet, subnets, NSGs and route tables to the firewall.</li>
+  <li>It creates peering both ways and links to private DNS zones.</li>
+  <li>App team deploys resources into the spoke subnets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">module &quot;spoke_orders_prod&quot; {
+  source  = &quot;app.terraform.io/acme/spoke/azurerm&quot;
+  version = &quot;~&gt; 3.2&quot;
+
+  providers = {
+    azurerm     = azurerm.orders_prod
+    azurerm.hub = azurerm.hub
+  }
+
+  name               = &quot;orders-prod&quot;
+  address_space      = [&quot;10.42.0.0/22&quot;]       # from IPAM
+  hub_vnet_id        = data.azurerm_virtual_network.hub.id
+  firewall_private_ip = &quot;10.0.1.4&quot;
+  private_dns_zone_ids = var.central_private_dns_zone_ids
+  subnets = {
+    app = { cidr = &quot;10.42.0.0/24&quot; }
+    pe  = { cidr = &quot;10.42.1.0/24&quot; }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One state containing the hub and every spoke.</li>
+  <li>Private DNS zones created per spoke, breaking resolution.</li>
+  <li>Overlapping CIDRs discovered only at peering time.</li>
+  <li>Forgetting the hub side of the peering or gateway transit settings.</li>
+  <li>Giving app teams rights to edit route tables.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The platform team owns the hub in its own state: firewall, gateways, Bastion and the central private DNS zones used for private endpoints. Each application gets a spoke from a vending module, in its own state, which creates the VNet, peers it with the hub, adds route tables sending traffic through the firewall, links the private DNS zones and applies NSGs. IPAM is central to avoid overlaps, through Virtual Network Manager IPAM or a registry in code. App teams deploy into their spokes but can't change peering or routes, and AVM modules give good building blocks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do spoke teams request firewall rules?</strong> PRs to a rules collection in the platform repo, applied by the platform pipeline.</li>
+  <li><strong>Virtual WAN instead?</strong> Managed hub alternative when many regions and branches exist.</li>
+  <li><strong>Why bidirectional peering?</strong> Each VNet needs its own peering resource for traffic to flow.</li>
+</ul>
+</article>
+</body>
+</html>

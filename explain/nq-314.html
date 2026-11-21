@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-314 · How does Lambda scale when a queue receives many messages?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-314" data-topic="Cloud (AWS)">
+<h1>How does Lambda scale when a queue receives many messages?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>With an SQS trigger, the <strong>event source mapping adds pollers and concurrent invocations as the backlog grows</strong> (for standard queues, scaling by up to <strong>300 concurrent executions per minute</strong> to about <strong>1,250</strong> per mapping), bounded by <strong>account concurrency</strong> (default <strong>1,000 per region</strong>) and any <strong>reserved or maximum concurrency</strong>; <strong>FIFO</strong> scales only up to the number of <strong>active message groups</strong>; throttled messages <strong>stay in the queue</strong>, so you <strong>cap concurrency to protect downstream systems</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Scale-up:</strong> the Lambda service starts with a few pollers and monitors queue depth. As messages accumulate, it increases the number of pollers and concurrent function invocations; as the queue drains, it scales down. Since late 2023, scaling for standard queues is faster, adding up to 300 concurrent executions per minute, up to 1,250 concurrent invocations per event source mapping by default.</p>
+<p><strong>Limits:</strong></p>
+<ul>
+  <li><strong>Account concurrency quota:</strong> shared by all functions in a region, 1,000 by default (can be raised).</li>
+  <li><strong>Reserved concurrency</strong> on the function: caps it (and reserves capacity).</li>
+  <li><strong>Maximum concurrency</strong> on the event source mapping: caps how many concurrent invocations that queue drives (minimum 2).</li>
+  <li><strong>Batch size and batching window:</strong> larger batches mean fewer invocations for the same work.</li>
+</ul>
+<p><strong>FIFO queues:</strong> ordering per <strong>message group ID</strong> means only one batch per group is in flight; concurrency is limited by the number of active groups. Design group IDs (for example per customer) to allow parallelism.</p>
+<p><strong>Throttling:</strong> if Lambda cannot invoke because of concurrency limits, messages are not lost: they remain or return to the queue and are retried later. But with reserved concurrency alone, repeated throttled receives increase the receive count and can push messages into the DLQ; maximum concurrency on the mapping avoids that.</p>
+<p><strong>Downstream protection:</strong> scaling to hundreds of instances can exhaust a relational database's connections. Cap concurrency to what the database can handle, use <strong>RDS Proxy</strong> for connection pooling and keep connections outside the handler for reuse.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Messages arrive; queue depth rises.</li>
+  <li>ESM adds pollers and invocations.</li>
+  <li>Concurrency grows until a limit is reached.</li>
+  <li>Excess messages wait in the queue.</li>
+  <li>Backlog drains; ESM scales down.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws lambda update-event-source-mapping --uuid 6f1c-... \
+  --scaling-config MaximumConcurrency=40 \
+  --batch-size 20 --maximum-batching-window-in-seconds 2</code></pre>
+<p>With 40 concurrent invocations and an RDS Proxy, the database sees a bounded connection count even with 500,000 messages queued.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming Lambda scales infinitely.</li>
+  <li>Letting one function consume the whole account quota.</li>
+  <li>Using reserved concurrency alone with SQS and seeing DLQ entries.</li>
+  <li>Too few FIFO message groups, so no parallelism.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With an SQS trigger, Lambda watches the backlog and adds pollers and concurrent invocations as messages pile up, then scales down as the queue drains. For standard queues it scales up by up to about three hundred concurrent executions per minute, to roughly 1,250 per mapping, bounded by the account concurrency, a thousand per region by default, and any reserved or maximum concurrency. FIFO queues scale only up to the number of active message groups. Throttled messages just wait in the queue. Because fast scaling can overwhelm a database, I cap concurrency with maximum concurrency on the mapping and use RDS Proxy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Stop Lambda overwhelming a relational database?</strong> Maximum concurrency on the ESM, RDS Proxy, batching.</li>
+  <li><strong>How do you monitor scaling?</strong> <code>ConcurrentExecutions</code>, <code>Throttles</code>, queue age and depth.</li>
+  <li><strong>Need more than default throughput?</strong> Request quota increases and consider provisioned pollers or more queues.</li>
+</ul>
+</article>
+</body>
+</html>

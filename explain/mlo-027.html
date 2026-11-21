@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-027 · How do you run distributed training, and what infrastructure does it need?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-027" data-topic="MLOps">
+<h1>How do you run distributed training, and what infrastructure does it need?</h1>
+<p class="ex-meta">MLOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Data parallelism</strong> (PyTorch DDP) replicates the model and splits batches; for large models, <strong>FSDP or DeepSpeed ZeRO shard</strong> parameters, gradients and optimiser state, and <strong>tensor and pipeline parallelism</strong> split layers. It needs <strong>fast interconnects</strong> (NVLink, InfiniBand/RoCE) with <strong>NCCL</strong>, <strong>gang scheduling</strong>, and <strong>regular checkpointing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In <strong>data parallelism</strong>, every GPU holds a full model copy and processes a different slice of each global batch. After the backward pass, gradients are averaged across GPUs with an <strong>all-reduce</strong>, so all replicas stay identical. PyTorch <strong>DistributedDataParallel (DDP)</strong> implements this, overlapping communication with computation.</p>
+<p>When the model, gradients and optimiser state don't fit on one GPU, you <strong>shard</strong>. <strong>FSDP</strong> (Fully Sharded Data Parallel) and <strong>DeepSpeed ZeRO</strong> split parameters, gradients and optimiser states across GPUs and gather them just in time for each layer. <strong>Tensor parallelism</strong> splits individual matrix multiplications within a layer across GPUs (as in Megatron-LM), needing very high bandwidth, so it usually stays within a node. <strong>Pipeline parallelism</strong> places groups of layers on different GPUs as stages and streams micro-batches through them. Large LLM training combines these (&quot;3D parallelism&quot;).</p>
+<p><strong>Infrastructure</strong> matters because GPUs exchange data every step. Within a node, <strong>NVLink/NVSwitch</strong>; between nodes, <strong>InfiniBand</strong> or <strong>RoCE</strong> at hundreds of gigabits per GPU, with <strong>NCCL</strong> handling collective operations. Slow networking leaves GPUs idle waiting for gradients.</p>
+<p>On Kubernetes (Kubeflow Training Operator, Kueue, Volcano) or Slurm, jobs need <strong>gang scheduling</strong>: all workers start together or none do, avoiding deadlocked partial jobs. Failures are normal at scale, so <strong>checkpoint</strong> regularly to shared storage and support automatic restart (for example <code>torchrun</code> elastic launch).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose strategy by model size: DDP if it fits, FSDP/ZeRO if not, add tensor/pipeline for very large models.</li>
+  <li>Launch workers with <code>torchrun</code> or an operator; each gets a rank.</li>
+  <li>Initialise the process group with the NCCL backend.</li>
+  <li>Shard data with a distributed sampler.</li>
+  <li>Train; collectives synchronise gradients or shards.</li>
+  <li>Checkpoint periodically; restart from last checkpoint on failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">torchrun --nnodes=4 --nproc_per_node=8 \
+  --rdzv_backend=c10d --rdzv_endpoint=$MASTER_ADDR:29500 train.py</code></pre>
+<pre><code class="language-python">import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+dist.init_process_group(&quot;nccl&quot;)
+model = FSDP(model.cuda())          # shards params, grads, optimiser state
+sampler = torch.utils.data.distributed.DistributedSampler(dataset)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding nodes over slow Ethernet and seeing little speed-up.</li>
+  <li>No gang scheduling, so jobs hang with half their workers.</li>
+  <li>Checkpointing rarely, losing days on a node failure.</li>
+  <li>Ignoring data loading, leaving GPUs starved.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For models that fit on one GPU, I use data parallelism with PyTorch DDP: each GPU has a copy, processes part of the batch, and gradients are all-reduced every step. For larger models, FSDP or DeepSpeed ZeRO shard parameters, gradients and optimiser state, and very large models add tensor and pipeline parallelism. The infrastructure needs NVLink in the node and InfiniBand or RoCE between nodes, with NCCL for collectives. The scheduler must gang-schedule all workers, and we checkpoint frequently to shared storage so failures don't cost days.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do more GPUs sometimes barely help?</strong> Communication overhead, small per-GPU batches, data-loading bottlenecks or slow interconnects.</li>
+  <li><strong>What does gradient accumulation do?</strong> Simulates a bigger batch with fewer GPUs by summing gradients over steps.</li>
+  <li><strong>Spot instances for training?</strong> Possible with frequent checkpoints and elastic restart.</li>
+</ul>
+</article>
+</body>
+</html>

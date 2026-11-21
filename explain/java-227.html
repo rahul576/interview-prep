@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-227 · Compare virtual threads with reactive programming for scalable I/O.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-227" data-topic="Concurrency">
+<h1>Compare virtual threads with reactive programming for scalable I/O.</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Both target <strong>high-concurrency I/O</strong> without one expensive platform thread per request: <strong>virtual threads</strong> keep the <strong>simple blocking style</strong> and normal tooling, while <strong>reactive</strong> programming is <strong>non-blocking</strong> with <strong>backpressure</strong> and stream operators, at the cost of complexity.</p>
+
+<h2>Detailed explanation</h2>
+<p>The classic thread-per-request model breaks down because platform threads are OS threads: each costs memory for its stack and a context switch, so a few thousand is a practical limit, while most of their time is spent waiting on I/O.</p>
+<p><strong>Reactive programming</strong> (Project Reactor, Spring WebFlux, RxJava) solves this by never blocking: a small number of event-loop threads handle many requests, and work is expressed as <code>Mono</code>/<code>Flux</code> pipelines that resume when data arrives. It brings real strengths: <strong>backpressure</strong> (a slow consumer can signal demand), rich operators for streaming, merging, retrying and timing out, and efficient handling of long-lived streams like server-sent events. The costs are a different programming model, the need for non-blocking drivers end to end (R2DBC instead of JDBC), harder debugging, and stack traces full of operator frames.</p>
+<p><strong>Virtual threads</strong> (final in <strong>Java 21</strong>) solve the same problem in the runtime: millions of cheap threads scheduled by the JVM onto a few carrier threads. When a virtual thread blocks on I/O, it unmounts and the carrier runs something else. Code stays plain imperative Java with JDBC, try/catch, debuggers, profilers and readable stack traces. Since <strong>Java 24</strong> (JEP 491), <code>synchronized</code> no longer pins virtual threads in most cases, removing the main early caveat.</p>
+<p>The choice: for typical request/response services, virtual threads give most of the scalability with far less complexity. Reactive still wins for <strong>streaming</strong>, fine-grained backpressure, and teams already invested in a reactive stack.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Platform thread model: one OS thread per request, blocked during I/O.</li>
+  <li>Reactive: requests become event-driven pipelines on a few event-loop threads; no code may block.</li>
+  <li>Virtual threads: each request gets a virtual thread; blocking calls park it and free the carrier.</li>
+  <li>Limits move: the bottleneck becomes downstream resources (DB connections, APIs), not threads.</li>
+  <li>Decide per service based on streaming needs, library support and team skills.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Virtual threads: plain blocking code, scales to many concurrent requests
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    Future&lt;User&gt; user = exec.submit(() -&gt; userRepo.findById(id));   // JDBC
+    Future&lt;List&lt;Order&gt;&gt; orders = exec.submit(() -&gt; orderClient.list(id));
+    return new Profile(user.get(), orders.get());
+}
+
+// Reactive (WebFlux): non-blocking composition
+Mono&lt;Profile&gt; profile = Mono.zip(userRepo.findById(id), orderClient.list(id).collectList())
+        .map(t -&gt; new Profile(t.getT1(), t.getT2()));</code></pre>
+<p>In Spring Boot 3.2+, <code>spring.threads.virtual.enabled=true</code> runs request handling on virtual threads.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Virtual threads</th><th>Reactive</th></tr></thead>
+<tbody>
+<tr><td>Style</td><td>Imperative, blocking</td><td>Functional pipelines</td></tr>
+<tr><td>Libraries</td><td>Existing (JDBC, RestClient)</td><td>Non-blocking only (R2DBC, WebClient)</td></tr>
+<tr><td>Backpressure</td><td>Manual (semaphores, bounded queues)</td><td>Built in</td></tr>
+<tr><td>Debugging</td><td>Normal stack traces</td><td>Harder</td></tr>
+<tr><td>Best for</td><td>Request/response</td><td>Streaming, event processing</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming virtual threads make CPU-bound code faster; they only help waiting.</li>
+  <li>Removing connection pool limits because &quot;threads are free&quot;.</li>
+  <li>Pooling virtual threads; create one per task instead.</li>
+  <li>Calling blocking code inside a reactive pipeline on the event loop.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both solve the same problem: lots of concurrent I/O-bound work without one expensive platform thread per request. Virtual threads keep the simple blocking style, so I keep JDBC, normal stack traces and debugging, and the JVM parks the virtual thread during I/O. Reactive with Reactor or WebFlux is non-blocking and gives backpressure and powerful stream operators, which is great for streaming, but it is harder to write and debug and needs non-blocking libraries everywhere. For new request-response services on Java 21 or later I prefer virtual threads, and I use reactive for streaming use cases or where a reactive stack already exists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Does adopting virtual threads remove the need for connection pool limits?</strong> No; the database still has finite connections, so keep pool limits and add semaphores for other downstreams.</li>
+  <li><strong>What is pinning?</strong> A virtual thread that cannot unmount from its carrier while blocked, historically inside synchronized blocks or native calls; mostly fixed for synchronized in Java 24.</li>
+  <li><strong>Are virtual threads good for CPU-heavy work?</strong> No; use a bounded platform pool sized near the core count.</li>
+</ul>
+</article>
+</body>
+</html>

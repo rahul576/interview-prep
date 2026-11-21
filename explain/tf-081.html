@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-081 · Your hosted CI runners cannot reach private endpoints of databases and Key Vault that Terraform must configure. How do you solve it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-081" data-topic="Terraform">
+<h1>Your hosted CI runners cannot reach private endpoints of databases and Key Vault that Terraform must configure. How do you solve it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Creating resources uses the public <strong>control plane</strong>, but some Terraform resources perform <strong>data plane</strong> operations (Key Vault secrets, storage containers, database users, Kubernetes objects) that require <strong>network reach to private endpoints</strong>; run Terraform on <strong>self-hosted runners or agents inside the VNet</strong>, never <strong>temporarily open public access</strong>, and <strong>separate control and data plane</strong> steps.</p>
+
+<h2>Detailed explanation</h2>
+<p>Azure Resource Manager and AWS control plane APIs are public endpoints authenticated by identity, so a hosted runner anywhere on the internet can create a Key Vault or a database server. But many resources call the <strong>service's own endpoint</strong>: <code>azurerm_key_vault_secret</code> talks to <code>https://kv-name.vault.azure.net</code>, storage containers and blobs use the storage account endpoint, PostgreSQL or SQL providers connect to the database to create users and grants, and the Kubernetes and Helm providers talk to the cluster API server. With <strong>private endpoints</strong> and public access disabled, those endpoints resolve to private IPs reachable only from inside the network. Hosted runners time out or get 403 Forbidden.</p>
+<p>The proper fix is to <strong>run Terraform where the network is</strong>:</p>
+<ul>
+  <li><strong>GitHub Actions self-hosted runners</strong> in the VNet, often autoscaled with Actions Runner Controller on Kubernetes, or GitHub-hosted runners with <strong>Azure private networking</strong> where available.</li>
+  <li><strong>Azure DevOps Managed DevOps Pools</strong> with VNet injection, or VM scale set agents.</li>
+  <li><strong>HCP Terraform agents</strong> deployed inside the network, which poll HCP Terraform outbound, so no inbound firewall openings are needed.</li>
+</ul>
+<p>A tempting <strong>anti-pattern</strong> is a pipeline step that enables public network access or adds the runner's IP to the firewall, runs Terraform, and closes it again. It creates an exposure window and fails open if the pipeline crashes.</p>
+<p>Architecturally, <strong>separate control plane and data plane</strong> into different states or stages. Creating the vault, network and cluster can run anywhere; only the data plane state (secrets, database roles, in-cluster resources) needs private runners.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify resources that call data plane endpoints.</li>
+  <li>Deploy runners or agents in a VNet with private DNS resolution.</li>
+  <li>Give them a managed identity with only required permissions.</li>
+  <li>Route data plane stages to the private runner pool.</li>
+  <li>Keep control plane stages on hosted or private runners.</li>
+  <li>Patch and monitor runners as production infrastructure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">jobs:
+  control-plane:
+    runs-on: ubuntu-latest            # hosted: ARM only
+    steps:
+      - run: terraform -chdir=stacks/platform apply -auto-approve
+  data-plane:
+    needs: control-plane
+    runs-on: [self-hosted, vnet-prod] # inside the VNet, private DNS
+    steps:
+      - run: terraform -chdir=stacks/secrets apply -auto-approve</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Opening public access during pipelines.</li>
+  <li>Self-hosted runners without private DNS links, so names still resolve publicly.</li>
+  <li>Shared, long-lived runners with broad credentials and no patching.</li>
+  <li>Mixing control and data plane in one large state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Creating resources goes through the cloud control plane, which is reachable from anywhere, but resources like Key Vault secrets, storage containers, database users or Kubernetes objects use the data plane, and behind private endpoints that's only reachable from inside the network. The proper fix is running Terraform on runners inside the VNet: GitHub self-hosted runners, Azure DevOps Managed DevOps Pools, or HCP Terraform agents. I avoid temporarily opening public access in pipelines because that's a security gap. And I separate control plane and data plane into different states so only the data plane needs private runners.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you secure the runners?</strong> Ephemeral instances, hardened images, least-privilege identities, patching and network restrictions.</li>
+  <li><strong>Why do agents need no inbound ports?</strong> They poll the service outbound.</li>
+  <li><strong>What about DNS?</strong> Runners must use DNS linked to the private DNS zones.</li>
+</ul>
+</article>
+</body>
+</html>

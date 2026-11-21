@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-419 · Design an in-memory rate limiter class for a single service instance.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-419" data-topic="Low-Level Design">
+<h1>Design an in-memory rate limiter class for a single service instance.</h1>
+<p class="ex-meta">Low-Level Design · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Expose a <strong><code>tryAcquire(key)</code></strong> interface, implement a <strong>token bucket</strong> per key with <strong>time-based refill</strong>, store buckets in a <strong><code>ConcurrentHashMap</code> via <code>computeIfAbsent</code></strong>, make each bucket update <strong>thread-safe</strong> (synchronized or CAS), <strong>evict idle keys</strong>, and inject a <strong>clock</strong> for testing.</p>
+
+<h2>Detailed explanation</h2>
+<p>An in-memory limiter is appropriate for a single instance or as a local first line of defence. The API should be small and abstract: <code>boolean tryAcquire(String key)</code> (optionally with a permit count), so the implementation can switch to a sliding window or a Redis-backed version later.</p>
+<p><strong>Token bucket:</strong> each key has a capacity (max burst) and a refill rate (tokens per second). Instead of a background thread adding tokens, use <strong>lazy refill</strong>: on each call, compute elapsed time since the last refill, add <code>elapsed * rate</code> tokens capped at capacity, then consume one if at least one is available. This is O(1) per call and needs no timers.</p>
+<p><strong>Concurrency:</strong> the map is a <code>ConcurrentHashMap</code>, and <code>computeIfAbsent</code> ensures exactly one bucket per key even under races. Each bucket's refill-and-consume must be atomic: either <code>synchronized</code> on the bucket (simple and fast enough, as contention is per key) or pack state into an <code>AtomicLong</code>/<code>AtomicReference</code> and use a <strong>compare-and-set</strong> loop for a lock-free version.</p>
+<p><strong>Memory:</strong> keys like user IDs or IPs are unbounded, so idle buckets must be <strong>evicted</strong>, for example using a <strong>Caffeine</strong> cache with <code>expireAfterAccess</code>, or a periodic sweep. A full bucket that has been idle can be safely dropped because recreating it gives the same state.</p>
+<p><strong>Testability:</strong> inject a <code>Clock</code> or a <code>LongSupplier</code> for nanoTime so tests can advance time deterministically. Use <code>System.nanoTime()</code> (monotonic) rather than wall-clock time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>tryAcquire(key)</code> gets or creates the bucket.</li>
+  <li>Lock the bucket (or CAS loop).</li>
+  <li><code>now = clock.nanos()</code>; <code>tokens = min(capacity, tokens + (now - last) * ratePerNano)</code>; <code>last = now</code>.</li>
+  <li>If <code>tokens &gt;= 1</code>: decrement, return true; else return false.</li>
+  <li>Cache evicts buckets not accessed for, say, 10 minutes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface RateLimiter { boolean tryAcquire(String key); }
+
+public final class TokenBucketRateLimiter implements RateLimiter {
+    private final double capacity, refillPerNano;
+    private final LongSupplier nanoClock;
+    private final Cache&lt;String, Bucket&gt; buckets = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofMinutes(10)).build();
+
+    public TokenBucketRateLimiter(double capacity, double perSecond, LongSupplier nanoClock) {
+        this.capacity = capacity; this.refillPerNano = perSecond / 1_000_000_000d; this.nanoClock = nanoClock;
+    }
+
+    @Override public boolean tryAcquire(String key) {
+        return buckets.get(key, k -&gt; new Bucket(capacity, nanoClock.getAsLong())).tryConsume();
+    }
+
+    private final class Bucket {
+        private double tokens; private long last;
+        Bucket(double tokens, long now) { this.tokens = tokens; this.last = now; }
+        synchronized boolean tryConsume() {
+            long now = nanoClock.getAsLong();
+            tokens = Math.min(capacity, tokens + (now - last) * refillPerNano);
+            last = now;
+            if (tokens &gt;= 1) { tokens -= 1; return true; }
+            return false;
+        }
+    }
+}
+// Usage: new TokenBucketRateLimiter(20, 5, System::nanoTime)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A global lock for all keys, serialising every request.</li>
+  <li>Check-then-act on the map (<code>get</code> then <code>put</code>) creating duplicate buckets.</li>
+  <li>A background refill thread per key.</li>
+  <li>Using <code>System.currentTimeMillis()</code>, which can jump backwards.</li>
+  <li>Unbounded maps that leak memory.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd define a RateLimiter interface with tryAcquire(key). The implementation is a token bucket per key with capacity and refill rate, refilled lazily: on each call I add tokens for the elapsed time, capped at capacity, then consume one if available. Buckets live in a ConcurrentHashMap or Caffeine cache created with computeIfAbsent, and each bucket's update is synchronized, or a CAS loop if I need lock-free. Idle keys expire after access, and I inject a nano clock so tests can control time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Ten instances?</strong> Move state to Redis with an atomic Lua script, or split the limit per instance as an approximation.</li>
+  <li><strong>Lock-free version?</strong> Encode tokens and timestamp in an immutable state object and update with <code>AtomicReference.compareAndSet</code>.</li>
+  <li><strong>Why not Guava RateLimiter?</strong> It is per-limiter, blocking-oriented and not keyed; Bucket4j or Resilience4j fit better.</li>
+</ul>
+</article>
+</body>
+</html>

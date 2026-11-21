@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-322 · How does HTTP caching work for APIs? Explain ETag and Cache-Control.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-322" data-topic="REST &amp; API Design">
+<h1>How does HTTP caching work for APIs? Explain ETag and Cache-Control.</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Cache-Control</strong> tells browsers, proxies and CDNs <strong>whether and how long</strong> to cache (<code>max-age</code>, <code>private</code>, <code>no-store</code>, <code>no-cache</code>); an <strong>ETag</strong> identifies a <strong>resource version</strong>, enabling <strong>conditional requests</strong>: <strong>If-None-Match → 304 Not Modified</strong> for reads and <strong>If-Match → 412 Precondition Failed</strong> for safe updates.</p>
+
+<h2>Detailed explanation</h2>
+<p>HTTP caching saves bandwidth, latency and server load, and works for APIs as well as web pages.</p>
+<p><strong>Cache-Control</strong> (RFC 9111) directives on the response:</p>
+<ul>
+  <li><strong><code>max-age=60</code></strong>: the response is fresh for 60 seconds; caches can serve it without asking the server. <strong><code>s-maxage</code></strong> applies only to shared caches (CDN, proxies).</li>
+  <li><strong><code>public</code></strong> allows shared caches to store it; <strong><code>private</code></strong> allows only the user's browser, needed for user-specific data.</li>
+  <li><strong><code>no-cache</code></strong>: may store, but must <strong>revalidate</strong> with the server before each use.</li>
+  <li><strong><code>no-store</code></strong>: never store, for sensitive data like account details or tokens.</li>
+  <li><strong><code>stale-while-revalidate</code></strong> lets caches serve a slightly stale copy while fetching a new one.</li>
+</ul>
+<p><strong>ETag</strong> is an opaque validator for the current representation, such as a hash of the body (<code>&quot;5d8c72a5&quot;</code>) or a version number. <strong>Strong</strong> ETags mean byte-identical; <strong>weak</strong> ones (<code>W/&quot;...&quot;</code>) mean semantically equivalent. <code>Last-Modified</code> is an older, date-based validator.</p>
+<p><strong>Conditional GET (revalidation).</strong> The client stores the ETag and later sends <code>If-None-Match: &quot;5d8c72a5&quot;</code>. If unchanged, the server replies <strong>304 Not Modified</strong> with no body; the client reuses its copy. Bandwidth is saved; whether server work is saved depends on how the ETag is computed.</p>
+<p><strong>Conditional update (optimistic concurrency).</strong> A client sends <code>PUT</code> or <code>PATCH</code> with <code>If-Match: &quot;v7&quot;</code>. If the resource is still at version 7, the update proceeds; if someone else changed it, the server returns <strong>412 Precondition Failed</strong>, preventing <strong>lost updates</strong>. Some APIs require If-Match and return <strong>428 Precondition Required</strong> if it is missing. Mapping the ETag to a JPA <code>@Version</code> column is a neat implementation.</p>
+<p><strong>CDNs and proxies</strong> honour these headers, so public catalogue data with <code>public, max-age=300</code> can be served from the edge. Use <code>Vary</code> (e.g. <code>Vary: Accept-Encoding</code>) when the response depends on request headers. Never cache authenticated responses in shared caches unless marked appropriately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Server returns body + ETag + Cache-Control.</li>
+  <li>Within max-age, cache serves it directly.</li>
+  <li>After expiry, cache revalidates with If-None-Match.</li>
+  <li>Server answers 304 (reuse) or 200 (new body + new ETag).</li>
+  <li>Updates send If-Match; mismatch gives 412.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-http">GET /products/42
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=300
+ETag: &quot;v17&quot;
+
+GET /products/42
+If-None-Match: &quot;v17&quot;
+HTTP/1.1 304 Not Modified
+
+PUT /products/42
+If-Match: &quot;v16&quot;
+HTTP/1.1 412 Precondition Failed</code></pre>
+<pre><code class="language-java">@GetMapping(&quot;/products/{id}&quot;)
+ResponseEntity&lt;ProductDto&gt; get(@PathVariable long id) {
+    Product p = repo.findById(id).orElseThrow();
+    return ResponseEntity.ok()
+        .eTag(&quot;\&quot;&quot; + p.getVersion() + &quot;\&quot;&quot;)
+        .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic())
+        .body(ProductDto.from(p));
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Marking user-specific responses <code>public</code>.</li>
+  <li>Confusing <code>no-cache</code> (revalidate) with <code>no-store</code> (never store).</li>
+  <li>Computing ETags by rendering the full body every time on expensive endpoints.</li>
+  <li>Ignoring If-Match, allowing lost updates.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cache-Control tells clients and proxies how to cache: max-age sets freshness, public or private decides whether shared caches like CDNs may store it, no-cache forces revalidation and no-store forbids storing sensitive data. An ETag identifies the current version of a resource, for example a hash or the entity version. Clients send If-None-Match with the ETag, and if nothing changed the server returns 304 Not Modified with no body. For updates, If-Match gives optimistic concurrency: the update only succeeds if the version still matches, otherwise 412 Precondition Failed. Public responses can then be served straight from a CDN.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you generate ETags efficiently in Spring?</strong> Use the entity's @Version or updated timestamp; ShallowEtagHeaderFilter hashes the body but still does the work.</li>
+  <li><strong>What is a weak ETag?</strong> Indicates semantic equivalence, not byte equality.</li>
+  <li><strong>How do you invalidate a CDN cache?</strong> Purge by URL or tag, or use short max-age with versioned URLs.</li>
+</ul>
+</article>
+</body>
+</html>

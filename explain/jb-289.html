@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-289 · How would you identify CPU-intensive operations in a Java application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-289" data-topic="JVM &amp; Performance">
+<h1>How would you identify CPU-intensive operations in a Java application?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Confirm the process is <strong>CPU-bound</strong>, find the <strong>hot threads</strong> with <strong><code>top -H</code></strong> and match their <strong>hex ids</strong> to the <strong><code>nid</code></strong> in <strong>thread dumps</strong>, then use a <strong>sampling profiler</strong> (<strong>async-profiler</strong> or <strong>JFR</strong>) to get <strong>flame graphs</strong>; check whether CPU goes to <strong>GC or JIT threads</strong> rather than application code, and verify fixes with <strong>JMH</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Is it really CPU?</strong> High latency can come from waiting (locks, I/O) rather than computation. Check process CPU in metrics (<code>process.cpu.usage</code>), <code>top</code>, and in Kubernetes whether the container is <strong>throttled</strong> by its CPU limit, which looks like slowness without 100% usage.</p>
+<p><strong>Which threads?</strong> <code>top -H -p &lt;pid&gt;</code> shows per-thread CPU. Thread names help (<code>http-nio-8080-exec-12</code>, <code>GC Thread#3</code>, <code>C2 CompilerThread0</code>). Convert the hot native thread id to hex and find <code>nid=0x...</code> in a dump from <code>jcmd &lt;pid&gt; Thread.print</code>. Take several dumps seconds apart; a thread stuck in the same frames each time and in state <code>RUNNABLE</code> is your hotspot.</p>
+<p><strong>GC or JIT?</strong> If GC threads dominate, the root cause is memory pressure: look at allocation rates and heap occupancy. If compiler threads dominate shortly after startup, it is normal warm-up; persistently, it might be deoptimisation loops or a full code cache.</p>
+<p><strong>Sampling profilers.</strong> Thread dumps are a crude, manual sample. <strong>async-profiler</strong> uses <code>perf_events</code> and HotSpot APIs to sample all threads, including native and JVM frames, with low overhead and produces <strong>flame graphs</strong>: the x-axis width is the share of samples, the y-axis the call stack. <strong>JFR</strong> records <code>jdk.ExecutionSample</code> events with similar low overhead and is built into the JDK. Both avoid <strong>safepoint bias</strong>, the distortion where older profilers could only sample at safepoints and misattributed time. Both are safe for short recordings in production.</p>
+<p><strong>Typical culprits.</strong> Regex backtracking, JSON or XML serialisation, hashing and encryption, compression, logging with expensive formatting, inefficient loops and data structures (nested loops over large lists), busy waiting, retry loops without backoff, and exception creation with stack traces in hot paths.</p>
+<p><strong>Verify.</strong> Reproduce the hot method in a <strong>JMH</strong> benchmark, optimise, compare throughput, then confirm CPU usage dropped in production.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm CPU saturation and rule out throttling.</li>
+  <li><code>top -H</code> to find hot thread ids; map to thread dumps.</li>
+  <li>Distinguish GC, JIT and application threads.</li>
+  <li>Record a CPU flame graph with async-profiler or JFR.</li>
+  <li>Fix the widest frames; benchmark with JMH; re-check production.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">top -H -p 4211 -n 1 | head -15
+printf '%x\n' 4302             # 10ce
+jcmd 4211 Thread.print | grep -A 12 'nid=0x10ce'
+
+asprof -e cpu -d 30 -f /tmp/cpu.html 4211
+# or JFR
+jcmd 4211 JFR.start duration=60s settings=profile filename=/tmp/cpu.jfr</code></pre>
+<pre><code class="language-java">@Benchmark
+public String serialise(State s) throws Exception {
+    return s.mapper.writeValueAsString(s.order);   // measure before/after
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on one thread dump.</li>
+  <li>Ignoring GC and JIT threads in the analysis.</li>
+  <li>Using instrumenting profilers in production, distorting timings.</li>
+  <li>Optimising code that was not on the flame graph.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I confirm the process is CPU-bound with metrics and top, and that it isn't just container throttling. To find which threads burn CPU I use top -H on the JVM process, convert the hot thread ids to hex and match them to the nid fields in a thread dump from jcmd or jstack; several dumps in a row show whether it's a tight loop. The better tool is a sampling profiler: async-profiler or JFR produce flame graphs showing exactly which methods consume CPU, with low overhead, safe in production. I also check whether CPU is going to GC or JIT compiler threads rather than application code. Typical culprits are regex, serialisation, inefficient loops and logging, and I verify fixes with JMH.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a sampling profiler be misleading because of safepoint bias?</strong> Profilers that sample only at safepoints attribute time to the nearest safepoint, not the real hot code; async-profiler and JFR avoid this.</li>
+  <li><strong>How do you read a flame graph?</strong> Wide frames consume the most samples; look for wide plateaus near the top.</li>
+  <li><strong>What is wall-clock profiling?</strong> Sampling all threads regardless of state, useful for latency including waits.</li>
+</ul>
+</article>
+</body>
+</html>

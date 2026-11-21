@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-021 · How do you choose and tune a garbage collector for a latency-sensitive service?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-021" data-topic="JVM &amp; Performance">
+<h1>How do you choose and tune a garbage collector for a latency-sensitive service?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Start from the <strong>goal</strong> (throughput or <strong>tail latency</strong>): <strong>G1</strong> is the balanced default with a <strong>pause target</strong>, <strong>ZGC</strong> or <strong>Shenandoah</strong> give <strong>millisecond-level pauses</strong> on large heaps at some CPU cost, <strong>Parallel</strong> maximises throughput; size the heap deliberately, then <strong>measure with GC logs and JFR</strong> and often <strong>reduce allocation</strong> rather than adding flags.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Define the SLO first.</strong> &quot;p99 under 50 ms&quot; and &quot;process the nightly batch fastest&quot; lead to different collectors. GC pauses add directly to request latency, so for a latency-sensitive API the relevant numbers are pause duration distribution and how often pauses hit p99/p999.</p>
+<p><strong>Collectors.</strong></p>
+<ul>
+  <li><strong>G1</strong> (default since Java 9): region-based, mostly concurrent marking, evacuation pauses sized to <code>-XX:MaxGCPauseMillis</code> (default 200 ms). Good for most services with heaps from a few GB to tens of GB. Lowering the target to around 50-100 ms is common; too low causes more frequent collections and lower throughput.</li>
+  <li><strong>ZGC</strong>: concurrent marking, relocation and compaction using coloured pointers and load barriers; pauses typically well under a millisecond and independent of heap size, up to terabyte heaps. Generational ZGC arrived in Java 21 (<code>-XX:+UseZGC -XX:+ZGenerational</code>) and became the only mode in later releases, so on current JDKs <code>-XX:+UseZGC</code> is generational. Costs: more CPU for barriers and concurrent work, and it needs heap headroom.</li>
+  <li><strong>Shenandoah</strong>: also concurrent compaction with low pauses, available in OpenJDK builds from Red Hat and others.</li>
+  <li><strong>Parallel GC</strong>: highest throughput, long pauses; batch jobs.</li>
+</ul>
+<p><strong>Heap sizing.</strong> Set <code>-Xms</code> equal to <code>-Xmx</code> to avoid resize pauses and surprises, or in containers use <code>-XX:MaxRAMPercentage</code> (often 60-75%), leaving room for Metaspace, threads, direct buffers and the code cache. Concurrent collectors need <strong>headroom</strong>: if allocation outpaces concurrent collection you get allocation stalls (ZGC) or full GCs (G1).</p>
+<p><strong>Measure.</strong> Enable unified logging <code>-Xlog:gc*</code>, record with <strong>JFR</strong> and inspect in JDK Mission Control, use <code>jstat</code> for live views. Look at allocation rate, promotion rate, pause times, concurrent cycle frequency and humongous allocations. Load-test with realistic traffic.</p>
+<p><strong>Biggest win.</strong> Lower allocation in hot paths (logging, JSON, boxing, copies). Less garbage means fewer and shorter collections with any collector.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write down the latency or throughput target.</li>
+  <li>Pick the collector: G1 default, ZGC for strict latency or large heaps, Parallel for batch.</li>
+  <li>Size heap and container memory with headroom.</li>
+  <li>Enable GC logging and JFR; run a realistic load test.</li>
+  <li>Analyse pauses, allocation and promotion; change one setting at a time.</li>
+  <li>Reduce allocation in the code; re-measure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Latency-sensitive API on JDK 21+, 8 GB container
+java -XX:+UseZGC \
+     -XX:MaxRAMPercentage=70 \
+     -Xlog:gc*,safepoint:file=/logs/gc.log:time,uptime:filecount=5,filesize=20m \
+     -XX:StartFlightRecording=maxage=6h,filename=/logs/app.jfr \
+     -jar api.jar
+
+# G1 alternative with a tighter pause goal
+java -XX:+UseG1GC -Xms6g -Xmx6g -XX:MaxGCPauseMillis=100 -jar api.jar</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Collector</th><th>Pauses</th><th>Throughput</th><th>Typical use</th></tr></thead>
+<tbody>
+<tr><td>Parallel</td><td>Long</td><td>Highest</td><td>Batch, ETL</td></tr>
+<tr><td>G1</td><td>Tens to ~200 ms (target)</td><td>Good</td><td>General services</td></tr>
+<tr><td>ZGC</td><td>Sub-millisecond, typically</td><td>Slightly lower, more CPU</td><td>Strict latency, large heaps</td></tr>
+<tr><td>Shenandoah</td><td>Low milliseconds or less</td><td>Slightly lower</td><td>Low latency (OpenJDK builds)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying flag lists from blog posts without measuring.</li>
+  <li>Tuning many flags at once, so you cannot tell what helped.</li>
+  <li>Giving the heap the whole container limit, causing OOM kills.</li>
+  <li>Blaming GC for latency that is really database or lock contention.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I define the goal: throughput or tail latency. G1 is the default and balances both with a pause target via MaxGCPauseMillis. For very low latency or large heaps I'd consider ZGC, generational since Java 21, or Shenandoah, which do almost all work concurrently and keep pauses around a millisecond or less, at some CPU cost. Parallel GC is for batch throughput. I size the heap with Xms equal to Xmx, or MaxRAMPercentage in containers, leaving room for native memory. Then I measure rather than guess, with GC logs, JFR and jstat, looking at allocation rate, pauses and promotion. Often the biggest win is reducing allocation in the code.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do container memory limits interact with JVM heap settings?</strong> The JVM is container-aware; heap defaults to a percentage of the limit, and heap plus off-heap must stay below it or the pod is OOM-killed.</li>
+  <li><strong>What is an allocation stall in ZGC?</strong> Threads wait because the heap filled before the concurrent cycle freed memory; give more headroom or reduce allocation.</li>
+  <li><strong>When would you pick Parallel GC?</strong> For batch jobs where total runtime matters and pauses do not.</li>
+</ul>
+</article>
+</body>
+</html>

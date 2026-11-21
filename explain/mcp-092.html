@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-092 · A retailer assistant must check stock and place supplier orders. One supplier offers an MCP server, another offers an A2A agent. Design the integration.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-092" data-topic="MCP Servers">
+<h1>A retailer assistant must check stock and place supplier orders. One supplier offers an MCP server, another offers an A2A agent. Design the integration.</h1>
+<p class="ex-meta">MCP Servers · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Hide protocol differences behind a <strong>common internal interface</strong> (<code>check_stock</code>, <code>get_price</code>, <code>place_order</code>) with two adapters: an <strong>MCP client</strong> calling supplier A's tools directly, and an <strong>A2A client</strong> delegating tasks to supplier B's agent and tracking their lifecycle; across both, enforce <strong>human approval and budget limits</strong>, <strong>idempotency</strong>, <strong>order tracking</strong>, and <strong>per-supplier authentication and contracts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The retailer's assistant should reason about <strong>suppliers and orders</strong>, not about protocols. So the core of the design is a <strong>supplier abstraction</strong>: a small internal interface with operations like <code>check_stock(sku)</code>, <code>get_price(sku, qty)</code> and <code>place_order(sku, qty, delivery_by, reference)</code>. Each supplier gets an <strong>adapter</strong> that implements it. Adding a third supplier later, with a REST API, means one more adapter.</p>
+<p><strong>Supplier A: MCP server.</strong> The adapter is an <strong>MCP client</strong> connecting to the supplier's remote server with <strong>OAuth</strong> credentials scoped to the retailer's account. It maps <code>check_stock</code> to the supplier's stock tool and <code>place_order</code> to its order tool. Tool calls are <strong>deterministic and synchronous</strong>: our agent stays in control and gets a structured result.</p>
+<p><strong>Supplier B: A2A agent.</strong> The adapter discovers the agent via its <strong>agent card</strong>, authenticates per its declared security scheme, and <strong>delegates a task</strong>, for example &quot;Order 200 units of SKU X-114, delivered to the Nagpur warehouse by Friday, reference PO-88123.&quot; The remote agent is <strong>autonomous</strong>: it may take time, stream status, or move to <strong>input-required</strong> (&quot;Only 150 available by Friday; accept partial delivery?&quot;). The adapter tracks the <strong>task lifecycle</strong>, surfaces questions to our agent or a human buyer, and maps the final <strong>artifact</strong> (order confirmation) back to our interface.</p>
+<p><strong>Cross-cutting controls:</strong></p>
+<ul>
+  <li><strong>Human approval</strong> for orders above a threshold and <strong>budget limits</strong> per supplier and period, enforced in our code, not in a prompt.</li>
+  <li><strong>Idempotency</strong>: an MCP idempotency key or an A2A client reference such as our PO number, so retries never double-order.</li>
+  <li><strong>Order tracking</strong> in our own order system, the source of truth, with status updates and <strong>audit logs</strong>.</li>
+  <li><strong>Per-supplier auth, contracts and SLAs</strong>, and treating all supplier responses, especially free-text from the remote agent, as <strong>untrusted</strong>.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent decides stock is low and calls <code>check_stock</code> across suppliers.</li>
+  <li>It proposes an order; policy checks budget; above threshold a buyer approves.</li>
+  <li><code>place_order</code> routes to the adapter: MCP tool call, or A2A task creation.</li>
+  <li>A2A task streams updates; clarifying questions go to the buyer if needed.</li>
+  <li>Confirmation stored in our order system with the PO reference; audit event logged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">class SupplierAdapter(Protocol):
+    async def check_stock(self, sku: str) -&gt; Stock: ...
+    async def place_order(self, sku: str, qty: int, deliver_by: date, ref: str) -&gt; OrderResult: ...
+
+class McpSupplier:
+    async def place_order(self, sku, qty, deliver_by, ref):
+        r = await self.session.call_tool(&quot;create_order&quot;,
+              {&quot;sku&quot;: sku, &quot;quantity&quot;: qty, &quot;deliver_by&quot;: deliver_by.isoformat(), &quot;idempotency_key&quot;: ref})
+        return OrderResult.from_mcp(r)
+
+class A2ASupplier:
+    async def place_order(self, sku, qty, deliver_by, ref):
+        task = await self.client.send_message(
+            f&quot;Order {qty} x {sku}, deliver by {deliver_by}, PO reference {ref}.&quot;,
+            metadata={&quot;po_ref&quot;: ref})
+        async for update in self.client.stream(task.id):
+            if update.state == &quot;input-required&quot;:
+                await self.escalate_to_buyer(task.id, update.message)
+            if update.state in (&quot;completed&quot;, &quot;failed&quot;, &quot;canceled&quot;):
+                return OrderResult.from_a2a(update)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Letting the LLM talk to both protocols directly with no internal abstraction.</li>
+  <li>Budget and approval rules only in the prompt.</li>
+  <li>No client reference, so a retried A2A task creates a second order.</li>
+  <li>Treating the remote agent's confirmation text as authoritative without a structured artifact.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The orchestration shouldn't care which protocol a supplier uses, so I'd define a common internal interface, check_stock, get_price, place_order, with two adapters. For the MCP supplier, the adapter is an MCP client calling their tools directly with OAuth scoped to our account; calls are deterministic and our agent stays in control. For the A2A supplier, the adapter discovers the agent through its agent card, delegates a task like 'order 200 units of X by Friday', and tracks the lifecycle, including questions it asks back and the final artifact like an order confirmation. Across both, orders need human approval above thresholds and stay within budget, use idempotency keys or client references, and are tracked in our own order system with audit logs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Remote agent asks a question mid-task?</strong> Answer from policy if possible, otherwise escalate to a buyer and resume the task.</li>
+  <li><strong>Why our own order system?</strong> It is the source of truth regardless of supplier protocol.</li>
+  <li><strong>Testing?</strong> Contract tests per adapter and a sandbox from each supplier.</li>
+</ul>
+</article>
+</body>
+</html>

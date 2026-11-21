@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-059 · Which terraform state subcommands do you use, and when?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-059" data-topic="Infrastructure as Code">
+<h1>Which terraform state subcommands do you use, and when?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>terraform state list</code> / <code>state show</code></strong> to inspect, <strong><code>state mv</code></strong> to change addresses (now usually <strong><code>moved</code> blocks</strong>), <strong><code>state rm</code></strong> to stop managing without destroying (or <strong><code>removed</code> blocks</strong>), and <strong><code>state pull</code> / <code>push</code></strong> only in emergencies, always with a <strong>backup and the lock held</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The state maps resource addresses in your code (<code>aws_s3_bucket.logs</code>, <code>module.net.aws_vpc.this</code>) to real objects (bucket name, VPC ID). Most of the time <code>plan</code> and <code>apply</code> maintain it for you; the <code>terraform state</code> subcommands exist for inspection and for the rare cases where the mapping itself must change.</p>
+<p><strong>Inspect.</strong> <code>state list</code> prints every address, optionally filtered (<code>terraform state list module.net</code>). <code>state show ADDRESS</code> prints the recorded attributes, useful to compare with the cloud console when debugging drift or finding an ID.</p>
+<p><strong>Change addresses.</strong> <code>state mv</code> renames an address or moves it into a module so Terraform does not destroy and recreate the resource after a refactor. Since Terraform 1.1, <strong><code>moved</code> blocks</strong> do the same declaratively: they are in code, reviewed in the pull request, visible in the plan and work for every consumer of a module. Prefer them.</p>
+<p><strong>Forget a resource.</strong> <code>state rm</code> drops an address from state without touching the real object, for example when handing a resource to another stack or when it was deleted out of band. Since 1.7, a <strong><code>removed</code> block</strong> with <code>lifecycle { destroy = false }</code> does this in code. <strong>Adopting</strong> is the reverse: <code>terraform import</code> or, better, <strong><code>import</code> blocks</strong> (1.5+).</p>
+<p><strong>Raw access.</strong> <code>state pull</code> downloads the state JSON; <code>state push</code> overwrites remote state and can destroy history or serials, so it is a last resort.</p>
+<p>Before any manual change: stop pipelines, take a backup (<code>terraform state pull &gt; backup.tfstate</code>), ensure backend versioning, and run <code>plan</code> afterwards to confirm no unexpected changes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm nobody else is applying; the commands take the state lock.</li>
+  <li>Back up the current state.</li>
+  <li>Run the change (or merge the <code>moved</code>/<code>removed</code>/<code>import</code> block).</li>
+  <li>Run <code>terraform plan</code> and expect no changes for affected resources.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform state list | grep aws_s3_bucket
+terraform state show aws_s3_bucket.logs
+terraform state pull &gt; backup-$(date +%F).tfstate
+terraform state mv aws_s3_bucket.logs module.logging.aws_s3_bucket.this</code></pre>
+<pre><code class="language-hcl">moved {
+  from = aws_s3_bucket.logs
+  to   = module.logging.aws_s3_bucket.this
+}
+removed {
+  from = aws_iam_role.legacy
+  lifecycle { destroy = false }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>state rm</code> and then forgetting the resource still exists, costing money or leaving it unmanaged.</li>
+  <li>Running <code>state mv</code> locally while CI applies the same stack.</li>
+  <li>Refactoring modules without <code>moved</code> blocks, causing destroy-and-create plans for consumers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For inspection I use <code>state list</code> and <code>state show</code>, for example to find an ID or compare attributes with what's really in the cloud. When refactoring I need addresses to change without recreating resources; <code>state mv</code> does that, but today I prefer <code>moved</code> blocks because they're reviewed in code and work for all consumers. <code>state rm</code>, or a <code>removed</code> block, makes Terraform forget a resource without destroying it, for example when moving it to another stack. <code>state pull</code> and <code>push</code> are emergency tools. Before touching state manually I stop pipelines, take a backup and verify with a clean plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you use <code>terraform state rm</code>?</strong> Handing a resource to another configuration, or removing an entry for something already deleted outside Terraform.</li>
+  <li><strong>How do you move a resource between two states?</strong> <code>removed</code> (destroy false) in the old stack and an <code>import</code> block in the new one.</li>
+  <li><strong>What protects you if it goes wrong?</strong> Backend versioning and a pulled backup copy.</li>
+</ul>
+</article>
+</body>
+</html>

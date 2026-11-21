@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-144 · What is a composite index? How does column order affect it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-144" data-topic="Databases &amp; SQL">
+<h1>What is a composite index? How does column order affect it?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>composite index</strong> is one index on several columns, sorted by the first column, then the second, and so on, so it serves queries through the <strong>leftmost prefix rule</strong>; put <strong>equality columns first</strong> and <strong>range or sort columns last</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Think of a phone book sorted by last name and then first name. Finding &quot;Sharma, Priya&quot; is fast, finding all Sharmas is fast, but finding everyone called Priya means reading the whole book. A B-tree index on <code>(customer_id, created_at)</code> works the same way: entries are ordered by <code>customer_id</code>, and within each customer by <code>created_at</code>.</p>
+<p>The <strong>leftmost prefix rule</strong> follows: the index supports filters on <code>customer_id</code>, or on <code>customer_id</code> and <code>created_at</code>, but not on <code>created_at</code> alone.</p>
+<p>Column order rules of thumb:</p>
+<ul>
+  <li><strong>Equality predicates first</strong> (<code>customer_id = ?</code>, <code>status = ?</code>).</li>
+  <li><strong>Then the range or ORDER BY column</strong> (<code>created_at &gt; ?</code>, <code>ORDER BY created_at DESC</code>). Once the engine hits a range, columns after it cannot be used to narrow the search, only filtered.</li>
+  <li>Adding the selected columns (or <code>INCLUDE</code> columns) makes it a <strong>covering index</strong>, enabling an index-only scan.</li>
+</ul>
+<p>So <code>WHERE customer_id = ? ORDER BY created_at DESC LIMIT 20</code> with an index on <code>(customer_id, created_at)</code> reads exactly 20 index entries with no sort. With <code>(created_at, customer_id)</code> the engine would have to scan by date and filter for the customer, which is much worse.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The index stores tuples (col1, col2, ..., row pointer) in sorted order.</li>
+  <li>The engine descends the tree using the leading equality values.</li>
+  <li>Within that range, the next column is already sorted, enabling range scans and ordered reads.</li>
+  <li>A range on a column stops further index navigation for later columns.</li>
+  <li>If all needed columns are in the index, the table is not touched.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE INDEX idx_orders_cust_created ON orders (customer_id, created_at DESC);
+
+-- Uses index fully, no sort
+SELECT id, total FROM orders WHERE customer_id = 42 ORDER BY created_at DESC LIMIT 20;
+-- Uses leading column
+SELECT count(*) FROM orders WHERE customer_id = 42;
+-- Cannot seek on the index (no leading column)
+SELECT * FROM orders WHERE created_at &gt; now() - interval '1 day';
+
+-- Covering version (PostgreSQL)
+CREATE INDEX idx_orders_cov ON orders (customer_id, created_at DESC) INCLUDE (total);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating separate single-column indexes and expecting them to act like a composite.</li>
+  <li>Putting the range column first.</li>
+  <li>Adding a composite index that duplicates the prefix of an existing one.</li>
+  <li>Forgetting that functions on a column (<code>DATE(created_at)</code>) prevent index use.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A composite index is a single index on several columns, sorted by the first column and then by the next within it, like a phone book by last name and first name. Because of that, the leftmost prefix rule applies: an index on customer id and created at helps queries filtering by customer, or customer and date, but not date alone. I put equality columns first and range or sort columns last, so WHERE customer id equals something ORDER BY created at DESC reads just the needed entries with no sort. If I include the selected columns, it becomes a covering index and avoids table lookups.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would (created_at, customer_id) work for that query?</strong> Poorly; it must scan by date and filter customers, and cannot avoid the sort for one customer.</li>
+  <li><strong>Can the database combine two single-column indexes?</strong> Yes, with bitmap or index merge, but it is usually slower than one composite index.</li>
+  <li><strong>Does column order matter for pure equality on both columns?</strong> Less so; choose the order that also serves other queries.</li>
+</ul>
+</article>
+</body>
+</html>

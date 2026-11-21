@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-202 · How does Spring's proxy-based transaction management work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-202" data-topic="Spring Framework">
+<h1>How does Spring's proxy-based transaction management work?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>TransactionInterceptor</strong> in an AOP proxy reads the method's <strong>transaction attributes</strong>, calls <strong>PlatformTransactionManager.getTransaction()</strong> which joins, suspends or creates a transaction per <strong>propagation</strong>, <strong>binds resources to the thread</strong> via <strong>TransactionSynchronizationManager</strong>, and <strong>commits or rolls back</strong> after the call; hence <strong>self-invocation, private methods and other threads</strong> are not covered.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Proxy creation.</strong> <code>@EnableTransactionManagement</code> (automatic in Spring Boot) registers an advisor made of a <strong>TransactionAttributeSource</strong> (which reads <code>@Transactional</code> annotations) and a <strong>TransactionInterceptor</strong>. The auto-proxy creator wraps every bean with matching methods in a proxy, CGLIB by default in Boot.</p>
+<p><strong>Starting.</strong> On each call, the interceptor looks up the <strong>TransactionAttribute</strong> for the method (propagation, isolation, timeout, readOnly, rollback rules, which manager). It calls <code>getTransaction(definition)</code> on the <strong>PlatformTransactionManager</strong>. The manager checks the thread for an existing transaction. Depending on <strong>propagation</strong> it <strong>joins</strong> it (REQUIRED, SUPPORTS, MANDATORY), <strong>suspends</strong> it by unbinding its resources and starts a new one (REQUIRES_NEW, NOT_SUPPORTED), creates a <strong>savepoint</strong> (NESTED) or throws. For a new transaction, <code>JpaTransactionManager</code> creates an <code>EntityManager</code>, begins the transaction, obtains the JDBC connection, applies isolation and read-only flags, and <strong>binds</strong> the <code>EntityManagerHolder</code> and <code>ConnectionHolder</code> to the thread with <strong>TransactionSynchronizationManager</strong>, a set of ThreadLocal maps.</p>
+<p><strong>Participating.</strong> Spring Data repositories use a shared <code>EntityManager</code> proxy, and <code>JdbcTemplate</code> uses <code>DataSourceUtils.getConnection()</code>. Both look up the thread-bound resource first, so they automatically participate without any parameters.</p>
+<p><strong>Finishing.</strong> After the target returns, the interceptor calls <code>commit()</code>; if a matching exception was thrown, <code>rollback()</code> (or marks rollback-only if it is just a participant). Registered <strong>synchronizations</strong> run (<code>beforeCommit</code>, <code>afterCommit</code>, <code>afterCompletion</code>, used by <code>@TransactionalEventListener</code>), resources are <strong>unbound</strong>, and a suspended outer transaction is <strong>resumed</strong>.</p>
+<p><strong>Pitfalls.</strong> Because the transaction lives in the proxy and the thread: <code>this.method()</code> calls skip the interceptor; private methods can't be proxied; and work on <strong>another thread</strong>, for example <code>@Async</code>, <code>CompletableFuture.supplyAsync</code>, a <strong>parallel stream</strong> or a reactive scheduler, finds no thread-bound resources and runs in its own (or no) transaction.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Caller → proxy → TransactionInterceptor.</li>
+  <li>Attributes resolved; <code>getTransaction()</code> joins, suspends or begins.</li>
+  <li>Resources bound to the current thread.</li>
+  <li>Target method runs; repositories use the bound resources.</li>
+  <li>Commit or rollback; synchronizations fire; resources unbound; outer resumed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public void recalculate(List&lt;Long&gt; ids) {
+    ids.parallelStream()                       // ForkJoinPool worker threads:
+       .forEach(id -&gt; repo.updateScore(id));   // NOT in this transaction
+}
+
+@Transactional
+public void recalculateSafely(List&lt;Long&gt; ids) {
+    ids.forEach(id -&gt; repo.updateScore(id));   // same thread, same transaction
+}</code></pre>
+<pre><code class="language-text">TransactionSynchronizationManager (per thread)
+  resources: { DataSource -&gt; ConnectionHolder, EMF -&gt; EntityManagerHolder }
+  synchronizations: [ TransactionalEventListener adapters ... ]
+  currentTransactionReadOnly / isolation / name</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Parallel streams or <code>@Async</code> inside a transactional method.</li>
+  <li>Self-invocation or private methods.</li>
+  <li>Mixing two transaction managers without specifying which one.</li>
+  <li>Expecting ThreadLocal binding to work in reactive code (use <code>ReactiveTransactionManager</code>).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For @Transactional beans Spring creates a proxy with a TransactionInterceptor. On each call it reads the attributes and calls getTransaction on the PlatformTransactionManager, which, depending on propagation, joins the current transaction, suspends it or starts a new one, opening a connection or EntityManager and binding it to the thread through TransactionSynchronizationManager. Repositories and JdbcTemplate find that thread-bound resource and participate automatically. After the method returns or throws, the interceptor commits or rolls back and unbinds. So self-invocation and private methods aren't intercepted, and work on another thread, like @Async or a parallel stream, doesn't join the transaction.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't a parallel stream share the transaction?</strong> Worker threads have no thread-bound connection.</li>
+  <li><strong>How do reactive transactions work?</strong> ReactiveTransactionManager stores state in the Reactor Context.</li>
+  <li><strong>Two transaction managers?</strong> <code>@Transactional(&quot;ordersTxManager&quot;)</code> or <code>transactionManager</code> attribute.</li>
+</ul>
+</article>
+</body>
+</html>

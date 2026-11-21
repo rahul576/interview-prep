@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-027 · Trace how an HTTPS request from the internet reaches a pod in a Kubernetes cluster.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-027" data-topic="Kubernetes">
+<h1>Trace how an HTTPS request from the internet reaches a pod in a Kubernetes cluster.</h1>
+<p class="ex-meta">Kubernetes · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>DNS</strong> resolves to a <strong>cloud load balancer</strong> (from a <code>LoadBalancer</code> Service), which forwards to the <strong>ingress controller or Gateway</strong> pods; they <strong>terminate TLS</strong> and route by <strong>host and path</strong> to a <strong>Service</strong>, whose <strong>virtual IP</strong> is translated by <strong>kube-proxy (iptables/IPVS/nftables) or eBPF</strong> to a <strong>ready pod IP</strong> from <strong>EndpointSlices</strong>, delivered over the <strong>CNI</strong> network.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>1. DNS.</strong> <code>shop.example.com</code> resolves to the address of a cloud load balancer, or to an anycast/CDN edge in front of it.</p>
+<p><strong>2. Cloud load balancer.</strong> Created by the cloud controller manager (or the AWS Load Balancer Controller) for the ingress controller's <strong>Service of type LoadBalancer</strong>. An L4 load balancer forwards TCP to nodes on a <strong>NodePort</strong>, or directly to pod IPs in &quot;IP target&quot; mode on VPC-native CNIs.</p>
+<p><strong>3. Ingress controller / Gateway.</strong> Pods such as NGINX-based controllers, Envoy Gateway, Traefik or a cloud gateway implementation read <strong>Ingress</strong> or <strong>Gateway API</strong> (<code>Gateway</code> + <code>HTTPRoute</code>) objects. They <strong>terminate TLS</strong> using a certificate in a Secret, commonly issued and renewed by <strong>cert-manager</strong> via ACME, then match the <strong>host and path</strong> and choose a backend Service. Many controllers send traffic directly to endpoint pod IPs, bypassing the Service virtual IP.</p>
+<p><strong>4. Service and kube-proxy.</strong> If traffic goes to the Service ClusterIP, <strong>kube-proxy</strong> rules (iptables, IPVS or nftables) on the node, or <strong>eBPF</strong> programs with Cilium, rewrite the destination to one of the endpoints in the Service's <strong>EndpointSlices</strong>, which contain only pods passing <strong>readiness</strong> probes.</p>
+<p><strong>5. CNI network.</strong> The packet travels to the pod's node via an overlay (VXLAN/Geneve) or native VPC routing (AWS VPC CNI, Azure CNI), enters the pod's <strong>network namespace</strong> through a veth pair, and reaches the container port.</p>
+<p>Responses return the same way; with SNAT along the path, the pod may see a node IP rather than the client IP, which is what <code>externalTrafficPolicy: Local</code> or proxy protocol / <code>X-Forwarded-For</code> headers address.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client → DNS → load balancer IP.</li>
+  <li>LB → node port or ingress pod IP.</li>
+  <li>Ingress/Gateway: TLS termination, host/path routing.</li>
+  <li>Service → endpoint selection by kube-proxy or eBPF.</li>
+  <li>CNI delivers to the pod; only ready pods are endpoints.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: shop, namespace: shop }
+spec:
+  parentRefs: [{ name: public-gw, namespace: infra }]
+  hostnames: [&quot;shop.example.com&quot;]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: /api } }]
+      backendRefs: [{ name: api, port: 80 }]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting readiness, so traffic reaches pods that are not ready.</li>
+  <li>Losing client IPs through SNAT without forwarding headers.</li>
+  <li>Creating a load balancer per Service instead of sharing an ingress or gateway.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;DNS resolves the hostname to a cloud load balancer, created by a LoadBalancer Service for the ingress controller. The load balancer forwards to the ingress controller pods, or a Gateway API implementation, which terminates TLS with a certificate often issued by cert-manager and routes by host and path to a backend Service. The Service is a stable virtual IP; kube-proxy's iptables or IPVS rules, or eBPF with Cilium, pick one of the ready endpoints from EndpointSlices. The packet then travels over the CNI network into the pod's namespace. Only pods passing readiness are endpoints.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is <code>externalTrafficPolicy: Local</code>?</strong> Only nodes with local endpoints receive traffic, preserving the client IP and avoiding an extra hop, at the risk of uneven load.</li>
+  <li><strong>Ingress or Gateway API?</strong> Gateway API is the more expressive successor, with role separation between infrastructure and app teams.</li>
+  <li><strong>Where can TLS terminate?</strong> At the cloud LB, at the ingress, or end-to-end at the pod or mesh sidecar.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-048 · How do you deploy Bicep or ARM templates safely from a pipeline, and what are deployment stacks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-048" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you deploy Bicep or ARM templates safely from a pipeline, and what are deployment stacks?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Deploy Bicep safely by <strong>linting and validating in CI</strong>, running <strong>what-if</strong> to preview <strong>create/modify/delete</strong>, gating production on an <strong>approval of the what-if output</strong>, deploying with <strong>workload identity federation</strong>, and using <strong>deployment stacks</strong> to manage resources as a group, <strong>clean up removed resources</strong> (<code>actionOnUnmanage</code>) and <strong>protect them with deny settings</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>CI stage:</strong> <code>az bicep build</code> (or <code>bicep lint</code>) catches syntax errors and linter rules (no hard-coded secrets, use parameters, secure outputs). <code>az deployment group validate</code> checks the template against the target scope, catching invalid property values and some policy violations. Many teams add PSRule for Azure or Checkov for best-practice rules.</p>
+<p><strong>Preview:</strong> <code>az deployment group what-if</code> (or <code>sub</code>, <code>mg</code>, <code>tenant</code> scopes) shows a colour-coded diff: <strong>Create</strong>, <strong>Modify</strong> (with property changes), <strong>Delete</strong> (only in Complete mode or with stacks), <strong>NoChange</strong>, <strong>Ignore</strong>. The pipeline publishes it as an artifact or summary, and the production stage's environment <strong>approval</strong> asks a reviewer to approve based on it, much like reviewing a Terraform plan.</p>
+<p><strong>Deploy:</strong> with a service connection using <strong>workload identity federation</strong>, typically <strong>incremental</strong> mode at resource group scope.</p>
+<p><strong>The classic problem:</strong> incremental mode never deletes resources removed from the template, so orphans accumulate. <strong>Complete mode</strong> deletes anything not in the template in that resource group, which is dangerous and only works at resource group scope.</p>
+<p><strong>Deployment stacks</strong> (<code>Microsoft.Resources/deploymentStacks</code>, GA) solve this. A stack tracks the resources it manages. When you remove a resource from the template and update the stack, <strong>actionOnUnmanage</strong> decides whether to <strong>detach</strong> it (leave it, unmanaged) or <strong>delete</strong> it, separately for resources, resource groups and management groups. <strong>Deny settings</strong> (<code>denyDelete</code> or <code>denyWriteAndDelete</code>) create deny assignments so managed resources can't be changed or deleted outside the stack, even by Owners, with excluded principals (the pipeline identity) and excluded actions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR: lint, build, validate, policy-as-code checks.</li>
+  <li>Main: what-if against each environment; publish output.</li>
+  <li>Approval on prod environment, reviewing what-if.</li>
+  <li>Deploy (or update stack) with OIDC service connection.</li>
+  <li>Stack deletes or detaches removed resources; deny settings protect the rest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az bicep lint --file main.bicep
+az deployment group what-if -g rg-orders-prod -f main.bicep -p prod.bicepparam
+az stack group create -n orders-prod -g rg-orders-prod \
+  --template-file main.bicep --parameters prod.bicepparam \
+  --action-on-unmanage deleteResources \
+  --deny-settings-mode denyDelete \
+  --deny-settings-excluded-principals &lt;pipeline-identity-object-id&gt; --yes</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Approving deployments without anyone reading the what-if.</li>
+  <li>Using Complete mode on shared resource groups.</li>
+  <li>Deny settings without excluding the deployment identity.</li>
+  <li>Ignoring what-if noise until reviewers stop trusting it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In CI I lint and build the Bicep and validate it against the target scope. Before deploying, what-if shows what will be created, modified or deleted, like a Terraform plan; the pipeline publishes it and the production approval is based on that output. Deployment uses an OIDC service connection in incremental mode. Deployment stacks manage the resources as a group: when something is removed from the template, actionOnUnmanage detaches or deletes it, which fixes the orphan problem of incremental mode, and deny settings like denyDelete protect managed resources from changes outside the stack, even by owners.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What-if noise?</strong> Some properties show false changes; keep API versions current, use <code>--exclude-change-types</code> and document known noise.</li>
+  <li><strong>Stacks vs Terraform state?</strong> Stacks track resources in Azure itself, no state file.</li>
+  <li><strong>Complete mode risk?</strong> Deletes anything in the resource group not in the template.</li>
+</ul>
+</article>
+</body>
+</html>

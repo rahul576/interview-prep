@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-135 · How does systemd manage services? How do you troubleshoot a service that will not start?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-135" data-topic="Linux">
+<h1>How does systemd manage services? How do you troubleshoot a service that will not start?</h1>
+<p class="ex-meta">Linux · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>systemd runs services from <strong>unit files</strong> that define the command, user, environment, <strong>dependencies</strong> and <strong>restart policy</strong>; you manage them with <strong>systemctl</strong> and troubleshoot with <strong><code>systemctl status</code></strong> and <strong><code>journalctl -u</code></strong>, checking permissions, ports, config syntax and dependencies.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>systemd</strong> is PID 1 on almost every modern distribution. A <strong>service unit</strong> (<code>/etc/systemd/system/myapp.service</code>) describes what to run in <code>ExecStart</code>, as which <code>User</code> and <code>Group</code>, with which <code>Environment</code> or <code>EnvironmentFile</code>, in which <code>WorkingDirectory</code>, and how to recover: <code>Restart=on-failure</code> with <code>RestartSec</code>. Ordering and dependencies are separate concepts: <strong><code>After=</code></strong> only orders startup, while <strong><code>Requires=</code></strong> or <strong><code>Wants=</code></strong> pull another unit in. <code>After=network-online.target</code> plus <code>Wants=network-online.target</code> is the usual way to wait for networking. The <code>[Install]</code> section with <code>WantedBy=multi-user.target</code> lets <code>systemctl enable</code> start it at boot.</p>
+<p>systemd also places each service in its own <strong>cgroup</strong>, so it tracks every child process and can apply limits such as <code>MemoryMax=</code> and <code>CPUQuota=</code>, and hardening options like <code>ProtectSystem=strict</code>, <code>NoNewPrivileges=yes</code> and <code>PrivateTmp=yes</code>.</p>
+<p>When a service will not start, <strong><code>systemctl status myapp</code></strong> shows the state (failed, activating, auto-restart), the exit code and the last log lines. <strong><code>journalctl -u myapp -b</code></strong> gives full logs for this boot, and <code>-f</code> follows them. Common causes: the binary or config is <strong>not readable</strong> by the service user, the <strong>port is already in use</strong> (<code>ss -tulpn</code>), a <strong>config syntax error</strong> (many apps have a <code>-t</code> test flag, like <code>nginx -t</code>), a missing <strong>EnvironmentFile</strong>, wrong <code>Type=</code> (for example <code>forking</code> for a process that does not fork), or a dependency such as a database not being ready. After editing a unit, run <strong><code>systemctl daemon-reload</code></strong>; if restarts hit the start limit, <code>systemctl reset-failed</code> clears it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>systemd reads unit files and builds a dependency graph.</li>
+  <li><code>systemctl start</code> launches <code>ExecStart</code> in a dedicated cgroup.</li>
+  <li>stdout and stderr go to the journal.</li>
+  <li>On exit, the <code>Restart=</code> policy decides whether to restart.</li>
+  <li><code>enable</code> links the unit into a target for boot.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-ini"># /etc/systemd/system/orders.service
+[Unit]
+Description=Orders API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=orders
+EnvironmentFile=/etc/orders/env
+ExecStart=/opt/orders/bin/orders --config /etc/orders/config.yaml
+Restart=on-failure
+RestartSec=5
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+<pre><code class="language-bash">sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now orders
+systemctl status orders
+journalctl -u orders -b --no-pager | tail -50</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>daemon-reload</code> after editing a unit.</li>
+  <li>Thinking <code>After=</code> also creates a dependency.</li>
+  <li>Testing the command as root while the service runs as another user.</li>
+  <li>Editing vendor units in <code>/usr/lib</code> instead of using <code>systemctl edit</code> drop-ins.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;systemd manages services through unit files that describe the command, user, environment, dependencies such as After and Requires, and restart policies like Restart on-failure. I use systemctl start, stop and enable, and systemctl status for the state and recent logs. To troubleshoot, journalctl -u with the service name shows the full logs. Typical causes are file permissions for the service user, a port already in use, a config syntax error, a missing environment file or a dependency not ready. After editing a unit I run daemon-reload. systemd also gives each service a cgroup, so I can set limits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you limit a service's memory?</strong> Set <code>MemoryMax=</code> in the unit or a drop-in; systemd enforces it with cgroups.</li>
+  <li><strong>What is a drop-in?</strong> An override file created by systemctl edit that changes settings without editing the original unit.</li>
+  <li><strong>What are systemd timers?</strong> A cron alternative with journal logging and dependency support.</li>
+</ul>
+</article>
+</body>
+</html>

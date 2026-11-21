@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-091 · How do you distinguish between business exceptions, technical exceptions, and infrastructure failures?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-091" data-topic="Exceptions">
+<h1>How do you distinguish between business exceptions, technical exceptions, and infrastructure failures?</h1>
+<p class="ex-meta">Exceptions · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Business exceptions</strong> are expected rule violations (4xx, no retry, info/warn), <strong>technical exceptions</strong> are bugs or impossible states (500, error log, alert), and <strong>infrastructure failures</strong> are environment problems such as timeouts or unavailable dependencies (often transient: <strong>retry with backoff, circuit breaker, 503</strong>); model them as <strong>separate hierarchies with separate handling</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Treating every exception the same leads to bad outcomes: retrying &quot;insufficient balance&quot; five times, paging on-call for a user typo, or returning 400 for a database outage. Classifying failures lets each layer react correctly.</p>
+<p><strong>Business exceptions</strong> express domain rules: insufficient balance, order already shipped, coupon expired, duplicate registration. They are normal, expected outcomes. Map them to <strong>4xx</strong> (400, 404, 409, 422) with a stable <strong>error code</strong> the client can act on. Log at <strong>info or warn</strong> without full stack traces, count them as business metrics, and <strong>never retry</strong>, because the result will not change.</p>
+<p><strong>Technical exceptions</strong> are unexpected states caused by defects: <code>NullPointerException</code>, <code>IllegalStateException</code>, a mapping error, a violated invariant. They are not the user's fault. Return a generic <strong>500</strong> without internal details, log at <strong>error</strong> with the full stack trace and correlation id, and <strong>alert</strong> on rate increases. Retrying rarely helps.</p>
+<p><strong>Infrastructure failures</strong> come from the environment: DB connection timeouts, deadlocks, a downstream service returning 503, broker unavailable, DNS issues. They are often <strong>transient</strong>, so apply <strong>retries with exponential backoff and jitter</strong> (only for idempotent operations or with idempotency keys), <strong>circuit breakers</strong> and bulkheads (Resilience4j), timeouts, and fallbacks. Externally, return <strong>503</strong> or <strong>504</strong>, possibly with <code>Retry-After</code>. For messaging, transient failures go to retry topics and eventually a <strong>dead-letter queue</strong>.</p>
+<p>Implementation: a base <code>BusinessException</code> (with error code), a <code>TechnicalException</code>, and an <code>InfrastructureException</code> with a <code>retryable</code> flag, or classification via marker interfaces. Translate third-party exceptions at the adapter boundary (Spring already maps SQL errors into <code>TransientDataAccessException</code> vs <code>NonTransientDataAccessException</code>). Retry policies list retryable types explicitly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Adapters catch raw library exceptions and translate them into the right category.</li>
+  <li>Domain code throws business exceptions for rule violations.</li>
+  <li>Retry and circuit-breaker policies apply only to retryable infrastructure exceptions.</li>
+  <li>A central handler maps each category to status, log level and response body.</li>
+  <li>Metrics and alerts are configured per category.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public abstract class BusinessException extends RuntimeException {
+    private final String code;
+    protected BusinessException(String code, String msg) { super(msg); this.code = code; }
+    public String code() { return code; }
+}
+public class InfrastructureException extends RuntimeException {
+    public InfrastructureException(String msg, Throwable cause) { super(msg, cause); }
+}</code></pre>
+<pre><code class="language-yaml">resilience4j.retry.instances.payments:
+  maxAttempts: 3
+  waitDuration: 200ms
+  enableExponentialBackoff: true
+  retryExceptions:
+    - com.shop.InfrastructureException
+    - org.springframework.dao.TransientDataAccessException
+  ignoreExceptions:
+    - com.shop.BusinessException</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Business</th><th>Technical</th><th>Infrastructure</th></tr></thead>
+<tbody>
+<tr><td>Example</td><td>Insufficient balance</td><td>NPE</td><td>DB timeout</td></tr>
+<tr><td>HTTP</td><td>4xx</td><td>500</td><td>503/504</td></tr>
+<tr><td>Retry</td><td>Never</td><td>Rarely</td><td>Yes, with backoff</td></tr>
+<tr><td>Log/alert</td><td>Info/warn, metric</td><td>Error, alert</td><td>Warn/error, alert on rate</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying everything, including business and non-idempotent failures.</li>
+  <li>Logging business exceptions with full stack traces at error level, creating alert noise.</li>
+  <li>Leaking infrastructure details (SQL, hostnames) to clients.</li>
+  <li>Catching <code>Exception</code> in retry config.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I separate them by cause and reaction. Business exceptions are expected rule violations like insufficient balance; they map to 4xx with an error code, log at info or warn, and are never retried. Technical exceptions are bugs like an NPE or illegal state; they return a generic 500, log at error with the stack trace and alert. Infrastructure failures are timeouts or downstream outages; they're often transient, so retries with backoff, circuit breakers and 503 responses fit. I model them as separate hierarchies, translate library exceptions at adapters, and configure retries and alerts per category.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would your retry logic avoid retrying business exceptions?</strong> Explicit retry and ignore lists by exception type, or a retryable flag.</li>
+  <li><strong>How do you make retries safe?</strong> Idempotent operations or idempotency keys.</li>
+  <li><strong>Where do failed messages go?</strong> Retry topics, then a dead-letter queue.</li>
+</ul>
+</article>
+</body>
+</html>

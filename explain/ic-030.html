@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-030 · How do you read a Terraform plan? What do the +, -, ~ and -/+ symbols mean?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-030" data-topic="Infrastructure as Code">
+<h1>How do you read a Terraform plan? What do the +, -, ~ and -/+ symbols mean?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>In a plan, <strong>+</strong> create, <strong>-</strong> destroy, <strong>~</strong> update in place, <strong>-/+</strong> replace (destroy then create) and <strong>+/-</strong> replace with <strong>create_before_destroy</strong>; always look for <strong>&quot;forces replacement&quot;</strong>, understand <strong>&quot;known after apply&quot;</strong>, and check the <strong>summary line</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>terraform plan</code> compares configuration, state and refreshed reality and lists the actions it proposes, each prefixed with a symbol:</p>
+<ul>
+  <li><strong>+ create</strong>: a new resource will be created.</li>
+  <li><strong>- destroy</strong>: an existing resource will be deleted.</li>
+  <li><strong>~ update in place</strong>: some arguments change and the provider can modify the object without recreating it.</li>
+  <li><strong>-/+ replace</strong>: an argument that the API cannot change in place has changed, so Terraform destroys the old object and creates a new one. With <code>create_before_destroy</code> it shows <strong>+/-</strong>: new first, then delete.</li>
+  <li><strong>&lt;= read</strong>: a data source will be read during apply, because its inputs are not known yet.</li>
+</ul>
+<p>For replacements Terraform annotates the responsible attribute with <strong># forces replacement</strong>. This is the single most important line to check: replacing a database, a disk, a load balancer or a Kubernetes cluster can mean <strong>data loss or downtime</strong>, and it is often triggered by an innocent-looking change such as a subnet, name or availability zone.</p>
+<p><strong>(known after apply)</strong> marks values the provider computes during creation, like IDs and ARNs. Many of them are harmless, but a known-after-apply value feeding a force-new argument can cascade into more replacements. <code>(sensitive value)</code> hides sensitive attributes.</p>
+<p>The final line, such as <code>Plan: 3 to add, 1 to change, 0 to destroy.</code>, gives the scale and is a quick sanity check: a small code change should not produce &quot;12 to destroy&quot;. Recent versions also report <strong>moved</strong>, <strong>imported</strong> and <strong>forgotten</strong> objects.</p>
+<p>Reviewers should read the whole plan, not just the summary. In CI the plan is saved with <code>-out=tfplan</code>, rendered with <code>terraform show tfplan</code>, and <code>terraform show -json tfplan</code> feeds automated policy checks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Refresh real objects and compare with config and state.</li>
+  <li>Decide per resource: no-op, create, update, replace, delete.</li>
+  <li>Mark attributes that force replacement.</li>
+  <li>Print grouped changes and a summary.</li>
+  <li>Optionally save the plan for an exact apply later.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">  # aws_db_instance.orders must be replaced
+-/+ resource &quot;aws_db_instance&quot; &quot;orders&quot; {
+      ~ availability_zone = &quot;eu-west-1a&quot; -&gt; &quot;eu-west-1b&quot; # forces replacement
+      ~ id                = &quot;orders-db&quot; -&gt; (known after apply)
+        # (25 unchanged attributes hidden)
+    }
+
+  # aws_security_group.web will be updated in-place
+  ~ resource &quot;aws_security_group&quot; &quot;web&quot; {
+      ~ description = &quot;web&quot; -&gt; &quot;web tier&quot;
+    }
+
+Plan: 1 to add, 1 to change, 1 to destroy.</code></pre>
+<pre><code class="language-bash">terraform plan -out=tfplan
+terraform show -json tfplan | jq '.resource_changes[] | select(.change.actions | index(&quot;delete&quot;)) | .address'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading only the summary line.</li>
+  <li>Missing a <code>-/+</code> on a stateful resource.</li>
+  <li>Running <code>apply</code> without a saved plan, so something different gets applied.</li>
+  <li>Ignoring unexpected in-place updates that indicate drift.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Plus means create, minus destroy, tilde update in place, and minus-slash-plus replace: destroy and recreate, or plus-slash-minus if create_before_destroy is set. For replacements the plan marks the argument that forces replacement, which is the first thing I look for, because replacing a database or load balancer can mean data loss or downtime. Known after apply values are computed by the provider. The summary line gives the scale. I read the whole plan, save it with -out, and question any unexpected destroy or replace.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why apply a saved plan file in CI rather than running apply again?</strong> It guarantees what was reviewed is exactly what's applied; Terraform rejects it if state changed meanwhile.</li>
+  <li><strong>What does &lt;= mean?</strong> A data source read deferred to apply time.</li>
+  <li><strong>How can you avoid a forced replacement?</strong> Revert the change, use <code>ignore_changes</code> if appropriate, or plan a migration.</li>
+</ul>
+</article>
+</body>
+</html>

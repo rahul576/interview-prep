@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-219 · What are the states of a Java thread?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-219" data-topic="Concurrency">
+<h1>What are the states of a Java thread?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><code>Thread.State</code> has six values: <strong>NEW</strong>, <strong>RUNNABLE</strong> (running or ready), <strong>BLOCKED</strong> (waiting for a <strong>monitor</strong>), <strong>WAITING</strong> (indefinite wait/join/park), <strong>TIMED_WAITING</strong> (sleep or timed waits) and <strong>TERMINATED</strong>; these appear in <strong>thread dumps</strong> and are how you diagnose contention and hangs.</p>
+
+<h2>Detailed explanation</h2>
+<ul>
+  <li><strong>NEW</strong>: the <code>Thread</code> object exists but <code>start()</code> has not been called.</li>
+  <li><strong>RUNNABLE</strong>: after <code>start()</code>. The JVM does not distinguish &quot;running on a CPU&quot; from &quot;ready and waiting for the OS scheduler&quot;; both are RUNNABLE. Importantly, a platform thread blocked in <strong>native I/O</strong> (reading a socket) is also reported as RUNNABLE, because from the JVM's view it is executing native code.</li>
+  <li><strong>BLOCKED</strong>: waiting to <strong>acquire a monitor</strong> to enter a <code>synchronized</code> block or method, or to re-enter one after <code>wait()</code>. Only intrinsic locks produce BLOCKED.</li>
+  <li><strong>WAITING</strong>: waiting indefinitely for another thread: <code>Object.wait()</code> without timeout, <code>Thread.join()</code> without timeout, or <code>LockSupport.park()</code>. Since <code>ReentrantLock</code>, <code>CountDownLatch</code>, <code>BlockingQueue.take</code> and friends use <code>park</code>, a thread waiting on them shows <strong>WAITING (parking)</strong>, not BLOCKED.</li>
+  <li><strong>TIMED_WAITING</strong>: the same but with a timeout: <code>Thread.sleep</code>, <code>wait(ms)</code>, <code>join(ms)</code>, <code>parkNanos</code>, <code>tryLock(timeout)</code>, <code>poll(timeout)</code>.</li>
+  <li><strong>TERMINATED</strong>: <code>run()</code> has returned or thrown.</li>
+</ul>
+<p>A thread can't go back to NEW, and calling <code>start()</code> twice throws <code>IllegalThreadStateException</code>. You can read the state with <code>getState()</code>, but it is a snapshot for monitoring, not for synchronisation.</p>
+<p><strong>Diagnosis</strong> with <code>jcmd &lt;pid&gt; Thread.print</code> or <code>jstack</code>:</p>
+<ul>
+  <li>Many threads <strong>BLOCKED</strong> &quot;waiting to lock &lt;0x...&gt;&quot; on the same monitor → lock contention; find the thread &quot;locked &lt;0x...&gt;&quot;.</li>
+  <li>Many <strong>WAITING (parking)</strong> in a pool's <code>getTask</code> → idle workers, normal.</li>
+  <li>Many <strong>WAITING</strong> on a connection pool → pool exhaustion.</li>
+  <li>High CPU with <strong>RUNNABLE</strong> threads in the same frame → hot loop.</li>
+</ul>
+<p>Virtual threads report the same states; a parked virtual thread is WAITING.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>new Thread()</code> → NEW.</li>
+  <li><code>start()</code> → RUNNABLE.</li>
+  <li>Contended <code>synchronized</code> → BLOCKED → RUNNABLE on acquisition.</li>
+  <li><code>wait</code>/<code>join</code>/<code>park</code> → WAITING or TIMED_WAITING → RUNNABLE on notify, unpark or timeout.</li>
+  <li><code>run</code> ends → TERMINATED.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Thread t = new Thread(() -&gt; {
+    try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+});
+System.out.println(t.getState()); // NEW
+t.start();
+Thread.sleep(50);
+System.out.println(t.getState()); // TIMED_WAITING
+t.join();
+System.out.println(t.getState()); // TERMINATED</code></pre>
+<pre><code class="language-text">&quot;http-nio-8080-exec-7&quot; #42 daemon prio=5 tid=... nid=...
+   java.lang.Thread.State: BLOCKED (on object monitor)
+	at com.shop.PriceCache.get(PriceCache.java:31)
+	- waiting to lock &lt;0x000000071ab2c3d8&gt; (a com.shop.PriceCache)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying there is a separate RUNNING state.</li>
+  <li>Expecting threads waiting on ReentrantLock to show BLOCKED.</li>
+  <li>Thinking socket I/O shows as WAITING.</li>
+  <li>Using <code>getState()</code> for control flow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A thread is NEW after creation and before start. After start it's RUNNABLE, which covers both running and ready to run. It's BLOCKED while waiting to acquire a monitor for synchronized. It's WAITING when it calls wait, join or park without a timeout, and TIMED_WAITING for sleep or the timed versions. Finally it's TERMINATED when run completes. These states appear in thread dumps, which is how I diagnose contention: many threads BLOCKED on the same monitor point to a hot lock.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>State during blocking socket I/O?</strong> RUNNABLE for a platform thread, since it's in native code.</li>
+  <li><strong>Waiting on ReentrantLock?</strong> WAITING (parking), not BLOCKED.</li>
+  <li><strong>Can you restart a TERMINATED thread?</strong> No; create a new one.</li>
+</ul>
+</article>
+</body>
+</html>

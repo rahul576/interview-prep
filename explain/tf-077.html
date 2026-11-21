@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-077 · How would you do a blue-green replacement of infrastructure, such as a new cluster, using Terraform?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-077" data-topic="Terraform">
+<h1>How would you do a blue-green replacement of infrastructure, such as a new cluster, using Terraform?</h1>
+<p class="ex-meta">Terraform · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Parameterise the stack so a <strong>green</strong> copy is created <strong>alongside blue</strong> (two module instances or two states), deploy and test on green, <strong>shift traffic gradually</strong> with <strong>weighted DNS or a global load balancer</strong> managed as a Terraform variable, <strong>roll back</strong> by shifting weights back, remove blue after a <strong>soak period</strong>, and handle <strong>stateful data separately</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some infrastructure changes are too risky to apply in place: a Kubernetes cluster upgrade spanning several versions, a new network design, a different node OS or a new region layout. Blue-green turns a risky mutation into a <strong>controlled migration</strong> with an instant rollback path.</p>
+<p><strong>Parameterisation.</strong> Write the stack as a module and instantiate it per colour, for example <code>for_each = toset(var.active_colors)</code> producing <code>module.cluster[&quot;blue&quot;]</code> and <code>module.cluster[&quot;green&quot;]</code>, or keep a separate state per colour (<code>cluster-blue</code>, <code>cluster-green</code>) for isolation. The green instance gets the new Kubernetes version or network design.</p>
+<p><strong>Deploy and verify.</strong> Applications are deployed to green and tested with synthetic traffic, smoke tests and internal users.</p>
+<p><strong>Traffic shifting.</strong> A layer in front of both stacks splits traffic: <strong>Route 53 weighted records</strong>, <strong>Azure Front Door</strong> or Traffic Manager with weighted origins, or a global load balancer. The weights are a Terraform variable, changed through PRs: 10 percent, 50, then 100. Each step is reviewed and observed.</p>
+<p><strong>Rollback</strong> is simply shifting the weights back while blue is still running, which takes effect in seconds for a load balancer and within the DNS TTL for DNS.</p>
+<p><strong>Decommission.</strong> After a <strong>soak period</strong> at 100 percent green, remove <code>&quot;blue&quot;</code> from the colour set and apply, which destroys the old stack.</p>
+<p><strong>Stateful data</strong> such as databases, storage accounts and message brokers usually lives <strong>outside</strong> the coloured stacks, in its own state, shared by both colours or migrated deliberately, because duplicating data with every cluster swap is expensive and error-prone.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Shared layer: data stores and global entry point in their own state.</li>
+  <li>Add <code>green</code> to the active colours; apply creates the new stack.</li>
+  <li>Deploy apps to green; run tests.</li>
+  <li>Shift weights in steps through PRs, monitoring each step.</li>
+  <li>Roll back by restoring weights if metrics degrade.</li>
+  <li>After soak, remove blue from the set and apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;active_colors&quot; { default = [&quot;blue&quot;, &quot;green&quot;] }
+variable &quot;weights&quot;       { default = { blue = 90, green = 10 } }
+
+module &quot;cluster&quot; {
+  source     = &quot;./modules/aks-stack&quot;
+  for_each   = toset(var.active_colors)
+  color      = each.key
+  k8s_version = each.key == &quot;green&quot; ? &quot;1.33&quot; : &quot;1.31&quot;
+}
+
+resource &quot;aws_route53_record&quot; &quot;api&quot; {
+  for_each       = toset(var.active_colors)
+  zone_id        = var.zone_id
+  name           = &quot;api.example.com&quot;
+  type           = &quot;CNAME&quot;
+  ttl            = 60
+  set_identifier = each.key
+  records        = [module.cluster[each.key].ingress_hostname]
+  weighted_routing_policy { weight = var.weights[each.key] }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting the database inside the coloured stack.</li>
+  <li>High DNS TTLs, so traffic shifts and rollbacks are slow.</li>
+  <li>Destroying blue immediately after reaching 100 percent.</li>
+  <li>Forgetting capacity: green must handle full load before the last step.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I parameterise the stack, either a module instantiated twice with keys blue and green or a state per colour, so green, with the new Kubernetes version or network design, is created next to blue. Apps are deployed to green and tested. Traffic shifts gradually with weighted DNS or a global load balancer like Front Door or Route 53, with the weights as a Terraform variable: 10, 50, then 100. If metrics degrade, I shift the weights back while blue still runs. After a soak period, blue is removed. Stateful data is shared or migrated separately.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid DNS caching delays?</strong> Low TTLs set well in advance, or a load balancer layer instead of DNS.</li>
+  <li><strong>What about in-cluster state such as PVCs?</strong> Keep state in managed services or migrate with backups.</li>
+  <li><strong>Cost?</strong> Double infrastructure for the overlap; keep the window short.</li>
+</ul>
+</article>
+</body>
+</html>

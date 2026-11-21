@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-117 · What is structured concurrency in modern Java and why does it matter?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-117" data-topic="Concurrency">
+<h1>What is structured concurrency in modern Java and why does it matter?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Structured concurrency</strong> treats a group of related concurrent subtasks as <strong>one unit of work</strong> bounded by a code block: with <strong>StructuredTaskScope</strong> you <strong>fork</strong> subtasks, <strong>join</strong>, and on failure the scope <strong>cancels siblings and propagates the error</strong>, so no thread outlives its parent; it pairs with <strong>virtual threads</strong> and is still a <strong>preview API</strong> (reworked in Java 25).</p>
+
+<h2>Detailed explanation</h2>
+<p>With an <code>ExecutorService</code> or <code>CompletableFuture</code>, the relationship between a request and the tasks it spawns is only in the programmer's head. If one subtask fails, the others keep running and waste resources; if the parent is cancelled, children may leak; thread dumps show unrelated threads with no parent-child structure. This is &quot;unstructured&quot; concurrency, the threading equivalent of <code>goto</code>.</p>
+<p><strong>Structured concurrency</strong> applies the block structure of sequential code to threads: subtasks start inside a scope and must finish before the scope closes. The benefits:</p>
+<ul>
+  <li><strong>Error propagation</strong>: if a subtask fails, the scope can <strong>cancel</strong> (interrupt) the remaining ones and rethrow.</li>
+  <li><strong>Cancellation</strong>: if the parent is interrupted, all children are cancelled.</li>
+  <li><strong>No leaks</strong>: try-with-resources guarantees no subtask outlives the block.</li>
+  <li><strong>Observability</strong>: JSON thread dumps show the task hierarchy.</li>
+  <li><strong>Readability</strong>: the code looks like sequential code.</li>
+</ul>
+<p>It is designed for <strong>virtual threads</strong>: each <code>fork</code> starts a new virtual thread by default, so forking per subtask is cheap.</p>
+<p><strong>Status.</strong> It has been a <strong>preview API since Java 21</strong> (JEP 453), repeatedly refined. In <strong>Java 25 (JEP 505)</strong> the API changed: instead of subclassing <code>ShutdownOnFailure</code>/<code>ShutdownOnSuccess</code>, you call <code>StructuredTaskScope.open()</code> with an optional <strong>Joiner</strong> policy, for example <code>Joiner.awaitAllSuccessfulOrThrow()</code> (default), <code>anySuccessfulResultOrThrow()</code> or <code>allSuccessfulOrThrow()</code>. It still requires <code>--enable-preview</code>, and the API may change before finalisation. It works together with <strong>ScopedValue</strong>, whose bindings are inherited by forked subtasks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open a scope in try-with-resources.</li>
+  <li><code>fork</code> each subtask; each runs in its own virtual thread.</li>
+  <li><code>join()</code> waits according to the Joiner policy.</li>
+  <li>On failure, remaining subtasks are cancelled and <code>join</code> throws.</li>
+  <li>Read results from the <code>Subtask</code> handles; closing the scope guarantees all threads finished.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Java 25 preview API: javac --release 25 --enable-preview
+Dashboard load(String id) throws InterruptedException {
+    try (var scope = StructuredTaskScope.open()) {        // default: all must succeed
+        Subtask&lt;User&gt; user = scope.fork(() -&gt; userClient.find(id));
+        Subtask&lt;List&lt;Order&gt;&gt; orders = scope.fork(() -&gt; orderClient.byUser(id));
+
+        scope.join();          // throws FailedException if any subtask failed;
+                               // the other subtask is cancelled automatically
+        return new Dashboard(user.get(), orders.get());
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>CompletableFuture.allOf</th><th>StructuredTaskScope</th></tr></thead>
+<tbody>
+<tr><td>Failure of one</td><td>others keep running</td><td>others cancelled</td></tr>
+<tr><td>Lifetime</td><td>unbounded</td><td>bounded by block</td></tr>
+<tr><td>Parent cancel</td><td>not propagated</td><td>propagated</td></tr>
+<tr><td>Style</td><td>callbacks</td><td>sequential blocking code</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>Subtask.get()</code> before <code>join()</code>.</li>
+  <li>Assuming the API is final; it needs <code>--enable-preview</code> and may change.</li>
+  <li>Quoting the Java 21 <code>ShutdownOnFailure</code> API as current.</li>
+  <li>Using it for CPU-heavy parallelism instead of I/O fan-out.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Structured concurrency treats a group of related tasks running in different threads as a single unit of work whose lifetime is bounded by a code block. With StructuredTaskScope I fork subtasks, for example fetching a user and their orders in parallel, then join; if one fails, the scope cancels the others and propagates the error, and no thread outlives the block. It makes concurrent code read like sequential code and fits naturally with virtual threads. It's still a preview API: it's been previewing since Java 21, and Java 25 reworked it around StructuredTaskScope.open and Joiner policies, so it needs --enable-preview.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How is it different from CompletableFuture.allOf?</strong> allOf doesn't cancel siblings on failure or bound task lifetimes.</li>
+  <li><strong>What does a Joiner do?</strong> Defines the completion policy, such as all must succeed or first success wins.</li>
+  <li><strong>How does context flow?</strong> ScopedValue bindings are inherited by forked subtasks.</li>
+</ul>
+</article>
+</body>
+</html>

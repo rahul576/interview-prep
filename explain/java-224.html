@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-224 · What is the difference between shutdown() and shutdownNow() on an ExecutorService, and how do you shut down gracefully?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-224" data-topic="Concurrency">
+<h1>What is the difference between shutdown() and shutdownNow() on an ExecutorService, and how do you shut down gracefully?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>shutdown()</code> stops accepting new tasks but lets <strong>running and queued tasks finish</strong>; <code>shutdownNow()</code> also <strong>interrupts running tasks</strong> and <strong>returns the queued tasks</strong> that never started. A graceful shutdown combines <code>shutdown()</code>, <code>awaitTermination()</code> with a timeout, and <code>shutdownNow()</code> as a fallback.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <code>ExecutorService</code> owns worker threads, and unless they are daemon threads they keep the JVM alive. So every executor you create needs an explicit end of life. There are two levels of stopping.</p>
+<p><strong><code>shutdown()</code></strong> is the polite request: the executor rejects new submissions (they hit the <code>RejectedExecutionHandler</code>), but every task already in the queue still runs. The call returns immediately; it does not wait. <strong><code>shutdownNow()</code></strong> is the forceful request: it drains the queue, returns those tasks as a <code>List&lt;Runnable&gt;</code> so you can log or persist them, and calls <code>interrupt()</code> on running workers. Interruption is <strong>cooperative</strong>: a task stuck in a loop that never checks <code>Thread.interrupted()</code> or never calls a blocking method that throws <code>InterruptedException</code> will keep running.</p>
+<p><strong><code>awaitTermination(timeout, unit)</code></strong> is what actually waits. It returns <code>true</code> if all tasks finished in time. The standard pattern is: shutdown, wait, force, wait again briefly. Since <strong>Java 19</strong>, <code>ExecutorService</code> is <code>AutoCloseable</code>, and <code>close()</code> does a shutdown plus wait for you, which suits try-with-resources for short-lived executors.</p>
+<p>In frameworks, let the container manage it. Spring's <code>ThreadPoolTaskExecutor</code> supports <code>setWaitForTasksToCompleteOnShutdown(true)</code> and <code>setAwaitTerminationSeconds(...)</code>; for your own executors call the pattern from a <code>@PreDestroy</code> method or a shutdown hook. In Kubernetes the pod first gets <strong>SIGTERM</strong>, the JVM runs shutdown hooks, and after <code>terminationGracePeriodSeconds</code> (30 s by default) it gets SIGKILL, so your timeouts must fit inside that grace period.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stop taking new work: call <code>shutdown()</code> (and stop consumers or schedulers feeding the pool).</li>
+  <li>Wait for in-flight and queued tasks with <code>awaitTermination(...)</code>.</li>
+  <li>If the timeout expires, call <code>shutdownNow()</code> and record the returned unstarted tasks.</li>
+  <li>Wait a few more seconds for interrupted tasks to react.</li>
+  <li>If it still has not terminated, log it; the process will be killed anyway.</li>
+  <li>If the current thread is interrupted while waiting, call <code>shutdownNow()</code> and restore the interrupt flag.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">void shutdownGracefully(ExecutorService pool) {
+    pool.shutdown();                                   // no new tasks
+    try {
+        if (!pool.awaitTermination(20, TimeUnit.SECONDS)) {
+            List&lt;Runnable&gt; dropped = pool.shutdownNow(); // interrupt + drain
+            log.warn(&quot;Forced shutdown, {} tasks never started&quot;, dropped.size());
+            if (!pool.awaitTermination(5, TimeUnit.SECONDS)) {
+                log.error(&quot;Executor did not terminate&quot;);
+            }
+        }
+    } catch (InterruptedException e) {
+        pool.shutdownNow();
+        Thread.currentThread().interrupt();
+    }
+}
+
+@PreDestroy
+void stop() { shutdownGracefully(reportPool); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th><code>shutdown()</code></th><th><code>shutdownNow()</code></th></tr></thead>
+<tbody>
+<tr><td>New tasks</td><td>Rejected</td><td>Rejected</td></tr>
+<tr><td>Queued tasks</td><td>Still run</td><td>Removed and returned</td></tr>
+<tr><td>Running tasks</td><td>Allowed to finish</td><td>Interrupted</td></tr>
+<tr><td>Blocks caller</td><td>No</td><td>No</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>shutdown()</code> waits; it returns immediately, you need <code>awaitTermination</code>.</li>
+  <li>Never shutting executors down, so non-daemon threads keep the JVM from exiting.</li>
+  <li>Writing tasks that ignore interruption, so <code>shutdownNow()</code> cannot stop them.</li>
+  <li>Swallowing <code>InterruptedException</code> instead of restoring the interrupt flag.</li>
+  <li>Using timeouts longer than the Kubernetes grace period.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;shutdown stops accepting new tasks but lets the queued and running ones finish, and it returns immediately. shutdownNow also interrupts running tasks and hands back the tasks that never started. For a graceful stop I call shutdown, then awaitTermination with a timeout; if that fails I call shutdownNow and wait a few more seconds, and if I get interrupted I restore the flag. In Spring I let the framework manage the pool with wait-for-tasks settings, or call this from PreDestroy, and I make sure the timeouts fit inside the Kubernetes grace period after SIGTERM.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to queued tasks if the JVM exits without shutting down the executor?</strong> They are simply lost; nothing persists them, and non-daemon workers may even block a normal exit.</li>
+  <li><strong>How do you make a task respond to shutdownNow?</strong> Check <code>Thread.currentThread().isInterrupted()</code> in loops and let <code>InterruptedException</code> end the task.</li>
+  <li><strong>What does close() on an ExecutorService do?</strong> Since Java 19 it calls shutdown and waits for termination, interrupting only if the waiting thread is interrupted.</li>
+</ul>
+</article>
+</body>
+</html>

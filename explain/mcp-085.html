@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-085 · An agent keeps acting on stale data from MCP resources. Why might this happen, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-085" data-topic="MCP Servers">
+<h1>An agent keeps acting on stale data from MCP resources. Why might this happen, and how do you fix it?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Resources are typically <strong>read once into context</strong>, so in long sessions the model reasons from a <strong>stale snapshot</strong>; clients may <strong>cache beyond freshness</strong> (wrong or missing TTL hints) and many hosts <strong>ignore subscriptions</strong>; fix it by serving fast-changing data through <strong>tools</strong>, setting realistic <strong><code>ttlMs</code> hints</strong>, supporting <strong>subscriptions</strong>, and <strong>timestamping</strong> data so the model knows its age.</p>
+
+<h2>Detailed explanation</h2>
+<p>MCP <strong>resources</strong> are designed as context: files, documents, records that a host or user attaches to the conversation. Once a resource's contents are in the context window, they stay there as text. The model has no idea that an hour later the ticket was reassigned or the stock level dropped to zero. It keeps reasoning, and acting, from the snapshot.</p>
+<p>There are several contributing causes:</p>
+<ul>
+  <li><strong>Snapshot in context.</strong> The resource was read at the start of a long session and never re-read.</li>
+  <li><strong>Client caching.</strong> Hosts may cache resource reads or lists. If the server sends generous <strong>caching hints</strong> such as a large <code>ttlMs</code>, or none, the client may reuse old data longer than is safe.</li>
+  <li><strong>Subscriptions not handled.</strong> The protocol lets clients subscribe to a resource and receive <code>notifications/resources/updated</code>, but many hosts do not implement subscriptions, or do not re-inject updated content into the conversation.</li>
+</ul>
+<p><strong>Fixes.</strong> For data that <strong>changes often</strong>, such as ticket status, inventory, prices or deployment state, expose it through a <strong>tool</strong> that fetches the current value whenever the model needs it; tools are model-initiated, so the model can re-check before acting. Keep resources for <strong>stable</strong> content: documentation, schemas, policies, closed records. Set <strong>realistic <code>ttlMs</code></strong> hints per resource type and support <strong>subscriptions</strong> for hosts that use them. Include <strong>timestamps</strong> in returned data, &quot;status: open (as of 2026-11-21 10:42 UTC)&quot;, and tool descriptions that encourage re-checking important values before write actions. Write tools can also use <strong>optimistic concurrency</strong>: require a version or ETag, so acting on stale data fails safely.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Session starts; host attaches <code>tickets://4711</code> as a resource.</li>
+  <li>Ticket changes in the backend; the model's context still shows the old status.</li>
+  <li>Model acts on old status, for example closing an already reassigned ticket.</li>
+  <li>After the fix: status comes from <code>get_ticket</code> with a timestamp; <code>update_ticket</code> requires the current version.</li>
+  <li>Stale updates are rejected with a clear error telling the model to re-read.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;content&quot;: [{
+    &quot;type&quot;: &quot;text&quot;,
+    &quot;text&quot;: &quot;{\&quot;ticket\&quot;: 4711, \&quot;status\&quot;: \&quot;open\&quot;, \&quot;assignee\&quot;: \&quot;team-network\&quot;, \&quot;version\&quot;: 17, \&quot;as_of\&quot;: \&quot;2026-11-21T10:42:05Z\&quot;}&quot;
+  }]
+}</code></pre>
+<pre><code class="language-text">update_ticket(id=4711, status=&quot;resolved&quot;, expected_version=16)
+-&gt; error: &quot;Ticket changed since you read it (now version 17, assigned to team-db). Re-read with get_ticket before updating.&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Exposing live operational data only as resources.</li>
+  <li>Long TTL hints on volatile data.</li>
+  <li>No version check on writes.</li>
+  <li>Returning data without any timestamp.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Resources are usually read once and put into context, so in a long session the model keeps reasoning from that snapshot while the real data changes. Clients may also cache resource reads longer than they should if the server's TTL hints are generous or missing, and many hosts don't implement subscriptions, so update notifications are never acted on. For data that changes often, like ticket status or inventory, I expose it through a tool that fetches the current value whenever the model needs it. I set realistic ttlMs hints, support subscriptions for hosts that use them, and include timestamps like 'as of 10:42 UTC' so the model knows the data's age. Writes can also require a version so stale actions fail safely.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Fine as long-lived resources?</strong> Docs, schemas, policies, historical or closed records.</li>
+  <li><strong>Why version checks?</strong> Optimistic concurrency turns stale-data actions into safe errors.</li>
+  <li><strong>Do subscriptions solve it?</strong> Only if the host re-injects updates into the conversation.</li>
+</ul>
+</article>
+</body>
+</html>

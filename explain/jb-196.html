@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-196 · What is the difference between JPQL, HQL, and native SQL?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-196" data-topic="Spring Data &amp; JPA">
+<h1>What is the difference between JPQL, HQL, and native SQL?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>JPQL</strong> is the portable JPA query language over <strong>entities and fields</strong>, <strong>HQL</strong> is Hibernate's <strong>superset</strong> of JPQL, and <strong>native SQL</strong> targets <strong>tables and columns</strong> in the database dialect, giving access to vendor features at the cost of portability and entity awareness.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>JPQL</strong> (Jakarta Persistence Query Language) looks like SQL but operates on the object model: <code>SELECT o FROM Order o JOIN o.customer c WHERE c.id = :id</code>. You navigate associations with paths, the provider knows the mapping, and it generates SQL for the configured dialect. Because results are entities, they enter the persistence context and dirty checking works. JPQL is portable across databases supported by the provider.</p>
+<p><strong>HQL</strong> is Hibernate's language and every JPQL query is valid HQL. In Hibernate 6 HQL gained much more: set operations (<code>UNION</code>), CTEs, window functions in some forms, <code>LIMIT/OFFSET</code>, many SQL functions and <code>insert ... select</code>. Using HQL-only features ties you to Hibernate, which is rarely a real problem in Spring Boot projects.</p>
+<p><strong>Native SQL</strong> is plain SQL for your database, run with <code>createNativeQuery</code> or <code>@Query(nativeQuery = true)</code>. It is the right tool for vendor-specific features: PostgreSQL <code>ON CONFLICT</code> upserts, JSONB operators, recursive CTEs, <code>LATERAL</code>, full-text search, query hints, or a hand-tuned query the provider cannot express. Downsides: no portability, column names must be maintained by hand, results are not automatically entities unless mapped, and Hibernate does not know which tables a native modifying query touched, so caches and the persistence context can become stale.</p>
+<p>Also consider the <strong>Criteria API</strong> (type-safe, for dynamic queries) and tools like <strong>jOOQ</strong> or <strong>Querydsl</strong> when many complex queries are needed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>JPQL/HQL string is parsed into an abstract tree using entity metadata.</li>
+  <li>Hibernate translates it into dialect-specific SQL and caches the plan.</li>
+  <li>Results are hydrated as entities, DTOs (constructor expressions) or scalars.</li>
+  <li>Native SQL skips translation; Hibernate only binds parameters and maps the result set.</li>
+  <li>Mapping of native results uses entity classes, <code>@SqlResultSetMapping</code>, Spring Data interface projections or Tuple.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface OrderRepository extends JpaRepository&lt;Order, Long&gt; {
+
+    // JPQL with a DTO constructor expression
+    @Query(&quot;select new com.shop.OrderSummary(o.id, o.total) &quot; +
+           &quot;from Order o where o.customer.id = :cid&quot;)
+    List&lt;OrderSummary&gt; summaries(@Param(&quot;cid&quot;) Long customerId);
+
+    // Native SQL with a window function, mapped to an interface projection
+    @Query(value = &quot;&quot;&quot;
+        select o.id as id, o.total as total,
+               rank() over (order by o.total desc) as position
+        from orders o where o.created_at &gt; :since
+        &quot;&quot;&quot;, nativeQuery = true)
+    List&lt;RankedOrder&gt; ranked(@Param(&quot;since&quot;) Instant since);
+}
+
+interface RankedOrder { Long getId(); BigDecimal getTotal(); Long getPosition(); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>JPQL</th><th>HQL</th><th>Native SQL</th></tr></thead>
+<tbody>
+<tr><td>Works on</td><td>Entities</td><td>Entities</td><td>Tables</td></tr>
+<tr><td>Portable</td><td>Yes (JPA)</td><td>Hibernate only</td><td>No</td></tr>
+<tr><td>Vendor features</td><td>Limited</td><td>More</td><td>All</td></tr>
+<tr><td>Result</td><td>Entities/DTOs</td><td>Entities/DTOs</td><td>Needs mapping</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing table names in JPQL (<code>from orders</code>) instead of entity names.</li>
+  <li>Concatenating user input into native SQL instead of binding parameters (SQL injection).</li>
+  <li>Using native UPDATEs without <code>@Modifying(clearAutomatically = true)</code>, leaving stale entities in the context.</li>
+  <li>Jumping to native SQL for things JPQL handles well, losing type safety.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;JPQL is the JPA standard: it queries entities and their fields, navigates associations by path, and the provider translates it to SQL for each database, so it is portable and returns managed entities. HQL is Hibernate's superset; every JPQL query is valid HQL, and Hibernate 6 adds CTEs, set operations and more functions. Native SQL is written against tables in the database dialect. I default to JPQL with DTO projections and use native queries for vendor features like upserts, JSON operators or window functions, or for hand-tuned performance, mapping the result to an interface projection or a result set mapping and always binding parameters.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you map a native result to a DTO?</strong> Interface projections in Spring Data, <code>@SqlResultSetMapping</code> with <code>@ConstructorResult</code>, or Tuple.</li>
+  <li><strong>When use the Criteria API?</strong> For dynamic filters built at runtime; Specifications in Spring Data wrap it.</li>
+  <li><strong>Are native queries cached?</strong> Plans are not translated, but the query cache can store results if you declare affected tables.</li>
+</ul>
+</article>
+</body>
+</html>

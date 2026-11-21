@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-050 · Design a hotel reservation system like Booking.com.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-050" data-topic="Classic Design Problems">
+<h1>Design a hotel reservation system like Booking.com.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Hotel booking models <strong>inventory per hotel, room type and date</strong>, reserves <strong>all nights atomically</strong> with constraints or <strong>optimistic locking</strong>, allows <strong>controlled overbooking</strong>, uses <strong>idempotent</strong> reservation requests, serves search from a <strong>separate read index</strong>, and <strong>shards by hotel</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>You don't assign room 304 at booking time; you reserve a <strong>room type</strong> for each night. A table <code>room_inventory(hotel_id, room_type_id, date, total, reserved)</code> makes availability simple: a 3-night stay needs <code>reserved &lt; total</code> for 3 rows.</p>
+<p><strong>Concurrency:</strong> two users booking the last room at the same moment. Options: a single transaction with <code>UPDATE … SET reserved = reserved + 1 WHERE … AND reserved &lt; total</code> for each date (all must succeed or roll back), a <code>CHECK (reserved &lt;= total * overbook_ratio)</code> constraint, or <strong>optimistic locking</strong> with a version column and retries. Contention is low per hotel, so this works well.</p>
+<p><strong>Overbooking:</strong> hotels often sell 105–110% knowing some guests cancel; it's just a different limit.</p>
+<p><strong>Idempotency:</strong> double-clicks and retries must not create two reservations; the client sends a reservation ID.</p>
+<p><strong>Search</strong> is far heavier than booking and spans many hotels; serve it from Elasticsearch (location, price, amenities, approximate availability) updated via CDC, then <strong>re-check</strong> availability and price in the transactional DB at booking time.</p>
+<p>Since every booking touches one hotel, <strong>shard by hotel_id</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Search → ES (cached prices/availability).</li>
+  <li>Select → <code>POST /reservations {reservationId, hotel, roomType, dates}</code>.</li>
+  <li>Transaction: update inventory rows for each date with condition; insert reservation <code>PENDING</code>.</li>
+  <li>Payment → <code>CONFIRMED</code>; failure/timeout → release inventory.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">UPDATE room_inventory SET reserved = reserved + 1
+WHERE hotel_id=$h AND room_type_id=$r AND date BETWEEN $in AND $out - 1
+  AND reserved &lt; total;
+-- require updated row count = number of nights, else ROLLBACK</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assigning specific rooms at booking time.</li>
+  <li>Checking availability and booking in separate transactions.</li>
+  <li>Treating search results as authoritative availability.</li>
+  <li>Forgetting partial-date failures in multi-night stays.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Inventory is per hotel, room type and date. Booking updates every night's row in one transaction with a condition that reserved stays within the limit, which may include an overbooking margin, so concurrent bookings can't exceed capacity. Requests carry an idempotency key. Search runs on a separate Elasticsearch index fed by CDC, and we re-validate price and availability at booking. Data is sharded by hotel since transactions never span hotels.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Price changed between search and booking?</strong> Re-quote at booking; show the change; quotes with expiry.</li>
+  <li><strong>Channel managers (Booking.com + Expedia)?</strong> Sync inventory via APIs; allocate per channel or shared pool.</li>
+  <li><strong>Cancellations?</strong> Release rows in a transaction; apply penalties per policy.</li>
+</ul>
+</article>
+</body>
+</html>

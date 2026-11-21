@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-026 · How do you find and fix workloads that use API versions removed in the next Kubernetes release?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-026" data-topic="Kubernetes">
+<h1>How do you find and fix workloads that use API versions removed in the next Kubernetes release?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Read the <strong>deprecated API migration guide</strong> and release notes, <strong>scan sources</strong> (Git manifests, Helm charts) with <strong>pluto or kubent</strong>, find <strong>actual callers</strong> with the <strong><code>apiserver_requested_deprecated_apis</code></strong> metric and <strong>audit logs</strong>, fix the <strong>source</strong>, not just live objects, handle <strong>Helm release history</strong> with <strong><code>helm mapkubeapis</code></strong>, and make the check a <strong>CI gate</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes serves each resource through one or more API versions (<code>v1beta1</code>, <code>v1</code>). Deprecated versions keep working for a period, then are <strong>removed</strong> in a specific release, after which requests using them fail with &quot;no matches for kind&quot;. Examples from history: <code>extensions/v1beta1</code> Ingress and Deployments (removed 1.16/1.22), <code>policy/v1beta1</code> PodDisruptionBudget and PodSecurityPolicy (1.25), <code>autoscaling/v2beta2</code> HPA (1.26), <code>flowcontrol.apiserver.k8s.io/v1beta3</code> (1.32).</p>
+<p>An important subtlety: objects already in etcd are not broken. The API server converts them and serves them through the current version; <code>kubectl get</code> shows them fine. What breaks is anything that <strong>sends</strong> the old version: a manifest in Git, a Helm chart template, a CI script, an old operator, a Terraform provider. So the work is about <strong>sources and clients</strong>.</p>
+<p>Steps:</p>
+<ol>
+  <li><strong>Know what's removed</strong> in the target version from the official deprecation guide.</li>
+  <li><strong>Static scanning:</strong> <code>pluto detect-files</code> on repositories and rendered Helm or Kustomize output; <code>pluto detect-helm</code> for installed releases; kubent also inspects the cluster.</li>
+  <li><strong>Runtime evidence:</strong> the metric <code>apiserver_requested_deprecated_apis</code> (labels for group, version, resource, removed_release) shows what is still being called; <strong>audit logs</strong> with the <code>k8s.io/deprecated</code> annotation reveal <em>who</em> called (user agent, service account). Responses also carry a warning header that kubectl prints.</li>
+  <li><strong>Fix the sources</strong> in Git and charts, bump operator and chart versions, redeploy.</li>
+  <li><strong>Helm releases:</strong> Helm stores each release's rendered manifest in a Secret. If it contains a removed API, the next <code>helm upgrade</code> fails because Helm cannot map the old object. The <strong>helm mapkubeapis</strong> plugin rewrites those stored manifests to supported versions.</li>
+  <li><strong>Prevent regressions:</strong> run pluto or kubeconform with the target version in CI.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Determine target version's removals.</li>
+  <li>Scan Git and Helm; list findings.</li>
+  <li>Check metrics and audit logs for live callers.</li>
+  <li>Update manifests, charts, operators; redeploy.</li>
+  <li>Fix Helm history; add CI gate; then upgrade.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">pluto detect-files -d ./deploy --target-versions k8s=v1.35.0 -o wide
+helm template ./charts/api | pluto detect - --target-versions k8s=v1.35.0
+kubectl get --raw /metrics | grep apiserver_requested_deprecated_apis
+helm mapkubeapis orders --namespace shop --dry-run
+helm mapkubeapis orders --namespace shop</code></pre>
+<pre><code class="language-yaml"># CI gate (GitHub Actions)
+- run: kustomize build overlays/prod | pluto detect - --target-versions k8s=v1.35.0</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking only live objects with kubectl and declaring victory.</li>
+  <li>Forgetting third-party charts and operators.</li>
+  <li>Discovering the Helm history problem during the production upgrade.</li>
+  <li>No CI check, so old API versions are reintroduced by copy-paste.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start from the deprecated API migration guide for the target version. Then I scan the sources, Git manifests and rendered Helm charts, with pluto or kubent, and check what's actually being called with the apiserver_requested_deprecated_apis metric and audit logs, which also catches operators and CI scripts. Live objects are served in the new version by the API server, so the real fix is updating Git and charts. Helm is a special case: stored release manifests with removed APIs break upgrades, and helm mapkubeapis fixes them. Finally I add a CI gate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent new removed-API usage?</strong> pluto or kubeconform against the next version in CI, plus policy rules.</li>
+  <li><strong>Why do live objects look fine?</strong> The API server stores and serves them through supported versions.</li>
+  <li><strong>Who called the deprecated API?</strong> Audit logs with the deprecation annotation and user agent.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-086 · What happens when an exception is thrown inside a finally block?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-086" data-topic="Exceptions">
+<h1>What happens when an exception is thrown inside a finally block?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An exception thrown from <strong>finally replaces (masks) the exception</strong> that was propagating from try or catch, so the <strong>original cause is lost</strong>; a <strong>return in finally</strong> swallows exceptions the same way; keep finally simple or use <strong>try-with-resources</strong>, which records <strong>suppressed</strong> exceptions instead.</p>
+
+<h2>Detailed explanation</h2>
+<p>When the try block throws, the JVM saves that exception, runs finally, and then rethrows the saved one. But if finally itself completes abruptly, by throwing or returning, that new outcome <strong>replaces</strong> the pending one. The JLS defines it this way: the reason for abrupt completion of finally wins.</p>
+<p>Typical scenario: a database query fails with a meaningful <code>SQLException: deadlock detected</code>. In finally, <code>connection.close()</code> throws <code>SQLException: connection already closed</code>, because the failed query broke the connection. The caller and the logs now see only &quot;connection already closed&quot;. The real root cause has vanished, and the incident takes hours to diagnose.</p>
+<p><code>return</code> in finally is even worse: it silently discards the exception altogether, and the method appears to succeed. Most linters and IDEs flag &quot;finally block does not complete normally&quot;.</p>
+<p>How to avoid it:</p>
+<ul>
+  <li><strong>Use try-with-resources</strong> for anything <code>AutoCloseable</code>. If the body throws and <code>close()</code> also throws, the close exception is attached to the primary one via <code>addSuppressed</code>, visible with <code>getSuppressed()</code> and in stack traces under <code>Suppressed:</code>.</li>
+  <li><strong>Keep finally blocks trivial</strong>: unlock, reset a flag, remove MDC entries.</li>
+  <li>If finally must do something risky, <strong>wrap it in its own try/catch</strong>, log the cleanup failure, and optionally attach it with <code>original.addSuppressed(cleanupEx)</code>.</li>
+  <li><strong>Never return or throw from finally.</strong></li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Try throws exception A; the JVM stores it and jumps to finally.</li>
+  <li>Finally throws exception B.</li>
+  <li>A is discarded; B propagates.</li>
+  <li>With try-with-resources, B from close is added to A as suppressed; A propagates.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Masking
+try {
+    throw new IllegalStateException(&quot;real problem&quot;);
+} finally {
+    throw new RuntimeException(&quot;cleanup failed&quot;);   // caller sees only this
+}
+
+// Safer manual cleanup
+Connection c = ds.getConnection();
+try {
+    runQuery(c);
+} finally {
+    try { c.close(); }
+    catch (SQLException closeEx) { log.warn(&quot;close failed&quot;, closeEx); }
+}
+
+// Best
+try (Connection c2 = ds.getConnection()) {
+    runQuery(c2);
+} catch (SQLException e) {
+    log.error(&quot;query failed&quot;, e);                    // close failures are in e.getSuppressed()
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>close()</code> in finally without protecting it.</li>
+  <li>Returning from finally to &quot;make sure the method returns a value&quot;.</li>
+  <li>Ignoring suppressed exceptions when logging only <code>getMessage()</code>.</li>
+  <li>Throwing new exceptions from finally for validation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The exception from finally replaces the one that was propagating from try or catch, so the original is lost and the caller only sees the new one, often just a close error. That makes debugging very hard because the root cause disappears. A return in finally swallows exceptions the same way. To avoid it I keep finally blocks simple, and wrap any risky cleanup in its own try-catch that logs the failure. Better still, I use try-with-resources: if close fails after the body has thrown, the close exception is attached to the original as a suppressed exception instead of replacing it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you read suppressed exceptions from a caught exception?</strong> <code>e.getSuppressed()</code> returns the array; stack traces print them too.</li>
+  <li><strong>What if try returns and finally throws?</strong> The exception propagates and the return value is lost.</li>
+  <li><strong>Can you add suppressed exceptions manually?</strong> Yes, <code>addSuppressed</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-222 · What is service registration?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-222" data-topic="Microservices">
+<h1>What is service registration?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Service registration</strong> is how a running instance publishes its <strong>network location and metadata</strong> to a <strong>service registry</strong>, either by <strong>self-registration</strong> (Eureka or Consul client with heartbeats) or <strong>third-party registration</strong> by the platform (Kubernetes adding ready pods to Service endpoints), and is removed again on shutdown or failed health checks.</p>
+
+<h2>Detailed explanation</h2>
+<p>Discovery only works if the registry knows which instances exist and are healthy. Registration is that half of the problem.</p>
+<p>With <strong>self-registration</strong>, the instance itself talks to the registry. A Spring Boot app with the <strong>Eureka client</strong> registers on startup with its application name (<code>spring.application.name</code>), host, port, status and metadata such as zone or version. It then <strong>renews its lease</strong> with a heartbeat every 30 seconds; if renewals stop for the lease expiry period (90 seconds by default), the Eureka server <strong>evicts</strong> it. On graceful shutdown it <strong>deregisters</strong> explicitly, so traffic stops at once. With <strong>Consul</strong>, the agent registers the service and runs <strong>health checks</strong> (HTTP, TCP or TTL), marking it critical if they fail. Self-registration is simple but couples every service to a registry client library and language.</p>
+<p>With <strong>third-party registration</strong>, a separate component registers instances on their behalf. In <strong>Kubernetes</strong>, you never write registry code: the control plane watches pods matching a Service's label selector, and only pods whose <strong>readiness probe</strong> passes are added to the Service's <strong>EndpointSlices</strong>. When a pod fails readiness or is terminated, it is removed. kube-proxy or a service mesh then routes traffic to the current endpoints. Other examples are Registrator for Docker, or cloud load balancers registering auto-scaled VMs in target groups.</p>
+<p>Important details: register only when the instance can really serve traffic (after caches warm up, migrations run), deregister <strong>before</strong> shutting down so in-flight requests finish, and include metadata for zone-aware or version-aware routing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Instance starts and initialises.</li>
+  <li>It becomes ready (readiness probe or health check passes).</li>
+  <li>It is registered (by itself or the platform) with address and metadata.</li>
+  <li>Heartbeats or periodic checks keep it registered.</li>
+  <li>Failure or missed heartbeats → removed from the registry.</li>
+  <li>Graceful shutdown → deregister first, then drain and exit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Self-registration with Eureka (Spring Boot)
+spring:
+  application:
+    name: order-service
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka-1:8761/eureka/,http://eureka-2:8761/eureka/
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 30
+    metadata-map:
+      zone: eu-west-1a</code></pre>
+<pre><code class="language-yaml"># Third-party registration in Kubernetes: readiness controls endpoint membership
+readinessProbe:
+  httpGet: { path: /actuator/health/readiness, port: 8080 }
+  periodSeconds: 5</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Self-registration</th><th>Third-party registration</th></tr></thead>
+<tbody>
+<tr><td>Who registers</td><td>The service</td><td>Platform or registrar</td></tr>
+<tr><td>Code needed</td><td>Registry client</td><td>None</td></tr>
+<tr><td>Examples</td><td>Eureka, Consul client</td><td>Kubernetes, AWS target groups</td></tr>
+<tr><td>Language independent</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Registering before the app is ready, so early requests fail.</li>
+  <li>No readiness probe in Kubernetes (pod receives traffic while starting).</li>
+  <li>Not deregistering on shutdown, leaving stale entries for up to 90 seconds.</li>
+  <li>Using liveness probes that check downstream dependencies, causing restart loops.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Service registration is how an instance makes its address and metadata known to a registry so others can discover it. With self-registration the instance does it, for example a Spring Boot app with the Eureka client registers at startup, sends heartbeats every thirty seconds and deregisters on shutdown; if heartbeats stop, it is evicted. With third-party registration the platform does it: in Kubernetes, pods that pass their readiness probe are automatically added to the Service's endpoints, so the application needs no registry client. Either way, an instance should only be registered once it can actually serve traffic.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a readiness probe important for registration in Kubernetes?</strong> It decides when a pod joins and leaves the Service endpoints.</li>
+  <li><strong>Readiness vs liveness?</strong> Readiness controls traffic; liveness controls restarts.</li>
+  <li><strong>What happens if the registry is down?</strong> Clients use cached registry data; new instances cannot register until it recovers.</li>
+</ul>
+</article>
+</body>
+</html>

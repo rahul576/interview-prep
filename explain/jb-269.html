@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-269 · How would you prevent SQL injection in a Java application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-269" data-topic="Security">
+<h1>How would you prevent SQL injection in a Java application?</h1>
+<p class="ex-meta">Security · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Prevent SQL injection with <strong>parameterised queries</strong> everywhere: <strong>PreparedStatement bind variables</strong>, <strong>JPA/Spring Data named parameters</strong>, never string concatenation; <strong>whitelist</strong> dynamic identifiers like sort columns, and add <strong>least-privilege DB users</strong>, <strong>validation</strong> and <strong>static analysis</strong> as defence in depth.</p>
+
+<h2>Detailed explanation</h2>
+<p>SQL injection happens when user input becomes part of the <strong>SQL text</strong> and so changes the query's structure. With <code>&quot;... WHERE email = '&quot; + email + &quot;'&quot;</code>, the input <code>' OR '1'='1</code> returns every row, and other payloads can read other tables or modify data. With a <strong>bind parameter</strong>, the database receives the SQL with placeholders and the values separately; the value can never be parsed as SQL, whatever characters it contains.</p>
+<p>In Java that means <code>PreparedStatement</code> with <code>?</code> placeholders in JDBC, <code>JdbcTemplate</code> and <code>NamedParameterJdbcTemplate</code> with arguments, <code>:name</code> parameters in JPQL and native <code>@Query</code> methods, the Criteria API, jOOQ or QueryDSL. Spring Data <strong>derived queries</strong> such as <code>findByEmail</code> are parameterised automatically. The danger is code that concatenates inside these tools, such as <code>createQuery(&quot;... &quot; + input)</code> or a native query assembled with <code>String.format</code>.</p>
+<p>Parameters only work for <strong>values</strong>. Table names, column names, <code>ORDER BY</code> fields and sort directions cannot be bound, so map them through a <strong>whitelist</strong>, for example an enum or a <code>Map</code> of allowed sort keys, and reject anything else. <code>LIKE</code> patterns should be bound too, escaping <code>%</code> and <code>_</code> if needed.</p>
+<p>Defence in depth limits damage if something slips through: validate input types and lengths, connect with a <strong>least-privilege database account</strong> that cannot drop tables or read other schemas, avoid detailed SQL errors in responses, run <strong>SAST</strong> tools (SpotBugs with FindSecBugs, Sonar, Semgrep, CodeQL) in CI, test with tools like sqlmap or OWASP ZAP, and optionally add a WAF.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write SQL with placeholders.</li>
+  <li>The driver sends the statement and parameter values separately.</li>
+  <li>The database parses and plans the statement once, treating values as data.</li>
+  <li>Dynamic identifiers go through a whitelist before reaching SQL.</li>
+  <li>CI scanners flag concatenated queries; reviews check native queries.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Vulnerable
+String sql = &quot;select * from users where email = '&quot; + email + &quot;'&quot;;
+
+// Safe JDBC
+try (PreparedStatement ps = con.prepareStatement(&quot;select * from users where email = ?&quot;)) {
+    ps.setString(1, email);
+    ResultSet rs = ps.executeQuery();
+}
+
+// Safe Spring Data
+@Query(&quot;select u from User u where u.email = :email&quot;)
+Optional&lt;User&gt; byEmail(@Param(&quot;email&quot;) String email);
+
+// Whitelisted sort column
+private static final Map&lt;String, String&gt; SORT = Map.of(&quot;name&quot;, &quot;u.name&quot;, &quot;created&quot;, &quot;u.createdAt&quot;);
+String column = Optional.ofNullable(SORT.get(sortParam)).orElseThrow(BadRequestException::new);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing that JPA or Hibernate automatically makes concatenated JPQL safe.</li>
+  <li>Escaping quotes manually instead of binding.</li>
+  <li>Passing a user-supplied sort field straight into <code>ORDER BY</code>.</li>
+  <li>Using a database admin account for the application.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;SQL injection happens when input is concatenated into the SQL string and changes the query. My main defence is parameterised queries everywhere: PreparedStatement with bind variables in JDBC, named parameters in JPQL and Spring Data @Query, including native queries, and never building SQL with string concatenation. Identifiers like a sort column cannot be parameters, so I map them through a whitelist. On top I validate input, use a least-privilege database user, keep SQL errors out of responses, and run static analysis in CI and security tests as defence in depth.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is a Spring Data derived method like findByEmail safe?</strong> Yes, the value is bound as a parameter.</li>
+  <li><strong>Are stored procedures safe?</strong> Only if they do not build dynamic SQL from parameters inside.</li>
+  <li><strong>What is second-order injection?</strong> Stored input later used unsafely in another query; bind it there too.</li>
+</ul>
+</article>
+</body>
+</html>

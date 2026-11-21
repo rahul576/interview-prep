@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-227 · What is the difference between Saga orchestration and choreography?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-227" data-topic="Microservices">
+<h1>What is the difference between Saga orchestration and choreography?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>In <strong>orchestration</strong> a central <strong>orchestrator</strong> (service or workflow engine like <strong>Temporal, Camunda, AWS Step Functions</strong>) holds saga state and <strong>sends commands</strong>; in <strong>choreography</strong> services <strong>react to each other's events</strong> with no coordinator; choreography is <strong>loosely coupled but implicit</strong>, orchestration is <strong>explicit and easier to manage</strong> but adds a central component.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Orchestration.</strong> One component owns the saga's logic as an explicit workflow. For an order it sends <code>ChargePayment</code>, waits for <code>PaymentCharged</code>, sends <code>ReserveStock</code>, waits, and so on. On failure or timeout, it sends compensating commands (<code>RefundPayment</code>, <code>CancelOrder</code>). Its state is persisted, so it survives crashes. Benefits: the <strong>flow is visible in one place</strong>, easy to reason about, test, monitor and change; <strong>timeouts, retries and compensations</strong> are handled consistently; participants are simpler because they only respond to commands and do not need to know about each other. Workflow engines like <strong>Temporal</strong> (code-first durable workflows), <strong>Camunda</strong> (BPMN models), <strong>AWS Step Functions</strong>, or framework support such as <strong>Axon</strong> sagas, provide persistence, retries and visual history. Drawbacks: the orchestrator <strong>knows all participants</strong>, becomes a <strong>central component</strong> to operate and scale, and there is a risk of moving too much business logic into it, making participants anaemic.</p>
+<p><strong>Choreography.</strong> There is no coordinator. The order service publishes <code>OrderCreated</code>; payment listens and publishes <code>PaymentCompleted</code>; inventory listens and publishes <code>StockReserved</code>; order listens and confirms. Compensation is also event-driven: inventory publishes <code>StockUnavailable</code>, payment refunds, order cancels. Benefits: <strong>loose coupling</strong>, no single point of control, easy to add a new listener (analytics) without changing others, and it is simple for <strong>two or three steps</strong>. Drawbacks: the <strong>overall flow is implicit</strong>, spread across services' code, so understanding &quot;what happens when an order is placed&quot; requires reading several codebases; it is <strong>harder to debug and monitor</strong> (you need distributed tracing and process dashboards); adding a step means changing multiple services; and services can develop <strong>cyclic event dependencies</strong>.</p>
+<p>A practical rule: <strong>choreography for short, stable flows</strong>, <strong>orchestration for longer business processes</strong> with many steps, timeouts, human tasks or frequent changes. They can also be combined: an orchestrated core process that publishes domain events others choreograph around.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Orchestration: orchestrator persists state → sends command → awaits reply → next command or compensation.</li>
+  <li>Choreography: service commits → publishes event → interested services react → publish their own events.</li>
+  <li>Both: local transactions, outbox publishing, idempotent handlers.</li>
+  <li>Monitoring: orchestrator history versus tracing and correlation across events.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Orchestration with Temporal: the whole flow in one place
+@WorkflowInterface
+public interface OrderWorkflow { @WorkflowMethod void process(Order order); }
+
+public class OrderWorkflowImpl implements OrderWorkflow {
+    public void process(Order order) {
+        Saga saga = new Saga(new Saga.Options.Builder().build());
+        try {
+            payments.charge(order);       saga.addCompensation(payments::refund, order);
+            inventory.reserve(order);     saga.addCompensation(inventory::release, order);
+            shipping.schedule(order);
+            orders.confirm(order.id());
+        } catch (ActivityFailure e) { saga.compensate(); orders.cancel(order.id()); }
+    }
+}</code></pre>
+<pre><code class="language-text">Choreography of the same flow:
+order: OrderCreated --&gt; payment: PaymentCompleted --&gt; inventory: StockReserved --&gt; order: confirm
+                                                      inventory: StockUnavailable --&gt; payment: refund --&gt; order: cancel</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Orchestration</th><th>Choreography</th></tr></thead>
+<tbody>
+<tr><td>Control</td><td>Central orchestrator</td><td>Distributed, event reactions</td></tr>
+<tr><td>Flow visibility</td><td>Explicit</td><td>Implicit</td></tr>
+<tr><td>Coupling</td><td>Orchestrator knows participants</td><td>Loose</td></tr>
+<tr><td>Error handling</td><td>Centralised</td><td>Spread across services</td></tr>
+<tr><td>Best for</td><td>Long, complex processes</td><td>Short, simple flows</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Choreographing a ten-step process nobody can follow.</li>
+  <li>Putting all domain logic into the orchestrator.</li>
+  <li>No correlation id across choreographed events.</li>
+  <li>Forgetting timeouts when a participant never responds.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In orchestration a dedicated orchestrator, a service or a workflow engine like Temporal, Camunda or Step Functions, holds the saga state and tells each participant what to do: charge payment, wait, reserve stock, and on failure send the compensating commands. The flow is explicit in one place and easy to monitor and change, but it is a central component that knows all participants. In choreography there is no coordinator; each service listens to events and reacts. It is loosely coupled and simple for a few steps, but the flow is implicit and spread across services, harder to debug, and can create cyclic dependencies. I use choreography for short flows and orchestration for longer business processes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you monitor a choreographed saga?</strong> Correlation ids in all events, distributed tracing, and a process-tracking view that consumes the events.</li>
+  <li><strong>Is the orchestrator a single point of failure?</strong> Workflow engines persist state and run clustered, so it can resume after failures.</li>
+  <li><strong>Can you mix both?</strong> Yes: orchestrate the core process and let other services react to its events.</li>
+</ul>
+</article>
+</body>
+</html>

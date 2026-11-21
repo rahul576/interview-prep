@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-321 · How would you handle retries and failures in an asynchronous message-processing workflow?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-321" data-topic="Cloud (AWS)">
+<h1>How would you handle retries and failures in an asynchronous message-processing workflow?</h1>
+<p class="ex-meta">Cloud (AWS) · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Classify errors</strong>: retry <strong>transient</strong> ones with <strong>exponential backoff and jitter</strong> up to a limit, and send <strong>permanent</strong> ones straight to a <strong>DLQ</strong> with the reason. Make every consumer <strong>idempotent</strong>, and track workflow <strong>state</strong> for <strong>compensation</strong>, <strong>alerting</strong> and <strong>redrive</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In asynchronous systems failures are normal. Networks blip, downstream services throttle, and some messages are simply invalid. The design question is how to recover automatically from the first kind without endlessly reprocessing the second.</p>
+<p><strong>Transient errors</strong> include timeouts, connection resets, HTTP 429/503 and database deadlocks. These usually succeed later, so retry them with <strong>exponential backoff</strong> (1 s, 2 s, 4 s, ...) plus <strong>jitter</strong>, under a cap and a maximum number of attempts. There are several mechanisms:</p>
+<ul>
+  <li>queue redelivery via the <strong>visibility timeout</strong> (SQS) or nack/requeue (RabbitMQ)</li>
+  <li><strong>delayed retry queues or topics</strong> (Kafka <code>orders.retry.1m</code>, <code>orders.retry.10m</code>)</li>
+  <li>in-process retries for very short blips (Resilience4j)</li>
+</ul>
+<p><strong>Permanent errors</strong> include schema validation failures, unknown customers and business rule violations. Retrying them only wastes capacity and blocks partitions. Route them straight to a <strong>dead-letter queue or error topic</strong> with metadata: the error, stack trace, attempt count and original offset.</p>
+<p>Retries and redeliveries mean <strong>at-least-once</strong> delivery, so consumers must be <strong>idempotent</strong>. Use a processed-message table, upserts, or idempotency keys on downstream calls. For multi-step workflows, persist the <strong>state of each step</strong>. When a later step fails permanently, a <strong>saga</strong> runs compensating actions (refund, release stock) or raises a manual task.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The consumer receives a message and checks its idempotency key.</li>
+  <li>It processes the message. If successful, it commits or acks and records the key.</li>
+  <li>On a transient error with attempts below max: requeue with a delay of <code>min(cap, base * 2^n)</code> randomised.</li>
+  <li>On a permanent error, or once attempts are exhausted: publish to the DLQ with the reason and ack the original.</li>
+  <li>A DLQ alarm fires. An operator inspects, fixes the data or code, and <strong>redrives</strong>.</li>
+  <li>Dashboards show retry rate, DLQ depth and consumer lag.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RetryableTopic(attempts = &quot;4&quot;,
+    backoff = @Backoff(delay = 1000, multiplier = 2.0, random = true),
+    exclude = {ValidationException.class})          // permanent: skip retries
+@KafkaListener(topics = &quot;orders&quot;)
+public void onOrder(OrderEvent e) {
+    if (processed.exists(e.eventId())) return;       // idempotency
+    service.handle(e);
+    processed.save(e.eventId());
+}
+
+@DltHandler
+public void toDlt(OrderEvent e, @Header(KafkaHeaders.EXCEPTION_MESSAGE) String err) {
+    alerting.notify(e.eventId(), err);
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying everything, including validation errors, forever.</li>
+  <li>Immediate retries without backoff, which hammer a struggling dependency.</li>
+  <li>DLQs nobody monitors and no tool to redrive.</li>
+  <li>Non-idempotent consumers creating duplicate payments or emails.</li>
+  <li>Blocking a Kafka partition with in-place retries for minutes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I classify errors. Transient ones like timeouts or throttling get retried with exponential backoff and jitter, using redelivery, delayed retry queues or retry topics, up to a maximum number of attempts. Permanent ones like invalid data go straight to a dead-letter queue with the reason. DLQs have alarms and redrive tooling. Because retries create duplicates, every consumer is idempotent, deduplicating on a message or business id. I persist workflow state so a permanent failure can trigger compensation or a manual follow-up, and I monitor error rates and DLQ size.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why add jitter?</strong> Without it, many clients retry at the same moments and create synchronised load spikes. Jitter spreads them out.</li>
+  <li><strong>Poison message?</strong> A message that always fails. Max attempts plus a DLQ stops it from blocking the queue or partition.</li>
+  <li><strong>How do you redrive safely?</strong> Fix the cause first, replay at a controlled rate, and rely on idempotency.</li>
+</ul>
+</article>
+</body>
+</html>

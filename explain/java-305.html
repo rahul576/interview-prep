@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-305 · What is the difference between a servlet Filter and a Spring HandlerInterceptor?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-305" data-topic="Spring Framework">
+<h1>What is the difference between a servlet Filter and a Spring HandlerInterceptor?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>servlet Filter</strong> works at the <strong>container level</strong>, before the <strong>DispatcherServlet</strong>, for every request, and can <strong>wrap request and response</strong>; a <strong>HandlerInterceptor</strong> is <strong>Spring MVC-specific</strong>, runs <strong>after the handler is chosen</strong> so it <strong>knows the controller method</strong>, and offers <strong>preHandle, postHandle and afterCompletion</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Filters</strong> are part of the Jakarta Servlet specification. They form a chain around the whole servlet, so they see every request, including static resources, error dispatches and requests that never reach Spring MVC. A filter receives <code>ServletRequest</code> and <code>ServletResponse</code> and decides whether to call <code>chain.doFilter</code>. Crucially it can <strong>replace them with wrappers</strong>, for example <code>ContentCachingRequestWrapper</code> to read the body for logging, a response wrapper to compress output, or adding headers. Typical uses: <strong>security</strong> (Spring Security is a filter chain), <strong>CORS</strong>, request and response <strong>logging</strong>, correlation ids and MDC, compression, rate limiting, encoding. In Spring Boot, extend <code>OncePerRequestFilter</code> and register it as a bean or through <code>FilterRegistrationBean</code> to set order and URL patterns.</p>
+<p><strong>Interceptors</strong> belong to Spring MVC. They are registered via <code>WebMvcConfigurer.addInterceptors</code> and run inside the <code>DispatcherServlet</code> once the <strong>HandlerMapping</strong> has selected a handler. They therefore receive the <strong>handler object</strong>, usually a <code>HandlerMethod</code>, so you can read the controller class, method and its annotations. Hooks:</p>
+<ul>
+  <li><code>preHandle</code>: before the controller; return false to stop.</li>
+  <li><code>postHandle</code>: after the controller, before view rendering (limited for <code>@ResponseBody</code>, as the body is already written).</li>
+  <li><code>afterCompletion</code>: always at the end, with any exception.</li>
+</ul>
+<p>Typical uses: checks based on <strong>custom annotations</strong> on controller methods, per-handler <strong>metrics</strong>, locale or tenant resolution, adding model attributes for views. Interceptors cannot swap the request object for the chain, so body caching or wrapping belongs in a filter. In WebFlux the equivalent is <code>WebFilter</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Container passes the request through filters in order.</li>
+  <li>The last filter calls the <code>DispatcherServlet</code>.</li>
+  <li>HandlerMapping chooses the handler and its interceptors.</li>
+  <li>preHandle, controller, postHandle, afterCompletion run inside the dispatcher.</li>
+  <li>Control returns outward through the filters, which can post-process the response.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+class CorrelationIdFilter extends OncePerRequestFilter {
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+            throws ServletException, IOException {
+        String id = Optional.ofNullable(req.getHeader(&quot;X-Correlation-Id&quot;)).orElse(UUID.randomUUID().toString());
+        MDC.put(&quot;correlationId&quot;, id);
+        res.setHeader(&quot;X-Correlation-Id&quot;, id);
+        try { chain.doFilter(req, res); } finally { MDC.remove(&quot;correlationId&quot;); }
+    }
+}
+
+@Component
+class FeatureFlagInterceptor implements HandlerInterceptor {
+    public boolean preHandle(HttpServletRequest req, HttpServletResponse res, Object handler) throws Exception {
+        if (handler instanceof HandlerMethod hm &amp;&amp; hm.hasMethodAnnotation(BetaFeature.class) &amp;&amp; !flags.betaOn()) {
+            res.sendError(404);
+            return false;
+        }
+        return true;
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Filter</th><th>HandlerInterceptor</th></tr></thead>
+<tbody>
+<tr><td>Level</td><td>Servlet container</td><td>Spring MVC</td></tr>
+<tr><td>Runs</td><td>Before DispatcherServlet, all requests</td><td>After handler selection</td></tr>
+<tr><td>Knows controller method</td><td>No</td><td>Yes</td></tr>
+<tr><td>Can wrap request/response</td><td>Yes</td><td>No</td></tr>
+<tr><td>Typical use</td><td>Security, CORS, logging, compression</td><td>Annotation checks, per-handler metrics, locale</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Implementing authentication in an interceptor alongside Spring Security.</li>
+  <li>Reading the body in an interceptor and breaking <code>@RequestBody</code> later.</li>
+  <li>Using a plain <code>Filter</code> that runs twice on error dispatches instead of <code>OncePerRequestFilter</code>.</li>
+  <li>Forgetting filter order relative to the security chain.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A servlet Filter works at the container level, before the DispatcherServlet, for every request, even static resources and ones Spring MVC never handles. It can wrap the request or response, for example to cache the body for logging, so I use filters for security, CORS, compression, correlation ids and request logging; Spring Security itself is a filter chain. A HandlerInterceptor is Spring MVC-specific and runs after the handler has been chosen, so it knows which controller method will run and can read its annotations. It has preHandle, postHandle and afterCompletion, which I use for per-handler checks, locale or metrics.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can an interceptor not easily read the request body twice?</strong> The input stream is consumed once; only a filter can wrap it in a caching wrapper earlier.</li>
+  <li><strong>What is OncePerRequestFilter?</strong> A base class guaranteeing one execution per request, even across forwards and error dispatches.</li>
+  <li><strong>WebFlux equivalent?</strong> <code>WebFilter</code> and <code>HandlerFilterFunction</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-256 · Given Customer and Orders tables, write a query to calculate total revenue per customer per year.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-256" data-topic="Databases &amp; SQL">
+<h1>Given Customer and Orders tables, write a query to calculate total revenue per customer per year.</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Join</strong> customers to orders on <strong><code>customer_id</code></strong>, extract the <strong>year</strong> from the order date, <strong><code>SUM</code> the amount</strong>, and <strong><code>GROUP BY</code> customer and year</strong>, grouping by the <strong>id</strong> (not just the name) and filtering out cancelled orders.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each order belongs to one customer through the foreign key <code>orders.customer_id</code>. To get revenue per customer per year:</p>
+<ol>
+  <li><strong>Join</strong> <code>customer</code> and <code>orders</code> on <code>customer_id</code> so each order row carries its customer's details.</li>
+  <li><strong>Derive the year</strong>: <code>EXTRACT(YEAR FROM order_date)</code> is standard SQL and works in PostgreSQL, Oracle and MySQL; <code>YEAR(order_date)</code> works in MySQL and SQL Server.</li>
+  <li><strong>Aggregate</strong> with <code>SUM(amount)</code>.</li>
+  <li><strong>Group</strong> by the customer key and the year. Include <code>customer_id</code>, not only <code>name</code>, so two different customers called &quot;Rahul Mehta&quot; are not merged. Including <code>name</code> in the GROUP BY is needed in strict SQL modes; PostgreSQL also allows it to be omitted when grouping by the primary key, because name is functionally dependent on it.</li>
+  <li><strong>Order</strong> by name and year for readability.</li>
+</ol>
+<p>Practical refinements an interviewer likes to hear:</p>
+<ul>
+  <li><strong>Status filter</strong>: exclude cancelled or refunded orders (<code>WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')</code>) or define revenue per the business rule.</li>
+  <li><strong>Line-level revenue</strong>: if the amount lives in <code>order_items</code>, join that table and sum <code>quantity * unit_price</code>, being careful not to double-count when joining several one-to-many tables.</li>
+  <li><strong>Customers without orders</strong>: use <code>LEFT JOIN</code> and <code>COALESCE(SUM(o.amount), 0)</code>; note that their year will be NULL unless you build a calendar of years with a cross join.</li>
+  <li><strong>Performance</strong>: an index on <code>orders(customer_id, order_date)</code> (or including <code>amount</code>) helps; for date ranges, filter with <code>order_date &gt;= '2025-01-01' AND order_date &lt; '2026-01-01'</code> rather than wrapping the column in a function, so an index on order_date can be used.</li>
+  <li><strong>Money types</strong>: amounts should be <code>DECIMAL/NUMERIC</code>, not floating point.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>FROM/JOIN combines each order with its customer.</li>
+  <li>WHERE removes cancelled orders.</li>
+  <li>GROUP BY forms one group per customer and year.</li>
+  <li>SUM computes revenue per group.</li>
+  <li>ORDER BY sorts the output.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT c.customer_id,
+       c.name,
+       EXTRACT(YEAR FROM o.order_date) AS order_year,
+       SUM(o.amount)                   AS total_revenue
+FROM customer c
+JOIN orders o ON o.customer_id = c.customer_id
+WHERE o.status &lt;&gt; 'CANCELLED'
+GROUP BY c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date)
+ORDER BY c.name, order_year;
+
+-- Revenue from line items instead
+SELECT c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date) AS order_year,
+       SUM(oi.quantity * oi.unit_price) AS total_revenue
+FROM customer c
+JOIN orders o       ON o.customer_id = c.customer_id
+JOIN order_items oi ON oi.order_id   = o.order_id
+GROUP BY c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Grouping only by name, merging different customers.</li>
+  <li>Selecting non-aggregated columns that are not in GROUP BY.</li>
+  <li>Forgetting to exclude cancelled or refunded orders.</li>
+  <li>Double-counting by joining items and payments in the same query.</li>
+  <li>Using <code>YEAR()</code> in a database that does not support it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd join customer and orders on customer id, extract the year from the order date with EXTRACT, or YEAR in MySQL, sum the amount, and group by customer id, name and year, ordering by name and year. I group by customer id as well as name so two customers with the same name aren't merged. I'd also confirm the business definition of revenue, for example excluding cancelled orders, and if the amounts live in an order items table, I'd join that and sum quantity times unit price. An index on orders customer id and order date keeps it efficient.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Include customers with no orders as zero?</strong> LEFT JOIN from customer and <code>COALESCE(SUM(o.amount), 0)</code>.</li>
+  <li><strong>Show year-over-year growth?</strong> Use <code>LAG(total_revenue) OVER (PARTITION BY customer_id ORDER BY order_year)</code>.</li>
+  <li><strong>Only customers above 10,000 a year?</strong> Add <code>HAVING SUM(o.amount) &gt; 10000</code>.</li>
+</ul>
+</article>
+</body>
+</html>

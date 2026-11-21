@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-003 · How do you choose the number of shards and replicas for an index?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-003" data-topic="Elasticsearch">
+<h1>How do you choose the number of shards and replicas for an index?</h1>
+<p class="ex-meta">Elasticsearch · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Primary shard count is fixed at creation</strong> (change it with <strong>split, shrink or reindex</strong>). Size shards at roughly <strong>10–50 GB</strong> (and under about 200 million documents), avoid <strong>oversharding</strong>, use <strong>replicas</strong> (usually 1) for <strong>HA and read throughput</strong> (changeable at any time), and for time-series data use <strong>data streams with ILM rollover</strong> so each backing index stays well sized.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Primary shards</strong> split the data. Each is a Lucene index that can live on a different node, so more primaries means more parallelism for indexing and larger total capacity. Routing is <code>hash(_routing) % number_of_primary_shards</code>, which is why the number <strong>can't change</strong> without rewriting data. The <code>_split</code> API (to a multiple of the current count), <code>_shrink</code> (to a factor), or <code>_reindex</code> are the ways out.</p>
+<p><strong>Sizing guidance</strong> (Elastic's current recommendations):</p>
+<ul>
+  <li>Aim for <strong>10–50 GB per shard</strong>. Search-heavy indices often prefer the lower end, logs the upper end.</li>
+  <li>Keep each shard <strong>below about 200M documents</strong>.</li>
+  <li>Avoid huge numbers of small shards. Each shard has overhead (heap for metadata, file handles, cluster state, a search thread per shard per query). The old rule &quot;20 shards per GB of heap&quot; has been replaced in recent versions by per-shard field-mapping overhead guidance, but the principle stands: <strong>fewer, well-sized shards</strong>.</li>
+</ul>
+<p><strong>Too few shards</strong> means very large shards: slow recovery and relocation, and limited parallelism. <strong>Too many</strong> (oversharding) means wasted memory and slower searches, because one query fans out to hundreds of tiny shards, each with fixed overhead.</p>
+<p><strong>Replicas</strong> are full copies of each primary on different nodes. They give <strong>high availability</strong> (a replica is promoted if a primary's node fails) and extra <strong>read capacity</strong>. They can be changed at any time (<code>number_of_replicas</code>), and <strong>1</strong> is typical. A single-node cluster can't allocate replicas, which is why its health shows <strong>yellow</strong>.</p>
+<p><strong>Time-series data</strong> (logs, metrics, events): don't create one giant index. Use <strong>data streams</strong> with <strong>ILM rollover</strong> at a max primary shard size (for example 50 GB) or age (for example 1 day). Each backing index then has a predictable size, and old indices move to warm or cold tiers or are deleted cheaply.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Estimate the data size, growth and retention.</li>
+  <li>Primaries ≈ expected index size ÷ target shard size (for example 300 GB ÷ 30 GB = 10).</li>
+  <li>Spread the shards evenly across data nodes.</li>
+  <li>Replicas = 1 (raise them for read-heavy workloads or stricter HA).</li>
+  <li>For time series, use a data stream with rollover on <code>max_primary_shard_size</code>.</li>
+  <li>Monitor <code>_cat/shards</code> and adjust with split, shrink or reindex if needed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">PUT _ilm/policy/logs-policy
+{ &quot;policy&quot;: { &quot;phases&quot;: {
+    &quot;hot&quot;:    { &quot;actions&quot;: { &quot;rollover&quot;: { &quot;max_primary_shard_size&quot;: &quot;50gb&quot;, &quot;max_age&quot;: &quot;1d&quot; } } },
+    &quot;delete&quot;: { &quot;min_age&quot;: &quot;30d&quot;, &quot;actions&quot;: { &quot;delete&quot;: {} } } } } }
+
+PUT _index_template/logs-app
+{ &quot;index_patterns&quot;: [&quot;logs-app-*&quot;], &quot;data_stream&quot;: {},
+  &quot;template&quot;: { &quot;settings&quot;: { &quot;number_of_shards&quot;: 2, &quot;number_of_replicas&quot;: 1,
+                              &quot;index.lifecycle.name&quot;: &quot;logs-policy&quot; } } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One index per day per tenant with 5 shards each, which creates thousands of tiny shards.</li>
+  <li>Planning to &quot;just change the shard count later&quot; without knowing about split, shrink or reindex.</li>
+  <li>Setting replicas to 0 in production for ingest speed and then forgetting to restore them.</li>
+  <li>Uneven shard distribution creating hot nodes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The number of primary shards is fixed at creation because documents are routed by a hash modulo that number. Changing it needs split, shrink or reindex. I aim for shard sizes of roughly 10 to 50 gigabytes and avoid lots of tiny shards, because each shard costs memory and cluster-state overhead, and a query fans out to every shard. Replicas give high availability and read throughput, can be changed any time, and one is typical. For logs and events I use data streams with ILM rollover by size or age, so each backing index stays well sized and retention is just deleting old indices.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>A query hitting 2,000 shards?</strong> Huge fan-out overhead, coordinating node pressure and higher latency. Reduce the shards or narrow the indices searched.</li>
+  <li><strong>Custom routing?</strong> Route by tenant id so a query hits one shard, but watch for hot shards.</li>
+  <li><strong>Why is a single node yellow?</strong> Replicas can't be allocated on the same node as their primary.</li>
+</ul>
+</article>
+</body>
+</html>

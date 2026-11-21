@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-031 · How does Java handle string concatenation internally?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-031" data-topic="Core Java &amp; OOP">
+<h1>How does Java handle string concatenation internally?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Constant expressions</strong> are folded by javac into one literal; up to <strong>Java 8</strong>, other <code>+</code> expressions compiled to a <strong>StringBuilder append chain</strong>; since <strong>Java 9 (JEP 280)</strong> they compile to an <strong>invokedynamic</strong> call bootstrapped by <strong>StringConcatFactory</strong>, letting the JVM pick the best strategy at runtime.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Compile-time constants.</strong> If every operand is a compile-time constant (literals, <code>static final</code> constants with constant initialisers), javac computes the result itself: <code>&quot;a&quot; + &quot;b&quot; + 1</code> becomes the literal <code>&quot;ab1&quot;</code> in the class file and is pooled.</p>
+<p><strong>Java 5 to 8.</strong> For anything else, javac rewrote <code>a + b + c</code> into <code>new StringBuilder().append(a).append(b).append(c).toString()</code>. This worked but was suboptimal: the builder started at default capacity and might resize several times, the final <code>toString</code> copied the buffer again, and the shape was frozen into the bytecode of every class. The JIT had special-case optimisations (<code>-XX:+OptimizeStringConcat</code>) that recognised the pattern, but they were fragile.</p>
+<p><strong>Java 9+.</strong> <strong>JEP 280, &quot;Indify String Concatenation&quot;</strong>, changed javac to emit a single <code>invokedynamic</code> instruction with a recipe like <code>&quot;\u0001,\u0001&quot;</code> and the dynamic argument types. On first execution, the bootstrap method <code>StringConcatFactory.makeConcatWithConstants</code> builds a <strong>MethodHandle</strong> chain tailored to those types. The default strategy computes the <strong>exact final length and coder</strong> (Latin-1 or UTF-16, linked to Compact Strings) up front, allocates one byte array and fills it directly, with no intermediate builder and no extra copy. Later call executions jump straight to the linked handle.</p>
+<p>Benefits: faster concatenation and less garbage, smaller bytecode, and <strong>future JDKs can improve the strategy without recompiling</strong> your code, since the logic lives in the runtime, not your class files. (javac still has the hidden <code>-XDstringConcat=inline</code> option to emit the old builder style, used for example by code that runs very early in JVM startup.)</p>
+<p>What it does <strong>not</strong> change: each expression is still optimised in isolation. A loop with <code>s += x</code> still allocates a new String per iteration, so StringBuilder or joining remains the right tool there.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>javac folds constant operands.</li>
+  <li>For dynamic operands, it emits <code>invokedynamic makeConcatWithConstants</code> with a recipe.</li>
+  <li>First execution bootstraps a call site via StringConcatFactory.</li>
+  <li>The linked MethodHandle computes length/coder, allocates once and copies operands.</li>
+  <li>Subsequent executions reuse the linked call site.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">String greet(String name, int age) {
+    return &quot;Hi &quot; + name + &quot;, age &quot; + age;
+}</code></pre>
+<pre><code class="language-bash">javac Greeter.java &amp;&amp; javap -c -p Greeter
+#   invokedynamic #7, 0  // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;I)Ljava/lang/String;
+# Compiled with --release 8 instead you'd see:
+#   new java/lang/StringBuilder ... append ... toString</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying modern Java still compiles <code>+</code> to StringBuilder.</li>
+  <li>Concluding that loops are now fine because &quot;Java 9 optimised concatenation&quot;.</li>
+  <li>Hand-rewriting simple <code>+</code> into builders for performance.</li>
+  <li>Ignoring that <code>toString()</code> of operands is still called and may be expensive.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Constant expressions like &quot;a&quot; + &quot;b&quot; are folded by javac into a single literal. Up to Java 8, anything else was compiled into a StringBuilder append chain plus toString. Since Java 9, JEP 280 compiles concatenation into a single invokedynamic call bootstrapped by StringConcatFactory. At runtime the JVM builds a strategy for those argument types, typically computing the exact final length and filling one byte array without intermediate copies. It's faster and the JDK can improve it without recompiling our code. It still optimises one expression at a time, so concatenating inside a loop still allocates each iteration.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why did the JDK move string concatenation to invokedynamic?</strong> To make the strategy a runtime decision that can evolve and optimise per type without recompiling.</li>
+  <li><strong>Does it help loops?</strong> No, each iteration is still a separate concatenation.</li>
+  <li><strong>How can you see it?</strong> <code>javap -c</code> shows the invokedynamic instruction.</li>
+</ul>
+</article>
+</body>
+</html>

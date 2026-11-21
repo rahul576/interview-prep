@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-331 · How do you use virtual threads in a Spring Boot application, and what should you check first?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-331" data-topic="Spring Boot">
+<h1>How do you use virtual threads in a Spring Boot application, and what should you check first?</h1>
+<p class="ex-meta">Spring Boot · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On Spring Boot <strong>3.2+</strong> and Java 21+, set <strong>spring.threads.virtual.enabled=true</strong> so <strong>Tomcat requests, @Async, scheduling</strong> and more run on <strong>virtual threads</strong>; first check <strong>pinning</strong> (synchronized blocks before <strong>Java 24</strong>), <strong>ThreadLocal-heavy code</strong>, and <strong>downstream limits</strong> like <strong>connection pools</strong>, then <strong>load test</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Virtual threads</strong> (Project Loom, final in Java 21) are lightweight threads scheduled by the JVM onto a small pool of <strong>carrier</strong> platform threads. When a virtual thread blocks on I/O, it is unmounted and the carrier runs another one. You keep simple blocking code but can have hundreds of thousands of concurrent tasks, which removes the main reason for reactive programming in many I/O-bound services.</p>
+<p>In Spring Boot 3.2+ the single property <code>spring.threads.virtual.enabled=true</code> (with Java 21+) switches embedded <strong>Tomcat and Jetty</strong> request handling to virtual threads, makes the auto-configured <code>applicationTaskExecutor</code> used by <strong>@Async</strong> and Spring MVC async a <code>SimpleAsyncTaskExecutor</code> with virtual threads, and applies to <strong>@Scheduled</strong> and various message listener containers. Since Boot 3.2 you can also add <code>spring.main.keep-alive=true</code>, because virtual threads are daemon threads and an app with only scheduled tasks might otherwise exit.</p>
+<p><strong>Check before enabling:</strong></p>
+<ul>
+  <li><strong>Pinning</strong>: on Java 21-23, a virtual thread blocking inside a <code>synchronized</code> block or native call pins its carrier, so a few such calls can starve the carriers. <strong>JEP 491 in Java 24</strong> removes pinning for <code>synchronized</code>; on older JDKs look for it with <code>-Djdk.tracePinnedThreads</code> (removed later) or JFR <code>jdk.VirtualThreadPinned</code> events, and upgrade drivers that use <code>ReentrantLock</code> instead.</li>
+  <li><strong>Downstream limits</strong>: virtual threads remove the thread bottleneck, not the database one. A Hikari pool of 20 connections still allows 20 concurrent queries; thousands of requests will queue for connections and time out. Similar for rate-limited APIs. Use semaphores to bound concurrency explicitly.</li>
+  <li><strong>ThreadLocal usage</strong>: millions of threads each with large ThreadLocal caches waste memory; object pools relying on thread reuse no longer help. Scoped values are the modern alternative.</li>
+  <li><strong>CPU-bound work</strong> gains nothing.</li>
+  <li>Observability: thread dumps look different, and thread-per-request metrics change.</li>
+</ul>
+<p>Then <strong>load test</strong> and compare throughput, p99 latency, pool wait times and memory with the old setup.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Requests arrive; Tomcat starts a new virtual thread per request.</li>
+  <li>Blocking I/O (JDBC, HTTP) parks the virtual thread and frees the carrier.</li>
+  <li>When I/O completes, the thread is scheduled again on any carrier.</li>
+  <li>Concurrency is then limited by real resources: pools, CPU, downstream services.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  threads:
+    virtual:
+      enabled: true
+  main:
+    keep-alive: true
+  datasource:
+    hikari:
+      maximum-pool-size: 30
+      connection-timeout: 2000   # fail fast instead of queuing forever</code></pre>
+<pre><code class="language-bash"># Java 21-23: record pinning events during a load test
+java -XX:StartFlightRecording=filename=pin.jfr,settings=profile -jar app.jar
+jfr print --events jdk.VirtualThreadPinned pin.jfr</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting more throughput when the database pool is the bottleneck.</li>
+  <li>Pooling virtual threads in a fixed-size executor, defeating the point.</li>
+  <li>Ignoring pinning on Java 21 with old JDBC drivers.</li>
+  <li>Enabling it for CPU-heavy services.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;From Spring Boot 3.2 on Java 21 I set spring.threads.virtual.enabled to true, and Tomcat request handling, @Async tasks, scheduling and several listeners run on virtual threads. Before enabling it I check three things: pinning, where synchronized blocks in our code or libraries pin the carrier during blocking calls, which Java 24 largely fixes; heavy ThreadLocal usage; and downstream limits, because connection pools and rate limits still bound real concurrency, so thousands of virtual threads may just queue on a database pool of twenty. Then I load test and compare throughput, latency and pool wait times.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would virtual threads help a CPU-heavy image processing service?</strong> No; throughput is bound by cores, so use a sized platform thread pool.</li>
+  <li><strong>Do virtual threads replace WebFlux?</strong> For most I/O-bound services yes; reactive still helps for streaming and backpressure.</li>
+  <li><strong>Should you pool virtual threads?</strong> No, create one per task and limit concurrency with semaphores.</li>
+</ul>
+</article>
+</body>
+</html>

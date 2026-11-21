@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-041 · How do you make a Java microservice observable in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-041" data-topic="Observability">
+<h1>How do you make a Java microservice observable in production?</h1>
+<p class="ex-meta">Observability · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Make a service observable with the three signals: <strong>structured logs</strong> carrying a <strong>trace id</strong>, <strong>metrics</strong> via <strong>Micrometer</strong> exported to Prometheus, and <strong>distributed traces</strong> with <strong>OpenTelemetry</strong>, plus <strong>Actuator health probes</strong>, and <strong>SLO-based dashboards and alerts</strong> on top.</p>
+
+<h2>Detailed explanation</h2>
+<p>Observability means you can answer new questions about production behaviour without shipping new code. For a Java microservice that rests on three signals that must be correlated.</p>
+<p><strong>Logs:</strong> JSON, one event per line, with consistent fields (timestamp, level, service, version, trace id, span id, business keys like orderId). Spring Boot 3.4+ has built-in structured logging (<code>logging.structured.format.console=ecs</code> or <code>logstash</code>); Micrometer Tracing puts the trace id in the MDC automatically. Logs are shipped to ELK, Loki or a vendor.</p>
+<p><strong>Metrics:</strong> Micrometer is the facade; Actuator exposes <code>/actuator/prometheus</code>. Track <strong>RED</strong> per endpoint (rate, errors, duration as histograms for p95/p99), JVM (heap after GC, GC pauses, threads), resource pools (Hikari, executors), dependencies and Kafka consumer lag, plus business metrics like orders placed. Watch <strong>cardinality</strong>: never use user ids as tags.</p>
+<p><strong>Traces:</strong> OpenTelemetry (Java agent or Micrometer Tracing with the OTel bridge) creates spans for HTTP, JDBC and Kafka and propagates context via the W3C <code>traceparent</code> header, exported via OTLP to a Collector and on to Jaeger, Tempo or an APM. Sampling keeps cost under control.</p>
+<p><strong>Health:</strong> Actuator liveness and readiness groups back Kubernetes probes; readiness reflects whether the instance can serve, liveness only whether it is stuck.</p>
+<p>Finally, define <strong>SLOs</strong> (for example 99.9% of requests under 300 ms) and alert on <strong>symptoms</strong> with burn-rate alerts, while causes like CPU go on dashboards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Add Actuator, Micrometer Prometheus registry and Micrometer Tracing / OTel.</li>
+  <li>Configure JSON logging with trace and span ids.</li>
+  <li>Instrument custom business metrics and spans for key steps.</li>
+  <li>Export to Prometheus, an OTel Collector and a log store.</li>
+  <li>Build Grafana dashboards per service (RED, JVM, dependencies).</li>
+  <li>Define SLOs and burn-rate alerts with runbooks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">management:
+  endpoints.web.exposure.include: health,info,prometheus
+  endpoint.health.probes.enabled: true
+  metrics.distribution.percentiles-histogram.http.server.requests: true
+  tracing.sampling.probability: 0.1
+  otlp.tracing.endpoint: http://otel-collector:4318/v1/traces
+logging:
+  structured.format.console: ecs</code></pre>
+<pre><code class="language-java">Counter.builder(&quot;orders.placed&quot;).tag(&quot;channel&quot;, &quot;web&quot;).register(registry).increment();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Logs without trace ids, so signals cannot be correlated.</li>
+  <li>High-cardinality metric tags (user id, full URL) exploding storage.</li>
+  <li>Liveness probes that check the database, causing restart storms.</li>
+  <li>Alerting on every CPU spike instead of user-facing symptoms.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I cover logs, metrics and traces and make sure they're correlated. Logs are structured JSON with the trace id from the MDC, shipped centrally. Metrics come from Micrometer through Actuator to Prometheus: request rate, errors and latency percentiles, JVM and pool metrics, Kafka lag and business metrics, keeping tag cardinality low. Tracing uses OpenTelemetry, propagating context over HTTP and Kafka and exporting through a Collector to Tempo or Jaeger. Actuator liveness and readiness back the Kubernetes probes. On top I define SLOs and alert on symptoms like error rate and latency burn rate, keeping causes on dashboards.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What would you alert on?</strong> SLO burn rate for errors and latency, saturation that predicts outages; everything else goes on dashboards.</li>
+  <li><strong>How do you connect a metric spike to a trace?</strong> Exemplars attach trace ids to histogram buckets.</li>
+  <li><strong>Liveness vs readiness?</strong> Readiness removes the pod from traffic; liveness restarts it, so it must not depend on external systems.</li>
+</ul>
+</article>
+</body>
+</html>

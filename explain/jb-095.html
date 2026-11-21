@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-095 · What is the difference between start() and run()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-095" data-topic="Concurrency">
+<h1>What is the difference between start() and run()?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><code>start()</code> asks the JVM to <strong>create a new thread</strong> that then calls <code>run()</code>; calling <code>run()</code> directly is just an <strong>ordinary method call on the current thread</strong>, so there is <strong>no concurrency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>Thread.run()</code> holds the work: either your override, or it delegates to the <code>Runnable</code> you passed in. On its own it is just a method. <strong><code>Thread.start()</code></strong> is what makes a thread: it moves the thread from the <code>NEW</code> state to <code>RUNNABLE</code>, the JVM creates a native thread (or schedules a virtual thread) with its <strong>own call stack</strong>, and that new thread invokes <code>run()</code>. <code>start()</code> returns immediately, so the caller continues in parallel.</p>
+<p>If you call <code>run()</code> directly, the code executes <strong>synchronously on the calling thread</strong>. The output looks correct, which is why this bug is easy to miss, but you lose all concurrency: a slow <code>run()</code> blocks the caller, <code>Thread.currentThread().getName()</code> inside it prints <code>main</code> (or whatever the caller is), and the <code>Thread</code> object remains in the <code>NEW</code> state.</p>
+<p>A thread can be <strong>started only once</strong>. Calling <code>start()</code> again, even after the thread has finished, throws <strong><code>IllegalThreadStateException</code></strong>, because a terminated thread's native resources are gone and the lifecycle is one way: NEW, RUNNABLE, (BLOCKED/WAITING/TIMED_WAITING), TERMINATED. To run the work again, create a new <code>Thread</code> or, better, submit the <code>Runnable</code> again to an executor.</p>
+<p>In modern code you rarely call either method by hand. You submit tasks to an <strong><code>ExecutorService</code></strong>, use <code>CompletableFuture</code>, or start <strong>virtual threads</strong> with <code>Thread.startVirtualThread(task)</code> or <code>Executors.newVirtualThreadPerTaskExecutor()</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>new Thread(task)</code> creates a Thread object in state <code>NEW</code>; no OS thread exists yet.</li>
+  <li><code>start()</code> registers it with the JVM, which creates the underlying thread and stack.</li>
+  <li>The new thread runs <code>run()</code>, which calls <code>task.run()</code>.</li>
+  <li>The caller continues immediately after <code>start()</code>.</li>
+  <li>When <code>run()</code> returns or throws, the thread is <code>TERMINATED</code> and cannot be restarted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Runnable task = () -&gt;
+    System.out.println(&quot;Running in &quot; + Thread.currentThread().getName());
+
+Thread t = new Thread(task, &quot;worker-1&quot;);
+
+t.run();     // prints &quot;Running in main&quot;   - same thread, synchronous
+t.start();   // prints &quot;Running in worker-1&quot; - new thread, asynchronous
+t.join();
+
+t.start();   // throws IllegalThreadStateException - already started once</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th><code>start()</code></th><th><code>run()</code> called directly</th></tr></thead>
+<tbody>
+<tr><td>New thread created</td><td>Yes</td><td>No</td></tr>
+<tr><td>Runs on</td><td>New thread</td><td>Caller's thread</td></tr>
+<tr><td>Caller blocked</td><td>No</td><td>Yes, until run returns</td></tr>
+<tr><td>Can call twice</td><td>No (exception)</td><td>Yes, it is just a method</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>run()</code> and believing the code is running in parallel.</li>
+  <li>Trying to restart a finished thread instead of creating a new one.</li>
+  <li>Overriding <code>start()</code> instead of <code>run()</code>.</li>
+  <li>Creating raw threads in server code instead of using a managed executor.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;start asks the JVM to create a new thread with its own call stack, and that new thread then invokes run, while the caller continues immediately. Calling run directly is just a normal method call, so the code runs on the current thread, sequentially, with no concurrency at all; if it is slow it blocks the caller. A thread can be started only once, so calling start twice throws IllegalThreadStateException. So run defines the work and start executes it asynchronously. In practice I rarely call either: I submit tasks to an ExecutorService or use virtual threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a Thread not be restarted after it finishes?</strong> Its lifecycle is one way and the native thread is released on termination; the API forbids reuse, so create a new thread or reuse via a pool.</li>
+  <li><strong>How do you get a result from a thread?</strong> Use a Callable with an ExecutorService, which returns a Future, or a CompletableFuture.</li>
+  <li><strong>What state is a Thread in before start()?</strong> NEW, as reported by getState().</li>
+</ul>
+</article>
+</body>
+</html>

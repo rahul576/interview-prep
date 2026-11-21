@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-032 · How do you debug Terraform when something behaves unexpectedly?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-032" data-topic="Infrastructure as Code">
+<h1>How do you debug Terraform when something behaves unexpectedly?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Read the <strong>error and provider message</strong> first, inspect state with <strong>terraform state list/show</strong>, evaluate expressions in <strong>terraform console</strong>, compare with the <strong>real resource</strong> and its <strong>permissions</strong>, and use <strong>TF_LOG=DEBUG/TRACE</strong> with <strong>TF_LOG_PATH</strong> for API-level detail.</p>
+
+<h2>Detailed explanation</h2>
+<p>Most Terraform failures are not Terraform bugs but <strong>provider API errors</strong>: missing IAM permissions (<code>AccessDenied</code>, <code>AuthorizationFailed</code>), names already taken, quota limits, invalid combinations of settings, eventual consistency (a role not yet visible), or an organisation policy blocking an action (SCPs, Azure Policy). The error usually names the resource address, the API call and the reason, so reading it carefully, including the provider's original message and request ID, solves most problems.</p>
+<p>For <strong>unexpected plans</strong>, compare what Terraform believes with reality. <code>terraform state list</code> shows which addresses Terraform manages, so you can spot duplicates or a resource missing after a refactor. <code>terraform state show &lt;address&gt;</code> prints the recorded attributes, which you compare with the cloud console or CLI. <code>terraform plan -refresh-only</code> separates drift from code changes. Unexpected replacements usually point to a force-new attribute; perpetual diffs to normalisation issues such as JSON policy formatting or list ordering.</p>
+<p>For <strong>expression problems</strong>, <code>terraform console</code> is the best tool: it loads the configuration and state and lets you evaluate <code>var.x</code>, <code>local.y</code>, <code>module.z.output</code>, or a for expression interactively, which is ideal for debugging <code>for_each</code> maps, <code>merge</code>, <code>try</code> or <code>cidrsubnet</code>. Temporary outputs serve a similar purpose.</p>
+<p>For <strong>deep problems</strong>, <code>TF_LOG=DEBUG</code> or <code>TRACE</code> logs Terraform core and provider activity, including HTTP requests and responses to cloud APIs; <code>TF_LOG_PROVIDER</code> and <code>TF_LOG_CORE</code> target one side, <code>TF_LOG_PATH</code> writes to a file, and <code>TF_LOG=JSON</code> gives structured logs. These logs can contain <strong>credentials, tokens and secret values</strong>, so they must be handled carefully. Finally, check versions: a provider upgrade or known GitHub issue often explains odd behaviour.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the error: address, API, reason.</li>
+  <li>Check identity and permissions (<code>aws sts get-caller-identity</code>).</li>
+  <li>Inspect state and real resources.</li>
+  <li>Evaluate expressions in console.</li>
+  <li>Enable debug logs and reproduce if still unclear.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform state list | grep aws_iam_role
+terraform state show 'aws_iam_role.app'
+aws sts get-caller-identity
+
+terraform console
+&gt; local.subnets_by_az
+&gt; { for k, v in var.services : k =&gt; v.port if v.public }
+&gt; cidrsubnet(&quot;10.0.0.0/16&quot;, 4, 2)
+
+TF_LOG=DEBUG TF_LOG_PATH=./tf-debug.log terraform plan
+grep -n &quot;HTTP Request&quot; tf-debug.log | head</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Jumping to <code>TF_LOG=TRACE</code> before reading the actual error.</li>
+  <li>Running with the wrong credentials or account.</li>
+  <li>Editing state by hand instead of using state commands.</li>
+  <li>Sharing debug logs that contain secrets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I read the error carefully; most failures are provider API errors like missing IAM permissions, a name already taken or a quota, and the message says which. For unexpected plans, terraform state list shows what Terraform manages and state show what it recorded for a resource, which I compare with the real resource. terraform console lets me evaluate variables, locals and functions interactively, perfect for debugging for_each maps. If that's not enough, TF_LOG=DEBUG or TRACE with TF_LOG_PATH logs every API request and response, which I treat as sensitive.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should TF_LOG output never be shared publicly?</strong> It may include tokens, secrets and account details from API calls.</li>
+  <li><strong>How do you debug a perpetual diff?</strong> Compare state show with config, check normalisation, check provider issues.</li>
+  <li><strong>What if state lists a resource that no longer exists?</strong> Refresh removes it, or <code>terraform state rm</code> after confirming.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-028 · terraform plan fails with Error acquiring the state lock. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-028" data-topic="Terraform">
+<h1>terraform plan fails with Error acquiring the state lock. What do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>The lock is held by <strong>another active run</strong> or a <strong>crashed or cancelled run</strong> that never released it; read the <strong>lock info</strong> (ID, who, when, operation), <strong>check running pipelines and ask</strong>, and only if it is definitely stale use <strong><code>terraform force-unlock &lt;ID&gt;</code></strong>; never remove a lock while a run is applying.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Error acquiring the state lock</strong> means the backend refused to give this run the lock, because a lock already exists. Either another engineer or pipeline is <strong>genuinely running</strong> plan or apply on the same state right now, or a previous run <strong>died without releasing it</strong>: a CI job was cancelled or hit its timeout, a runner was killed.</p>
+<p>The error message includes <strong>lock info</strong>: the <strong>lock ID</strong>, the <strong>path</strong>, <strong>who</strong> created it (user and host), the <strong>operation</strong> (<code>OperationTypeApply</code>, <code>OperationTypePlan</code>), the Terraform version and <strong>when</strong> it was created. Check the CI system for running jobs on that state, ask in the team channel, and look at the user and time: a lock from a pipeline that finished hours ago, or from a runner that no longer exists, is very likely stale.</p>
+<p>If the run is still active, <strong>wait</strong>, or retry with <code>-lock-timeout=10m</code> so Terraform waits for the lock. If you are sure it is stale, run <strong><code>terraform force-unlock &lt;LOCK_ID&gt;</code></strong> from a correctly initialised working directory; it only removes the lock, not changes. On Azure you can also <strong>break the blob lease</strong> in the portal or with <code>az storage blob lease break</code>.</p>
+<p>Why caution matters: if another run is <strong>really applying</strong>, removing its lock allows <strong>two writers</strong>. Both read the same state version and the last one to write wins, so resources created by the other run vanish from state, leading to duplicates or orphans. Frequent stale locks indicate that <strong>pipeline timeouts or cancellations</strong> kill Terraform; fix those, and serialise runs per state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform tries to acquire the lock; backend reports it is held.</li>
+  <li>Read the lock info from the error.</li>
+  <li>Check CI and colleagues for an active run.</li>
+  <li>Active: wait or use <code>-lock-timeout</code>.</li>
+  <li>Stale: <code>terraform force-unlock &lt;ID&gt;</code>, then plan to verify state.</li>
+  <li>Fix the root cause (timeouts, concurrency).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Error: Error acquiring the state lock
+Lock Info:
+  ID:        6f1c2b7e-3d1a-4c8e-9b0f-1a2b3c4d5e6f
+  Path:      acme-tfstate-prod/network/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       runner@gha-runner-42
+  Version:   1.14.0
+  Created:   2026-11-21 07:12:44 UTC</code></pre>
+<pre><code class="language-bash">terraform force-unlock 6f1c2b7e-3d1a-4c8e-9b0f-1a2b3c4d5e6f
+terraform plan    # confirm state matches reality after the crashed apply</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Force-unlocking without checking who holds the lock.</li>
+  <li>Running with <code>-lock=false</code> to get past the error.</li>
+  <li>Not checking state consistency after a crashed apply.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The error means someone else holds the lock: another engineer or pipeline is running plan or apply on the same state, or a previous run crashed or was cancelled and never released it. The message gives the lock ID, who created it, when and which operation. First I check whether that run is still active in CI and ask the person; if it is, I wait. Only if I'm sure the lock is stale, like a runner killed hours ago, do I run <code>terraform force-unlock</code> with the ID, or break the blob lease on Azure, then plan to verify state. Removing a lock during a real apply can cause two writers and corrupted state. Repeated stale locks mean pipeline timeouts need fixing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Pipelines queue instead of fail?</strong> CI concurrency groups per state, <code>-lock-timeout</code>, or HCP Terraform run queues.</li>
+  <li><strong>What does force-unlock change?</strong> Only the lock, not state or resources.</li>
+  <li><strong>After a crashed apply?</strong> Run a plan and look for missing or duplicate resources.</li>
+</ul>
+</article>
+</body>
+</html>

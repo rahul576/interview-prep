@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-074 · An important Deployment was deleted in production and nobody admits doing it. How do you find out what happened?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-074" data-topic="Kubernetes">
+<h1>An important Deployment was deleted in production and nobody admits doing it. How do you find out what happened?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>API server audit log</strong> records <strong>who</strong> (user or service account), <strong>what</strong> (verb, resource, name), <strong>when</strong> and <strong>from where</strong> (source IP, user agent); search for the <strong>delete</strong> on that Deployment, and remember the culprit is often <strong>automation</strong> (GitOps prune, Helm, an operator, CI), then fix <strong>RBAC and change management</strong> without blame.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes <strong>audit logging</strong> is configured on the API server with an audit policy; on managed clusters you enable it and it ships to <strong>CloudWatch Logs</strong> (EKS control plane logging), <strong>Azure Monitor</strong> diagnostic settings (kube-audit or kube-audit-admin on AKS) or <strong>Cloud Audit Logs</strong> (GKE). Each event includes <code>verb</code>, <code>objectRef</code> (resource, namespace, name), <code>user.username</code> and groups, <code>impersonatedUser</code>, <code>sourceIPs</code>, <code>userAgent</code> and timestamps. If auditing was not enabled, the evidence may simply not exist, which is itself a finding.</p>
+<p>Search for <code>verb=delete</code>, <code>objectRef.resource=deployments</code>, the name and namespace, around the time the Deployment disappeared. The <code>userAgent</code> is revealing: <code>argocd-application-controller</code>, <code>Helm/3.x</code>, <code>kubectl/v1.34</code> or a Terraform provider. A ServiceAccount username like <code>system:serviceaccount:argocd:argocd-application-controller</code> means GitOps did it.</p>
+<p>Automation is the usual answer. <strong>Argo CD or Flux pruned</strong> it because the manifest was removed or renamed in Git, or a path changed. <strong>Helm</strong> removed it because a template condition turned it off in the new values. An <strong>operator</strong> reconciled its owned resources. A CI job using a <strong>cluster-admin service account</strong> ran a cleanup script. Then check <strong>Git history</strong> and controller logs to see the triggering change. Kubernetes garbage collection can also delete objects whose <code>ownerReferences</code> point to a deleted owner.</p>
+<p>Use the findings constructively: least-privilege RBAC so humans cannot delete in production, prune safeguards such as Argo CD <code>Prune=false</code> or <code>Delete=false</code> sync options for critical resources, admission policies protecting labelled objects, and all changes through reviewed GitOps PRs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm when it disappeared (monitoring, events, Argo CD history).</li>
+  <li>Query audit logs for delete on that object.</li>
+  <li>Read user, groups, source IP and user agent.</li>
+  <li>If automation, find the Git commit, Helm revision or controller log.</li>
+  <li>Restore from Git; then apply RBAC, prune protection and policy fixes.</li>
+  <li>Blameless review and change-management improvement.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-kusto">// AKS audit logs in Log Analytics
+AKSAudit
+| where Verb == &quot;delete&quot; and ObjectRef.resource == &quot;deployments&quot;
+| where ObjectRef.name == &quot;checkout&quot; and ObjectRef.namespace == &quot;shop&quot;
+| project TimeGenerated, User.username, SourceIps, UserAgent</code></pre>
+<pre><code class="language-bash"># self-managed: JSON audit log on the control plane
+jq 'select(.verb==&quot;delete&quot; and .objectRef.resource==&quot;deployments&quot; and .objectRef.name==&quot;checkout&quot;)
+    | {ts: .requestReceivedTimestamp, user: .user.username, ua: .userAgent, ip: .sourceIPs}' /var/log/kubernetes/audit.log</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Auditing not enabled until after the incident.</li>
+  <li>Assuming a human did it.</li>
+  <li>Shared admin credentials, making identity meaningless.</li>
+  <li>Punishing people instead of fixing access.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The API server audit log records every request with the user or service account, verb, resource, time, source IP and user agent, if auditing is enabled; managed clusters ship it to CloudWatch, Azure Monitor or Cloud Logging. I'd search for a delete on that deployment around the time it vanished. Often it isn't a person: Argo CD pruning after the manifest left Git, a Helm upgrade that dropped it, an operator, or a CI job with a powerful account. I'd check Git history and controller logs. The goal is learning, so I'd tighten RBAC, protect critical resources from pruning and route changes through GitOps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which audit level?</strong> Metadata for most resources, RequestResponse only for sensitive writes, None for noisy reads like events and health checks.</li>
+  <li><strong>Why are shared accounts bad here?</strong> The audit log shows the account, not the person.</li>
+  <li><strong>Can you prevent prune deletes?</strong> Argo CD sync options and resource annotations, plus policy.</li>
+</ul>
+</article>
+</body>
+</html>

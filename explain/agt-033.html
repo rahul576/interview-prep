@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-033 · Design an agent that onboards new customers by calling several backend systems. How do you make it reliable?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-033" data-topic="AI Agents &amp; AIOps">
+<h1>Design an agent that onboards new customers by calling several backend systems. How do you make it reliable?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Make onboarding an <strong>explicit workflow</strong> with the agent handling only the <strong>unstructured parts</strong>, <strong>validate data in code</strong> before actions, give every backend call an <strong>idempotency key</strong>, store <strong>durable state</strong> to resume after failures, use <strong>sagas with compensating actions</strong> for partial failures, and provide <strong>human escalation and audit logs</strong>, verifying the final state in each system.</p>
+
+<h2>Detailed explanation</h2>
+<p>Customer onboarding has <strong>fixed business steps</strong>: verify identity or KYC, create the account in the CRM, set up billing, provision the product, and send a welcome email. Letting a model decide the order of these steps adds risk without benefit. So the <strong>process is a deterministic workflow</strong>, and the agent is used where language understanding helps: reading customer emails and documents, extracting details, asking for missing information, answering questions and handling unusual cases.</p>
+<p><strong>Validation in code</strong>: data the agent collects, company registration number, VAT ID, billing address, contact email, plan, is validated by code against schemas and external checks before any backend call. The model proposes; validators decide.</p>
+<p><strong>Idempotency</strong>: each backend call is a tool with an <strong>idempotency key</strong> derived from the onboarding case ID and step, such as <code>onb-7781:create_billing_account</code>. If a call times out and is retried, the backend returns the existing result instead of creating a duplicate account or invoice. Where a backend lacks idempotency support, the tool first checks for an existing record.</p>
+<p><strong>Durable state</strong>: the workflow state, completed steps and created resource IDs is persisted after each step, using a durable execution engine like Temporal or a state machine with a database. The process <strong>resumes after crashes or deployments</strong> and can wait days for customer replies without holding resources.</p>
+<p><strong>Partial failure</strong>: if a later step fails permanently, a <strong>saga</strong> runs <strong>compensating actions</strong> defined in code, such as deactivating the half-created CRM account or voiding the billing account, or <strong>escalates to a human</strong> with full context and the current state.</p>
+<p><strong>Audit and verification</strong>: every action is recorded in an <strong>audit log</strong>, and the final status is <strong>verified by reading back</strong> from each system before the customer is told onboarding is complete.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent reads customer input and extracts structured onboarding data.</li>
+  <li>Code validates data; agent asks the customer for anything missing or invalid.</li>
+  <li>Workflow executes steps in order, each with an idempotency key.</li>
+  <li>State is persisted after each step; waits are durable.</li>
+  <li>On permanent failure, compensate or escalate.</li>
+  <li>Verify the final state in all systems; send welcome email; audit everything.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">STEPS = [
+    (&quot;verify_identity&quot;,   kyc.verify,          None),
+    (&quot;create_crm&quot;,        crm.create_account,  crm.deactivate_account),
+    (&quot;create_billing&quot;,    billing.create,      billing.void_account),
+    (&quot;provision_product&quot;, provisioning.create, provisioning.deprovision),
+    (&quot;send_welcome&quot;,      mailer.send_welcome, None),
+]
+
+def run_onboarding(case):
+    done = case.state.completed            # persisted list of (step, result)
+    for name, action, compensate in STEPS:
+        if name in done:
+            continue                       # resume after crash
+        try:
+            result = action(case.data, idempotency_key=f&quot;{case.id}:{name}&quot;)
+            case.state.record(name, result)   # durable write
+        except PermanentError as e:
+            for prev, res in reversed(case.state.completed_with_compensation(STEPS)):
+                prev.compensate(res, idempotency_key=f&quot;{case.id}:undo:{prev.name}&quot;)
+            return escalate(case, reason=str(e))
+    return verify_all_systems(case)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Letting the agent decide the order of fixed business steps.</li>
+  <li>Retrying create calls without idempotency keys.</li>
+  <li>Keeping progress only in memory or model context.</li>
+  <li>Compensations improvised by the model.</li>
+  <li>Telling the customer &quot;done&quot; without verifying.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Onboarding has fixed business steps, identity check, CRM account, billing, provisioning, welcome email, so I make the overall process an explicit workflow and use the agent for the unstructured parts: understanding customer messages and documents, asking for missing information and handling exceptions. Collected data is validated by code before any action. Each backend call has an idempotency key derived from the onboarding case, so retries don't create duplicates. State is stored durably after each step, so the process resumes after crashes or long waits. If a later step fails permanently, a saga runs compensating actions or escalates to a human. Everything is audited, and the final state is verified in each system.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which steps stay fully deterministic?</strong> Identity checks, account creation, billing and provisioning calls and their order.</li>
+  <li><strong>Backend without idempotency support?</strong> Check-then-create using a unique external reference, inside the tool.</li>
+  <li><strong>Long waits for the customer?</strong> Durable timers with reminders and timeouts, no running process.</li>
+</ul>
+</article>
+</body>
+</html>

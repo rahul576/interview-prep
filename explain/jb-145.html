@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-145 · What is an execution plan, and how do you use it to optimize slow queries?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-145" data-topic="Databases &amp; SQL">
+<h1>What is an execution plan, and how do you use it to optimize slow queries?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>execution plan</strong> is the optimizer's step-by-step strategy for running a query (access paths, join order, join algorithms, sorts, estimated rows); you read it with <strong><code>EXPLAIN</code></strong> / <strong><code>EXPLAIN ANALYZE</code></strong>, find the expensive or mis-estimated step, fix it, and <strong>verify</strong> the new plan.</p>
+
+<h2>Detailed explanation</h2>
+<p>SQL says <em>what</em> you want; the <strong>cost-based optimizer</strong> decides <em>how</em>. It uses <strong>statistics</strong> (row counts, value distributions, distinct values, correlations) to estimate the cost of alternatives: sequential scan vs index scan vs index-only scan, nested loop vs hash join vs merge join, the join order, and whether to sort or read pre-sorted index data.</p>
+<p><code>EXPLAIN</code> shows the chosen plan with <strong>estimates</strong>. <code>EXPLAIN ANALYZE</code> (PostgreSQL, MySQL 8.0.18+) actually executes the query and adds <strong>actual rows, loops and time per node</strong>; in PostgreSQL add <code>BUFFERS</code> to see I/O. Be careful running it on <code>UPDATE</code> or <code>DELETE</code>: wrap it in a transaction and roll back. Oracle uses <code>EXPLAIN PLAN</code> and <code>DBMS_XPLAN.DISPLAY_CURSOR</code>, and SQL Server has actual execution plans.</p>
+<p>What to look for:</p>
+<ul>
+  <li><strong>Seq Scan / full table scan</strong> on a large table where few rows are needed.</li>
+  <li><strong>Estimated vs actual rows</strong> differing by orders of magnitude: stale statistics, correlated columns, or skewed data. This often causes a nested loop that runs millions of times.</li>
+  <li>Expensive <strong>Sort</strong> nodes or sorts spilling to disk (&quot;external merge&quot;), or hashes exceeding <code>work_mem</code>.</li>
+  <li><strong>Rows Removed by Filter</strong> being huge: an index exists but doesn't match the predicate well.</li>
+  <li>Plans that read the table repeatedly through correlated subqueries.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Capture the real query and representative parameters.</li>
+  <li>Run <code>EXPLAIN (ANALYZE, BUFFERS)</code> and read it bottom-up, inner nodes first.</li>
+  <li>Find the node with the most time and check row estimates.</li>
+  <li>Form a hypothesis: missing index, non-sargable predicate, stale stats, bad join order.</li>
+  <li>Apply one change: index, rewrite, <code>ANALYZE</code>, extended statistics, query restructuring.</li>
+  <li>Re-run and compare time, rows and buffers; monitor in production.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">EXPLAIN (ANALYZE, BUFFERS)
+SELECT c.name, SUM(o.total)
+FROM orders o JOIN customer c ON c.id = o.customer_id
+WHERE o.created_at &gt;= '2026-11-01'
+GROUP BY c.name;
+
+-- Seq Scan on orders (cost=... rows=1200) (actual rows=4,800,000) -&gt; estimates off
+--   Filter: created_at &gt;= '2026-11-01'  Rows Removed by Filter: 40,000,000
+ANALYZE orders;
+CREATE INDEX CONCURRENTLY idx_orders_created ON orders (created_at) INCLUDE (customer_id, total);
+-- Re-run: Index Only Scan + Hash Join, 9.8 s -&gt; 310 ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading only total cost numbers, which are unitless estimates, not milliseconds.</li>
+  <li>Testing on a tiny dev database where plans differ completely.</li>
+  <li>Running <code>EXPLAIN ANALYZE</code> on a destructive statement without rollback.</li>
+  <li>Forcing hints instead of fixing statistics or indexes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An execution plan shows how the optimizer will run a query: which indexes or scans it uses, the join order and algorithms like nested loop or hash join, sorts, and estimated row counts. I get it with EXPLAIN, and preferably EXPLAIN ANALYZE with buffers, which runs the query and shows actual rows and time per step. I look for full scans on large tables, expensive sorts, nested loops over many rows, and big gaps between estimated and actual rows, which usually mean stale statistics. Then I add or adjust an index, rewrite the query or run ANALYZE, and re-check the plan and timing to confirm the improvement.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Estimated rows far lower than actual?</strong> Stale or insufficient statistics or correlated columns; the optimizer may choose a nested loop wrongly.</li>
+  <li><strong>Why would the optimizer choose a seq scan despite an index?</strong> The query returns a large fraction of rows, so a sequential read is cheaper.</li>
+  <li><strong>How do you find slow queries in the first place?</strong> Slow query log, <code>pg_stat_statements</code>, APM traces.</li>
+</ul>
+</article>
+</body>
+</html>

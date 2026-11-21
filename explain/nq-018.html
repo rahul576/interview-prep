@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-018 · How are resources released when a virtual thread completes execution?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-018" data-topic="Modern Java (11-21)">
+<h1>How are resources released when a virtual thread completes execution?</h1>
+<p class="ex-meta">Modern Java (11-21) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>When a virtual thread finishes, it is <strong>unmounted</strong>, its <strong>carrier returns to the scheduler</strong>, and the thread object, its <strong>heap-stored stack chunks</strong> and <strong>ThreadLocal values</strong> become <strong>garbage collected</strong>; your <strong>own resources</strong> (connections, files, locks, permits) still need <strong>try-with-resources or finally</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A virtual thread never owned an OS thread, so there is nothing to give back to the operating system. When its <code>run</code> method completes, normally or with an exception, the continuation terminates and the JVM <strong>unmounts</strong> it. The <strong>carrier thread</strong> is immediately free to mount the next runnable virtual thread from the ForkJoinPool queue.</p>
+<p>What remains is plain heap memory: the <code>Thread</code> object, the <strong>stack chunk objects</strong> that held its frames while unmounted, and its <strong>ThreadLocal map</strong>. Once nothing references them (no one holds the <code>Thread</code> or a <code>Future</code> keeping the result), the <strong>garbage collector</strong> reclaims them like any other objects. That is why creating and finishing millions of virtual threads is cheap: there is no kernel call and no pool bookkeeping, just allocation and GC. One subtle benefit: because each task gets a fresh thread, ThreadLocal values <strong>do not leak</strong> into the next task, a classic bug with pooled platform threads.</p>
+<p>The JVM does <strong>not</strong> know about application-level resources the code acquired:</p>
+<ul>
+  <li>JDBC connections borrowed from HikariCP must be closed to return to the pool.</li>
+  <li>Files, sockets and HTTP response bodies must be closed.</li>
+  <li><code>ReentrantLock</code>s must be unlocked and <strong>semaphore permits</strong> released, or other threads block forever.</li>
+  <li>Spans, MDC entries and similar context should be cleaned up.</li>
+</ul>
+<p>So the usual discipline applies: <strong>try-with-resources</strong> for <code>AutoCloseable</code>s and <strong>finally</strong> for locks and permits. At the task-group level, an <code>ExecutorService</code> in try-with-resources waits for all its tasks; <strong>structured concurrency</strong> additionally cancels sibling tasks on failure so none are left running.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Task returns or throws; uncaught exceptions go to the handler.</li>
+  <li>Continuation ends; JVM unmounts the virtual thread.</li>
+  <li>Carrier picks up the next virtual thread.</li>
+  <li>Thread object, stack chunks and ThreadLocals become unreachable.</li>
+  <li>GC reclaims memory; application resources were closed by your code.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">try (var ex = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (long id : ids) {
+        ex.submit(() -&gt; {
+            permits.acquire();
+            try (Connection c = dataSource.getConnection();
+                 PreparedStatement ps = c.prepareStatement(&quot;UPDATE orders SET synced = true WHERE id = ?&quot;)) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            } finally {
+                permits.release();     // never leak a permit
+            }
+            return null;
+        });
+    }
+}   // waits for all tasks</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking the JVM closes connections or files when the thread ends.</li>
+  <li>Releasing locks or permits outside <code>finally</code>.</li>
+  <li>Holding references to finished threads or futures, delaying GC.</li>
+  <li>Relying on ThreadLocal cleanup instead of explicit resource handling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When a virtual thread finishes, the JVM unmounts it and its carrier goes straight back to the scheduler to run other virtual threads; nothing goes back to the OS because no OS thread was created for it. The thread object and its stack chunks, which live on the heap, become unreachable and the garbage collector reclaims them along with its ThreadLocals. What the JVM doesn't release are my own resources, like database connections, files, locks or semaphore permits, so I still use try-with-resources and finally blocks. And an ExecutorService in try-with-resources waits for its tasks before closing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are virtual threads cheap to create and destroy?</strong> They are heap objects with small growable stacks; no kernel calls or pooling.</li>
+  <li><strong>What happens to an uncaught exception?</strong> It goes to the uncaught exception handler; with a Future it's wrapped in ExecutionException.</li>
+  <li><strong>Do ThreadLocals leak with virtual threads?</strong> Not across tasks, since each task has a new thread, but they cost memory while it lives.</li>
+</ul>
+</article>
+</body>
+</html>

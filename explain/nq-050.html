@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-050 · When should you use a parallel stream, and what factors should you consider?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-050" data-topic="Java 8+ Features">
+<h1>When should you use a parallel stream, and what factors should you consider?</h1>
+<p class="ex-meta">Java 8+ Features · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use a parallel stream only when <strong>total work is large</strong> (many elements times <strong>costly CPU work per element</strong>, the <strong>N x Q</strong> idea), the <strong>source splits well</strong>, operations are <strong>independent, stateless and associative</strong>, <strong>order does not matter</strong>, there are <strong>free cores</strong>, and a <strong>JMH benchmark</strong> proves the gain; avoid it for <strong>blocking I/O</strong> and in <strong>shared web servers</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Doug Lea's rule of thumb is to think in terms of <strong>N x Q</strong>: N is the number of elements and Q the cost per element. If the product is small (a few thousand cheap additions), the overhead of splitting, scheduling and merging outweighs any gain. Parallelism starts to pay when the total amounts to something like ten thousand or more non-trivial operations, and it shines for CPU-intensive tasks: parsing large files already in memory, hashing, compression, image processing, Monte Carlo simulations, scoring many records with a model.</p>
+<p><strong>Source and operations.</strong> The source should be cheap to split: <code>ArrayList</code>, arrays, <code>IntStream.range</code>. Operations should be pure and independent per element, and reductions associative. Stateful or ordered operations (<code>sorted</code>, <code>distinct</code>, <code>limit</code>, <code>findFirst</code>) reduce or erase the benefit.</p>
+<p><strong>Environment.</strong> A parallel stream uses the JVM-wide <strong>common ForkJoinPool</strong>. In a batch job or CLI tool that owns the machine, that is fine. In a <strong>Spring Boot service under load</strong>, the cores are already busy with request threads; parallel streams in request handlers compete for the same CPUs, share one small pool across all requests, and add tail latency instead of reducing it. In <strong>containers</strong> with one or two CPUs, the common pool may have parallelism of 1 or even fall back to a new thread per task, giving no benefit at all.</p>
+<p><strong>Never for blocking I/O.</strong> Calling HTTP services or databases inside a parallel stream ties up common-pool workers waiting on the network. Use <code>CompletableFuture</code> with a dedicated executor, or virtual threads, for concurrent I/O.</p>
+<p><strong>Measure.</strong> Benchmark with <strong>JMH</strong> (warm-up, multiple forks) or realistic load tests, comparing latency and CPU, and check results are identical.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Estimate N and Q; discard small or cheap workloads.</li>
+  <li>Check source splittability and operation statelessness.</li>
+  <li>Confirm results do not depend on order.</li>
+  <li>Check deployment: cores available, shared server or dedicated job.</li>
+  <li>Benchmark sequential versus parallel with JMH.</li>
+  <li>Adopt parallel only for a clear, repeatable gain.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Good candidate: CPU-heavy work on a large in-memory ArrayList in a batch job
+List&lt;Document&gt; docs = loadAll();                 // 200,000 documents
+Map&lt;String, Long&gt; termCounts = docs.parallelStream()
+    .flatMap(d -&gt; tokenize(d.text()).stream())    // expensive CPU work
+    .collect(Collectors.groupingByConcurrent(t -&gt; t, Collectors.counting()));
+
+// Bad candidate: blocking I/O in a request handler
+List&lt;Price&gt; prices = skus.parallelStream()
+    .map(pricingClient::fetch)                    // HTTP call, blocks workers
+    .toList();
+// Better: virtual threads
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    List&lt;Future&lt;Price&gt;&gt; fs = skus.stream().map(s -&gt; exec.submit(() -&gt; pricingClient.fetch(s))).toList();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Factor</th><th>Favours parallel</th><th>Favours sequential</th></tr></thead>
+<tbody>
+<tr><td>Data size x cost</td><td>Large, CPU-heavy</td><td>Small or cheap</td></tr>
+<tr><td>Source</td><td>ArrayList, array, range</td><td>LinkedList, iterate, I/O</td></tr>
+<tr><td>Order needed</td><td>No</td><td>Yes</td></tr>
+<tr><td>Work type</td><td>CPU-bound</td><td>Blocking I/O</td></tr>
+<tr><td>Runtime</td><td>Dedicated batch, idle cores</td><td>Busy web server, 1-2 CPU container</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Choosing parallel based on intuition rather than benchmarks.</li>
+  <li>Using parallel streams for remote calls.</li>
+  <li>Ignoring that container CPU limits shrink the common pool.</li>
+  <li>Measuring a cold JVM without warm-up.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I consider a parallel stream only when the total work is large: many elements times a costly per-element operation, the N times Q idea, with real CPU work like parsing or scoring. The source must split cheaply, like an ArrayList, array or range; the operations must be independent, stateless and associative; I must not need ordered results; and there must be idle cores. I avoid it for blocking I/O, where I use a dedicated executor or virtual threads, and inside web request handlers, where the shared common pool competes with request threads and hurts tail latency. And I always measure with JMH before and after.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might a parallel stream hurt a Spring Boot service under load?</strong> All requests share the small common pool and compete with request threads for cores, increasing latency.</li>
+  <li><strong>What does a 1-CPU container do to the common pool?</strong> Parallelism becomes 1 or less, so there is little or no parallelism, only overhead.</li>
+  <li><strong>How does JMH help?</strong> It handles warm-up, JIT effects and dead-code elimination to give trustworthy timings.</li>
+</ul>
+</article>
+</body>
+</html>

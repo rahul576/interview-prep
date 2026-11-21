@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-058 · How would you choose between ArrayList, LinkedList, HashSet, and ConcurrentHashMap for a high-throughput application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-058" data-topic="Collections">
+<h1>How would you choose between ArrayList, LinkedList, HashSet, and ConcurrentHashMap for a high-throughput application?</h1>
+<p class="ex-meta">Collections · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Choose by <strong>access pattern and concurrency</strong>: <strong>ArrayList</strong> for append-and-iterate data (cache friendly), almost never <strong>LinkedList</strong>, <strong>HashSet</strong> for O(1) <strong>membership</strong>, and <strong>ConcurrentHashMap</strong> for <strong>shared mutable state across threads</strong>, then <strong>presize</strong> and <strong>verify with JMH and profiling</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In high-throughput systems the constant factors matter as much as Big-O. Modern CPUs are fast at streaming through <strong>contiguous memory</strong> and slow at <strong>pointer chasing</strong>, and every extra object adds allocation and GC pressure.</p>
+<p><strong>ArrayList</strong> is the default for ordered data that is mostly appended and iterated: one compact array, O(1) index access and excellent cache locality. Presize it with the expected capacity to avoid repeated copies.</p>
+<p><strong>LinkedList</strong> rarely wins, even for inserts: each element is a separate node of 24 or more bytes plus the element itself, nodes are scattered across the heap, and finding a position is O(n). For queues and stacks, <strong>ArrayDeque</strong> is faster.</p>
+<p><strong>HashSet</strong> gives average O(1) <code>contains</code>, ideal for <strong>de-duplication</strong>, idempotency checks or &quot;seen ids&quot;. Performance depends on a <strong>well-distributed hashCode</strong> and on sizing to avoid rehashing (<code>HashSet.newHashSet(n)</code> in Java 19+). For primitive ids at very large scale, primitive collections (Eclipse Collections, fastutil) avoid boxing.</p>
+<p><strong>ConcurrentHashMap</strong> is the tool when many threads read and update the same map: counters, caches, session registries. Use atomic operations like <code>merge</code>, <code>compute</code> and <code>computeIfAbsent</code>, and <code>LongAdder</code> values for hot counters. If the data is read-mostly and changes rarely, an <strong>immutable map swapped through a volatile reference</strong> is even cheaper. For thread-confined data, plain HashMap per thread or per request avoids any synchronisation.</p>
+<p>Finally, <strong>measure</strong>: write JMH benchmarks for the hot path with realistic sizes and use a profiler such as async-profiler or JFR to confirm allocation and cache behaviour.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the operations: append, index, insert, membership, key lookup.</li>
+  <li>Identify sharing: thread-confined, read-mostly or concurrently mutated.</li>
+  <li>Pick the simplest structure that fits.</li>
+  <li>Presize with expected capacity.</li>
+  <li>Benchmark with JMH and profile in production-like load.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">List&lt;Event&gt; batch = new ArrayList&lt;&gt;(BATCH_SIZE);         // append + iterate
+Set&lt;String&gt; seen = HashSet.newHashSet(1_000_000);         // dedup, Java 19+
+if (!seen.add(event.id())) return;                        // already processed
+
+ConcurrentMap&lt;String, LongAdder&gt; perTenant = new ConcurrentHashMap&lt;&gt;();
+perTenant.computeIfAbsent(tenant, t -&gt; new LongAdder()).increment();
+
+@Benchmark public long iterateArrayList() { long s = 0; for (int x : arrayList) s += x; return s; }
+@Benchmark public long iterateLinkedList() { long s = 0; for (int x : linkedList) s += x; return s; }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Picking LinkedList for &quot;frequent inserts&quot; without measuring.</li>
+  <li>Locking a HashMap with <code>synchronized</code> around every call instead of using ConcurrentHashMap.</li>
+  <li>Poor hashCode implementations causing collisions.</li>
+  <li>Micro-benchmarking with <code>System.nanoTime</code> loops instead of JMH.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start from the access pattern and whether data is shared between threads. For ordered data that's mostly appended and iterated, ArrayList is my default because the contiguous array is cache friendly. LinkedList almost never wins because of pointer chasing and per-node overhead; for queues I use ArrayDeque. For fast membership and de-duplication I use HashSet, which needs a well-distributed hashCode. When many threads update shared state like counters or caches, I use ConcurrentHashMap with merge or computeIfAbsent. I presize collections and confirm choices with JMH and profiling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you use an immutable copy instead?</strong> For read-mostly data: rebuild and publish a new immutable map, so readers need no locks.</li>
+  <li><strong>What does JMH protect against?</strong> JIT warm-up, dead-code elimination and other benchmarking pitfalls.</li>
+  <li><strong>Primitive collections?</strong> They avoid boxing and save memory for large numeric data sets.</li>
+</ul>
+</article>
+</body>
+</html>

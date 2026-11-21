@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-027 · Every terraform plan shows the same change on an IAM policy even right after apply. What causes perpetual diffs and how do you fix them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-027" data-topic="Terraform">
+<h1>Every terraform plan shows the same change on an IAM policy even right after apply. What causes perpetual diffs and how do you fix them?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>perpetual diff</strong> means what Terraform sends is <strong>not what the API returns</strong> on the next read; for IAM policies the API <strong>normalises JSON</strong>, so build policies with <strong><code>jsonencode</code> or <code>aws_iam_policy_document</code></strong>, fix <strong>external modifications or overlapping resources</strong>, use <strong><code>ignore_changes</code></strong> only for attributes legitimately managed elsewhere, and <strong>report provider bugs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>After apply, Terraform stores what the provider returned. On the next plan it refreshes the object and compares it with configuration. If the API stores the value in a <strong>different form</strong> than you wrote, the comparison never matches, and every plan shows the same update; applying &quot;fixes&quot; it and the cycle repeats. This noise is harmful: reviewers learn to ignore plans and miss real changes.</p>
+<p><strong>IAM policies</strong> are the classic case. AWS <strong>normalises policy JSON</strong>: it may reorder keys, strip whitespace, turn <code>&quot;Action&quot;: &quot;s3:GetObject&quot;</code> into a list or back, or return principals in canonical ARN form. A hand-written heredoc rarely matches byte for byte. The AWS provider tries to compare policies semantically, but formatting quirks still cause diffs. Building the policy with <strong><code>jsonencode()</code></strong> or the <strong><code>aws_iam_policy_document</code></strong> data source produces consistent, normalised JSON and usually solves it.</p>
+<p>Other common causes:</p>
+<ul>
+  <li><strong>Case or format normalisation</strong>: lowercase names, CIDR notation, trailing dots in DNS names, time formats.</li>
+  <li><strong>Defaults added by the API</strong> that you did not set, or a provider default different from the API's.</li>
+  <li><strong>External systems</strong>: Azure Policy appending tags, an autoscaler changing <code>desired_count</code> or node counts, a Kubernetes controller adding annotations, another team's script.</li>
+  <li><strong>Two resources managing the same thing</strong>: inline <code>ingress</code> blocks plus separate rule resources, inline bucket policy plus <code>aws_s3_bucket_policy</code>, or two configurations owning one object.</li>
+</ul>
+<p>Fix the source where you can: write the value as the API stores it, remove overlapping management, or let only one system own an attribute. Use <strong><code>lifecycle { ignore_changes = [...] }</code></strong> for attributes <strong>legitimately managed elsewhere</strong>, narrowly, never for whole resources. If the provider is wrong, reproduce it minimally and <strong>report it</strong> with the plan output.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Apply sends value A; API stores normalised A'.</li>
+  <li>Refresh reads A'; Terraform compares with A from config.</li>
+  <li>A' differs from A, so plan proposes an update.</li>
+  <li>Fix by matching representation, removing conflicts or ignoring the attribute.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;aws_iam_policy_document&quot; &quot;read_logs&quot; {
+  statement {
+    actions   = [&quot;s3:GetObject&quot;, &quot;s3:ListBucket&quot;]
+    resources = [aws_s3_bucket.logs.arn, &quot;${aws_s3_bucket.logs.arn}/*&quot;]
+  }
+}
+
+resource &quot;aws_iam_policy&quot; &quot;read_logs&quot; {
+  name   = &quot;read-logs&quot;
+  policy = data.aws_iam_policy_document.read_logs.json
+}
+
+resource &quot;aws_ecs_service&quot; &quot;api&quot; {
+  # ...
+  lifecycle { ignore_changes = [desired_count] }   # owned by autoscaling
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accepting perpetual diffs as normal noise.</li>
+  <li><code>ignore_changes = all</code> to silence diffs.</li>
+  <li>Mixing inline rules and separate rule resources.</li>
+  <li>Not checking whether a newer provider version fixed the bug.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A perpetual diff means what Terraform sends isn't what the API returns on the next read. With IAM policies the API normalises the JSON, reordering keys, removing whitespace or converting a single action into a list, so a hand-written heredoc never matches exactly. The fix is to build the policy with jsonencode or the aws_iam_policy_document data source. Other causes are case differences, defaults the API adds, attributes changed by another system like Azure Policy tags or an autoscaler, or two resources managing the same setting. I fix the source when possible, use ignore_changes only for attributes legitimately managed elsewhere, and report genuine provider bugs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Finding the attribute in a large plan?</strong> <code>terraform show -json</code> and diff before/after for that resource, or filter the plan output.</li>
+  <li><strong>Why are perpetual diffs dangerous?</strong> Reviewers stop reading plans and miss real changes.</li>
+  <li><strong>ignore_changes risks?</strong> Real drift on that attribute is hidden too.</li>
+</ul>
+</article>
+</body>
+</html>

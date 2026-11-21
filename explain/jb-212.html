@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-212 · How would you design an API that processes millions of records?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-212" data-topic="System Design">
+<h1>How would you design an API that processes millions of records?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Treat it as an <strong>asynchronous job</strong>: the client <strong>uploads input to object storage</strong>, the API returns <strong>202 Accepted with a job ID and status endpoint</strong>, <strong>background workers process in chunks</strong> (Spring Batch or queue consumers) that are <strong>idempotent and restartable</strong>, partial failures go into an <strong>error report</strong>, and results come via <strong>download link, pagination or webhook</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A synchronous HTTP request cannot reliably process millions of records: gateways time out after 30-60 seconds, memory explodes if the whole payload is buffered, and a failure halfway leaves the client unsure what happened.</p>
+<p><strong>Input:</strong> instead of a giant JSON body, the client uploads a file (CSV, JSON Lines, Parquet) to <strong>S3 or Azure Blob</strong> via a presigned URL, or provides a reference. Then <code>POST /jobs {inputUrl, type}</code> creates a job record (<code>QUEUED</code>) and returns <strong><code>202 Accepted</code></strong> with <code>Location: /jobs/{id}</code>.</p>
+<p><strong>Processing:</strong> workers <strong>stream</strong> the input (never load it fully) and process it in <strong>chunks</strong> of, say, 1,000 records, with <strong>batched database writes</strong> (JDBC batch, <code>COPY</code>). <strong>Spring Batch</strong> provides exactly this: chunk-oriented steps, commit intervals, skip/retry policies, and a job repository that records progress so a failed job <strong>restarts from the last committed chunk</strong>. For massive scale, split the file into partitions and fan out to multiple workers via a queue (Kafka, SQS) or Spring Batch partitioning.</p>
+<p><strong>Idempotency:</strong> retries must not duplicate data: use upserts on natural keys or record a processed-chunk checkpoint. <strong>Partial failures</strong> (invalid rows) are written to an error file with row number and reason rather than failing the whole job; a threshold can abort if errors exceed, say, 5%.</p>
+<p><strong>Results:</strong> clients <strong>poll</strong> <code>GET /jobs/{id}</code> (status, progress %, counts), receive a <strong>webhook</strong> when done, and download results or the error report via a signed URL. Support <strong>cancellation</strong> with a flag checked between chunks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client gets a presigned URL and uploads the file.</li>
+  <li><code>POST /jobs</code> -&gt; job row QUEUED -&gt; message to queue -&gt; <code>202 Accepted</code>.</li>
+  <li>Worker claims job, streams file, processes chunks, commits each with progress update.</li>
+  <li>Invalid records go to an error report; transient errors retry.</li>
+  <li>On completion: status COMPLETED/COMPLETED_WITH_ERRORS, results file written, webhook sent.</li>
+  <li>Crash -&gt; job restarts from last checkpoint.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@PostMapping(&quot;/jobs&quot;)
+ResponseEntity&lt;JobView&gt; submit(@RequestBody @Valid JobRequest req) {
+    Job job = jobService.create(req.inputUrl(), req.type());    // status QUEUED, publishes message
+    return ResponseEntity.accepted().location(URI.create(&quot;/jobs/&quot; + job.id())).body(JobView.of(job));
+}
+
+@Bean
+Step importStep(JobRepository repo, PlatformTransactionManager tx,
+                FlatFileItemReader&lt;CustomerRow&gt; reader, ItemProcessor&lt;CustomerRow, Customer&gt; processor,
+                JdbcBatchItemWriter&lt;Customer&gt; upsertWriter) {
+    return new StepBuilder(&quot;import&quot;, repo)
+        .&lt;CustomerRow, Customer&gt;chunk(1000, tx)
+        .reader(reader).processor(processor).writer(upsertWriter)
+        .faultTolerant().skip(ValidationException.class).skipLimit(10_000)
+        .retry(TransientDataAccessException.class).retryLimit(3)
+        .build();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accepting millions of records in one synchronous request.</li>
+  <li>Loading the whole file into memory.</li>
+  <li>One giant transaction that rolls back everything on one bad row.</li>
+  <li>Non-idempotent inserts that duplicate on restart.</li>
+  <li>No progress visibility for the client.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A synchronous request can't handle millions of records, so I make it an asynchronous job. The client uploads the file to object storage, then the API returns 202 Accepted with a job ID and a status endpoint. Background workers fed through a queue stream the input and process it in chunks with batched writes, using Spring Batch so each chunk commits independently and the job restarts from the last checkpoint. Processing is idempotent with upserts, bad rows go into an error report, and clients poll status or get a webhook, then download results.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Cancelling a running job?</strong> Set a CANCEL_REQUESTED flag checked between chunks; stop gracefully and report progress.</li>
+  <li><strong>Scaling to faster processing?</strong> Partition the input and process partitions in parallel workers.</li>
+  <li><strong>Ordering requirements?</strong> Partition by key so related records go to the same worker.</li>
+</ul>
+</article>
+</body>
+</html>

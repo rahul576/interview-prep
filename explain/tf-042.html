@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-042 · Each pull request should get a temporary preview environment created by Terraform and destroyed when the PR closes. How do you design this?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-042" data-topic="Terraform">
+<h1>Each pull request should get a temporary preview environment created by Terraform and destroyed when the PR closes. How do you design this?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Give each pull request its <strong>own state</strong> (backend key or workspace), <strong>PR-number naming</strong>, a <strong>destroy on PR close</strong> plus a <strong>scheduled TTL cleanup</strong>, and keep it cheap by <strong>reusing shared base infrastructure</strong> with <strong>small sizes and caps</strong> on count and cost.</p>
+
+<h2>Detailed explanation</h2>
+<p>Preview environments let reviewers and testers see a change running before merge. The design challenge is isolation, speed and cost. <strong>Isolation</strong> comes from a separate state per PR, for example <code>previews/pr-123.tfstate</code> passed through <code>-backend-config</code> or a Terraform workspace named <code>pr-123</code>, and from including the PR number in every resource name, DNS record and namespace so previews never collide.</p>
+<p><strong>Speed and cost</strong> come from splitting the infrastructure. Expensive, slow things like VNets, a shared Kubernetes cluster, a database server and the ingress controller live in a long-lived base state. The preview configuration creates only thin per-PR pieces: a Kubernetes namespace, a database on the shared server, a DNS record such as <code>pr-123.preview.example.com</code>, secrets and the app deployment. A preview then appears in a couple of minutes rather than forty.</p>
+<p><strong>Lifecycle</strong> is driven by the CI system: apply when the PR opens or updates, <code>terraform destroy</code> when it closes or merges. Destroys fail sometimes (an API timeout, a dependency created outside Terraform), so a <strong>scheduled cleanup job</strong> compares existing previews with open PRs and TTL tags and removes leftovers, including their state files. Guardrails include a maximum number of concurrent previews, small SKUs, auto-shutdown, budget alerts and tags like <code>preview=true</code> and <code>pr=123</code> for cost tracking.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened: pipeline runs <code>init</code> with key <code>previews/pr-&lt;n&gt;.tfstate</code>, passing <code>pr_number</code>.</li>
+  <li>Plan and apply create namespace, database, DNS and deployment from the shared base.</li>
+  <li>The pipeline comments the preview URL on the PR.</li>
+  <li>PR updated: re-apply with the new image tag.</li>
+  <li>PR closed: <code>terraform destroy</code>, then delete the state file.</li>
+  <li>Nightly job removes previews whose PR is closed or whose TTL expired.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitHub Actions (excerpt)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+concurrency: preview-${{ github.event.number }}
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -backend-config=&quot;key=previews/pr-${{ github.event.number }}.tfstate&quot;
+      - if: github.event.action != 'closed'
+        run: terraform apply -auto-approve -var=&quot;pr_number=${{ github.event.number }}&quot;
+      - if: github.event.action == 'closed'
+        run: terraform destroy -auto-approve -var=&quot;pr_number=${{ github.event.number }}&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Building a full stack per PR, which is slow and expensive.</li>
+  <li>No cleanup job, so failed destroys leave orphans billing for months.</li>
+  <li>Sharing one state for all previews, causing lock contention and accidental deletes.</li>
+  <li>Running previews from forked PRs with privileged credentials.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each PR gets its own state, a backend key like previews/pr-123 or a workspace, and every name includes the PR number. To keep it fast and cheap, previews reuse a shared base: network, a shared cluster and database server, and only create a namespace, a database, DNS and the deployment. The pipeline applies on open and update and destroys on close. Because destroy can fail, a scheduled job removes previews whose PR is closed or TTL expired, using tags. I also cap the number of previews and track their cost.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle data and migrations?</strong> Seed a small anonymised dataset per preview database and run migrations in the deploy step.</li>
+  <li><strong>Forked PRs?</strong> Do not run privileged previews automatically; require a maintainer label.</li>
+  <li><strong>Workspaces or keys?</strong> Either works; keys keep naming explicit in CI.</li>
+</ul>
+</article>
+</body>
+</html>

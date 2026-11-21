@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-186 · Explain @Entity, @Table, @Id, and @GeneratedValue.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-186" data-topic="Spring Data &amp; JPA">
+<h1>Explain @Entity, @Table, @Id, and @GeneratedValue.</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>@Entity</strong> marks a class as a persistent JPA entity, <strong>@Table</strong> customises the table it maps to, <strong>@Id</strong> marks the primary key, and <strong>@GeneratedValue</strong> chooses how keys are generated (<strong>IDENTITY, SEQUENCE, TABLE, AUTO</strong>, plus <strong>UUID</strong> since JPA 3.1); <strong>SEQUENCE</strong> is usually best because it keeps JDBC batching possible.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>entity</strong> is a class whose instances are managed by the <strong>persistence context</strong>: Hibernate tracks their state, detects changes (dirty checking) and writes them at flush. An entity needs an identifier and a no-argument constructor (public or protected) so the provider can instantiate it through reflection, and it should not be final if you want lazy proxies.</p>
+<p><strong>@Table</strong> is optional. Without it the table name is derived from the entity name by the naming strategy (Spring Boot turns <code>OrderItem</code> into <code>order_item</code>). Use it to set <code>name</code>, <code>schema</code>, <code>uniqueConstraints</code> and <code>indexes</code>; the last two only matter for schema generation, so in production they document intent while Flyway or Liquibase creates the real schema.</p>
+<p><strong>@Id</strong> marks the primary key field (field access) or getter (property access); its placement decides the access type for the whole entity. <strong>@GeneratedValue</strong> tells the provider who produces the value:</p>
+<ul>
+  <li><strong>IDENTITY</strong> uses an auto-increment or identity column. The database creates the id during the INSERT, so Hibernate must execute the INSERT immediately on <code>persist()</code> to learn the id. That is why <strong>JDBC insert batching is disabled</strong> for such entities.</li>
+  <li><strong>SEQUENCE</strong> asks a database sequence for values before inserting. With <code>allocationSize</code> (default 50) and a pooled optimiser, Hibernate fetches one sequence value per 50 ids, assigns ids in memory and can then batch the INSERTs. Preferred on PostgreSQL, Oracle and SQL Server.</li>
+  <li><strong>TABLE</strong> emulates a sequence with a row in a separate table and row locks: portable but slow and contended.</li>
+  <li><strong>AUTO</strong> lets the provider choose; Hibernate 6 picks SEQUENCE where supported, which surprises people migrating from Hibernate 5 on MySQL.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>At startup Hibernate scans <code>@Entity</code> classes and builds metadata from the annotations.</li>
+  <li><code>@Table</code> and the naming strategy decide the table and column names.</li>
+  <li>On <code>persist()</code>, the id generator runs: SEQUENCE takes the next value from its in-memory pool, IDENTITY forces an immediate INSERT.</li>
+  <li>The entity is stored in the persistence context keyed by its id.</li>
+  <li>At flush, pending INSERTs are grouped into JDBC batches if ids are already known and <code>hibernate.jdbc.batch_size</code> is set.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+@Table(name = &quot;orders&quot;, schema = &quot;sales&quot;,
+       indexes = @Index(name = &quot;idx_orders_customer&quot;, columnList = &quot;customer_id&quot;))
+public class Order {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = &quot;order_seq&quot;)
+    @SequenceGenerator(name = &quot;order_seq&quot;, sequenceName = &quot;order_seq&quot;, allocationSize = 50)
+    private Long id;
+
+    @Column(name = &quot;customer_id&quot;, nullable = false)
+    private Long customerId;
+
+    protected Order() { }          // required by JPA
+}</code></pre>
+<pre><code class="language-sql">CREATE SEQUENCE sales.order_seq INCREMENT BY 50;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>Id known before INSERT</th><th>Batch inserts</th><th>Typical DB</th></tr></thead>
+<tbody>
+<tr><td>IDENTITY</td><td>No</td><td>Disabled</td><td>MySQL, SQL Server</td></tr>
+<tr><td>SEQUENCE</td><td>Yes</td><td>Yes</td><td>PostgreSQL, Oracle</td></tr>
+<tr><td>TABLE</td><td>Yes</td><td>Yes, but slow</td><td>Any</td></tr>
+<tr><td>UUID</td><td>Yes</td><td>Yes</td><td>Any</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using IDENTITY for bulk-loading entities and wondering why <code>batch_size</code> has no effect.</li>
+  <li>Setting <code>allocationSize = 50</code> in Java while the database sequence increments by 1, which produces duplicate or overlapping ids.</li>
+  <li>Relying on <code>@Table(indexes = ...)</code> in production instead of migrations.</li>
+  <li>Making entities final or omitting the no-arg constructor, breaking proxies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;@Entity tells JPA that a class is persistent and managed by the persistence context; it needs an id and a no-arg constructor. @Table is optional and overrides the table name, schema, unique constraints and indexes. @Id marks the primary key, and @GeneratedValue picks the strategy. IDENTITY relies on an auto-increment column, so Hibernate has to insert immediately to get the id, which disables batch inserts. SEQUENCE fetches ids from a sequence, and with an allocation size of 50 Hibernate hands out ids in memory and batches inserts, so that is my default on PostgreSQL. TABLE is slow, and AUTO leaves the choice to the provider, which I avoid so behaviour is explicit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does IDENTITY prevent batching?</strong> The id only exists after the INSERT runs, so Hibernate must execute each INSERT straight away to put the entity in the persistence context.</li>
+  <li><strong>When would you use UUID keys?</strong> When ids are generated by clients or across services; prefer time-ordered UUIDs (v7) to keep B-tree indexes compact.</li>
+  <li><strong>What does allocationSize do?</strong> It is how many ids Hibernate reserves per sequence call; it must match the sequence increment.</li>
+</ul>
+</article>
+</body>
+</html>

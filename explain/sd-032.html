@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-032 · Design a metrics monitoring and alerting system like Datadog or Prometheus.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-032" data-topic="Classic Design Problems">
+<h1>Design a metrics monitoring and alerting system like Datadog or Prometheus.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A monitoring system collects metrics via <strong>agents (push) or scraping (pull)</strong>, buffers through a <strong>queue</strong>, stores them in a <strong>compressed time-series database</strong> with <strong>downsampling and retention tiers</strong>, controls <strong>label cardinality</strong>, and runs a highly available <strong>alerting engine</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Scale example: 100,000 hosts × 500 metrics every 10 s = 5M points/s. Each <strong>series</strong> is identified by metric name plus labels (<code>http_requests_total{service=&quot;cart&quot;,code=&quot;500&quot;}</code>). Storage is optimised for appending points and reading ranges: timestamps compressed with delta-of-delta, values with XOR (Gorilla encoding), giving ~1–2 bytes per point.</p>
+<p><strong>Pull</strong> (Prometheus) makes target health obvious (scrape fails = target down) and avoids overloading the server; <strong>push</strong> (Datadog agent, OTLP) suits short-lived jobs and firewalled hosts. Many systems combine both.</p>
+<p>The number one scaling risk is <strong>cardinality</strong>: adding <code>user_id</code> as a label turns one series into millions, exploding memory and index size. Enforce limits and use logs/traces for high-cardinality data.</p>
+<p>Alerting must be <strong>more reliable than what it monitors</strong>: evaluate rules close to data, deduplicate and group alerts, support silences and routing, and alert on symptoms (SLO burn rates).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agents/scrapers collect → gateway → Kafka (buffer, replay).</li>
+  <li>Ingesters write to the TSDB (sharded by series hash), with replication.</li>
+  <li>Compaction and downsampling (10 s → 1 min → 1 h); old blocks to object storage.</li>
+  <li>Query layer fans out across shards for dashboards.</li>
+  <li>Rule evaluator → Alertmanager → PagerDuty/Slack.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- alert: CheckoutHighErrorBurn
+  expr: (sum(rate(http_requests_total{service=&quot;checkout&quot;,code=~&quot;5..&quot;}[5m]))
+        / sum(rate(http_requests_total{service=&quot;checkout&quot;}[5m]))) &gt; 14.4 * 0.001
+  for: 2m</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unbounded label values.</li>
+  <li>Keeping full-resolution data forever.</li>
+  <li>Alerting on every cause (CPU 80%) instead of user-facing symptoms.</li>
+  <li>Monitoring stack sharing failure domains with production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Agents push, or Prometheus pulls, metrics into an ingestion tier buffered by Kafka. A sharded, replicated time-series DB stores compressed points, downsamples older data and tiers it to object storage. I'd guard label cardinality strictly. Alerting evaluates SLO-based rules and routes through deduplication and silencing, and it runs independently so it still works when production is unhealthy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Monitor the monitoring?</strong> A small independent watchdog/dead-man's switch alert.</li>
+  <li><strong>Long-term storage?</strong> Thanos, Cortex/Mimir with object storage.</li>
+  <li><strong>Push vs pull?</strong> Pull for service discovery and liveness; push for ephemeral jobs.</li>
+</ul>
+</article>
+</body>
+</html>

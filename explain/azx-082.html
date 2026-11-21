@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-082 · Which storage options do you use on AKS, and what do you need to consider for each?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-082" data-topic="Azure Kubernetes (AKS)">
+<h1>Which storage options do you use on AKS, and what do you need to consider for each?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On AKS use <strong>Azure Disk CSI</strong> for <strong>ReadWriteOnce</strong> block storage (databases), <strong>Azure Files CSI</strong> for <strong>ReadWriteMany</strong> shares, the <strong>Blob CSI driver</strong> for large datasets, and <strong>ephemeral OS disks or local NVMe</strong> for scratch, remembering that <strong>disks are zonal</strong> and choosing <strong>Premium SSD v2</strong> or Ultra for demanding databases.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Azure Disk</strong> (StorageClasses <code>managed-csi</code>, <code>managed-csi-premium</code>) attaches a managed disk to one node, so it is <strong>ReadWriteOnce</strong>: one pod writes at a time. It is the default for StatefulSets and databases. SKUs range from <strong>Standard SSD</strong> to <strong>Premium SSD</strong>, <strong>Premium SSD v2</strong> (where IOPS and throughput are configured independently of size, often the best price-performance for databases) and <strong>Ultra Disk</strong> for extreme latency needs. The VM size also limits the number of disks and total IOPS.</p>
+<p><strong>Zones matter:</strong> a locally redundant disk lives in <strong>one availability zone</strong>, so a pod using it can only run on nodes in that zone. Use <code>volumeBindingMode: WaitForFirstConsumer</code> so the disk is created where the pod is scheduled, spread StatefulSet replicas across zones, or use <strong>ZRS disks</strong> (<code>Premium_ZRS</code>) that can attach in any zone of the region.</p>
+<p><strong>Azure Files</strong> (<code>azurefile-csi</code>, <code>azurefile-csi-premium</code>) provides <strong>ReadWriteMany</strong> shares over <strong>SMB or NFS</strong>, mountable by many pods across nodes and zones. Good for shared uploads, CMS content or legacy apps; too slow and lock-sensitive for most databases.</p>
+<p><strong>Blob CSI driver</strong> mounts blob containers with <strong>BlobFuse2</strong> (with local caching) or <strong>NFS 3.0</strong>, suited to large read-mostly data such as ML models and datasets.</p>
+<p><strong>Ephemeral storage:</strong> <strong>ephemeral OS disks</strong> use the VM's local cache or temp disk, faster and free, and <strong>local NVMe</strong> on sizes like Lsv3 offers very high IOPS, usable directly or via <strong>Azure Container Storage</strong>. Data is lost when the node is reimaged or deleted, so use it for caches, scratch or replicated databases only.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose by access mode: RWO (Disk), RWX (Files), object-style (Blob).</li>
+  <li>Choose performance tier and redundancy (LRS vs ZRS).</li>
+  <li>Create a StorageClass with the right parameters and binding mode.</li>
+  <li>Reference it from PVCs or StatefulSet volumeClaimTemplates.</li>
+  <li>Back up volumes and monitor IOPS and latency.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: { name: premiumv2-db }
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: PremiumV2_LRS
+  DiskIOPSReadWrite: &quot;8000&quot;
+  DiskMBpsReadWrite: &quot;300&quot;
+  cachingMode: None
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Access</th><th>Best for</th><th>Watch out</th></tr></thead>
+<tbody>
+<tr><td>Azure Disk</td><td>RWO</td><td>Databases</td><td>Zonal, attach limits</td></tr>
+<tr><td>Azure Files</td><td>RWX</td><td>Shared files</td><td>Latency, locking</td></tr>
+<tr><td>Blob CSI</td><td>RWX/RO</td><td>Large datasets</td><td>Not POSIX-complete</td></tr>
+<tr><td>Local NVMe</td><td>Node-local</td><td>Scratch, caches</td><td>Data lost with node</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>Immediate</code> binding and getting pods stuck in a different zone from their disk.</li>
+  <li>Running databases on Azure Files SMB.</li>
+  <li>Leaving <code>reclaimPolicy: Delete</code> on critical data.</li>
+  <li>Forgetting VM-level IOPS limits when buying fast disks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Azure Disk is ReadWriteOnce block storage, my default for databases, with Premium SSD v2 when I need tunable IOPS and throughput. Disks are zonal, so I use WaitForFirstConsumer and zone-aware scheduling or ZRS disks. Azure Files gives ReadWriteMany SMB or NFS shares for shared content. The Blob CSI driver mounts containers for big datasets like models. Ephemeral OS disks and local NVMe are fast for scratch, but data disappears with the node.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>70 GB model read by many pods?</strong> Blob or Files premium NFS mounted read-only with local caching, or pre-load to local NVMe; avoid baking it into images.</li>
+  <li><strong>Why Premium SSD v2?</strong> Independent IOPS and throughput at lower cost.</li>
+  <li><strong>How to resize a disk?</strong> Edit the PVC size with volume expansion enabled.</li>
+</ul>
+</article>
+</body>
+</html>

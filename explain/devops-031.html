@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-031 · What is Terraform state, and how should a team manage it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-031" data-topic="Infrastructure as Code">
+<h1>What is Terraform state, and how should a team manage it?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Terraform is <strong>declarative IaC</strong>: you describe resources in <strong>HCL</strong>, <strong>providers</strong> call the cloud APIs, <strong><code>plan</code></strong> shows the diff and <strong><code>apply</code></strong> makes it; the <strong>state file</strong> maps configuration to <strong>real resource IDs and attributes</strong>, so teams must keep it in a <strong>remote, encrypted, versioned backend with locking</strong>, restrict access because it <strong>contains secrets</strong>, and review <strong>plans in pull requests</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When you write <code>resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {...}</code>, Terraform needs to remember that this block corresponds to the real bucket <code>acme-logs-prod</code> with a specific ARN. That mapping, plus all known attributes and dependency information, lives in the <strong>state</strong> (<code>terraform.tfstate</code>, JSON). On every <code>plan</code>, Terraform <strong>refreshes</strong> state from the real APIs, compares it with the configuration and computes the actions: create, update in place, replace or destroy.</p>
+<p>For a team, a <strong>local state file</strong> is dangerous: it lives on one laptop, two people can apply from different copies, and it can be lost. Git is worse: no locking and secrets in history. The solution is a <strong>remote backend</strong>:</p>
+<ul>
+  <li><strong>S3</strong> with <strong>versioning</strong> (to recover older states), <strong>encryption</strong> (SSE-KMS) and <strong>locking</strong>, either the classic <strong>DynamoDB table</strong> or the newer <strong>native S3 lock file</strong> (<code>use_lockfile = true</code>, Terraform 1.10+), which makes DynamoDB unnecessary.</li>
+  <li><strong>Azure Storage</strong> (locking via blob leases), <strong>GCS</strong>, or <strong>HCP Terraform / Terraform Enterprise</strong>, which also runs plans remotely.</li>
+</ul>
+<p><strong>Locking</strong> ensures only one operation modifies state at a time. <strong>State is sensitive</strong>: database passwords, generated keys and connection strings are stored in plain text inside it, even for variables marked <code>sensitive</code>. So restrict who can read the bucket, encrypt it, and prefer generating secrets in a secret manager.</p>
+<p><strong>Workflow:</strong> changes go through <strong>pull requests</strong>; CI runs <code>plan</code> and posts it for review; after approval, CI applies <strong>exactly that plan</strong>. Split state by environment and component to limit blast radius.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>terraform init</code> configures the backend and downloads providers.</li>
+  <li><code>plan</code> acquires the lock, refreshes state, diffs, shows changes.</li>
+  <li><code>apply</code> executes, writes updated state to the backend, releases the lock.</li>
+  <li>The backend keeps versions for recovery.</li>
+  <li>Other configurations can read outputs via <code>terraform_remote_state</code> or data sources.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_version = &quot;&gt;= 1.10&quot;
+  backend &quot;s3&quot; {
+    bucket       = &quot;acme-tfstate-prod&quot;
+    key          = &quot;network/terraform.tfstate&quot;
+    region       = &quot;eu-west-1&quot;
+    encrypt      = true
+    use_lockfile = true      # native S3 locking; older setups use dynamodb_table
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing <code>terraform.tfstate</code> to Git.</li>
+  <li>One giant state for everything, so every plan is slow and risky.</li>
+  <li>Giving all developers read access to state that contains passwords.</li>
+  <li>Applying from laptops instead of a controlled pipeline.</li>
+  <li>Hand-editing state JSON.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform is declarative: I describe resources in HCL, providers talk to APIs like AWS, <code>plan</code> shows the changes and <code>apply</code> makes them. The state file maps each resource in the code to the real resource ID and its attributes, so Terraform knows what exists and can compute diffs. For a team, state must never be on a laptop or in Git. I use a remote backend like S3 with versioning, encryption and locking, now with the native S3 lock file instead of DynamoDB, or HCP Terraform, so two people can't apply at once. State can contain secrets, so access is restricted. All changes go through PRs where the plan is reviewed, and CI applies the approved plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>State corrupted or resource deleted manually?</strong> Restore a previous state version from the bucket; for deleted resources, plan will recreate them, or <code>state rm</code> if they should go.</li>
+  <li><strong>Why split state?</strong> Smaller blast radius, faster plans and clearer ownership.</li>
+  <li><strong>How do you read another state's outputs?</strong> <code>terraform_remote_state</code> or, better, data sources or SSM parameters.</li>
+</ul>
+</article>
+</body>
+</html>

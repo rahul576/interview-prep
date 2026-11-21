@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-193 · What callback interfaces are involved in the bean lifecycle?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-193" data-topic="Spring Framework">
+<h1>What callback interfaces are involved in the bean lifecycle?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Lifecycle callbacks come as <strong>interfaces</strong> (<code>InitializingBean.afterPropertiesSet</code>, <code>DisposableBean.destroy</code>), <strong>Aware interfaces</strong> (<code>BeanNameAware</code>, <code>BeanFactoryAware</code>, <code>ApplicationContextAware</code>, <code>EnvironmentAware</code>), <strong>annotations</strong> (<code>@PostConstruct</code>/<code>@PreDestroy</code>, preferred), <strong><code>@Bean(initMethod, destroyMethod)</code></strong>, plus <strong>Lifecycle/SmartLifecycle</strong> and <strong>application events</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spring offers several ways for a bean to react to its own lifecycle, each with a purpose.</p>
+<p><strong>Initialisation and destruction interfaces.</strong> <code>InitializingBean.afterPropertiesSet()</code> runs after all properties are set; <code>DisposableBean.destroy()</code> runs on context shutdown. They work but <strong>couple your class to Spring</strong>, so they are mostly used inside framework code.</p>
+<p><strong>Aware interfaces</strong> let a bean receive container infrastructure: <code>BeanNameAware</code> (its bean name), <code>BeanClassLoaderAware</code>, <code>BeanFactoryAware</code>, <code>ApplicationContextAware</code>, <code>EnvironmentAware</code>, <code>ResourceLoaderAware</code>, <code>ApplicationEventPublisherAware</code>. In modern code you usually just inject <code>Environment</code> or <code>ApplicationEventPublisher</code> through the constructor instead.</p>
+<p><strong>Annotations</strong> <code>@PostConstruct</code> and <code>@PreDestroy</code> come from <code>jakarta.annotation</code> (they were <code>javax.annotation</code> before Jakarta EE 9). They are the <strong>preferred approach</strong>: standard, non-Spring-specific and readable.</p>
+<p><strong>Configuration-based</strong>: <code>@Bean(initMethod = &quot;start&quot;, destroyMethod = &quot;close&quot;)</code> is ideal for <strong>third-party classes</strong> you cannot annotate. For <code>@Bean</code> methods Spring also infers a public <code>close()</code> or <code>shutdown()</code> method as the destroy method.</p>
+<p><strong>Phased start and stop</strong>: <code>Lifecycle</code> and <strong><code>SmartLifecycle</code></strong> have <code>start()</code>, <code>stop()</code> and <code>isRunning()</code>; SmartLifecycle adds <code>getPhase()</code> and <code>isAutoStartup()</code>, so components like message listeners and schedulers start after all beans are ready and stop in a controlled order during graceful shutdown. <code>SmartInitializingSingleton.afterSingletonsInstantiated()</code> runs once all singletons exist.</p>
+<p><strong>Events</strong>: <code>ApplicationListener</code> or <code>@EventListener</code> for <code>ContextRefreshedEvent</code>, <code>ApplicationStartedEvent</code>, <strong><code>ApplicationReadyEvent</code></strong> and <code>ContextClosedEvent</code>; <code>ApplicationRunner</code>/<code>CommandLineRunner</code> run code after startup.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Aware callbacks after dependency injection.</li>
+  <li><code>@PostConstruct</code>, then <code>afterPropertiesSet()</code>, then the custom init method.</li>
+  <li>After all singletons: SmartInitializingSingleton, then SmartLifecycle <code>start()</code> by phase.</li>
+  <li>Context refreshed and ready events; runners execute.</li>
+  <li>Shutdown: SmartLifecycle <code>stop()</code> by phase, then <code>@PreDestroy</code>, <code>destroy()</code>, destroy method.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Configuration
+class ClientConfig {
+    @Bean(initMethod = &quot;connect&quot;, destroyMethod = &quot;disconnect&quot;)
+    LegacyFtpClient ftpClient() { return new LegacyFtpClient(&quot;ftp.internal&quot;); }
+}
+
+@Component
+class OutboxPoller implements SmartLifecycle {
+    private volatile boolean running;
+    public void start() { running = true; executor.submit(this::poll); }
+    public void stop()  { running = false; executor.shutdown(); }
+    public boolean isRunning() { return running; }
+    public int getPhase() { return 100; }       // starts late, stops early
+}
+
+@Component
+class StartupReport {
+    @EventListener(ApplicationReadyEvent.class)
+    void ready() { log.info(&quot;Service ready to accept traffic&quot;); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Implementing Spring interfaces in business classes when annotations would do.</li>
+  <li>Importing <code>javax.annotation.PostConstruct</code> on Boot 3, which is silently ignored if not on the classpath or fails to compile.</li>
+  <li>Starting background threads in <code>@PostConstruct</code> without stopping them.</li>
+  <li>Using ContextRefreshedEvent, which can fire multiple times with child contexts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are several forms. Interfaces: InitializingBean with afterPropertiesSet and DisposableBean with destroy. Aware interfaces give the bean container objects: BeanNameAware, BeanFactoryAware, ApplicationContextAware, EnvironmentAware. Annotations: @PostConstruct and @PreDestroy from jakarta.annotation, which I prefer because they don't couple code to Spring. For third-party classes, @Bean initMethod and destroyMethod. For start and stop phases, SmartLifecycle, and events like ApplicationReadyEvent for work after startup.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Order of init callbacks?</strong> @PostConstruct, afterPropertiesSet, then initMethod.</li>
+  <li><strong>SmartLifecycle vs @PostConstruct?</strong> SmartLifecycle runs after all beans exist and supports ordered stop.</li>
+  <li><strong>Where to run startup tasks?</strong> ApplicationRunner or an ApplicationReadyEvent listener.</li>
+</ul>
+</article>
+</body>
+</html>

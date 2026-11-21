@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-038 · What logging drivers does Docker support, and how do you centralise container logs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-038" data-topic="Docker">
+<h1>What logging drivers does Docker support, and how do you centralise container logs?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The <strong>logging driver</strong> decides where container <strong>stdout/stderr</strong> go: default <strong>json-file</strong>, more efficient <strong>local</strong>, or remote drivers like <strong>syslog, journald, fluentd, awslogs, gcplogs</strong>, set per container or in <strong>daemon.json</strong>; a robust pattern is <strong>local files with rotation plus an agent (Fluent Bit, Vector)</strong> shipping to <strong>Elasticsearch or Loki</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers should log to <strong>stdout and stderr</strong>, and Docker captures those streams. The <strong>logging driver</strong> determines what happens next. <strong>json-file</strong> is the default: each line is stored as JSON with a timestamp in a file on the host, readable with <code>docker logs</code>, but with <strong>no rotation unless configured</strong>. <strong>local</strong> uses a compact binary format and rotates by default, so it is a better default for new hosts. <strong>journald</strong> and <strong>syslog</strong> hand logs to the host's logging system. <strong>fluentd</strong>, <strong>gelf</strong>, <strong>awslogs</strong> (CloudWatch), <strong>gcplogs</strong>, <strong>splunk</strong> and others send logs directly to a remote collector.</p>
+<p>You set the driver per container with <code>--log-driver</code> and <code>--log-opt</code>, in Compose with the <code>logging</code> key, or as the default in <code>/etc/docker/daemon.json</code> (applies to new containers only).</p>
+<p>Remote drivers have trade-offs. By default delivery is <strong>blocking</strong>: if the destination is slow or down, writes to stdout block and the <strong>application stalls</strong>. <code>mode=non-blocking</code> with <code>max-buffer-size</code> uses a ring buffer instead, dropping messages when it is full. Since Docker 20.10, <strong>dual logging</strong> keeps a local cache so <code>docker logs</code> works with remote drivers, but older setups lost it.</p>
+<p>For these reasons a common robust architecture is to keep <strong>json-file or local with rotation</strong> and run a node-level <strong>agent</strong> such as <strong>Fluent Bit</strong>, <strong>Vector</strong> or <strong>Promtail/Alloy</strong> that tails the files, adds metadata (container name, labels) and ships to <strong>Elasticsearch/OpenSearch</strong>, <strong>Loki</strong> or a SaaS. Kubernetes does exactly this. Structured <strong>JSON application logs</strong> make parsing reliable.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App writes to stdout/stderr.</li>
+  <li>The container shim passes the streams to dockerd's logging driver.</li>
+  <li>The driver writes locally or sends to a remote endpoint.</li>
+  <li>An agent tails local files, enriches and buffers.</li>
+  <li>The backend indexes logs for search and alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;log-driver&quot;: &quot;local&quot;,
+  &quot;log-opts&quot;: { &quot;max-size&quot;: &quot;20m&quot;, &quot;max-file&quot;: &quot;5&quot; }
+}</code></pre>
+<pre><code class="language-bash">docker run -d --log-driver fluentd \
+  --log-opt fluentd-address=127.0.0.1:24224 \
+  --log-opt mode=non-blocking --log-opt max-buffer-size=4m \
+  --log-opt tag=orders registry.local/orders:1.4</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>json-file without rotation, filling disks.</li>
+  <li>Blocking remote drivers that freeze apps when the log backend is down.</li>
+  <li>Logging to files inside the container instead of stdout.</li>
+  <li>Unstructured multiline stack traces that the pipeline splits into many events.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The logging driver decides where stdout and stderr go. The default json-file writes JSON files on the host; local is more compact with rotation built in. Other drivers send to syslog, journald, fluentd, CloudWatch with awslogs or Google Cloud Logging, set per container or globally in daemon.json. Remote drivers can block the application if the destination is slow unless you use non-blocking mode. So I usually keep a local driver with rotation and run an agent like Fluent Bit or Vector that ships the files with metadata to Elasticsearch or Loki, with apps logging structured JSON.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if the remote destination is down?</strong> Blocking mode stalls the app; non-blocking drops messages when the buffer fills.</li>
+  <li><strong>Does docker logs work with remote drivers?</strong> Yes since 20.10 via dual logging, unless disabled.</li>
+  <li><strong>How do you handle multiline stack traces?</strong> Log JSON or configure multiline parsing in the agent.</li>
+</ul>
+</article>
+</body>
+</html>

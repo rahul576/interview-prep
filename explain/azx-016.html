@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-016 · How do Azure Front Door caching, rules and the WAF work together to protect and speed up a web application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-016" data-topic="Azure">
+<h1>How do Azure Front Door caching, rules and the WAF work together to protect and speed up a web application?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Azure Front Door</strong> terminates TLS at Microsoft's global <strong>edge (anycast)</strong>, <strong>caches</strong> static content close to users, applies a <strong>rules engine</strong> for redirects, rewrites and routing, and enforces a <strong>WAF policy</strong> (managed rules, bot protection, custom and rate-limit rules); with <strong>Premium</strong>, origins are reached over <strong>Private Link</strong> so they are not public.</p>
+
+<h2>Detailed explanation</h2>
+<p>Front Door (Standard and Premium tiers; the classic tier is being retired) is a global Layer 7 entry point. Users resolve your hostname to an <strong>anycast</strong> address and connect to the nearest of hundreds of edge locations. TLS terminates there with managed or your own certificates, and Front Door forwards over the Microsoft backbone, reusing warm connections, to the best <strong>origin</strong> in an <strong>origin group</strong> based on health probes, latency and priority/weight. That alone cuts latency, and it gives instant global failover.</p>
+<p><strong>Caching</strong> is configured per <strong>route</strong>: you can enable caching, choose how <strong>query strings</strong> affect the cache key, enable <strong>compression</strong>, and respect or override origin <code>Cache-Control</code>. Static assets served from the edge reduce origin load drastically. <strong>Purge</strong> invalidates content after deployments.</p>
+<p>The <strong>rules engine</strong> (rule sets attached to routes) evaluates conditions like path, header, device or geography and performs actions: HTTP-to-HTTPS <strong>redirects</strong>, <strong>URL rewrites</strong>, request and response <strong>header</strong> changes, cache overrides and <strong>route overrides</strong> that send <code>/api/*</code> to a different origin group.</p>
+<p>The <strong>WAF policy</strong> sits at the edge, so attacks are dropped before reaching you. Premium includes the <strong>Microsoft default rule set</strong> (OWASP-style protections for SQL injection, XSS and more) and the <strong>bot manager</strong> rule set; <strong>custom rules</strong> handle <strong>geo-filtering</strong>, IP allow/deny and <strong>rate limiting</strong>. Start in <strong>detection</strong> mode, tune exclusions, then switch to <strong>prevention</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client → anycast → nearest edge; TLS terminated.</li>
+  <li>WAF evaluates custom and managed rules.</li>
+  <li>Rules engine applies redirects, rewrites, header and route overrides.</li>
+  <li>Cache hit → response from edge; miss → request to origin.</li>
+  <li>Origin chosen by health and latency; Premium uses Private Link to the origin.</li>
+  <li>Response cached per route settings and returned.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bicep">resource rateRule 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = {
+  name: 'wafShop'
+  location: 'global'
+  sku: { name: 'Premium_AzureFrontDoor' }
+  properties: {
+    policySettings: { mode: 'Prevention', enabledState: 'Enabled' }
+    customRules: { rules: [ {
+      name: 'LimitLogin', priority: 10, ruleType: 'RateLimitRule'
+      rateLimitThreshold: 100, rateLimitDurationInMinutes: 1, action: 'Block'
+      matchConditions: [ { matchVariable: 'RequestUri', operator: 'Contains', matchValue: [ '/login' ] } ]
+    } ] }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving origins publicly reachable so attackers bypass Front Door.</li>
+  <li>Caching personalised responses because the cache key ignores cookies or auth.</li>
+  <li>Turning WAF prevention on without tuning, blocking real users.</li>
+  <li>Forgetting to purge or version static assets after release.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Front Door is a global edge entry point: users hit the nearest edge via anycast, TLS terminates there and traffic travels over Microsoft's backbone to the healthiest origin. I enable caching and compression per route for static content, use the rules engine for HTTPS redirects, header rewrites and sending API paths to a separate origin group, and attach a WAF policy with the managed rule set, bot protection, geo and rate-limit rules. On Premium I connect origins through Private Link and disable their public access, so nothing can bypass Front Door.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you stop origin bypass without Private Link?</strong> Restrict to the <code>AzureFrontDoor.Backend</code> service tag and check the <code>X-Azure-FDID</code> header.</li>
+  <li><strong>Front Door vs Application Gateway?</strong> Global edge vs regional, in-VNet load balancer; often used together.</li>
+  <li><strong>How to cache safely for logged-in users?</strong> Cache only static or public routes; bypass cache for authenticated APIs.</li>
+</ul>
+</article>
+</body>
+</html>

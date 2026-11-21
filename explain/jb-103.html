@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-103 · What is the difference between wait(), notify(), and notifyAll()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-103" data-topic="Concurrency">
+<h1>What is the difference between wait(), notify(), and notifyAll()?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>wait()</code>, <code>notify()</code> and <code>notifyAll()</code> are <strong><code>Object</code> methods</strong> for low-level coordination on a <strong>monitor</strong>: <code>wait()</code> <strong>releases the lock and suspends</strong>, <code>notify()</code> wakes <strong>one</strong> waiting thread, <code>notifyAll()</code> wakes <strong>all</strong>; you must hold the monitor and should always <strong>wait in a loop</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every object has an intrinsic lock and a <strong>wait set</strong>. These three methods let threads wait for a <strong>condition</strong> on shared state (&quot;queue not empty&quot;) without busy-spinning.</p>
+<p>You must call them while holding the object's monitor, that is inside <code>synchronized (obj)</code>, otherwise you get <strong><code>IllegalMonitorStateException</code></strong>. This requirement is deliberate: checking the condition and going to sleep must be atomic with respect to the thread that changes the condition, or you could miss the notification.</p>
+<p><strong><code>wait()</code></strong> atomically releases the monitor and puts the thread in the <code>WAITING</code> state (or <code>TIMED_WAITING</code> with <code>wait(millis)</code>). When it is woken, it must <strong>reacquire the monitor</strong> before <code>wait()</code> returns, so it competes with other threads. <strong><code>notify()</code></strong> moves one arbitrary thread from the wait set; <strong><code>notifyAll()</code></strong> wakes them all, and they then take turns acquiring the lock. The notifier keeps the lock until it leaves its synchronized block.</p>
+<p>Always wrap <code>wait()</code> in a <strong><code>while</code> loop that re-checks the condition</strong>. The JVM permits <strong>spurious wakeups</strong>, and even a genuine notification may be stale: another thread may grab the lock first and consume the item. <code>if</code> instead of <code>while</code> is a classic bug.</p>
+<p>Prefer <code>notifyAll()</code> when threads wait for <strong>different conditions</strong> on the same object (producers waiting for space, consumers for items); <code>notify()</code> might wake the wrong kind of thread and the right one never gets woken. Use <code>notify()</code> only when all waiters are equivalent and any one can proceed.</p>
+<p>In modern code use higher-level tools: <strong><code>BlockingQueue</code></strong>, <strong><code>Condition</code></strong> (<code>await</code>/<code>signal</code> with separate conditions per lock), <code>CountDownLatch</code>, <code>Semaphore</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Consumer enters <code>synchronized (queue)</code> and checks <code>while (queue.isEmpty())</code>.</li>
+  <li>It calls <code>queue.wait()</code>: releases the lock, joins the wait set.</li>
+  <li>Producer enters <code>synchronized (queue)</code>, adds an item, calls <code>queue.notifyAll()</code>.</li>
+  <li>Producer exits the block, releasing the lock.</li>
+  <li>Consumer wakes, reacquires the lock, re-checks the condition, then takes the item.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class BoundedBuffer&lt;T&gt; {
+    private final Deque&lt;T&gt; items = new ArrayDeque&lt;&gt;();
+    private final int capacity;
+    BoundedBuffer(int capacity) { this.capacity = capacity; }
+
+    public synchronized void put(T item) throws InterruptedException {
+        while (items.size() == capacity) wait();     // loop, not if
+        items.addLast(item);
+        notifyAll();                                  // wake consumers
+    }
+
+    public synchronized T take() throws InterruptedException {
+        while (items.isEmpty()) wait();
+        T item = items.removeFirst();
+        notifyAll();                                  // wake producers
+        return item;
+    }
+}
+// Production code: just use new ArrayBlockingQueue&lt;&gt;(capacity)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>wait()</code>/<code>notify()</code> without holding the monitor.</li>
+  <li>Using <code>if</code> instead of <code>while</code> around <code>wait()</code>.</li>
+  <li>Using <code>notify()</code> when producers and consumers share one wait set, causing hangs.</li>
+  <li>Calling <code>wait()</code> on one object while synchronised on another.</li>
+  <li>Swallowing <code>InterruptedException</code> inside the wait loop.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;They are methods on Object for low-level coordination, and you must hold the object's monitor, so call them inside synchronized on that object or you get IllegalMonitorStateException. wait releases the lock and suspends the thread until it is notified, then it reacquires the lock before continuing. notify wakes one arbitrary waiting thread; notifyAll wakes all of them, which is safer when threads wait for different conditions. I always call wait in a while loop that re-checks the condition because of spurious wakeups and competing threads. In real code I'd prefer BlockingQueue, Condition or CountDownLatch.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you implement a producer-consumer queue with wait and notify?</strong> A synchronized bounded buffer where put waits while full and take waits while empty, each calling notifyAll after changing state.</li>
+  <li><strong>Does notify() release the lock immediately?</strong> No; the lock is released only when the notifying thread leaves the synchronized block.</li>
+  <li><strong>Why is Condition better?</strong> One lock can have separate notFull and notEmpty conditions, so you signal only the right waiters.</li>
+</ul>
+</article>
+</body>
+</html>

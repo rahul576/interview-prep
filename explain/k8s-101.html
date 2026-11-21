@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-101 · One worker node in your cluster becomes unresponsive and must be replaced. How do you replace it without affecting application availability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-101" data-topic="Kubernetes">
+<h1>One worker node in your cluster becomes unresponsive and must be replaced. How do you replace it without affecting application availability?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Replace a node safely by having <strong>replicas spread with PDBs</strong> beforehand, then <strong>cordon and drain</strong>, handle an <strong>unreachable node</strong> carefully (force-delete StatefulSet pods only when it is truly dead), <strong>delete the node object</strong>, let the <strong>node group or autoscaler</strong> provision a replacement, and <strong>verify</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Availability during a node replacement is decided <strong>before</strong> the node fails. Every important workload needs <strong>several replicas spread across nodes and zones</strong> using topology spread constraints or pod anti-affinity, and a <strong>PodDisruptionBudget</strong> so voluntary evictions never take too many replicas at once. If a service runs a single replica, no procedure will keep it up.</p>
+<p>If the node still responds, the flow is simple. <strong>Cordon</strong> it so nothing new lands there (drain does this too), then <strong>drain</strong> with <code>--ignore-daemonsets --delete-emptydir-data</code>. Pods are <strong>evicted gracefully</strong>, honouring PDBs and termination grace periods, and their controllers recreate them on healthy nodes.</p>
+<p>If the node is <strong>unresponsive</strong>, the kubelet cannot confirm anything. The node controller marks it <strong>NotReady/Unknown</strong>, applies <code>node.kubernetes.io/unreachable</code> taints, and after the default toleration of about <strong>five minutes</strong> pods are marked for deletion. <strong>Deployment</strong> pods are recreated elsewhere. <strong>StatefulSet</strong> pods are not, because the system cannot be sure the old copy has stopped, and two pods with the same identity could corrupt data. Only after confirming the machine is <strong>powered off or terminated</strong> do you force-delete them (or apply the <code>out-of-service</code> taint, which lets volumes detach and pods move).</p>
+<p>Then <strong>delete the node object</strong> and let the managed node group, cluster autoscaler or Karpenter create a replacement rather than repairing by hand. Verify the new node is <strong>Ready</strong> and workloads are healthy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm replicas, spread and PDBs are in place.</li>
+  <li><code>kubectl cordon</code> the node.</li>
+  <li><code>kubectl drain</code> to evict pods gracefully.</li>
+  <li>If unreachable: wait for eviction; force-delete StatefulSet pods only after confirming the node is dead.</li>
+  <li><code>kubectl delete node</code>; terminate the instance; let automation replace it.</li>
+  <li>Check the new node is Ready and pods are Running and Ready.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl cordon worker-3
+kubectl drain worker-3 --ignore-daemonsets --delete-emptydir-data --timeout=10m
+# node unreachable and confirmed powered off:
+kubectl taint node worker-3 node.kubernetes.io/out-of-service=nodeshutdown:NoExecute
+kubectl -n data delete pod db-1 --grace-period=0 --force
+kubectl delete node worker-3
+kubectl get nodes; kubectl get pods -A -o wide | grep -v Running</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Force-deleting StatefulSet pods while the old node might still be running.</li>
+  <li>Repairing nodes manually instead of replacing them through the node group.</li>
+  <li>Running critical services with one replica and expecting zero downtime.</li>
+  <li>Uncordoning a node that is being retired.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Availability depends on preparation: several replicas spread across nodes with topology spread or anti-affinity, and PodDisruptionBudgets. Then I cordon the node and drain it with ignore-daemonsets and delete-emptydir-data, which evicts pods gracefully, respecting PDBs, and controllers recreate them elsewhere. If the node is completely unresponsive, the control plane marks it NotReady and evicts pods after a timeout; Deployments recover, but StatefulSet pods are not recreated, so I force-delete them only after confirming the node is really off. Then I delete the node object, let the node group or Karpenter create a replacement, and verify it is Ready.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if a PDB allows zero disruptions during the drain?</strong> Drain retries indefinitely; fix the PDB or replica count with the owner.</li>
+  <li><strong>Why not recreate StatefulSet pods automatically?</strong> It could create two pods with the same identity writing to the same volume.</li>
+  <li><strong>How long until pods move from a dead node?</strong> About five minutes by default, set by the unreachable toleration.</li>
+</ul>
+</article>
+</body>
+</html>

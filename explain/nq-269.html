@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-269 · What is integration testing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-269" data-topic="Testing">
+<h1>What is integration testing?</h1>
+<p class="ex-meta">Testing · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Integration testing</strong> checks that <strong>several components work together</strong> with <strong>real infrastructure or framework code</strong>, for example a repository against a real database or a REST endpoint through the Spring context, using tools like <strong>@SpringBootTest, slice tests, Testcontainers, WireMock and MockMvc</strong>; such tests are slower, so there are fewer of them.</p>
+
+<h2>Detailed explanation</h2>
+<p>Unit tests prove each piece works alone, but most production bugs live in the <strong>seams</strong> between pieces: a JPQL query with a typo, a column mapped to the wrong type, a Jackson setting that renames a field, a missing <code>@Transactional</code>, a security rule blocking an endpoint, a Kafka deserialiser mismatch, a Flyway migration that fails on the real engine. Integration tests exercise those seams with real collaborators.</p>
+<p>Typical integration tests in a Spring Boot service:</p>
+<ul>
+  <li><strong>Persistence:</strong> repositories, custom queries and migrations against <strong>PostgreSQL in Testcontainers</strong>, often with <code>@DataJpaTest</code> so each test rolls back.</li>
+  <li><strong>Web layer:</strong> controllers through <strong>MockMvc</strong> or a real server with <code>@SpringBootTest(webEnvironment = RANDOM_PORT)</code> and <strong>WebTestClient</strong> or REST Assured, verifying status codes, validation, JSON shape, error handling and security.</li>
+  <li><strong>Messaging:</strong> listeners and producers against a real Kafka or RabbitMQ container.</li>
+  <li><strong>External HTTP APIs:</strong> <strong>WireMock</strong> simulates the third-party service, including errors and slow responses, so the real HTTP client, serialisation, timeouts and retries are tested.</li>
+  <li><strong>Full flows:</strong> an API call that writes to the database and publishes an event, asserting both.</li>
+</ul>
+<p><strong>Testcontainers is preferred over H2</strong> because it runs the same database engine and version as production; H2's compatibility modes do not support every feature and behave differently for locking, types and SQL functions.</p>
+<p>Integration tests take seconds rather than milliseconds and need Docker, so the <strong>test pyramid</strong> keeps them fewer than unit tests. They are still far cheaper and more reliable than full end-to-end tests across deployed services. Keep them <strong>independent</strong>: each test creates its own data or relies on rollback.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Spring starts the relevant part of the context (slice or full).</li>
+  <li>Testcontainers starts real dependencies; <code>@ServiceConnection</code> wires them in.</li>
+  <li>WireMock stands in for third-party HTTP APIs.</li>
+  <li>The test calls the real entry point (HTTP, message, method).</li>
+  <li>Assertions check responses and side effects in DB or topics.</li>
+  <li>Data is rolled back or isolated per test.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Testcontainers
+class CustomerApiIT {
+
+    @Container @ServiceConnection
+    static PostgreSQLContainer&lt;?&gt; pg = new PostgreSQLContainer&lt;&gt;(&quot;postgres:16&quot;);
+
+    @Autowired WebTestClient client;
+    @Autowired CustomerRepository repo;
+
+    @Test
+    void createsCustomerAndStoresIt() {
+        client.post().uri(&quot;/customers&quot;)
+              .bodyValue(Map.of(&quot;name&quot;, &quot;Asha&quot;, &quot;email&quot;, &quot;asha@example.com&quot;))
+              .exchange()
+              .expectStatus().isCreated()
+              .expectBody().jsonPath(&quot;$.id&quot;).isNotEmpty();
+
+        assertThat(repo.findByEmail(&quot;asha@example.com&quot;)).isPresent();
+    }
+
+    @Test
+    void rejectsInvalidEmail() {
+        client.post().uri(&quot;/customers&quot;)
+              .bodyValue(Map.of(&quot;name&quot;, &quot;Asha&quot;, &quot;email&quot;, &quot;not-an-email&quot;))
+              .exchange()
+              .expectStatus().isBadRequest();
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using H2 and missing production SQL behaviour.</li>
+  <li>Mocking so much in &quot;integration&quot; tests that nothing real is integrated.</li>
+  <li>Tests sharing data and failing depending on order.</li>
+  <li>Writing every scenario as an integration test, making the build slow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Integration tests check that several parts work together with real infrastructure or the framework: a repository running its queries against a real PostgreSQL, a REST controller through the full Spring context with serialisation, validation and security, or a Kafka listener consuming real messages. In Spring Boot I use SpringBootTest or slices like DataJpaTest and WebMvcTest, Testcontainers for real databases and brokers, and WireMock for external APIs. They catch wiring, mapping, SQL and configuration bugs that unit tests can't, but they're slower, so following the test pyramid there are fewer of them than unit tests.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why Testcontainers over H2?</strong> Same engine and version as production, so dialect and behaviour match.</li>
+  <li><strong>How do you isolate test data?</strong> Rollback in @DataJpaTest, unique ids per test, or cleanup in @AfterEach.</li>
+  <li><strong>How do you keep them fast?</strong> Shared containers and a cached Spring context.</li>
+</ul>
+</article>
+</body>
+</html>

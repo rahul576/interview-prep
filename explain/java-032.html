@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-032 · How does JWT-based authentication work in a Spring Boot microservice?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-032" data-topic="Security">
+<h1>How does JWT-based authentication work in a Spring Boot microservice?</h1>
+<p class="ex-meta">Security · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The client gets a signed <strong>JWT access token</strong> from an identity provider and sends it as a <strong>Bearer</strong> token; Spring Security, configured as an <strong>OAuth 2 resource server</strong>, verifies the <strong>signature via JWKS</strong> and checks <strong>exp, iss and aud</strong> on every request, so the service stays <strong>stateless</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <strong>JWT</strong> (JSON Web Token) has three base64url parts: a <strong>header</strong> (algorithm such as RS256 or ES256, and a key id <code>kid</code>), a <strong>payload</strong> of <strong>claims</strong> (<code>sub</code>, <code>iss</code>, <code>aud</code>, <code>exp</code>, <code>iat</code>, <code>scope</code>, roles) and a <strong>signature</strong>. The signature proves the token was issued by the trusted authorization server and not altered. It does not hide the content: the payload is only encoded, so personal or secret data must not go in it.</p>
+<p>In a typical microservice setup the user signs in through <strong>OAuth 2 / OpenID Connect</strong> at an identity provider (Keycloak, Okta, Entra ID, Auth0). The client receives an access token and calls APIs with <code>Authorization: Bearer &lt;token&gt;</code>. Each Spring Boot service is a <strong>resource server</strong>: the <code>BearerTokenAuthenticationFilter</code> in the <strong>SecurityFilterChain</strong> extracts the token, a <code>JwtDecoder</code> fetches and caches the provider's public keys from the <strong>JWKS endpoint</strong>, verifies the signature, and validates expiry, not-before, issuer and audience. Then it builds a <code>JwtAuthenticationToken</code> with authorities (by default <code>SCOPE_</code> + each scope) and stores it in the <strong>SecurityContext</strong>.</p>
+<p>Because everything needed is in the token, there is <strong>no server session</strong> and any instance can handle any request, which suits horizontal scaling. The trade-off is <strong>revocation</strong>: a valid token works until it expires. So access tokens are <strong>short lived</strong> (5 to 15 minutes) and clients use <strong>refresh tokens</strong>, which the authorization server can revoke and rotate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client authenticates at the identity provider (authorization code with PKCE) and receives access and refresh tokens.</li>
+  <li>Client sends the access token as a Bearer header.</li>
+  <li>Resource server filter extracts it and looks up the signing key by <code>kid</code> in the cached JWKS.</li>
+  <li>It verifies the signature and validates <code>exp</code>, <code>nbf</code>, <code>iss</code> and <code>aud</code>.</li>
+  <li>Claims are mapped to authorities and placed in the SecurityContext; authorization rules run.</li>
+  <li>When the token expires, the client uses the refresh token to get a new one.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.example.com/realms/shop
+          audiences: orders-api</code></pre>
+<pre><code class="language-java">@Bean
+SecurityFilterChain api(HttpSecurity http) throws Exception {
+    http.authorizeHttpRequests(a -&gt; a
+            .requestMatchers(&quot;/actuator/health/**&quot;).permitAll()
+            .requestMatchers(HttpMethod.POST, &quot;/orders/**&quot;).hasAuthority(&quot;SCOPE_orders.write&quot;)
+            .anyRequest().authenticated())
+        .oauth2ResourceServer(o -&gt; o.jwt(Customizer.withDefaults()))
+        .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+    return http.build();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Not validating the audience, so a token for another API is accepted.</li>
+  <li>Accepting <code>alg: none</code> or using a shared HS256 secret across many services.</li>
+  <li>Long-lived access tokens with no refresh strategy.</li>
+  <li>Putting personal or sensitive data in the payload.</li>
+  <li>Storing tokens in localStorage in browser apps, exposing them to XSS.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The user logs in at an identity provider using OAuth 2 and OpenID Connect and the client gets a JWT access token. A JWT has a header, a payload of claims like subject, scopes, issuer, audience and expiry, and a signature. The client sends it as a Bearer token. In Spring Boot I configure the service as an OAuth 2 resource server with the issuer URI; the filter chain verifies the signature using the provider's JWKS public keys and checks expiry, issuer and audience, then puts the principal and authorities into the SecurityContext. Nothing is stored server side, so it is stateless. I keep access tokens short lived with refresh tokens, and never put secrets in the payload because it is only encoded.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you revoke a JWT before it expires?</strong> Short expiry plus refresh-token revocation; for urgent cases a deny-list of <code>jti</code> values in Redis, or opaque tokens with introspection.</li>
+  <li><strong>How are signing keys rotated?</strong> The provider publishes new keys in JWKS with a new <code>kid</code>; Spring refreshes its cached key set.</li>
+  <li><strong>What about service-to-service calls?</strong> Client credentials tokens or token exchange, often plus mTLS.</li>
+</ul>
+</article>
+</body>
+</html>

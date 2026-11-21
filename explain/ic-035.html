@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-035 · Explain the Terraform lifecycle meta-arguments.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-035" data-topic="Infrastructure as Code">
+<h1>Explain the Terraform lifecycle meta-arguments.</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>The <strong>lifecycle</strong> block tunes resource handling: <strong>create_before_destroy</strong> (zero-downtime replacement), <strong>prevent_destroy</strong> (block deletion), <strong>ignore_changes</strong> (tolerate external changes), <strong>replace_triggered_by</strong> (force replacement on other changes), and <strong>precondition/postcondition</strong> (validate assumptions).</p>
+
+<h2>Detailed explanation</h2>
+<p>Every resource accepts a <code>lifecycle</code> block with meta-arguments that change Terraform's default behaviour.</p>
+<p><strong>create_before_destroy = true</strong>: by default a replacement deletes the old object first, then creates the new one, causing downtime. With this flag Terraform creates the replacement, repoints dependents, then deletes the old one. It requires that both can <strong>coexist</strong>, so unique names are needed, typically <code>name_prefix</code> instead of <code>name</code>. The behaviour propagates to dependencies.</p>
+<p><strong>prevent_destroy = true</strong>: any plan that would destroy the resource, including a replacement, fails with an error. Protects databases and buckets, but only as long as the block exists in code.</p>
+<p><strong>ignore_changes = [attr, ...]</strong>: Terraform ignores differences in those attributes after creation. Correct for values legitimately managed elsewhere: <code>desired_count</code> of an autoscaled ECS service, <code>desired_capacity</code> of an ASG, tags added by another tool, or a password rotated outside Terraform. <code>ignore_changes = all</code> ignores everything after creation.</p>
+<p><strong>replace_triggered_by = [ref, ...]</strong>: replaces this resource whenever a referenced resource or attribute changes, for example recreating instances when their launch template or a config hash (<code>terraform_data</code>) changes.</p>
+<p><strong>precondition</strong> and <strong>postcondition</strong> blocks contain a <code>condition</code> and an <code>error_message</code>. Preconditions check assumptions before the resource is planned or changed, such as that a looked-up AMI is <code>arm64</code>; postconditions check results afterwards, such as that a certificate is <code>ISSUED</code>. Both fail with clear messages instead of obscure downstream errors.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform computes the normal plan.</li>
+  <li>ignore_changes removes diffs on listed attributes.</li>
+  <li>replace_triggered_by upgrades changes in referenced objects to replacements.</li>
+  <li>create_before_destroy reorders replacement steps.</li>
+  <li>prevent_destroy fails plans with destroy actions; conditions are evaluated at plan or apply time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_launch_template&quot; &quot;web&quot; {
+  name_prefix   = &quot;web-&quot;
+  image_id      = data.aws_ami.web.id
+  instance_type = var.instance_type
+
+  lifecycle {
+    create_before_destroy = true
+    precondition {
+      condition     = data.aws_ami.web.architecture == &quot;x86_64&quot;
+      error_message = &quot;The selected AMI must be x86_64.&quot;
+    }
+  }
+}
+
+resource &quot;aws_ecs_service&quot; &quot;api&quot; {
+  name          = &quot;api&quot;
+  desired_count = 2
+  lifecycle {
+    ignore_changes = [desired_count]   # managed by autoscaling
+  }
+}
+
+resource &quot;aws_instance&quot; &quot;worker&quot; {
+  # ...
+  lifecycle {
+    replace_triggered_by = [aws_launch_template.web.latest_version]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>create_before_destroy with fixed names, causing &quot;already exists&quot; errors.</li>
+  <li><code>ignore_changes = all</code> to silence plans, hiding real drift.</li>
+  <li>Relying on prevent_destroy as the only protection.</li>
+  <li>Using variables in lifecycle arguments (they must be static).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The lifecycle block changes how Terraform handles a resource. create_before_destroy builds the replacement before deleting the old one to avoid downtime, which needs unique names like name_prefix. prevent_destroy makes any plan that would destroy the resource fail. ignore_changes ignores drift in attributes legitimately managed elsewhere, like the desired count of an autoscaled service. replace_triggered_by forces replacement when another resource changes, for example instances when a launch template changes. And preconditions and postconditions validate assumptions with clear error messages.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the risk of ignore_changes = all?</strong> Terraform stops managing the resource after creation; code changes and drift are silently ignored.</li>
+  <li><strong>Can lifecycle use variables?</strong> No, most lifecycle arguments must be literal values.</li>
+  <li><strong>What is terraform_data used for?</strong> A neutral resource to hold values or trigger replace_triggered_by.</li>
+</ul>
+</article>
+</body>
+</html>

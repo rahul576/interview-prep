@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-067 · Design a multi-region, highly available deployment of a critical service on Kubernetes.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-067" data-topic="Kubernetes">
+<h1>Design a multi-region, highly available deployment of a critical service on Kubernetes.</h1>
+<p class="ex-meta">Kubernetes · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>Run <strong>at least two multi-zone clusters in different regions</strong> behind a <strong>health-checked global load balancer</strong>, deploy identical versions via <strong>GitOps</strong> one region at a time, make an explicit <strong>data replication and consistency</strong> decision (<strong>active-passive or active-active</strong>), keep <strong>capacity headroom</strong> to absorb a lost region and <strong>prove it with failover drills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start from requirements: availability target, <strong>RTO and RPO</strong>, latency for users in different geographies, and data residency. Inside one region, a cluster spread across <strong>three availability zones</strong> with <code>topologySpreadConstraints</code>, <strong>PodDisruptionBudgets</strong> and zone-redundant storage already survives node and zone failures. A region-wide outage, a bad cloud control plane change or a cluster-level mistake needs a <strong>second cluster in another region</strong>.</p>
+<p><strong>Traffic</strong>: a global entry point (Azure Front Door, AWS Route 53 with health checks or Global Accelerator, a Google global external load balancer, or Cloudflare) routes users to the nearest healthy region and removes a region when its health checks fail. Health checks should test a meaningful endpoint, not just &quot;pod alive&quot;. DNS-based failover is affected by TTLs and client caching.</p>
+<p><strong>Delivery</strong>: GitOps (Argo CD ApplicationSets or Flux) deploys the same manifests to all clusters; rollouts are <strong>progressive per region</strong>, so a bad release hits one region first. Clusters are built from the same IaC to avoid drift.</p>
+<p><strong>Data</strong> is the hard part and dictates the topology. <strong>Active-passive</strong>: one writer region with asynchronous replicas in the other, simple and consistent, but failover loses up to the replication lag (RPO above zero) and needs a promotion runbook. <strong>Active-active</strong>: both regions serve writes, requiring a globally distributed database (Spanner, Cosmos DB, CockroachDB, DynamoDB global tables) or partitioning users by home region, and conflict or consistency trade-offs. Caches, queues and object storage need their own replication.</p>
+<p><strong>Capacity</strong>: each region must be able to take the other's traffic, either by running with headroom (around 50 percent utilisation in two-region active-active) or by autoscaling fast enough with reserved quota.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Two or more regional clusters, each across three zones, built from IaC.</li>
+  <li>Global load balancer with health checks routing to healthy regions.</li>
+  <li>GitOps deploys identical versions, region by region.</li>
+  <li>Database replication matching the RPO; promotion runbook or multi-writer DB.</li>
+  <li>Secrets, certificates and config replicated to both regions.</li>
+  <li>Headroom or fast autoscaling for full failover load.</li>
+  <li>Scheduled failover drills and game days.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: { name: orders }
+spec:
+  generators:
+    - list:
+        elements:
+          - { cluster: prod-weu, url: https://weu.k8s.example.com }
+          - { cluster: prod-neu, url: https://neu.k8s.example.com }
+  template:
+    metadata: { name: &quot;orders-{{cluster}}&quot; }
+    spec:
+      project: prod
+      source: { repoURL: https://git.example.com/apps.git, path: orders/overlays/prod, targetRevision: main }
+      destination: { server: &quot;{{url}}&quot;, namespace: orders }
+      syncPolicy: { automated: { prune: true, selfHeal: true } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Two regions sharing one database in a single region.</li>
+  <li>Never testing failover, so the runbook fails on the day.</li>
+  <li>No capacity in the surviving region.</li>
+  <li>Deploying to all regions simultaneously.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd run at least two clusters in different regions, each spread over three zones with topology spread and PDBs. A global load balancer with real health checks routes users to the nearest healthy region and drops a failed one automatically. GitOps deploys the same versions everywhere, one region at a time. The hard part is data: either a single writer region with replicas for active-passive, accepting some RPO, or a globally distributed database for active-active. Each region needs headroom for the other's traffic, and we run regular failover drills to prove it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if strong consistency is required across regions?</strong> Use a consensus-based global database and accept higher write latency, or a single writer region with synchronous replication and lower availability.</li>
+  <li><strong>How do you avoid split-brain on failover?</strong> Fence the old primary and use a single, authoritative promotion decision.</li>
+  <li><strong>Multi-cluster service discovery?</strong> Global LB at the edge; for internal calls, mesh multi-cluster or MCS API.</li>
+</ul>
+</article>
+</body>
+</html>

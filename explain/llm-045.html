@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-045 · What is semantic caching for LLM applications, and what are its risks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-045" data-topic="LLMOps &amp; RAG">
+<h1>What is semantic caching for LLM applications, and what are its risks?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>semantic cache</strong> stores answers keyed by the <strong>embedding of the question</strong>, so semantically similar questions reuse a previous answer, saving <strong>cost and latency</strong>; the risks are <strong>wrong matches</strong> from a loose <strong>similarity threshold</strong>, <strong>cross-user leakage</strong> of personalised answers, and <strong>stale answers</strong> without <strong>invalidation</strong>, so it fits <strong>frequent, generic</strong> questions.</p>
+
+<h2>Detailed explanation</h2>
+<p>An exact-match cache rarely hits for natural language: &quot;How do I reset my password?&quot; and &quot;password reset steps&quot; are different strings. A semantic cache embeds the incoming question, searches a small vector index of previous questions, and if the nearest neighbour's similarity exceeds a threshold, returns its stored answer in milliseconds without calling the LLM. Gateways such as Azure API Management (semantic caching policies) and LLM proxies or libraries (for example LiteLLM, GPTCache-style tools, Redis-based caches) offer this.</p>
+<p>The risks are serious:</p>
+<ul>
+  <li><strong>False hits.</strong> Embeddings capture topic more than detail. &quot;Refund policy for Germany&quot; and &quot;refund policy for France&quot; can be very similar vectors but need different answers. Negations, numbers, dates and product names are typical traps. The <strong>threshold</strong> must be tuned on real pairs, and it is safer to include extracted entities (country, product) in the cache key.</li>
+  <li><strong>Personalisation and permissions.</strong> Answers that depend on user identity, permissions, account data or conversation history must never be served to another user. Scope cache keys by tenant, user or permission set, or <strong>bypass</strong> the cache for such requests.</li>
+  <li><strong>Staleness.</strong> When underlying documents change, cached answers are wrong. Use TTLs and <strong>invalidate</strong> entries that cite changed documents.</li>
+  <li><strong>Context.</strong> A follow-up like &quot;and what about the premium plan?&quot; means nothing alone; cache only standalone, rewritten questions or first turns.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Normalise and (if needed) rewrite the question to standalone form.</li>
+  <li>Decide if the request is cacheable (generic, no personal data, no tools).</li>
+  <li>Embed; search the cache within the right scope.</li>
+  <li>Similarity above threshold and entities match -&gt; return cached answer.</li>
+  <li>Otherwise call the LLM; store question, embedding, answer, cited doc IDs, TTL.</li>
+  <li>Invalidate on document change; monitor hit rate and wrong-hit rate.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def answer(q, user):
+    if is_cacheable(q):
+        key_scope = f&quot;tenant:{user.tenant}&quot;
+        hit = cache.nearest(embed(q), scope=key_scope)
+        if hit and hit.score &gt;= 0.93 and hit.entities == extract_entities(q):
+            return hit.answer
+    resp = rag_answer(q, user)
+    if is_cacheable(q):
+        cache.put(q, embed(q), resp.text, docs=resp.cited_doc_ids, ttl=86400, scope=key_scope)
+    return resp.text</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One global cache for personalised answers.</li>
+  <li>Picking a threshold without measuring false hits.</li>
+  <li>No invalidation when source documents change.</li>
+  <li>Caching multi-turn questions without rewriting them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A semantic cache keys answers by the meaning of the question rather than the exact text, using embeddings, so 'how do I reset my password' and 'password reset steps' share one answer. That saves model calls and returns in milliseconds. The risks are significant: a loose threshold returns the wrong answer for subtly different questions, like Germany versus France; personalised or permission-dependent answers must never be shared, so I scope keys by user or tenant or bypass the cache; and entries must be invalidated when the source documents change. I use it for frequent, generic questions and measure wrong-hit rate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Measuring wrong answers?</strong> Sample cache hits for judge or human review; compare cached vs fresh answers.</li>
+  <li><strong>Typical hit rate?</strong> Highly workload-dependent; FAQ-style traffic benefits most.</li>
+  <li><strong>Versus prompt caching?</strong> Prompt caching reuses computation for a shared prefix but still generates a fresh answer.</li>
+</ul>
+</article>
+</body>
+</html>

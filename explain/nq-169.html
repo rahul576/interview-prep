@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-169 · What is the role of volatile in Java memory visibility?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-169" data-topic="JVM &amp; Performance">
+<h1>What is the role of volatile in Java memory visibility?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>volatile</code> gives a field <strong>visibility and ordering</strong> guarantees under the <strong>Java Memory Model</strong>: a write to it <strong>happens-before</strong> every later read of it, but it does <strong>not</strong> make compound actions like <code>count++</code> atomic.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>Java Memory Model (JMM)</strong> allows compilers, the JIT and CPUs to keep values in registers or caches and to <strong>reorder</strong> reads and writes, as long as a single thread cannot tell. Across threads this means one thread may never see another thread's update, or may see writes in a surprising order. The JMM only guarantees visibility when there is a <strong>happens-before</strong> relationship, created by locks, thread start/join, final fields, concurrent collections, or <code>volatile</code>.</p>
+<p>For a <code>volatile</code> field, the JMM says a write <strong>happens-before</strong> every subsequent read of that same field. The JVM implements this with <strong>memory barriers</strong>: reads cannot be served from a stale register, and ordinary reads and writes cannot be reordered across the volatile access in a way that breaks the guarantee. A powerful consequence is <strong>piggybacking</strong>: everything the writer did <em>before</em> the volatile write becomes visible to a thread that <em>reads</em> the new value. That is why a volatile <code>ready</code> flag can safely publish an object that was fully built before the flag was set.</p>
+<p>What volatile does <strong>not</strong> give is <strong>atomicity</strong> of read-modify-write sequences. <code>count++</code> is a read, an add and a write; two threads can read the same value and both write <code>n+1</code>. For that you need <code>synchronized</code>, a <code>Lock</code>, or <code>AtomicInteger</code>/<code>LongAdder</code>. Reads and writes of volatile <code>long</code> and <code>double</code> are, however, guaranteed atomic.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A writes normal fields (builds the config object).</li>
+  <li>Thread A writes the volatile field (release semantics).</li>
+  <li>Thread B reads the volatile field and sees the new value (acquire semantics).</li>
+  <li>Because of happens-before, B also sees all of A's earlier writes.</li>
+  <li>Without volatile, B could loop forever on a cached value or see a half-initialised object.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Worker implements Runnable {
+    private volatile boolean running = true;   // visibility for stop signal
+    private volatile Config config;            // safe publication
+
+    public void stop() { running = false; }
+    public void reload(Config c) { config = c; } // c fully built before this write
+
+    public void run() {
+        while (running) {                      // always reads latest value
+            process(config);
+        }
+    }
+}
+
+// NOT thread-safe even if volatile:
+volatile int hits;
+void hit() { hits++; }           // use AtomicInteger.incrementAndGet() instead</code></pre>
+<p>Double-checked locking for a lazy singleton is also only correct when the instance field is <code>volatile</code>.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Need</th><th>volatile</th><th>synchronized / Lock</th><th>Atomic classes</th></tr></thead>
+<tbody>
+<tr><td>Visibility</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Ordering</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Atomic compound action</td><td>No</td><td>Yes</td><td>Yes (single variable)</td></tr>
+<tr><td>Blocking</td><td>No</td><td>Yes</td><td>No (CAS)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using volatile for counters or check-then-act logic.</li>
+  <li>Thinking volatile is only about &quot;CPU caches&quot;; reordering by the JIT matters just as much.</li>
+  <li>Making a reference volatile and assuming the object's later mutations are visible; only writes before the volatile write are published.</li>
+  <li>Forgetting volatile in double-checked locking.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Under the Java Memory Model, threads may see stale values and operations may be reordered unless there is a happens-before relationship. Declaring a field volatile creates one: a write to it happens-before every later read of that field, so readers always see the latest value, and also everything the writer did before that write. That makes it ideal for stop flags and for safely publishing an immutable object. It does not make <code>count++</code> atomic, so for counters I use <code>AtomicInteger</code> or <code>LongAdder</code>, and for multi-field invariants a lock.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is safe publication?</strong> Making an object visible to other threads only after full construction, via volatile, final fields, locks or concurrent collections.</li>
+  <li><strong>Why does double-checked locking need volatile?</strong> Without it, another thread may see a non-null reference to a partially constructed object.</li>
+  <li><strong>volatile vs AtomicInteger?</strong> Atomic adds CAS-based atomic read-modify-write on top of volatile semantics.</li>
+</ul>
+</article>
+</body>
+</html>

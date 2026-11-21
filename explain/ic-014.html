@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-014 · What does idempotency mean in infrastructure as code and configuration management?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-014" data-topic="Infrastructure as Code">
+<h1>What does idempotency mean in infrastructure as code and configuration management?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Idempotency</strong> means applying the same code repeatedly yields the <strong>same end state</strong>: the first run converges the system, later runs <strong>change nothing</strong>; Terraform shows <strong>no changes</strong>, Ansible reports <strong>ok</strong> instead of <strong>changed</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Infrastructure as code and configuration management are <strong>declarative</strong>: you describe the desired state, and the tool works out what to do. Idempotency is the property that makes this safe. The first run makes whatever changes are needed; a second run finds that reality already matches the description and does nothing.</p>
+<p><strong>Terraform</strong> achieves it by comparing three things: the configuration, the state and the real infrastructure (via refresh). If they agree, <code>terraform plan</code> reports &quot;No changes. Your infrastructure matches the configuration.&quot; A plan that is never empty, a <strong>perpetual diff</strong>, usually indicates a provider quirk, ordering differences in a list or something outside Terraform changing values.</p>
+<p><strong>Ansible</strong> modules are written to check the current state before acting: <code>ansible.builtin.package</code> with <code>state: present</code> only installs if the package is missing, <code>lineinfile</code> only adds a line if it is absent. Results are reported as <strong>ok</strong> (already correct) or <strong>changed</strong>, and a second run of a good playbook shows <code>changed=0</code>.</p>
+<p>Why it matters: you can <strong>rerun safely after a failure halfway</strong>, without worrying about duplicating work; you can run configuration <strong>on a schedule</strong> to correct drift; and &quot;changed&quot; becomes a meaningful signal that triggers handlers such as service restarts. The usual sources of non-idempotent behaviour are <strong>raw shell commands</strong>: <code>echo &quot;x&quot; &gt;&gt; file</code> appends every time, <code>useradd</code> fails the second time, a download step runs on every run. The fix is to use proper modules or add guards like <code>creates</code>, <code>changed_when</code> and checks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the current state of each resource or setting.</li>
+  <li>Compare it with the desired state in code.</li>
+  <li>Act only on differences.</li>
+  <li>Report what changed.</li>
+  <li>A second run finds no differences and makes no changes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Not idempotent: appends a line every run
+- name: Add JVM option
+  ansible.builtin.shell: echo &quot;-Xmx2g&quot; &gt;&gt; /etc/app/jvm.options
+
+# Idempotent: ensures the line exists exactly once
+- name: Add JVM option
+  ansible.builtin.lineinfile:
+    path: /etc/app/jvm.options
+    line: &quot;-Xmx2g&quot;</code></pre>
+<pre><code class="language-bash">ansible-playbook site.yml   # changed=3
+ansible-playbook site.yml   # changed=0
+terraform plan              # No changes. Your infrastructure matches the configuration.</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>shell</code> or <code>command</code> where a module exists.</li>
+  <li>Tasks that always report changed, triggering needless restarts.</li>
+  <li>Ignoring perpetual diffs in Terraform plans.</li>
+  <li>Treating &quot;it ran without errors&quot; as proof of idempotency instead of running twice.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Idempotency means running the same code again gives the same end state: the first run makes the needed changes, later runs change nothing because the system already matches. Terraform does it by comparing configuration, state and real infrastructure, so a second plan says no changes. Ansible modules check current state first and report ok instead of changed. That's what makes it safe to rerun after a failure halfway or on a schedule to fix drift. Raw shell commands are the usual offenders, like appending to a file every run, so I prefer modules or add guards like creates and changed_when.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you make an Ansible shell task idempotent?</strong> Use <code>creates</code>/<code>removes</code>, a check task with <code>register</code> and <code>when</code>, and <code>changed_when</code>.</li>
+  <li><strong>How do you test idempotency?</strong> Run twice in CI (Molecule's idempotence step) and fail if anything changes.</li>
+  <li><strong>What causes perpetual Terraform diffs?</strong> Provider normalisation issues, unordered lists, or external changes.</li>
+</ul>
+</article>
+</body>
+</html>

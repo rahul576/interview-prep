@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-064 · Why did Kubernetes remove dockershim, and what does it mean for Docker images?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-064" data-topic="Docker">
+<h1>Why did Kubernetes remove dockershim, and what does it mean for Docker images?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Kubernetes talks to runtimes via the <strong>CRI</strong>; <strong>Docker Engine never implemented CRI</strong>, so the kubelet carried an adapter called <strong>dockershim</strong>, <strong>removed in 1.24</strong>; nodes now use <strong>containerd or CRI-O</strong> directly, <strong>Docker-built OCI images still work</strong>, but anything relying on <strong>Docker on the node</strong> (socket mounts, <code>docker ps</code>) broke.</p>
+
+<h2>Detailed explanation</h2>
+<p>Early Kubernetes was tightly coupled to Docker. To support other runtimes, it introduced the <strong>Container Runtime Interface (CRI)</strong>, a gRPC API the kubelet uses to manage pods, containers and images. containerd (via its CRI plugin) and <strong>CRI-O</strong> implement CRI natively. Docker Engine did not, so Kubernetes maintained <strong>dockershim</strong> inside the kubelet, translating CRI calls into Docker API calls. The path became kubelet → dockershim → dockerd → containerd → runc, an extra hop with extra failure modes, and the Kubernetes project had to maintain Docker-specific code. Dockershim was <strong>deprecated in 1.20</strong> and <strong>removed in 1.24</strong> (2022).</p>
+<p>For <strong>images</strong>, nothing changed. <code>docker build</code> produces standard <strong>OCI images</strong>, and containerd and CRI-O pull and run them exactly as before, because Docker itself used containerd underneath. Developers can keep using Docker locally and in CI.</p>
+<p>What broke were things that assumed <strong>Docker was installed on the node</strong>. Workloads that mounted <strong><code>/var/run/docker.sock</code></strong> to build images (Docker-in-Docker style CI runners), to discover containers, or to read metadata stopped working. <strong>Log collectors</strong> that read <code>/var/lib/docker/containers/*.log</code> had to switch to <code>/var/log/pods</code> and the CRI log format. Monitoring agents querying the Docker API needed CRI support. Admin habits changed too: <code>docker ps</code> on a node became <strong><code>crictl ps</code></strong>, <code>docker logs</code> became <code>crictl logs</code>, and <code>ctr -n k8s.io</code> gives lower-level containerd access. Teams that truly needed Docker Engine could use <strong>cri-dockerd</strong>, an external adapter maintained by Mirantis. Managed services (EKS, AKS, GKE) moved to containerd.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>kubelet sends CRI requests (RunPodSandbox, CreateContainer).</li>
+  <li>containerd's CRI plugin or CRI-O handles them.</li>
+  <li>The runtime pulls OCI images from registries.</li>
+  <li>It starts containers through runc or crun.</li>
+  <li>Logs are written to <code>/var/log/pods</code> in CRI format.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get nodes -o wide                 # CONTAINER-RUNTIME column: containerd://1.7.x
+sudo crictl ps                            # list running containers
+sudo crictl images
+sudo crictl logs &lt;container-id&gt;
+sudo ctr -n k8s.io containers list        # containerd native view</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing Docker images no longer work on Kubernetes.</li>
+  <li>Keeping CI jobs that mount the node's Docker socket.</li>
+  <li>Log agents still reading Docker's log path.</li>
+  <li>Confusing &quot;Docker the build tool&quot; with &quot;Docker the node runtime&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kubernetes talks to runtimes through the Container Runtime Interface. Docker Engine never implemented CRI, so Kubernetes maintained dockershim in the kubelet as an adapter, which added complexity and an extra hop through dockerd to containerd. It was removed in 1.24, and nodes now use containerd or CRI-O directly. Docker-built images are OCI images, so they run unchanged. What broke were things depending on Docker on the node: tools mounting docker.sock to build images or collect logs, and habits like docker ps, which is now crictl. Teams had to switch log collectors and in-cluster builds.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you list containers on a containerd node?</strong> <code>crictl ps</code>, or <code>ctr -n k8s.io containers list</code>.</li>
+  <li><strong>How do you build images in-cluster now?</strong> BuildKit, kaniko or buildah, rootless where possible.</li>
+  <li><strong>Can you still use Docker Engine?</strong> Yes, with the external cri-dockerd adapter.</li>
+</ul>
+</article>
+</body>
+</html>

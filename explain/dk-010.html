@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-010 · What is the difference between COPY and ADD in a Dockerfile?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-010" data-topic="Docker">
+<h1>What is the difference between COPY and ADD in a Dockerfile?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Both copy files into the image, but <strong><code>COPY</code></strong> only copies from the <strong>build context</strong> (or another stage), while <strong><code>ADD</code></strong> also <strong>auto-extracts local tar archives</strong> and can <strong>fetch remote URLs</strong> (and git repos); <strong>prefer <code>COPY</code></strong> for predictability, and use <strong><code>--chown</code></strong> (and <code>--chmod</code>) to set ownership for non-root users.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>COPY src dest</code></strong> does exactly one thing: copy files or directories from the build context into the image. With <code>COPY --from=build /out/app /app</code> it copies from an earlier stage of a multi-stage build or from another image.</p>
+<p><strong><code>ADD src dest</code></strong> does the same plus extra magic:</p>
+<ul>
+  <li>If the source is a <strong>local tar archive</strong> (plain, gzip, bzip2 or xz), it is <strong>automatically extracted</strong> into the destination. Handy when you really want that, surprising when you just wanted to copy <code>app.tar.gz</code> as a file.</li>
+  <li>If the source is a <strong>URL</strong>, Docker downloads it. Remote archives are <strong>not</strong> extracted.</li>
+  <li>With BuildKit it can also add a <strong>git repository</strong> (<code>ADD https://github.com/org/repo.git#v1.2 /src</code>) and verify HTTP downloads with <strong><code>--checksum=sha256:…</code></strong>.</li>
+</ul>
+<p>Why the official best practice is <strong>&quot;prefer COPY&quot;</strong>:</p>
+<ol>
+  <li><strong>Predictability:</strong> the extraction rule depends on the file type, so behaviour can change silently.</li>
+  <li><strong>Download risks:</strong> a URL's content can change or be tampered with. Without a checksum you get whatever the server returns, the layer may not be cached reliably, and you cannot clean up in the same layer (the downloaded archive stays in the image).</li>
+  <li><strong>Better alternatives:</strong> <code>RUN curl -fsSL … -o /tmp/x.tgz &amp;&amp; echo &quot;&lt;sha256&gt;  /tmp/x.tgz&quot; | sha256sum -c - &amp;&amp; tar -xzf /tmp/x.tgz -C /opt &amp;&amp; rm /tmp/x.tgz</code> verifies and cleans up in one layer, or download in a builder stage and <code>COPY --from</code>.</li>
+</ol>
+<p><strong>Ownership:</strong> files are copied as root by default. <code>COPY --chown=app:app target/app.jar /app/</code> (and <code>--chmod=0755</code>) sets ownership and mode in the same step, avoiding a separate <code>RUN chown -R</code>, which would duplicate the files in a new layer and double the size.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>COPY</code>: read files from context/stage → write to image layer.</li>
+  <li><code>ADD</code> local tar: detect archive → extract into dest.</li>
+  <li><code>ADD</code> URL: download → place file (optionally verify checksum).</li>
+  <li><code>--chown/--chmod</code> apply ownership and permissions as the layer is written.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jre
+RUN useradd -r -u 10001 app
+# Preferred: explicit copy with ownership
+COPY --chown=app:app target/app.jar /app/app.jar
+# Legitimate ADD: unpack a vendored local archive
+ADD vendor/agent-1.8.tar.gz /opt/agent/
+# Remote download with integrity check (BuildKit)
+ADD --checksum=sha256:4f3c...e9a1 https://example.com/tools/cli-2.3.tar.gz /tmp/cli.tar.gz
+USER app
+ENTRYPOINT [&quot;java&quot;, &quot;-jar&quot;, &quot;/app/app.jar&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>ADD</code> everywhere out of habit.</li>
+  <li><code>ADD</code> of a remote URL without <code>--checksum</code>, trusting whatever is downloaded.</li>
+  <li><code>RUN chown -R</code> after <code>COPY</code>, doubling layer size.</li>
+  <li>Expecting remote archives to be extracted by <code>ADD</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both copy files into the image. COPY simply copies from the build context or another stage, which is explicit and predictable. ADD also auto-extracts local tar archives and can download from a URL or a git repo. Because of those surprises, best practice is to prefer COPY and use ADD only when I actually want a local archive extracted. For downloads I use RUN with curl and checksum verification, or a builder stage, so I can verify and clean up in the same layer; with BuildKit, ADD --checksum is acceptable. Both support --chown, like COPY --chown=app:app app.jar /app/, to set ownership for a non-root user.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is ADD from a URL risky?</strong> Unverified, mutable content and poor caching; use checksums.</li>
+  <li><strong>Why not <code>RUN chown</code> afterwards?</strong> It creates a new layer with a full copy of the files.</li>
+  <li><strong>Can COPY copy from another image?</strong> Yes, <code>COPY --from=image:tag /path /dest</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-217 · Which BlockingQueue implementations exist, and how do you implement producer-consumer with them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-217" data-topic="Collections">
+<h1>Which BlockingQueue implementations exist, and how do you implement producer-consumer with them?</h1>
+<p class="ex-meta">Collections · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Main <strong>BlockingQueue</strong> types are <strong>ArrayBlockingQueue</strong> (bounded), <strong>LinkedBlockingQueue</strong> (optionally bounded), <strong>SynchronousQueue</strong> (direct hand-off), <strong>DelayQueue</strong> and <strong>PriorityBlockingQueue</strong>; in producer-consumer, <strong>put blocks when full</strong> and <strong>take blocks when empty</strong>, giving <strong>back-pressure</strong>, with <strong>poison pills</strong> or interruption for shutdown.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>BlockingQueue</code> adds waiting operations to <code>Queue</code>. There are four styles: <code>add</code>/<code>remove</code> throw, <code>offer</code>/<code>poll</code> return immediately, <code>put</code>/<code>take</code> block forever, and <code>offer(e, timeout)</code>/<code>poll(timeout)</code> block for a limited time.</p>
+<ul>
+  <li><strong>ArrayBlockingQueue</strong>: fixed capacity array, one lock for both ends, optional fairness.</li>
+  <li><strong>LinkedBlockingQueue</strong>: linked nodes, separate put and take locks; capacity defaults to <code>Integer.MAX_VALUE</code>, so always pass a bound in production.</li>
+  <li><strong>SynchronousQueue</strong>: zero capacity; each <code>put</code> waits for a <code>take</code>. Used by <code>Executors.newCachedThreadPool</code>, so a task is handed to an idle thread or a new thread is created.</li>
+  <li><strong>PriorityBlockingQueue</strong>: unbounded heap, takes the highest priority first.</li>
+  <li><strong>DelayQueue</strong>: elements implement <code>Delayed</code> and become available only after their delay expires, good for retries and timeouts.</li>
+  <li>Also <strong>LinkedTransferQueue</strong> and <strong>LinkedBlockingDeque</strong>.</li>
+</ul>
+<p>In producer-consumer, the queue decouples speeds. With a <strong>bounded</strong> queue, a fast producer blocks on <code>put</code> instead of exhausting memory: that is <strong>back-pressure</strong>. Consumers <code>take</code> and process. Shutdown is the tricky part: either enqueue a <strong>poison pill</strong> (one per consumer) so they exit after draining, or interrupt them (<code>take</code> throws <code>InterruptedException</code>). Today you would usually let an <code>ExecutorService</code> manage consumers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a bounded queue sized for your burst tolerance.</li>
+  <li>Producers call <code>put</code> (or <code>offer</code> with timeout to fail fast).</li>
+  <li>Consumers loop on <code>take</code>, process, repeat.</li>
+  <li>On shutdown, producers send one poison pill per consumer.</li>
+  <li>Consumers exit when they see the pill; join or await them.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">BlockingQueue&lt;Order&gt; q = new ArrayBlockingQueue&lt;&gt;(1_000);
+Order POISON = new Order(-1);
+
+Runnable producer = () -&gt; {
+    for (Order o : source) q.put(o);          // blocks when full
+    for (int i = 0; i &lt; CONSUMERS; i++) q.put(POISON);
+};
+Runnable consumer = () -&gt; {
+    while (true) {
+        Order o = q.take();                    // blocks when empty
+        if (o == POISON) return;
+        process(o);
+    }
+};</code></pre>
+<p>(Interrupt handling omitted for brevity; real code must catch <code>InterruptedException</code> and restore the flag.)</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unbounded LinkedBlockingQueue hiding a backlog until OutOfMemoryError.</li>
+  <li>Swallowing <code>InterruptedException</code> in consumers.</li>
+  <li>Sending one poison pill for many consumers.</li>
+  <li>Busy-polling with <code>poll()</code> in a loop instead of blocking.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The main implementations are ArrayBlockingQueue, bounded; LinkedBlockingQueue, optionally bounded; SynchronousQueue with zero capacity for direct hand-off; DelayQueue for delayed items; and PriorityBlockingQueue. For producer-consumer, producers call put, which blocks when the queue is full, and consumers call take, which blocks when it's empty, so a bounded queue gives natural back-pressure. To stop consumers I send a poison pill per consumer or interrupt them, and I use offer and poll with timeouts when blocking forever isn't acceptable.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which queue does newCachedThreadPool use?</strong> SynchronousQueue, so tasks go straight to a thread and new threads are created as needed.</li>
+  <li><strong>ArrayBlockingQueue vs LinkedBlockingQueue?</strong> One lock and preallocated array vs two locks and per-node allocation.</li>
+  <li><strong>What does <code>drainTo</code> do?</strong> Moves available elements in bulk, useful for batching.</li>
+</ul>
+</article>
+</body>
+</html>

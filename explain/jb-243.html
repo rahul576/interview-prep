@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-243 · What is an offset in Kafka?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-243" data-topic="Kafka">
+<h1>What is an offset in Kafka?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>offset</strong> is the sequential position of a record <strong>within one partition</strong>; consumer groups <strong>commit</strong> offsets to the internal <code>__consumer_offsets</code> topic so they can <strong>resume</strong> after restarts or rebalances, and you can <strong>reset or replay</strong> by moving offsets.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each partition is an ordered log, and every record gets a 64-bit <strong>offset</strong>: 0, 1, 2, and so on. Offsets are unique only <strong>per partition</strong>, so &quot;offset 100&quot; is meaningless without the topic and partition. They are not renumbered when old data is deleted by retention or compaction, so the earliest available offset (&quot;log start offset&quot;) can be greater than zero, and compacted topics can have gaps.</p>
+<p>The consumer tracks a <strong>position</strong> (the next offset it will read) in memory. To survive restarts, it <strong>commits</strong> offsets per partition for its <strong>consumer group</strong>; the committed value is the offset of the <em>next</em> record to read. Kafka stores commits in the compacted internal topic <strong><code>__consumer_offsets</code></strong>, managed by the group coordinator. Commits happen automatically (<code>enable.auto.commit=true</code>, every <code>auto.commit.interval.ms</code>) or manually with <code>commitSync</code>/<code>commitAsync</code>, or through Spring Kafka's ack modes.</p>
+<p>When does the commit happen relative to processing? Commit <strong>after</strong> processing gives <strong>at-least-once</strong>; commit <strong>before</strong> gives <strong>at-most-once</strong>. After a restart or rebalance, the new owner starts at the last committed offset. If the group has <strong>no committed offset</strong> (new group) or the committed offset has been deleted by retention, <strong><code>auto.offset.reset</code></strong> decides: <code>earliest</code>, <code>latest</code> (the default) or <code>none</code> (throw). The difference between the log end offset and the committed offset is <strong>consumer lag</strong>, the key health metric.</p>
+<p>To <strong>replay</strong>, you can reset offsets with the CLI while the group is inactive, or call <code>seek</code>, <code>seekToBeginning</code> or <code>offsetsForTimes</code> in code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer appends; broker assigns the next offset.</li>
+  <li>Consumer polls from its position.</li>
+  <li>After processing, it commits offset = last processed + 1.</li>
+  <li>Commit is written to <code>__consumer_offsets</code> for group/topic/partition.</li>
+  <li>On restart, consumer fetches the committed offset and continues.</li>
+  <li>If none or out of range, <code>auto.offset.reset</code> applies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Inspect lag
+kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group billing
+# TOPIC   PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG
+# orders  0         1520           1534           14
+
+# Replay from a point in time (group must be stopped)
+kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group billing \
+  --topic orders --reset-offsets --to-datetime 2026-11-20T00:00:00.000 --execute</code></pre>
+<pre><code class="language-java">consumer.seek(new TopicPartition(&quot;orders&quot;, 0), 1200L); // reprocess from 1200</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating offsets as global across a topic.</li>
+  <li>Committing the processed record's offset instead of offset + 1 (with the raw consumer API).</li>
+  <li>Assuming <code>auto.offset.reset</code> applies on every restart; it only applies when no valid commit exists.</li>
+  <li>Leaving auto-commit on while processing asynchronously, which can commit unprocessed records.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An offset is the position of a record inside a partition, starting at zero and increasing, so it is unique only per partition. Consumers in a group commit the next offset to read for each partition, and Kafka stores that in <code>__consumer_offsets</code>. After a restart or rebalance the consumer resumes from that committed offset, so committing after processing gives at-least-once and before gives at-most-once. If there is no valid commit, <code>auto.offset.reset</code> decides earliest or latest. I can replay by resetting offsets with <code>kafka-consumer-groups</code> or <code>seek</code>, and I monitor lag, the gap between log end and committed offset.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if retention deletes records past the committed offset?</strong> The offset is out of range and <code>auto.offset.reset</code> decides where to restart, possibly skipping data.</li>
+  <li><strong>How long are committed offsets kept?</strong> By default seven days after the group becomes empty (<code>offsets.retention.minutes</code>).</li>
+  <li><strong>What is consumer lag?</strong> Log end offset minus committed offset; rising lag means consumers are falling behind.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-027 · Which vector database options and index types exist, and how do you choose?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-027" data-topic="LLMOps &amp; RAG">
+<h1>Which vector database options and index types exist, and how do you choose?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Vector search uses <strong>approximate nearest neighbour (ANN)</strong> indexes such as <strong>HNSW</strong> (high recall, memory-hungry) and <strong>IVF</strong> (clustered, leaner), often with <strong>vector quantisation</strong>; choose between <strong>dedicated databases</strong> (Pinecone, Weaviate, Qdrant, Milvus) and <strong>vector support in existing stores</strong> (pgvector, Elasticsearch, OpenSearch, Azure AI Search) based on <strong>scale, filtering, hybrid search, multi-tenancy and operations</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Why ANN.</strong> Exact (flat) search compares the query with every vector: fine for tens of thousands, too slow for tens of millions at low latency. ANN indexes trade a little <strong>recall</strong> for orders-of-magnitude speed.</p>
+<p><strong>HNSW (Hierarchical Navigable Small World)</strong> builds a multi-layer graph where each vector links to near neighbours; search greedily walks from coarse upper layers to the dense bottom layer. It gives <strong>high recall and low latency</strong> and supports incremental inserts, but keeps the graph and vectors <strong>in memory</strong>, and builds slowly.</p>
+<p><strong>IVF (inverted file)</strong> clusters vectors with k-means into lists; a query searches only the nearest <code>nprobe</code> clusters. Lower memory and faster builds, some recall loss, and it needs retraining when data distribution shifts. Often combined with <strong>product quantisation (IVF-PQ)</strong>.</p>
+<p><strong>Quantisation</strong> compresses vectors: <strong>scalar</strong> (float32 to int8, 4x smaller), <strong>product quantisation</strong> and <strong>binary</strong> (32x smaller) with rescoring of top candidates using full vectors. <strong>DiskANN</strong>-style indexes keep most data on SSD for billion-scale corpora.</p>
+<p><strong>Options.</strong></p>
+<ul>
+  <li><strong>Dedicated vector databases</strong>: <strong>Pinecone</strong> (managed, serverless), <strong>Weaviate</strong>, <strong>Qdrant</strong>, <strong>Milvus/Zilliz</strong>, offering rich filtering, hybrid search, multi-tenancy and horizontal scale.</li>
+  <li><strong>Existing stores with vector support</strong>: <strong>PostgreSQL + pgvector</strong> (HNSW and IVFFlat, plus SQL joins and transactions), <strong>Elasticsearch / OpenSearch</strong> (strong BM25 plus kNN), <strong>Redis</strong>, <strong>MongoDB Atlas Vector Search</strong>, <strong>Azure AI Search</strong>, Vertex AI Vector Search, and others.</li>
+</ul>
+<p><strong>How to choose:</strong> number of vectors and growth; latency and QPS targets; <strong>metadata filtering</strong> quality (filtered HNSW can lose recall with very selective filters); built-in <strong>hybrid</strong> keyword search; <strong>multi-tenancy</strong> and access control; update rate; and above all <strong>what the team already runs well</strong>. For many applications up to several million vectors, <strong>pgvector or the existing search engine</strong> is enough and avoids a new system.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose distance metric (cosine, dot product, L2) matching the embedding model.</li>
+  <li>Build the index (HNSW or IVF) with chosen parameters.</li>
+  <li>Query: ANN search with filters returns top candidates.</li>
+  <li>Optionally rescore with full-precision vectors and rerank.</li>
+  <li>Tune parameters against recall and latency targets.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE chunks (id bigserial PRIMARY KEY, tenant_id int, doc_id text, body text, embedding vector(1024));
+CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 128);
+SET hnsw.ef_search = 100;
+SELECT id, body FROM chunks
+WHERE tenant_id = 42
+ORDER BY embedding &lt;=&gt; $1
+LIMIT 20;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Index</th><th>Recall</th><th>Memory</th><th>Build</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Flat</td><td>Exact</td><td>High</td><td>None</td><td>Small data only</td></tr>
+<tr><td>HNSW</td><td>High</td><td>High</td><td>Slow</td><td>Default choice</td></tr>
+<tr><td>IVF / IVF-PQ</td><td>Medium-high</td><td>Lower</td><td>Faster</td><td>Needs training</td></tr>
+<tr><td>DiskANN</td><td>High</td><td>Low RAM</td><td>Slow</td><td>SSD, billion scale</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding a new vector database when pgvector would do.</li>
+  <li>Ignoring recall loss with selective filters.</li>
+  <li>Never measuring recall versus exact search.</li>
+  <li>Mismatched distance metric for the embedding model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Vector search uses approximate nearest neighbour indexes because exact search over millions of vectors is too slow. HNSW, a graph index, gives high recall and low latency but needs lots of memory and builds slowly; IVF clusters vectors and probes only nearby clusters, leaner with some recall loss; and quantisation compresses vectors. Options are dedicated databases like Pinecone, Weaviate, Qdrant and Milvus, or vector support in stores we already run like pgvector, Elasticsearch, OpenSearch or Azure AI Search. I choose by scale, filtering and hybrid search needs, multi-tenancy, latency and operations; for many teams pgvector or the existing search engine is enough.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When move off pgvector?</strong> Hundreds of millions of vectors, high QPS, or complex filtering at scale hurting latency.</li>
+  <li><strong>HNSW tuning?</strong> Raise ef_search for recall, M and ef_construction for quality at memory cost.</li>
+  <li><strong>Filtered search issues?</strong> Pre-filter vs post-filter trade-offs; use engines with filter-aware traversal.</li>
+</ul>
+</article>
+</body>
+</html>

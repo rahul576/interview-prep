@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-252 · What is the difference between partitioning and sharding?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-252" data-topic="Databases &amp; SQL">
+<h1>What is the difference between partitioning and sharding?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Both split data by a key, but <strong>partitioning</strong> divides a table into pieces <strong>inside one database instance</strong> (mainly for <strong>pruning and maintenance</strong>), while <strong>sharding</strong> places pieces on <strong>different servers</strong> (for <strong>scale-out capacity</strong>), bringing <strong>distributed-system complexity</strong>; sharding is essentially horizontal partitioning across machines.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Partitioning</strong> in the usual database sense (PostgreSQL declarative partitioning, MySQL or Oracle partitioning) splits one logical table into partitions by range, list or hash. The database manages it <strong>transparently</strong>: SQL, transactions, constraints and joins work as normal. The gains are <strong>partition pruning</strong>, smaller per-partition indexes, and easy <strong>lifecycle management</strong>, such as dropping last year's partition in milliseconds. What it does <strong>not</strong> do is add capacity: all partitions share the same server's CPU, RAM, disk and write-ahead log, so the write ceiling of one primary remains.</p>
+<p><strong>Sharding</strong> places each partition (shard) on an <strong>independent database server</strong> with its own resources. Total storage and write throughput grow with the number of shards. The price is that the system is now <strong>distributed</strong>:</p>
+<ul>
+  <li>Something must <strong>route</strong> each query to the right shard.</li>
+  <li><strong>Cross-shard queries</strong> need scatter-gather; cross-shard joins are expensive.</li>
+  <li><strong>Cross-shard transactions</strong> require two-phase commit or sagas.</li>
+  <li><strong>Rebalancing</strong> data when adding shards, and handling <strong>hotspots</strong>.</li>
+  <li>Global constraints (unique emails), schema migrations and backups across shards.</li>
+</ul>
+<p>Some products blur the line: Citus, Vitess, CockroachDB, MongoDB and Cassandra handle the routing for you, so sharding feels closer to partitioning, but the distributed trade-offs remain.</p>
+<p>They combine well: <strong>shard by tenant or customer</strong> across servers, then <strong>partition each shard's tables by date</strong> for retention and pruning.</p>
+<p>On ordering: <strong>partition first</strong>. It is cheap, reversible and transparent. Shard only when one primary truly cannot handle the write volume or data size after tuning, caching, replicas and vertical scaling.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Partitioning: parent table + partitions on one server; planner prunes partitions by key.</li>
+  <li>Sharding: shard key maps rows to servers; a router directs queries.</li>
+  <li>Partitioned table: local transactions and joins as usual.</li>
+  <li>Sharded system: single-shard operations are local; multi-shard ones need coordination.</li>
+  <li>Combined: router picks the shard, then the shard's planner prunes partitions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Partitioning (one PostgreSQL server)
+CREATE TABLE events (tenant_id BIGINT, ts TIMESTAMPTZ, payload JSONB)
+  PARTITION BY RANGE (ts);
+
+-- Sharding the same table across nodes with Citus, still partitioned by time on each node
+SELECT create_distributed_table('events', 'tenant_id');</code></pre>
+<pre><code class="language-text">Router: tenant 42 -&gt; shard 7 -&gt; db-node-3 -&gt; partition events_2026_11</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Partitioning</th><th>Sharding</th></tr></thead>
+<tbody>
+<tr><td>Where</td><td>One instance</td><td>Many servers</td></tr>
+<tr><td>Purpose</td><td>Pruning, maintenance</td><td>Capacity, write scale</td></tr>
+<tr><td>Transparency</td><td>Fully transparent</td><td>Needs routing</td></tr>
+<tr><td>Transactions/joins</td><td>Normal</td><td>Cross-shard is hard</td></tr>
+<tr><td>Reversibility</td><td>Easy</td><td>Hard</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the terms interchangeably without defining them.</li>
+  <li>Expecting partitioning to fix a CPU-bound or write-bound primary.</li>
+  <li>Sharding before trying partitioning, indexing and replicas.</li>
+  <li>Forgetting that each shard can itself be partitioned and replicated.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both split data into pieces by a key. Partitioning usually means splitting a table into partitions inside a single database instance; the database handles it transparently, and the benefits are partition pruning, smaller indexes and easy maintenance, like dropping an old month, but capacity is still one server. Sharding is horizontal partitioning across multiple servers, each with its own CPU, memory and disk, so capacity scales out, at the cost of routing, cross-shard queries and transactions, and rebalancing. I'd partition first because it's cheap and transparent, and shard only when one primary can't keep up. They're often combined: shard by tenant, partition by date within each shard.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Shard or partition first?</strong> Partition first; it is simpler and reversible. Shard when a single primary's limits are reached.</li>
+  <li><strong>Is a Cassandra token range a partition or a shard?</strong> Effectively a shard: data is spread across nodes by partition key.</li>
+  <li><strong>Can replicas replace sharding?</strong> Only for read scaling; all writes still go to one primary.</li>
+</ul>
+</article>
+</body>
+</html>

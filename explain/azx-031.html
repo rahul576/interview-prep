@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-031 · How do you secure networking for an Azure App Service application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-031" data-topic="Azure">
+<h1>How do you secure networking for an Azure App Service application?</h1>
+<p class="ex-meta">Azure · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Secure App Service by treating <strong>inbound and outbound separately</strong>: inbound via <strong>private endpoint</strong> (public access disabled) or a <strong>WAF gateway</strong> with <strong>access restrictions</strong> (service tag plus Front Door ID header); outbound via <strong>VNet integration</strong> with <strong>route all</strong> through a <strong>firewall or NAT gateway</strong>; and harden with <strong>no FTP/basic auth, HTTPS/TLS 1.2+, managed identities</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>App Service is a multi-tenant PaaS, so its networking features are split by direction, which is a common source of confusion.</p>
+<p><strong>Inbound</strong> (who can reach the app):</p>
+<ul>
+  <li><strong>Private endpoint:</strong> gives the app (and its SCM/Kudu site) a private IP in your VNet with a <code>privatelink.azurewebsites.net</code> DNS zone. You then <strong>disable public network access</strong>, so only VNet, peered or on-premises clients via VPN/ExpressRoute can reach it.</li>
+  <li><strong>Public but protected:</strong> put <strong>Azure Front Door</strong> or <strong>Application Gateway with WAF</strong> in front. Use <strong>access restrictions</strong> to allow only the <code>AzureFrontDoor.Backend</code> <strong>service tag</strong> plus a check of the <code>X-Azure-FDID</code> header for your Front Door instance (the service tag alone includes everyone's Front Door), or the App Gateway subnet. With Front Door Premium, use Private Link to the origin and disable public access entirely.</li>
+  <li>Restrict the <strong>SCM site</strong> separately.</li>
+</ul>
+<p><strong>Outbound</strong> (what the app can reach):</p>
+<ul>
+  <li><strong>VNet integration</strong> connects the app's outbound traffic to a delegated subnet, so it can reach <strong>private endpoints</strong> of SQL, Storage, Key Vault, and on-premises systems. It does <strong>not</strong> make the app reachable inbound.</li>
+  <li>With <strong>route all</strong> (outbound internet traffic routed through the VNet, now default for new apps), UDRs send traffic to <strong>Azure Firewall</strong> for filtering and logging, or a <strong>NAT gateway</strong> provides <strong>stable, dedicated egress IPs</strong> for partner allow-lists.</li>
+</ul>
+<p><strong>Hardening:</strong> disable <strong>FTP</strong> and <strong>basic authentication</strong> for SCM/FTP publishing (deploy via pipelines using Entra ID), enforce <strong>HTTPS only</strong> and <strong>minimum TLS 1.2</strong> (1.3 supported), use <strong>managed identities</strong> and Key Vault references instead of connection strings with secrets, and disable remote debugging. For full single-tenant isolation, an <strong>App Service Environment v3</strong> deploys into your VNet.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide exposure: internal only, or public through WAF.</li>
+  <li>Inbound: private endpoint + disable public access, or access restrictions to the gateway.</li>
+  <li>Outbound: VNet integration on a delegated subnet; route all enabled.</li>
+  <li>UDR 0.0.0.0/0 to firewall, or NAT gateway for egress IPs.</li>
+  <li>Private endpoints and DNS for dependencies.</li>
+  <li>Disable FTP/basic auth; HTTPS only; managed identity.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az webapp vnet-integration add -g rg-app -n app-orders --vnet vnet-spoke --subnet snet-appsvc-out
+az webapp config set -g rg-app -n app-orders --ftps-state Disabled --min-tls-version 1.2
+az resource update -g rg-app --namespace Microsoft.Web --resource-type basicPublishingCredentialsPolicies \
+  --parent sites/app-orders -n scm --set properties.allow=false
+az webapp config access-restriction add -g rg-app -n app-orders --priority 100 \
+  --service-tag AzureFrontDoor.Backend --http-header x-azure-fdid=&lt;front-door-id&gt;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing VNet integration makes the app private inbound.</li>
+  <li>Allowing the Front Door service tag without checking the FDID header.</li>
+  <li>Forgetting private DNS for dependencies, so traffic goes public.</li>
+  <li>Leaving SCM site open or basic auth enabled.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On App Service, inbound and outbound are separate. For inbound, I either use a private endpoint and disable public access, or, for public apps, put Front Door or Application Gateway with WAF in front and lock the app down with access restrictions to the gateway's service tag and our Front Door ID header. For outbound, VNet integration lets the app reach private endpoints of databases and Key Vault, and with route all, traffic goes through Azure Firewall or a NAT gateway for control and stable IPs. I also disable FTP and basic auth, enforce HTTPS and TLS 1.2+, and use managed identities.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't VNet integration make the app private?</strong> It only handles outbound traffic; inbound needs a private endpoint.</li>
+  <li><strong>When use App Service Environment?</strong> Single-tenant isolation, very high scale or strict compliance.</li>
+  <li><strong>How to restrict Kudu?</strong> Separate SCM access restrictions or the private endpoint covers both.</li>
+</ul>
+</article>
+</body>
+</html>

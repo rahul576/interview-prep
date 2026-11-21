@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-223 · What is false sharing, and how do you avoid it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-223" data-topic="Concurrency">
+<h1>What is false sharing, and how do you avoid it?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>False sharing</strong> happens when threads on different cores write <strong>different variables that share one CPU cache line</strong> (typically <strong>64 bytes</strong>), so the <strong>cache-coherence protocol</strong> keeps invalidating the line and the cores fight over it; avoid it with <strong>padding</strong>, <strong>@Contended</strong>, or structures like <strong>LongAdder</strong> that already spread updates.</p>
+
+<h2>Detailed explanation</h2>
+<p>CPUs don't move single bytes between memory and caches; they move <strong>cache lines</strong>, usually 64 bytes (128 on some ARM chips). Coherence protocols like <strong>MESI</strong> guarantee that only one core can hold a line in a modified state. When core 1 writes to a line, copies in other cores are <strong>invalidated</strong>; when core 2 then writes, it must fetch the line back and invalidate core 1's copy.</p>
+<p>If two threads write <strong>logically independent</strong> variables, for example <code>counterA</code> updated by thread 1 and <code>counterB</code> by thread 2, that happen to sit next to each other in memory, they still share a line. Each write ping-pongs the line between cores. There is <strong>no data sharing</strong>, hence <em>false</em> sharing, but throughput can drop by an order of magnitude, and adding threads makes it <strong>worse</strong> instead of better. Typical victims: arrays of per-thread counters, adjacent volatile fields and queue head/tail indexes.</p>
+<p><strong>Avoiding it:</strong></p>
+<ul>
+  <li><strong>Padding</strong>: insert unused fields so each hot variable occupies its own line. The JVM may reorder fields, so manual padding is fragile.</li>
+  <li><strong><code>@jdk.internal.vm.annotation.Contended</code></strong>: the JVM adds padding around the field or class. It is internal to the JDK; application code must use <code>--add-exports java.base/jdk.internal.vm.annotation=ALL-UNNAMED</code> and <code>-XX:-RestrictContended</code>, so it's rarely used outside libraries. The JDK itself uses it in <code>Thread</code>, <code>ForkJoinPool</code>, <code>Striped64</code> and <code>ConcurrentHashMap</code> counter cells.</li>
+  <li><strong>LongAdder / LongAccumulator</strong>: spread updates over padded <code>@Contended</code> cells and sum on read.</li>
+  <li><strong>Thread-local accumulation</strong>: each thread counts locally and merges at the end.</li>
+  <li>Space array elements apart (e.g. index × 8 or 16 for longs).</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Two hot fields share one 64-byte line.</li>
+  <li>Core 1 writes field A → line Modified in core 1, invalidated elsewhere.</li>
+  <li>Core 2 writes field B → must fetch the line, invalidates core 1.</li>
+  <li>Repeat millions of times: memory-bus traffic, stalls.</li>
+  <li>Padding puts A and B on different lines, so writes stay local.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Problem: adjacent slots updated by different threads
+long[] perThread = new long[THREADS];          // perThread[t]++ in a hot loop
+
+// Fix 1: spread slots onto separate lines (8 longs = 64 bytes)
+long[] padded = new long[THREADS * 8];          // use padded[t * 8]++
+
+// Fix 2: let the JDK do it
+LongAdder hits = new LongAdder();               // padded internal cells
+hits.increment();
+long total = hits.sum();</code></pre>
+<pre><code class="language-bash"># Detect with hardware counters (Linux)
+perf c2c record -- java -jar app.jar
+perf c2c report      # shows cache lines with heavy cross-core HITM traffic</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming more threads always means more throughput for shared counters.</li>
+  <li>Manual padding that the JVM reorders or that misses object headers.</li>
+  <li>Using <code>@Contended</code> without the required JVM flags.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CPUs cache memory in lines, typically 64 bytes. False sharing happens when two threads write different variables on the same line: each write invalidates the line in the other core's cache through the coherence protocol, so the cores keep fighting over it even though they share no data, which badly slows down things like per-thread counters. I avoid it by padding so hot variables sit on separate lines, by the @Contended annotation that the JDK uses internally, or by using LongAdder, which already spreads updates across padded cells.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you detect false sharing?</strong> Hardware counters such as <code>perf c2c</code> (HITM events), JMH scaling tests where throughput drops as threads increase, or async-profiler cache-miss profiling.</li>
+  <li><strong>Why is it called &quot;false&quot;?</strong> The threads don't share data, only the cache line.</li>
+  <li><strong>Does it affect reads?</strong> Mostly writes; read-only sharing of a line is fine.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-055 · A slow downstream dependency is making your whole service unresponsive. Which resilience patterns would you apply?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-055" data-topic="Scalability &amp; Reliability">
+<h1>A slow downstream dependency is making your whole service unresponsive. Which resilience patterns would you apply?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A slow dependency usually causes <strong>thread/connection pool exhaustion</strong>; fix it with <strong>timeouts</strong>, a <strong>circuit breaker</strong>, <strong>bulkheads</strong> isolating resources per dependency, <strong>fallbacks/graceful degradation</strong>, and <strong>monitoring of dependency latency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>If a dependency normally answers in 50 ms but now takes 30 s, each request holds a thread (or connection) 600x longer. With 200 threads, the pool fills in seconds, and requests that don't even need that dependency queue up. The whole service looks dead.</p>
+<ul>
+  <li><strong>Timeouts</strong> turn slow failures into fast ones; set them from the dependency's SLO/p99, never infinite.</li>
+  <li><strong>Circuit breaker</strong> (Resilience4j, Polly, Envoy outlier detection): track failure and slow-call rates; above a threshold, open the circuit and fail immediately for a cool-down; then half-open with a few trial calls.</li>
+  <li><strong>Bulkheads:</strong> separate thread pools/semaphores/connection pools per dependency, so the slow one can only consume its own compartment.</li>
+  <li><strong>Fallbacks:</strong> cached data, defaults, or omit the feature.</li>
+  <li><strong>Observability:</strong> per-dependency latency, error rate, pool saturation, breaker state.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request → bulkhead permit for dependency X (else fallback).</li>
+  <li>Call X with timeout → breaker records result.</li>
+  <li>Breaker open → skip call → fallback.</li>
+  <li>Alerts on breaker open and saturation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@CircuitBreaker(name = &quot;recs&quot;, fallbackMethod = &quot;popularItems&quot;)
+@Bulkhead(name = &quot;recs&quot;, type = Bulkhead.Type.SEMAPHORE)
+@TimeLimiter(name = &quot;recs&quot;)
+public CompletableFuture&lt;List&lt;Item&gt;&gt; recommendations(String userId) { ... }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default HTTP client timeouts (often infinite or minutes).</li>
+  <li>One shared pool for all outbound calls.</li>
+  <li>Fallbacks that call another slow dependency.</li>
+  <li>Breaker thresholds never tuned.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The root cause is usually that calls to the slow service hold all our threads. I'd add strict timeouts, a circuit breaker that opens on high error or slow-call rates, and bulkheads so each dependency gets its own limited pool. Non-essential features degrade to cached or default data. Then I'd monitor dependency latency and breaker state so we see it before users do.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What can degrade on an e-commerce page?</strong> Recommendations, reviews, recently viewed; not cart or payment.</li>
+  <li><strong>Breaker in a mesh or in code?</strong> Mesh for uniform policy; code when you need fallbacks.</li>
+  <li><strong>Semaphore vs thread-pool bulkhead?</strong> Semaphore is cheaper; thread pool isolates blocking calls.</li>
+</ul>
+</article>
+</body>
+</html>

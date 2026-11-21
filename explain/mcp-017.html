@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-017 · How does the connection lifecycle work in handshake-based MCP revisions such as 2025-11-25?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-017" data-topic="MCP Servers">
+<h1>How does the connection lifecycle work in handshake-based MCP revisions such as 2025-11-25?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In handshake-based revisions, the client sends <strong><code>initialize</code></strong> (protocol version, <strong>capabilities</strong>, client info), the server replies with <strong>its chosen version and capabilities</strong>, the client sends <strong><code>notifications/initialized</code></strong>, then normal operation begins; over HTTP the server may assign an <strong><code>Mcp-Session-Id</code></strong>, and shutdown is simply <strong>closing the transport</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Up to and including <strong>2025-11-25</strong>, every MCP connection began with an <strong>initialization phase</strong> that negotiated version and features.</p>
+<p><strong>1. initialize request.</strong> The client sends <code>initialize</code> with <code>protocolVersion</code> (the latest version it supports, e.g. &quot;2025-11-25&quot;), its <strong>capabilities</strong> (such as <code>roots</code> with <code>listChanged</code>, <code>sampling</code>, <code>elicitation</code>) and <code>clientInfo</code> (name, version).</p>
+<p><strong>2. initialize response.</strong> The server replies with the <code>protocolVersion</code> it will use, its <strong>capabilities</strong> (<code>tools</code> with <code>listChanged</code>, <code>resources</code> with <code>subscribe</code> and <code>listChanged</code>, <code>prompts</code>, <code>logging</code>, <code>completions</code>), <code>serverInfo</code> and optional <code>instructions</code> describing how to use the server. <strong>Version negotiation</strong>: if the server supports the requested version it must respond with the same one; otherwise it responds with another version it supports, normally its latest, and if the client does not support that, it should disconnect.</p>
+<p><strong>3. initialized notification.</strong> The client sends <code>notifications/initialized</code>. Before this, neither side should send normal requests (except pings and logging).</p>
+<p><strong>Operation.</strong> Each side uses <strong>only features the other advertised</strong>: a client must not call <code>resources/subscribe</code> if the server did not declare <code>subscribe</code>. Over HTTP, clients also send the <code>MCP-Protocol-Version</code> header on subsequent requests (from 2025-06-18).</p>
+<p><strong>Sessions.</strong> With Streamable HTTP, the server may return an <strong><code>Mcp-Session-Id</code></strong> header in the initialize response; the client must include it on all later requests. The server can expire it (returning 404), after which the client re-initialises. Clients can end a session with an HTTP DELETE.</p>
+<p><strong>Shutdown</strong> has no special message: for stdio the client closes the server's stdin and, if needed, terminates the process; for HTTP it closes connections or deletes the session.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client → <code>initialize</code> {version, capabilities, clientInfo}.</li>
+  <li>Server → result {version, capabilities, serverInfo, instructions}.</li>
+  <li>Client checks version compatibility; aborts if unsupported.</li>
+  <li>Client → <code>notifications/initialized</code>.</li>
+  <li>Requests flow, limited to negotiated capabilities; HTTP requests carry session and version headers.</li>
+  <li>Close transport to shut down.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;initialize&quot;,&quot;params&quot;:{
+  &quot;protocolVersion&quot;:&quot;2025-11-25&quot;,
+  &quot;capabilities&quot;:{&quot;elicitation&quot;:{},&quot;roots&quot;:{&quot;listChanged&quot;:true}},
+  &quot;clientInfo&quot;:{&quot;name&quot;:&quot;my-agent&quot;,&quot;version&quot;:&quot;1.4.0&quot;}}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;result&quot;:{
+  &quot;protocolVersion&quot;:&quot;2025-11-25&quot;,
+  &quot;capabilities&quot;:{&quot;tools&quot;:{&quot;listChanged&quot;:true},&quot;resources&quot;:{&quot;subscribe&quot;:true}},
+  &quot;serverInfo&quot;:{&quot;name&quot;:&quot;tickets&quot;,&quot;version&quot;:&quot;2.3.1&quot;}}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;notifications/initialized&quot;}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sending requests before <code>initialized</code>.</li>
+  <li>Using features the peer did not advertise.</li>
+  <li>Holding session state in memory on one replica without sticky routing.</li>
+  <li>Not handling 404 for an expired session by re-initialising.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every connection starts with initialize: the client sends the protocol version it wants, its capabilities, like elicitation or roots, and client info. The server replies with the version it will use, which is the same if it supports it, otherwise one it does support so the client can decide whether to continue, plus its capabilities, like tools with listChanged or resource subscriptions, and server info. Then the client sends an initialized notification and normal operation starts, with each side only using features the other advertised. Over HTTP the server may assign an Mcp-Session-Id that the client sends on later requests. Shutdown is just closing the transport.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Problems with sessions when scaling?</strong> Requests must reach the replica holding the session, or state must be shared; restarts lose sessions.</li>
+  <li><strong>What is <code>instructions</code> for?</strong> Server-provided guidance the host may add to the model's context.</li>
+  <li><strong>Is there a ping?</strong> Yes, <code>ping</code> requests check liveness.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-009 · When do you use tensor parallelism or pipeline parallelism to serve a large model?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-009" data-topic="LLMOps &amp; RAG">
+<h1>When do you use tensor parallelism or pipeline parallelism to serve a large model?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>tensor parallelism (TP)</strong> to split <strong>each layer</strong> across GPUs <strong>within a node</strong> over <strong>NVLink</strong> when a model does not fit or you need lower latency, and <strong>pipeline parallelism (PP)</strong> to split <strong>groups of layers into stages</strong> across <strong>nodes</strong> for very large models, accepting extra latency and bubble overhead.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Tensor parallelism</strong> shards the big weight matrices of every layer. For a feed-forward block, each of 4 GPUs holds a quarter of the columns, computes its part of the result, and the GPUs combine partial results with an <strong>all-reduce</strong> (twice per transformer layer in the common Megatron-style layout). All GPUs work on <strong>every token</strong>, so per-token compute and memory reads are divided, which <strong>reduces latency</strong>. The catch is communication on every layer for every step: it needs very high bandwidth and low latency, such as <strong>NVLink/NVSwitch</strong> inside a node (hundreds of GB/s to well over a TB/s per GPU). That is why TP is used with 2, 4 or 8 GPUs in one server, for example a 70B model with TP=4 on four H100s. TP degree must divide the number of attention heads.</p>
+<p><strong>Pipeline parallelism</strong> assigns consecutive layers to different GPUs: layers 1–40 on node A, 41–80 on node B. Only activations at stage boundaries travel between stages, so it tolerates slower links like InfiniBand or Ethernet between nodes. But a single token must pass through stages <strong>sequentially</strong>, so it does not reduce latency and adds hops; to keep all stages busy you need many sequences in flight (micro-batching), otherwise <strong>pipeline bubbles</strong> waste GPUs.</p>
+<p>A common pattern for huge models is <strong>TP within a node and PP across nodes</strong>, for example TP=8, PP=2 on two 8-GPU servers. vLLM, SGLang and TensorRT-LLM expose these as simple flags. Also consider the alternative: quantisation may make the model fit with less or no splitting, and several independent replicas usually give better throughput than one heavily split replica.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compute memory need; choose minimum GPUs.</li>
+  <li>Use TP up to the GPUs connected by NVLink in a node.</li>
+  <li>If still too large, add PP stages across nodes.</li>
+  <li>Launch with matching TP/PP settings; engine shards weights.</li>
+  <li>Benchmark latency and throughput against more replicas with less parallelism.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># 70B on one 4-GPU node
+vllm serve meta-llama/Llama-3.1-70B-Instruct --tensor-parallel-size 4
+# 405B across two 8-GPU nodes (Ray or multi-node launcher)
+vllm serve meta-llama/Llama-3.1-405B-Instruct-FP8 \
+  --tensor-parallel-size 8 --pipeline-parallel-size 2</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Tensor parallelism</th><th>Pipeline parallelism</th></tr></thead>
+<tbody>
+<tr><td>Splits</td><td>Each layer's matrices</td><td>Groups of layers</td></tr>
+<tr><td>Communication</td><td>All-reduce every layer</td><td>Activations between stages</td></tr>
+<tr><td>Interconnect</td><td>NVLink in a node</td><td>Works across nodes</td></tr>
+<tr><td>Latency</td><td>Lower</td><td>Higher</td></tr>
+<tr><td>Risk</td><td>Comms overhead</td><td>Pipeline bubbles</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running TP across nodes over ordinary networking.</li>
+  <li>Splitting a model that would fit with FP8, wasting GPUs.</li>
+  <li>TP degree that does not divide the attention heads.</li>
+  <li>Assuming one big split replica beats several smaller replicas for throughput.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When the model does not fit on one GPU, or I need more room for the KV cache, I split it. Tensor parallelism splits each layer's matrix multiplications across GPUs, so all GPUs work on every token and exchange partial results at every layer; that needs NVLink within a node, typically 2, 4 or 8 GPUs, and it also cuts latency. Pipeline parallelism puts groups of layers on different GPUs or nodes as stages; it needs less bandwidth and can span nodes, but adds latency and needs batching to avoid bubbles. For very large models I combine TP inside a node with PP across nodes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not TP across nodes?</strong> Per-layer all-reduce over slower links dominates step time.</li>
+  <li><strong>What is expert parallelism?</strong> Distributing MoE experts across GPUs with all-to-all routing.</li>
+  <li><strong>Data parallelism in serving?</strong> Independent replicas behind a load balancer, the simplest scaling.</li>
+</ul>
+</article>
+</body>
+</html>

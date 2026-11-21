@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-071 · What is Application Gateway for Containers, and how does it differ from the older AGIC?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-071" data-topic="Azure Kubernetes (AKS)">
+<h1>What is Application Gateway for Containers, and how does it differ from the older AGIC?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Application Gateway for Containers (AGC)</strong> is a newer <strong>Azure-managed layer 7 load balancer</strong> for Kubernetes, configured by an in-cluster <strong>ALB Controller</strong> from <strong>Gateway API</strong> or Ingress resources, sending traffic <strong>directly to pod IPs</strong> with <strong>near real-time updates</strong>, traffic splitting, mTLS and WAF; the older <strong>AGIC</strong> drove a classic <strong>Application Gateway v2</strong> through slow ARM updates.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>AGIC</strong> (Application Gateway Ingress Controller) watched Ingress resources and translated them into the configuration of a standard <strong>Application Gateway v2</strong>. Every change, such as a pod rescheduling or a new route, meant <strong>rewriting the gateway configuration through ARM</strong>, which could take tens of seconds or minutes. During that time the gateway could send traffic to pods that no longer existed, causing 502 errors during deployments. It also had scale limits and coupled the cluster tightly to a shared gateway that other teams might also modify.</p>
+<p><strong>AGC</strong> was designed for containers. It is a separate Azure resource with <strong>frontends</strong> (entry points with FQDNs) and an <strong>association</strong> to a delegated subnet in the cluster's VNet. The <strong>ALB Controller</strong> in the cluster watches <strong>Gateway API</strong> (GatewayClass <code>azure-alb-external</code>, Gateway, HTTPRoute) or Ingress resources and pushes configuration to AGC, which updates in <strong>near real time</strong> and routes directly to <strong>pod IPs</strong>.</p>
+<p>Features include <strong>weighted traffic splitting</strong> for canary and blue-green, header and query-based routing, URL rewrites and redirects, <strong>mutual TLS</strong> to frontends and backends, <strong>WAF</strong> policies, autoscaling and zone redundancy. It can be deployed <strong>managed by the ALB Controller</strong> (the controller creates the AGC resource from an <code>ApplicationLoadBalancer</code> custom resource) or <strong>bring-your-own</strong>, where you create AGC with Bicep or Terraform and reference it.</p>
+<p>It is also a natural migration target after the Ingress NGINX retirement. <strong>Azure Front Door</strong> is still often placed in front for global routing, CDN caching and edge WAF.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install the ALB Controller (Helm or AKS add-on) with a workload identity.</li>
+  <li>Create AGC and its association to a delegated subnet.</li>
+  <li>Create a Gateway referencing AGC; it receives a frontend FQDN.</li>
+  <li>Define HTTPRoutes to services; AGC routes to pod IPs.</li>
+  <li>Changes to routes or pods propagate within seconds.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public-gw
+  namespace: shop
+  annotations:
+    alb.networking.azure.io/alb-id: /subscriptions/&lt;sub&gt;/resourceGroups/rg-net/providers/Microsoft.ServiceNetworking/trafficControllers/agc-prod
+spec:
+  gatewayClassName: azure-alb-external
+  listeners: [{ name: http, port: 80, protocol: HTTP }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: shop, namespace: shop }
+spec:
+  parentRefs: [{ name: public-gw }]
+  rules:
+  - backendRefs:
+    - { name: shop-v1, port: 80, weight: 90 }
+    - { name: shop-v2, port: 80, weight: 10 }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>AGIC</th><th>AGC</th></tr></thead>
+<tbody>
+<tr><td>Data plane</td><td>Application Gateway v2</td><td>Purpose-built for containers</td></tr>
+<tr><td>Config updates</td><td>ARM rewrite, slow</td><td>Near real time</td></tr>
+<tr><td>API</td><td>Ingress</td><td>Gateway API and Ingress</td></tr>
+<tr><td>Traffic splitting</td><td>Limited</td><td>Weighted routes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting AGC to be configured like a classic Application Gateway in the portal.</li>
+  <li>Forgetting the delegated subnet and identity permissions for the controller.</li>
+  <li>Running AGIC with heavy pod churn and blaming the app for 502s.</li>
+  <li>Skipping Front Door when global routing or edge caching is needed.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Application Gateway for Containers is a managed layer 7 load balancer built for Kubernetes. The ALB Controller in the cluster watches Gateway API or Ingress resources and configures AGC, which routes straight to pod IPs and updates almost instantly. It supports weighted traffic splitting, header routing, mTLS and WAF. AGIC instead drove a classic Application Gateway by rewriting its whole configuration through ARM, which was slow, hit limits and caused 502s during rollouts. I'd use AGC for new designs, often with Front Door in front for global routing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When add Front Door?</strong> Multi-region failover, global anycast entry, CDN caching and edge WAF.</li>
+  <li><strong>Managed vs BYO deployment?</strong> Managed is simpler; BYO fits teams managing infrastructure in Terraform.</li>
+  <li><strong>Can AGC replace Ingress NGINX?</strong> Yes, it is one of Microsoft's recommended migration targets.</li>
+</ul>
+</article>
+</body>
+</html>

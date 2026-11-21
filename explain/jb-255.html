@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-255 · How does Kafka achieve high throughput and fault tolerance?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-255" data-topic="Kafka">
+<h1>How does Kafka achieve high throughput and fault tolerance?</h1>
+<p class="ex-meta">Kafka · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Kafka gets <strong>throughput</strong> from a <strong>sequential append-only log</strong>, the <strong>OS page cache</strong>, <strong>zero-copy</strong> transfer, <strong>batching and compression</strong> and <strong>partitioning</strong>, and <strong>fault tolerance</strong> from <strong>replication</strong> with leaders, followers and the <strong>ISR</strong>, <code>acks=all</code>, <code>min.insync.replicas</code> and <strong>KRaft</strong> controller failover.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Throughput.</strong> Each partition is an <strong>append-only log</strong> split into segment files. Writes are <strong>sequential</strong>, which disks and SSDs handle far faster than random I/O, and Kafka relies on the <strong>operating system page cache</strong> rather than a large JVM heap cache, so recent data is usually read from memory and GC stays small. When sending data to consumers, brokers use <strong>zero-copy</strong> (<code>sendfile</code>), moving bytes from the page cache to the network socket without copying them through user space (this does not apply when TLS encryption is enabled, since data must be encrypted in the JVM). Producers <strong>batch</strong> records per partition (<code>batch.size</code>, <code>linger.ms</code>) and <strong>compress</strong> whole batches (lz4, zstd, snappy, gzip); brokers store the compressed batch as is, and consumers fetch in large chunks. Finally, <strong>partitions</strong> spread a topic across brokers and allow as many parallel consumers per group as there are partitions.</p>
+<p><strong>Fault tolerance.</strong> Each partition has a <strong>replication factor</strong>, typically 3. One replica is the <strong>leader</strong>, handling reads and writes by default; <strong>followers</strong> fetch from it. Replicas that are caught up form the <strong>in-sync replica set (ISR)</strong>. With <strong><code>acks=all</code></strong> the leader only acknowledges once all ISR members have the record, and <strong><code>min.insync.replicas=2</code></strong> makes writes fail rather than be accepted by a lone replica. If a broker dies, the <strong>controller</strong> elects a new leader from the ISR, so acknowledged data is not lost; <code>unclean.leader.election.enable=false</code> (the default) prevents electing an out-of-date replica. Since Kafka 4.0 metadata and controller election use <strong>KRaft</strong>, a Raft-based quorum of controllers; ZooKeeper support has been removed. Replicas are spread across racks or availability zones with <code>broker.rack</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer batches and compresses records for a partition.</li>
+  <li>Leader appends the batch sequentially to the active segment.</li>
+  <li>Followers fetch and append; ISR is updated.</li>
+  <li>With <code>acks=all</code>, the leader acks after ISR replication.</li>
+  <li>Consumers fetch large chunks via zero-copy from page cache.</li>
+  <li>On broker failure, the KRaft controller promotes an ISR follower to leader.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties"># Topic
+replication.factor=3
+min.insync.replicas=2
+# Producer
+acks=all
+enable.idempotence=true
+compression.type=zstd
+linger.ms=10
+batch.size=65536</code></pre>
+<pre><code class="language-bash">kafka-topics.sh --bootstrap-server b1:9092 --create --topic payments \
+  --partitions 12 --replication-factor 3 --config min.insync.replicas=2</code></pre>
+<p>With RF 3 and min ISR 2, one broker can fail and writes continue; with two failures, producers get <code>NotEnoughReplicas</code> instead of silently losing durability.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Setting</th><th>Latency</th><th>Durability</th></tr></thead>
+<tbody>
+<tr><td><code>acks=0</code></td><td>Lowest</td><td>Loss likely on failure</td></tr>
+<tr><td><code>acks=1</code></td><td>Low</td><td>Loss if leader dies before replication</td></tr>
+<tr><td><code>acks=all</code> + min ISR 2</td><td>Higher</td><td>Survives single broker loss</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>acks=all</code> with <code>min.insync.replicas=1</code>, which gives little extra safety.</li>
+  <li>Giving brokers huge heaps instead of leaving memory for the page cache.</li>
+  <li>Too many partitions, increasing metadata and failover cost.</li>
+  <li>Saying Kafka fsyncs every message; it relies mainly on replication for durability.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For throughput, every partition is an append-only log written sequentially, reads are served mostly from the OS page cache, brokers use zero-copy sendfile to push data to the network, and producers batch and compress records. Partitioning spreads load across brokers and consumers. For fault tolerance, each partition is replicated, typically three times; the leader takes writes and followers in the ISR copy them. With <code>acks=all</code> and <code>min.insync.replicas=2</code> an acknowledged write survives a broker failure, and the KRaft controller quorum elects a new leader from the ISR.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What do you trade by using acks=1?</strong> Lower latency, but writes acknowledged by a leader that dies before replication are lost.</li>
+  <li><strong>What is unclean leader election?</strong> Electing an out-of-sync replica; restores availability but loses data.</li>
+  <li><strong>Why did Kafka drop ZooKeeper?</strong> KRaft simplifies operations and scales metadata to far more partitions.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-027 · Why is StringBuilder generally preferred over String concatenation in loops?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-027" data-topic="Core Java &amp; OOP">
+<h1>Why is StringBuilder generally preferred over String concatenation in loops?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Because <strong>String is immutable</strong>, <code>s = s + x</code> in a loop <strong>creates a new String and copies all previous characters every iteration</strong>, giving <strong>O(n²)</strong> work and lots of garbage; <strong>StringBuilder</strong> appends into a <strong>resizable buffer</strong> in <strong>amortised O(1)</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Consider building a CSV line from 10,000 values with <code>result += value + &quot;,&quot;;</code>. Each iteration:</p>
+<ol>
+  <li>Creates a new String (or builder) for the concatenation.</li>
+  <li>Copies every character of the current <code>result</code> into it.</li>
+  <li>Appends the new piece.</li>
+  <li>Discards the old <code>result</code>.</li>
+</ol>
+<p>If the final string has length L, the total characters copied is roughly L/2 per iteration on average times n iterations, which is <strong>quadratic</strong>. With 10,000 values of 10 characters that is around 500 million character copies instead of 100,000, plus tens of thousands of short-lived objects that increase <strong>GC pressure</strong> and allocation rate.</p>
+<p><strong>StringBuilder</strong> keeps a mutable byte array with spare capacity. <code>append</code> writes into the free space. When full, it grows (roughly double plus two) and copies once, so the total copying is linear: <strong>amortised constant time per append</strong>. You call <code>toString()</code> once at the end. <strong>Presizing</strong> (<code>new StringBuilder(expectedLength)</code>) removes even the growth copies.</p>
+<p>The compiler does help, but only within a single expression. <code>a + b + c</code> compiles (since Java 9) to one <code>invokedynamic</code> call to <code>StringConcatFactory</code> that computes the exact length and fills one array. It cannot merge work <strong>across loop iterations</strong>, because each iteration is a separate expression whose result is assigned back to an immutable variable. Escape analysis also rarely rescues this pattern.</p>
+<p>For joining collections, <code>String.join</code>, <code>StringJoiner</code> and <code>Collectors.joining</code> use a builder internally and handle separators cleanly. For readability, plain <code>+</code> is perfect outside loops. Prefer StringBuilder over the synchronised <strong>StringBuffer</strong> unless the buffer is really shared between threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Builder allocates an internal array (default capacity 16).</li>
+  <li>Each append copies only the new characters into free space.</li>
+  <li>On overflow, it allocates a larger array and copies once.</li>
+  <li><code>toString()</code> creates the final immutable String.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// O(n^2): new String every iteration
+String slow = &quot;&quot;;
+for (int i = 0; i &lt; 100_000; i++) slow += i + &quot;,&quot;;
+
+// O(n): one buffer, presized
+StringBuilder sb = new StringBuilder(100_000 * 6);
+for (int i = 0; i &lt; 100_000; i++) sb.append(i).append(',');
+String fast = sb.toString();
+
+// Clearest for collections
+String joined = IntStream.range(0, 100_000).mapToObj(Integer::toString)
+                         .collect(Collectors.joining(&quot;,&quot;));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>sb.append(a + b)</code>, which creates a temporary string; append separately.</li>
+  <li>Replacing every <code>+</code> with a builder, hurting readability for no gain.</li>
+  <li>Sharing a StringBuilder across threads.</li>
+  <li>Forgetting that logging string building also costs; use parameterised logging (<code>log.debug(&quot;x={}&quot;, x)</code>).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;String is immutable, so s = s + x in a loop creates a new String each iteration and copies everything built so far. Over n iterations that's quadratic work and a lot of short-lived garbage. StringBuilder keeps a mutable, resizable buffer; append writes into it in amortised constant time and only occasionally grows, and I call toString once at the end. The compiler optimises a single expression like a + b + c, but it can't remove the repeated allocation across loop iterations. Presizing the builder helps further, and for collections Collectors.joining is often the cleanest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is StringBuilder preferred over StringBuffer in most code?</strong> Builders are usually thread-local, so StringBuffer's synchronisation is pure overhead.</li>
+  <li><strong>Does the JIT fix loop concatenation?</strong> Generally no.</li>
+  <li><strong>What's the default capacity?</strong> 16 characters, or 16 plus the initial string's length.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-073 · Which product-processing operations are suitable for parallel execution?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-073" data-topic="Coding Exercises">
+<h1>Which product-processing operations are suitable for parallel execution?</h1>
+<p class="ex-meta">Coding Exercises · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Suitable for parallel: <strong>independent, CPU-bound per-product work on large collections</strong> (price calculations into new objects, filtering by computed rules) and <strong>associative aggregations</strong> (sum, count, min/max, <strong>groupingByConcurrent</strong>); unsuitable: <strong>ordered output</strong>, <strong>shared mutable updates</strong>, <strong>I/O or database calls per element</strong>, and <strong>small lists</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>parallelStream()</code> splits the source into chunks, processes them on the <strong>common ForkJoinPool</strong> (by default roughly one thread per CPU core minus one, plus the caller), and combines partial results. It helps only when the work saved by using more cores outweighs the cost of <strong>splitting, scheduling and merging</strong>.</p>
+<p><strong>Good candidates</strong> — all three conditions hold:</p>
+<ul>
+  <li><strong>Large data</strong>: hundreds of thousands or millions of products. A common rule of thumb is that the number of elements times the cost per element must be large (Doug Lea's &quot;N × Q&quot; guidance).</li>
+  <li><strong>Independent, CPU-bound work per element</strong>: computing discounted or taxed prices into <strong>new</strong> objects, evaluating complex pricing rules, scoring or filtering by computed criteria, parsing.</li>
+  <li><strong>Associative, stateless combination</strong>: sum, count, min, max, <code>summaryStatistics</code>, <code>toList</code>, and grouping — preferably <strong><code>groupingByConcurrent</code></strong>, which writes into one <code>ConcurrentHashMap</code> instead of merging many maps.</li>
+  <li><strong>Splittable sources</strong>: <code>ArrayList</code>, arrays and ranges split well; <code>LinkedList</code> and I/O-based streams split poorly.</li>
+</ul>
+<p><strong>Poor candidates:</strong></p>
+<ul>
+  <li><strong>Order-dependent work</strong>: <code>forEachOrdered</code>, <code>sorted</code>, <code>limit</code> and <code>findFirst</code> on ordered streams force coordination and reduce or eliminate gains.</li>
+  <li><strong>Shared mutable state</strong>: updating the same objects, adding to an external <code>ArrayList</code>, or incrementing a shared counter causes <strong>race conditions</strong> or contention.</li>
+  <li><strong>Blocking I/O</strong>: calling a pricing REST API or database per product blocks the <strong>common pool</strong>, which is shared JVM-wide (including other parallel streams and some <code>CompletableFuture</code> usage), starving unrelated work; throughput is limited by the remote service, not CPUs. Use async clients, batching, or an executor sized for I/O — for example <strong>virtual threads</strong> (Java 21) with structured concurrency.</li>
+  <li><strong>Small lists</strong>: thread coordination overhead dominates.</li>
+  <li>In <strong>application servers</strong>, many requests already use all cores, so parallel streams can hurt overall throughput.</li>
+</ul>
+<p>Always <strong>benchmark</strong> with realistic data and load before switching.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The source is split into chunks via its Spliterator.</li>
+  <li>Chunks are processed on ForkJoinPool worker threads.</li>
+  <li>Each chunk produces a partial result.</li>
+  <li>Partial results are combined with the collector's combiner.</li>
+  <li>Gains appear only when per-chunk work far exceeds this overhead.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// good: large list, CPU-bound, new objects, associative aggregation
+List&lt;Product&gt; repriced = catalogue.parallelStream()
+        .map(p -&gt; p.withPrice(pricingEngine.compute(p)))   // pure CPU work
+        .toList();
+
+double stockValue = catalogue.parallelStream()
+        .mapToDouble(p -&gt; p.price() * p.stock())
+        .sum();
+
+ConcurrentMap&lt;String, Long&gt; perCategory = catalogue.parallelStream()
+        .collect(Collectors.groupingByConcurrent(Product::category, Collectors.counting()));
+
+// bad: shared mutable list and blocking I/O
+List&lt;Product&gt; out = new ArrayList&lt;&gt;();
+catalogue.parallelStream().forEach(out::add);                  // race condition
+catalogue.parallelStream().map(p -&gt; pricingApi.fetch(p.id()))  // blocks common pool
+        .toList();
+
+// better for I/O: virtual threads
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    List&lt;Future&lt;Price&gt;&gt; fs = catalogue.stream()
+            .map(p -&gt; exec.submit(() -&gt; pricingApi.fetch(p.id()))).toList();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming parallel is always faster.</li>
+  <li>Collecting into a non-thread-safe external collection.</li>
+  <li>Doing network or database calls in parallel streams.</li>
+  <li>Using parallel streams inside request handling on a busy server.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Good candidates are operations where each product is processed independently and the work is CPU-bound on a large collection, say hundreds of thousands of products: computing discounted or taxed prices into new objects, filtering by computed rules, and associative aggregations like totals, counts, min or max, or grouping with groupingByConcurrent. Poor candidates are anything needing strict order, updating shared mutable objects or an external list, calls to a database or remote service per product, which block the common pool, and small lists where overhead dominates. I always benchmark before choosing parallel.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is calling a pricing REST API from a parallel stream a bad idea?</strong> It blocks the shared common pool and is limited by the remote service; use async calls or virtual threads.</li>
+  <li><strong>Can you use a custom pool?</strong> Submitting the stream inside a custom ForkJoinPool works in practice but is an implementation detail; prefer explicit executors.</li>
+  <li><strong>Why groupingByConcurrent?</strong> It avoids merging many per-thread maps.</li>
+</ul>
+</article>
+</body>
+</html>

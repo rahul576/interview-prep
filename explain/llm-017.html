@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-017 · What is multi-LoRA serving, and when is it useful?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-017" data-topic="LLMOps &amp; RAG">
+<h1>What is multi-LoRA serving, and when is it useful?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Multi-LoRA serving</strong> keeps <strong>one base model in GPU memory</strong> and applies many <strong>small LoRA adapters</strong> per request, even <strong>mixed in the same batch</strong>, so dozens or hundreds of <strong>per-customer or per-task fine-tunes</strong> run on shared GPUs; supported by <strong>vLLM, SGLang, TGI, LoRAX and managed platforms</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>LoRA (Low-Rank Adaptation)</strong> fine-tunes a model by freezing the original weights and learning small low-rank matrices A and B for selected layers, so the effective weight becomes W + BA. With rank 8 to 64, an adapter is typically <strong>megabytes to a few hundred megabytes</strong>, compared with tens or hundreds of gigabytes for the base model.</p>
+<p>Deploying each fine-tune as a separate full model would mean one GPU set per variant, mostly idle. <strong>Multi-LoRA serving</strong> loads the base model once and keeps a pool of adapters in GPU memory, with more in CPU memory or disk. Each request names its adapter (often via the <code>model</code> field of an OpenAI-compatible API). Specialised kernels, such as <strong>Punica / S-LoRA style</strong> batched LoRA kernels, apply the correct adapter to each sequence <strong>within the same batch</strong>, so continuous batching still works across tenants. Adapters are loaded on demand and evicted LRU when GPU slots are full.</p>
+<p>Use cases: <strong>per-customer</strong> fine-tunes in a SaaS product, <strong>per-language or per-domain</strong> variants, <strong>per-task</strong> adapters (classification, extraction, tone), and A/B testing of fine-tune versions.</p>
+<p>Trade-offs: some throughput overhead versus the plain base model, especially with many distinct adapters in one batch or high ranks; a limit on concurrently active adapters per GPU (<code>max_loras</code>) and maximum rank; adapter <strong>cold-load latency</strong> on first use; and all adapters must match the exact <strong>base model version</strong>. Merging an adapter into the weights is faster for a single high-traffic variant, so very popular adapters may get dedicated merged deployments.</p>
+<p>Operationally you need an <strong>adapter registry</strong> with versions, evaluation results and the base model they were trained on, plus gradual rollout and per-adapter metrics.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Train LoRA adapters against a fixed base model version.</li>
+  <li>Store them in a registry or object storage.</li>
+  <li>Serving engine loads base model; adapters load on request.</li>
+  <li>Batches mix requests for different adapters; kernels apply each one.</li>
+  <li>Hot adapters stay in GPU memory; cold ones are evicted.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve meta-llama/Llama-3.1-8B-Instruct --enable-lora \
+  --max-loras 16 --max-lora-rank 64 --max-cpu-loras 128 \
+  --lora-modules acme-support=/adapters/acme/v3 globex-legal=/adapters/globex/v1
+curl localhost:8000/v1/chat/completions -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;model&quot;:&quot;acme-support&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;Reset my router&quot;}]}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Training adapters on a different base version than the one served.</li>
+  <li>Expecting zero overhead with hundreds of active adapters.</li>
+  <li>No per-adapter evaluation or rollback.</li>
+  <li>Using LoRA where prompt engineering or RAG would suffice.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;LoRA fine-tuning trains small low-rank adapter matrices instead of changing all weights, so each variant is megabytes to a few hundred megabytes while the base model is many gigabytes. Multi-LoRA serving keeps one copy of the base model on the GPU and loads many adapters next to it; each request names its adapter and the engine applies the right one per sequence, even within one batch, swapping adapters between GPU and CPU memory. That makes it practical to serve one fine-tune per customer, language or task on shared GPUs. vLLM, SGLang and managed platforms support it, with some overhead per adapter.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Versioning hundreds of adapters?</strong> Registry with base-model version, eval scores, staged rollout and aliases.</li>
+  <li><strong>When merge instead?</strong> For one high-traffic variant where latency matters most.</li>
+  <li><strong>Limits?</strong> Max active adapters, max rank, and cold-load latency.</li>
+</ul>
+</article>
+</body>
+</html>

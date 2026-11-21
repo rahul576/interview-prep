@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-234 · How would you design reliable communication between multiple downstream systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-234" data-topic="Microservices">
+<h1>How would you design reliable communication between multiple downstream systems?</h1>
+<p class="ex-meta">Microservices · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Make communication reliable by using <strong>asynchronous durable messaging</strong> where possible, and for synchronous calls <strong>timeouts</strong>, <strong>retries with exponential backoff and jitter</strong> for idempotent operations, <strong>circuit breakers</strong>, <strong>bulkheads</strong>, <strong>fallbacks</strong>, plus <strong>idempotency, correlation ids, monitoring and contract tests</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start by asking whether the caller really needs an immediate answer. Anything that can wait, such as notifying a CRM, updating search or sending invoices, should go through <strong>durable messaging</strong> (Kafka, RabbitMQ, SQS). The downstream system can be slow or down and simply catch up later. Use <strong>dead-letter queues</strong> for poison messages, with tooling to inspect and replay them, and publish via the <strong>outbox</strong> so events are never lost.</p>
+<p>For calls that must be <strong>synchronous</strong>, protect yourself:</p>
+<ul>
+  <li><strong>Timeouts</strong> on connect and read, set from the dependency's p99 and smaller than your own caller's deadline. Default client timeouts are often infinite.</li>
+  <li><strong>Retries</strong> only for transient errors (timeouts, 503, connection resets) and only for <strong>idempotent</strong> or <strong>idempotency-keyed</strong> operations, with <strong>exponential backoff and jitter</strong> and a low maximum, at one layer only.</li>
+  <li><strong>Circuit breakers</strong> open when error or slow-call rates exceed a threshold, failing fast instead of piling up threads.</li>
+  <li><strong>Bulkheads</strong>: separate thread pools or semaphores per dependency, so one slow system cannot exhaust everything.</li>
+  <li><strong>Fallbacks</strong>: cached data, defaults or a degraded feature.</li>
+</ul>
+<p><strong>Resilience4j</strong> provides all of these in Spring Boot. Every request and message carries a <strong>correlation id</strong> and trace context (OpenTelemetry) so failures can be followed across systems. Monitor latency, error rate, breaker state and <strong>consumer lag</strong>, with alerts. Finally, prevent integration breakage with <strong>consumer-driven contract tests</strong> (Pact or Spring Cloud Contract) in CI.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify each integration: sync or async, critical or optional.</li>
+  <li>Async: outbox, durable topic/queue, idempotent consumer, DLQ, replay.</li>
+  <li>Sync: timeout, then retry with backoff, inside a circuit breaker and bulkhead.</li>
+  <li>Provide fallbacks for optional data.</li>
+  <li>Propagate correlation ids and traces; dashboard and alert.</li>
+  <li>Contract tests guard API changes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resilience4j:
+  circuitbreaker:
+    instances:
+      inventory:
+        failureRateThreshold: 50
+        slowCallDurationThreshold: 2s
+        waitDurationInOpenState: 30s
+  retry:
+    instances:
+      inventory:
+        maxAttempts: 3
+        waitDuration: 200ms
+        enableExponentialBackoff: true
+        enableRandomizedWait: true
+  bulkhead:
+    instances:
+      inventory:
+        maxConcurrentCalls: 20</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying non-idempotent POSTs, causing duplicate payments.</li>
+  <li>Retries at the client, gateway and mesh at once (retry storms).</li>
+  <li>One shared pool for all downstream calls.</li>
+  <li>DLQs nobody monitors.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I decide what really needs to be synchronous; anything that can wait goes through Kafka or a queue with an outbox, idempotent consumers and a dead-letter queue, so a slow system doesn't block us. For synchronous calls, every client has strict timeouts, retries only for transient errors on idempotent operations with exponential backoff and jitter, a circuit breaker to fail fast and a bulkhead per dependency, all with Resilience4j, plus fallbacks like cached data. Every call carries a correlation id, I monitor latency, errors and queue lag, and consumer-driven contract tests catch breaking changes before release.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which operations would you never retry automatically?</strong> Non-idempotent ones without an idempotency key, like charging a card, and client errors such as 400 or 409.</li>
+  <li><strong>Circuit breaker states?</strong> Closed, open (fail fast), half-open (trial calls).</li>
+  <li><strong>How do you handle a DLQ?</strong> Alert, inspect the cause, fix, then replay messages idempotently.</li>
+</ul>
+</article>
+</body>
+</html>

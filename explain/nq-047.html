@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-047 · What are the advantages, disadvantages, and limitations of parallel streams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-047" data-topic="Java 8+ Features">
+<h1>What are the advantages, disadvantages, and limitations of parallel streams?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Parallel streams can <strong>use all cores for large, CPU-bound work</strong> with almost no code change, but they add <strong>split/merge overhead</strong>, share the <strong>common ForkJoinPool</strong>, make <strong>ordered operations</strong> expensive, break with <strong>shared mutable state</strong>, and perform poorly on <strong>badly splittable sources</strong>; always <strong>benchmark</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Advantages.</strong> For a large data set and expensive per-element computation (parsing, hashing, image transforms, numerical work), adding <code>.parallel()</code> can give near-linear speed-ups on multi-core machines. The code stays declarative; you do not manage threads, locks or result merging yourself.</p>
+<p><strong>Disadvantages and overheads.</strong> Splitting the source, creating tasks, scheduling them and combining partial results all cost time. For a few thousand cheap operations, a parallel stream is commonly <strong>slower</strong> than a sequential one. Boxing and merging large intermediate collections (for example several partial <code>HashMap</code>s in <code>groupingBy</code>) can eat the gains.</p>
+<p><strong>Shared pool.</strong> All parallel streams use <code>ForkJoinPool.commonPool()</code>, shared with <code>CompletableFuture</code> async calls and other libraries. In a web server handling many requests, parallel streams compete with each other and with request threads for the same cores, and one stream doing blocking I/O can starve the rest.</p>
+<p><strong>Ordering.</strong> On ordered sources, <code>findFirst</code>, <code>limit</code>, <code>skip</code>, <code>sorted</code> and <code>forEachOrdered</code> must preserve encounter order, which requires buffering and coordination. <code>findAny</code>, <code>unordered()</code> or unordered collectors can be faster.</p>
+<p><strong>Correctness limits.</strong> Lambdas must be stateless and non-interfering; reductions must be associative with a correct identity. Shared mutable state (adding to an <code>ArrayList</code>, incrementing a counter) causes races. <code>reduce</code> with a non-associative operation such as subtraction gives different answers.</p>
+<p><strong>Source limits.</strong> <code>LinkedList</code>, <code>Stream.iterate</code>, <code>BufferedReader.lines()</code> and many custom iterators split badly, so the work stays mostly on one thread.</p>
+<p><strong>Other limits.</strong> You cannot set the thread count per stream through the API, thread-locals and transaction or security contexts do not propagate to worker threads, and debugging stack traces is harder.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Estimate work: N elements times Q cost per element.</li>
+  <li>Check the source splits well and operations are stateless and associative.</li>
+  <li>Check order is not required.</li>
+  <li>Benchmark sequential versus parallel with JMH under realistic load.</li>
+  <li>Keep parallel only if the gain is clear and the shared pool is not contended.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Wrong result: non-associative reduce
+int bad = IntStream.rangeClosed(1, 100).parallel().reduce(0, (a, b) -&gt; a - b);
+// varies between runs; sequential gives -5050
+
+// Race: shared ArrayList
+List&lt;Integer&gt; out = new ArrayList&lt;&gt;();
+IntStream.range(0, 100_000).parallel().forEach(out::add); // lost elements or exception
+
+// Correct
+List&lt;Integer&gt; safe = IntStream.range(0, 100_000).parallel().boxed().toList();</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Advantage</th><th>Disadvantage</th></tr></thead>
+<tbody>
+<tr><td>Performance</td><td>Speed-up on big CPU work</td><td>Slower for small/cheap work</td></tr>
+<tr><td>Threads</td><td>No manual management</td><td>Shared common pool, no per-stream size</td></tr>
+<tr><td>Ordering</td><td>Unordered ops scale well</td><td>Ordered ops costly</td></tr>
+<tr><td>Safety</td><td>Built-in safe reductions</td><td>Races with shared state</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making every stream parallel &quot;for performance&quot;.</li>
+  <li>Using parallel streams inside request handlers on a busy server.</li>
+  <li>Relying on ThreadLocal context (MDC, security, transactions) inside the lambdas.</li>
+  <li>Measuring with a single <code>System.currentTimeMillis()</code> run instead of JMH.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The advantage is easy use of all cores for CPU-intensive work on large data with almost no code change. The downsides are overhead from splitting, scheduling and merging, so small or cheap workloads usually get slower. All parallel streams share the common ForkJoinPool, so one blocking or slow stream affects others, which is risky in a web server. Ordered operations like findFirst, limit and sorted become expensive. Side effects on shared state cause races, and non-associative reductions give wrong results. Sources like LinkedList, iterate or I/O split badly. And context like ThreadLocals does not propagate. So I only use it after a JMH benchmark proves a gain.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can you give a case where a parallel stream gives a wrong result?</strong> <code>reduce(0, (a, b) -&gt; a - b)</code> or adding to a shared <code>ArrayList</code> from <code>forEach</code>.</li>
+  <li><strong>What is the N times Q rule?</strong> Parallelism tends to pay off only when element count times per-element cost is large, roughly 10,000 or more simple operations.</li>
+  <li><strong>How do you limit threads for one stream?</strong> Run it inside a custom <code>ForkJoinPool</code>.</li>
+</ul>
+</article>
+</body>
+</html>

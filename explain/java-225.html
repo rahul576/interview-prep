@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-225 · What is the difference between a livelock, starvation and a deadlock?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-225" data-topic="Concurrency">
+<h1>What is the difference between a livelock, starvation and a deadlock?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In a <strong>deadlock</strong> threads are <strong>blocked forever</strong> waiting on each other; in a <strong>livelock</strong> threads are <strong>active but make no progress</strong> because they keep reacting to each other; in <strong>starvation</strong> a thread <strong>never gets the resource</strong> because others keep winning.</p>
+
+<h2>Detailed explanation</h2>
+<p>All three are <strong>liveness failures</strong>: the program is not wrong in what it computes, it just stops making progress for some or all threads.</p>
+<p>A <strong>deadlock</strong> needs four conditions at once (the Coffman conditions): mutual exclusion, hold and wait, no pre-emption, and a circular wait. Typical Java case: thread A locks account 1 then wants account 2, thread B locks account 2 then wants account 1. Both are <code>BLOCKED</code> and a thread dump shows &quot;Found one Java-level deadlock&quot;. Nothing recovers on its own.</p>
+<p>A <strong>livelock</strong> is the polite version: threads are not blocked, they are running, but each reacts to the other in a way that undoes progress. Two threads that each <code>tryLock()</code> both locks, fail, release, and retry at exactly the same interval can keep colliding forever. CPU is high, throughput is zero. Retry storms between services are the distributed equivalent.</p>
+<p><strong>Starvation</strong> affects one thread or a class of tasks: the system as a whole progresses, but a particular thread never gets the lock, CPU or pool slot. Causes include unfair locks where newcomers barge ahead, a constant stream of readers starving a writer on a read-write lock, low thread priorities, or long tasks hogging a small pool.</p>
+<p>Remedies differ: <strong>global lock ordering</strong> or <code>tryLock</code> with timeout for deadlocks; <strong>randomised backoff (jitter)</strong> for livelocks; <strong>fair locks</strong>, separate pools, bounded work and time limits for starvation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deadlock: A holds L1 and waits for L2; B holds L2 and waits for L1; circular wait, both blocked.</li>
+  <li>Livelock: A and B both detect a conflict, both back off for the same time, both retry, conflict again.</li>
+  <li>Starvation: a scheduler or lock keeps choosing other threads, so one thread waits indefinitely.</li>
+  <li>Detection: thread dumps (<code>jcmd &lt;pid&gt; Thread.print</code>) show BLOCKED cycles for deadlocks; high CPU with no progress hints at livelock; long-waiting threads and growing latency for a subset of work hint at starvation.</li>
+  <li>Prevention: break one Coffman condition, add jitter, or add fairness and isolation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Deadlock fix: always lock in a global order (by id)
+void transfer(Account a, Account b, long amount) {
+    Account first  = a.id() &lt; b.id() ? a : b;
+    Account second = a.id() &lt; b.id() ? b : a;
+    synchronized (first) {
+        synchronized (second) {
+            a.withdraw(amount);
+            b.deposit(amount);
+        }
+    }
+}
+
+// Livelock fix: randomised backoff when tryLock fails
+long backoff = ThreadLocalRandom.current().nextLong(1, 20);
+Thread.sleep(backoff);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Deadlock</th><th>Livelock</th><th>Starvation</th></tr></thead>
+<tbody>
+<tr><td>Thread state</td><td>Blocked</td><td>Running</td><td>Waiting/runnable</td></tr>
+<tr><td>CPU</td><td>Low</td><td>High</td><td>Normal</td></tr>
+<tr><td>Who is affected</td><td>All involved threads</td><td>All involved threads</td><td>One thread or task type</td></tr>
+<tr><td>Typical fix</td><td>Lock ordering, timeouts</td><td>Random backoff</td><td>Fairness, isolation</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling every hang a deadlock without checking thread states.</li>
+  <li>Fixing a deadlock with tryLock retries but without jitter, creating a livelock.</li>
+  <li>Turning on fair locks everywhere; fairness costs throughput significantly.</li>
+  <li>Ignoring starvation of writers in read-heavy <code>ReentrantReadWriteLock</code> usage.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A deadlock is when threads wait on each other forever, each holding a lock the other needs, so they are all blocked. A livelock is when threads are not blocked but keep reacting to each other, like two threads that both back off and retry at the same moment, so CPU is busy but nothing progresses. Starvation is when one thread never gets the lock or CPU because others keep winning, for example with unfair locks or a flood of readers. I fix deadlocks with consistent lock ordering or tryLock with timeouts, livelocks with randomised backoff, and starvation with fair locks or separate pools.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can virtual threads starve platform threads?</strong> Not directly, but virtual threads run on a small carrier pool, so pinned or CPU-hogging virtual threads can starve other virtual threads; and many virtual threads can starve a shared resource like a connection pool.</li>
+  <li><strong>How does the JVM detect deadlocks?</strong> <code>ThreadMXBean.findDeadlockedThreads()</code> and thread dumps detect monitor and ownable-synchronizer cycles.</li>
+  <li><strong>Can a single thread deadlock?</strong> With non-reentrant locks, yes, for example re-acquiring a StampedLock write lock it already holds.</li>
+</ul>
+</article>
+</body>
+</html>

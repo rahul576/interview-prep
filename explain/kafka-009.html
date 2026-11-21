@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-009 · What is KRaft, and why did Kafka remove ZooKeeper?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-009" data-topic="Kafka">
+<h1>What is KRaft, and why did Kafka remove ZooKeeper?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>KRaft</strong> is Kafka's built-in <strong>Raft-based metadata quorum</strong>: <strong>controller nodes</strong> store cluster metadata in an internal log, replacing ZooKeeper, which was <strong>removed entirely in Kafka 4.0</strong>, giving <strong>simpler operations, faster failover and more partitions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Before KRaft, Kafka depended on <strong>Apache ZooKeeper</strong> to store metadata (topics, partitions, ISR, configs, ACLs) and to elect a single <strong>controller</strong> broker. That meant running and securing a second distributed system, and the controller had to load the full state from ZooKeeper on failover, which could take minutes on clusters with hundreds of thousands of partitions. Metadata propagation to brokers was also slow and a source of subtle inconsistency.</p>
+<p>With <strong>KRaft (Kafka Raft)</strong>, a small quorum of <strong>controllers</strong> (usually 3 or 5) runs a Raft protocol over an internal <strong><code>__cluster_metadata</code></strong> log. One controller is the <strong>active</strong> leader; the others are hot standbys with the full state already in memory, so failover is near-instant. Brokers <strong>replicate the metadata log</strong> like any other topic and apply changes as events, which scales to millions of partitions far better than ZooKeeper watches. Nodes can run in <strong>dedicated</strong> controller mode (recommended for production) or <strong>combined</strong> mode for small or dev clusters.</p>
+<p>Timeline: KRaft became production-ready in <strong>3.3</strong>, ZooKeeper mode was deprecated in 3.5, <strong>3.9</strong> is the last 3.x release that supports ZooKeeper and the migration, and <strong>Kafka 4.0 (March 2025)</strong> removed ZooKeeper completely. Existing ZooKeeper clusters must first <strong>migrate to KRaft on a 3.x bridge release</strong> (ideally 3.9), using the dual-write migration mode, and only then upgrade to 4.x.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Format storage with a cluster ID: <code>kafka-storage.sh format</code>.</li>
+  <li>Controllers form a Raft quorum and elect an active controller.</li>
+  <li>Metadata changes are appended to <code>__cluster_metadata</code> and committed by majority.</li>
+  <li>Brokers fetch and apply metadata deltas.</li>
+  <li>If the active controller dies, a standby wins the election and continues.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties"># dedicated controller
+process.roles=controller
+node.id=1
+controller.quorum.bootstrap.servers=c1:9093,c2:9093,c3:9093
+controller.listener.names=CONTROLLER
+# broker
+process.roles=broker
+node.id=101</code></pre>
+<pre><code class="language-bash">kafka-metadata-quorum.sh --bootstrap-server b1:9092 describe --status</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running an even number of controllers.</li>
+  <li>Using combined mode for large production clusters.</li>
+  <li>Trying to upgrade a ZooKeeper cluster directly to 4.0.</li>
+  <li>Forgetting tools that still talk to ZooKeeper (old scripts, <code>--zookeeper</code> flags).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;KRaft is Kafka's own consensus layer based on Raft. A quorum of controller nodes keeps cluster metadata in an internal metadata log instead of ZooKeeper, and brokers replicate that log. Kafka 4.0 removed ZooKeeper entirely. The benefits are one system to run and secure, near-instant controller failover because standbys already hold the state, faster startup and support for far more partitions. For an existing cluster you migrate to KRaft on a 3.x bridge release like 3.9 before upgrading to 4.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How many controllers?</strong> Three tolerates one failure; five tolerates two for large or critical clusters.</li>
+  <li><strong>Dedicated or combined mode?</strong> Dedicated in production to isolate metadata from data load.</li>
+  <li><strong>What does the migration look like?</strong> Controllers in migration mode dual-write to ZooKeeper, brokers roll over, then ZooKeeper is removed.</li>
+</ul>
+</article>
+</body>
+</html>

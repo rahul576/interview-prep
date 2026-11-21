@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-026 · Someone deleted an S3 bucket or storage account manually that Terraform manages. What happens on the next plan, and what do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-026" data-topic="Terraform">
+<h1>Someone deleted an S3 bucket or storage account manually that Terraform manages. What happens on the next plan, and what do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>On the next plan, <strong>refresh finds the object missing</strong>, Terraform <strong>drops it from state and proposes to create it again</strong>; applying gives an <strong>empty</strong> bucket or account, so first <strong>assess and restore the data</strong>, <strong>investigate via audit logs</strong>, and <strong>prevent repeats</strong> with locks, deny policies, <code>prevent_destroy</code> and least privilege.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform does not get alarmed by a deleted resource. During <strong>refresh</strong>, the provider asks the API for the bucket or storage account, receives &quot;not found&quot;, and Terraform <strong>removes it from the in-memory state</strong>. The plan then shows it as <strong>to be created</strong>, often with dependent resources (bucket policy, versioning, lifecycle rules, event notifications, private endpoints, role assignments) also being recreated or updated. Applying would create a <strong>new, empty</strong> resource with the same name and configuration.</p>
+<p>That is fine for infrastructure, but <strong>the data is gone</strong>. So <strong>do not apply blindly</strong>. First, assess impact and recovery options. For <strong>S3</strong>, a deleted bucket cannot be undeleted; recovery comes from <strong>cross-region replication</strong>, <strong>AWS Backup</strong> for S3 or application-level backups. Bucket names are global, so someone else could even claim the name. For <strong>Azure</strong>, a deleted storage account can sometimes be <strong>recovered for a limited period</strong> (if the name has not been reused) through the portal or support, and blob soft delete does not help once the account itself is gone. Recover first if possible, then plan: if the account comes back, Terraform will see it again and plan no create.</p>
+<p>Then investigate <strong>who and why</strong> using <strong>CloudTrail</strong> (<code>DeleteBucket</code>) or the <strong>Azure Activity Log</strong>. Usually it is someone cleaning up with too much access, or another automation.</p>
+<p><strong>Prevention</strong> happens in layers: <strong>least privilege</strong>, so humans do not have delete rights in production; <strong>cloud-side protection</strong> such as Azure <strong>resource locks</strong> (<code>CanNotDelete</code>), <strong>AWS SCPs or bucket policies denying <code>s3:DeleteBucket</code></strong>, S3 <strong>Object Lock</strong> for critical data; <strong><code>lifecycle { prevent_destroy = true }</code></strong> to stop Terraform itself from destroying it; and <strong>backups or replication</strong> stored separately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Refresh: provider reports resource not found.</li>
+  <li>Terraform removes it from refreshed state; plan proposes create.</li>
+  <li>Pause pipelines; assess data loss and restore options.</li>
+  <li>Recover or restore data; then plan again.</li>
+  <li>Investigate audit logs; add locks and permission changes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_storage_account&quot; &quot;data&quot; {
+  name                     = &quot;acmeproddata&quot;
+  resource_group_name      = azurerm_resource_group.data.name
+  location                 = &quot;westeurope&quot;
+  account_tier             = &quot;Standard&quot;
+  account_replication_type = &quot;GZRS&quot;
+  lifecycle { prevent_destroy = true }
+}
+
+resource &quot;azurerm_management_lock&quot; &quot;data&quot; {
+  name       = &quot;no-delete&quot;
+  scope      = azurerm_storage_account.data.id
+  lock_level = &quot;CanNotDelete&quot;
+  notes      = &quot;Production data. Remove via change request only.&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Applying immediately and overwriting any chance of recovering the original.</li>
+  <li>Assuming <code>prevent_destroy</code> protects against manual deletion.</li>
+  <li>No backups outside the account that holds the data.</li>
+  <li>Blaming the person instead of fixing the access model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;On the next plan Terraform refreshes, the provider reports the bucket no longer exists, so Terraform drops it from state and proposes creating it again. Applying would create an empty bucket with the right settings, but the data is gone, and dependent resources may also change. So before applying I check whether the data matters and restore it from replication or backups, or recover the storage account if Azure still allows it. I find out who deleted it and why from CloudTrail or the Activity Log. To prevent it, I use resource locks or deny policies on critical resources, prevent_destroy in Terraform and least-privilege access, so nobody deletes production resources by hand.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is prevent_destroy not enough?</strong> It only blocks Terraform-planned destroys; it has no effect on console or CLI deletion.</li>
+  <li><strong>Can Terraform tell you who deleted it?</strong> No, use cloud audit logs.</li>
+  <li><strong>How do you detect this earlier?</strong> Scheduled drift detection and alerts on delete events.</li>
+</ul>
+</article>
+</body>
+</html>

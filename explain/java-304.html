@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-304 · Explain the request flow through Spring MVC, from DispatcherServlet to response.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-304" data-topic="Spring Framework">
+<h1>Explain the request flow through Spring MVC, from DispatcherServlet to response.</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A request passes through <strong>servlet filters</strong> (including Spring Security) to the <strong>DispatcherServlet</strong>, which uses a <strong>HandlerMapping</strong> to find the controller method, runs <strong>interceptor preHandle</strong>, invokes it through a <strong>HandlerAdapter</strong> with <strong>argument resolvers</strong> and <strong>HttpMessageConverters</strong>, writes the return value back, routes exceptions to <strong>HandlerExceptionResolvers / @ControllerAdvice</strong>, and finishes with <strong>postHandle/afterCompletion</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Spring MVC follows the <strong>front controller</strong> pattern: one servlet, the <code>DispatcherServlet</code>, receives every request and delegates to pluggable strategy beans that Boot auto-configures.</p>
+<p>Before it, the servlet container runs the <strong>filter chain</strong>: character encoding, request logging, CORS, the Spring Security <code>FilterChainProxy</code> and so on. Filters can reject a request before Spring MVC is involved, which is why an unauthenticated call gets a 401 without touching your controller.</p>
+<p>Inside the dispatcher:</p>
+<ol>
+  <li><strong>HandlerMapping</strong>: <code>RequestMappingHandlerMapping</code> matches the path, HTTP method, <code>consumes</code>/<code>produces</code>, params and headers against registered <code>@RequestMapping</code> methods and returns a <strong>HandlerExecutionChain</strong>: the handler plus its interceptors. No match gives 404, a wrong method 405, a media type mismatch 415 or 406.</li>
+  <li><strong>HandlerInterceptor.preHandle</strong> runs for each interceptor; returning <code>false</code> stops processing.</li>
+  <li><strong>HandlerAdapter</strong> (<code>RequestMappingHandlerAdapter</code>) invokes the method. <strong>HandlerMethodArgumentResolvers</strong> supply each parameter: <code>@PathVariable</code>, <code>@RequestParam</code>, <code>@RequestHeader</code>, <code>Principal</code>, <code>Pageable</code>, and <code>@RequestBody</code>, which an <strong>HttpMessageConverter</strong> (Jackson's <code>MappingJackson2HttpMessageConverter</code>) deserialises from JSON. <code>@Valid</code> triggers validation here.</li>
+  <li><strong>Return value handlers</strong>: for <code>@ResponseBody</code> or <code>ResponseEntity</code>, content negotiation picks a converter based on <code>Accept</code> and serialises the result; for views, a <code>ViewResolver</code> renders a template.</li>
+  <li><strong>postHandle</strong> runs after the handler (for <code>@ResponseBody</code> the response is already committed, so it is of limited use).</li>
+  <li><strong>Exceptions</strong> at any step go to <code>HandlerExceptionResolver</code>s: <code>ExceptionHandlerExceptionResolver</code> (your <code>@ExceptionHandler</code> and <code>@ControllerAdvice</code>), <code>ResponseStatusExceptionResolver</code>, and <code>DefaultHandlerExceptionResolver</code> for Spring's own exceptions.</li>
+  <li><strong>afterCompletion</strong> always runs, even after errors, useful for cleanup and timing.</li>
+</ol>
+
+<h2>How it works</h2>
+<ol>
+  <li>Container → filters → <code>DispatcherServlet.doDispatch</code>.</li>
+  <li>HandlerMapping finds handler + interceptors.</li>
+  <li>preHandle → HandlerAdapter → argument resolution and conversion → controller method.</li>
+  <li>Return value handled by a message converter (or view).</li>
+  <li>Exceptions resolved by exception resolvers.</li>
+  <li>afterCompletion, then the response flows back through the filters.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Component
+class TimingInterceptor implements HandlerInterceptor {
+    public boolean preHandle(HttpServletRequest req, HttpServletResponse res, Object handler) {
+        req.setAttribute(&quot;start&quot;, System.nanoTime());
+        return true;
+    }
+    public void afterCompletion(HttpServletRequest req, HttpServletResponse res, Object handler, Exception ex) {
+        long ms = (System.nanoTime() - (long) req.getAttribute(&quot;start&quot;)) / 1_000_000;
+        if (handler instanceof HandlerMethod hm) log.info(&quot;{} took {} ms&quot;, hm.getMethod().getName(), ms);
+    }
+}
+
+@Configuration
+class WebConfig implements WebMvcConfigurer {
+    private final TimingInterceptor timing;
+    WebConfig(TimingInterceptor timing) { this.timing = timing; }
+    public void addInterceptors(InterceptorRegistry r) { r.addInterceptor(timing).addPathPatterns(&quot;/api/**&quot;); }
+}</code></pre>
+<pre><code class="language-text">Request -&gt; Filters (Security, CORS) -&gt; DispatcherServlet -&gt; HandlerMapping
+        -&gt; preHandle -&gt; HandlerAdapter (argument resolvers, Jackson) -&gt; @GetMapping method
+        -&gt; return value -&gt; Jackson -&gt; postHandle -&gt; afterCompletion -&gt; Response</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting interceptors to run for requests rejected by Spring Security filters.</li>
+  <li>Trying to modify the response body in <code>postHandle</code> for <code>@ResponseBody</code> methods.</li>
+  <li>Configuring a custom <code>ObjectMapper</code> incorrectly and replacing Boot's converters.</li>
+  <li>Doing authentication in an interceptor instead of in Spring Security.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A request first goes through the servlet filters, such as Spring Security, and then reaches the DispatcherServlet, the front controller. It asks the HandlerMapping which controller method matches the URL and HTTP method, which also returns the interceptors. Interceptors' preHandle run, then the HandlerAdapter invokes the method, using argument resolvers for path variables, request params and headers, and HttpMessageConverters like Jackson to deserialise the JSON body. The return value is serialised back by a message converter after content negotiation. Exceptions go to the exception resolvers, including my @ControllerAdvice handlers, and postHandle and afterCompletion hooks run at the end.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where would you put request logging: a filter or an interceptor?</strong> A filter, because it sees every request, including those rejected earlier, and can wrap the body.</li>
+  <li><strong>What happens if no handler matches?</strong> 404 through <code>NoResourceFoundException</code> in Spring 6.1+.</li>
+  <li><strong>How does content negotiation work?</strong> The <code>Accept</code> header is matched against converters' supported media types and <code>produces</code>.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-103 · Explain the main instructions of a Dockerfile.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-103" data-topic="Docker">
+<h1>Explain the main instructions of a Dockerfile.</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A Dockerfile is the <strong>recipe for an image</strong>: <strong><code>FROM</code></strong> picks the base, <strong><code>RUN</code></strong> executes build steps, <strong><code>COPY</code>/<code>ADD</code></strong> bring in files, <strong><code>WORKDIR</code>, <code>ENV</code>, <code>ARG</code>, <code>EXPOSE</code></strong> configure it, <strong><code>USER</code></strong> sets a non-root user, and <strong><code>CMD</code>/<code>ENTRYPOINT</code></strong> define what runs at start; ordering instructions for <strong>layer caching</strong> keeps builds fast.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker executes the instructions top to bottom, and each instruction that changes the filesystem (mainly <code>RUN</code>, <code>COPY</code>, <code>ADD</code>) creates a <strong>layer</strong>. Understanding the main instructions:</p>
+<ul>
+  <li><strong><code>FROM</code></strong> sets the base image, for example <code>eclipse-temurin:21-jre</code> or <code>node:22-alpine</code>. Pin a specific version, not <code>latest</code>. Several <code>FROM</code> lines create a <strong>multi-stage build</strong>.</li>
+  <li><strong><code>RUN</code></strong> runs a command at <strong>build time</strong>, such as installing packages. Combine related commands and clean caches in the same <code>RUN</code> so they don't bloat a layer.</li>
+  <li><strong><code>COPY</code></strong> copies files from the <strong>build context</strong> into the image. <strong><code>ADD</code></strong> can also extract local tar archives and fetch URLs, so prefer <code>COPY</code> for clarity unless you need those features.</li>
+  <li><strong><code>WORKDIR</code></strong> sets the working directory for later instructions and the container.</li>
+  <li><strong><code>ENV</code></strong> sets environment variables that persist into the running container; <strong><code>ARG</code></strong> defines build-time variables that do not (but never pass secrets with <code>ARG</code>, they show up in history).</li>
+  <li><strong><code>EXPOSE</code></strong> documents the port the app listens on; it does not publish it, <code>-p</code> does.</li>
+  <li><strong><code>USER</code></strong> switches to a non-root user for following instructions and at runtime.</li>
+  <li><strong><code>CMD</code></strong> gives the default command or arguments; <strong><code>ENTRYPOINT</code></strong> defines the executable. With both, <code>CMD</code> supplies default arguments to <code>ENTRYPOINT</code>. Use the <strong>exec form</strong> (JSON array) so the app is PID 1 and receives signals.</li>
+  <li>Others worth knowing: <strong><code>HEALTHCHECK</code></strong>, <strong><code>LABEL</code></strong>, <strong><code>VOLUME</code></strong>.</li>
+</ul>
+<p><strong>Caching:</strong> a layer is reused until its instruction or input files change; after that, all later layers rebuild. So put rarely changing steps first: base, OS packages, dependency manifest and install, and finally source code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>FROM</code> loads the base image layers.</li>
+  <li>Each <code>RUN</code>/<code>COPY</code> produces a new layer on top.</li>
+  <li>Metadata instructions (<code>ENV</code>, <code>EXPOSE</code>, <code>USER</code>, <code>CMD</code>) are stored in the image config.</li>
+  <li><code>docker run</code> creates a writable layer and runs <code>ENTRYPOINT</code> + <code>CMD</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM node:22-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY . .
+ENV NODE_ENV=production
+EXPOSE 3000
+USER node
+CMD [&quot;node&quot;, &quot;server.js&quot;]</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>CMD</th><th>ENTRYPOINT</th></tr></thead>
+<tbody>
+<tr><td>Purpose</td><td>Default command/args</td><td>Fixed executable</td></tr>
+<tr><td>Overridden by</td><td>Args after image name in <code>docker run</code></td><td><code>--entrypoint</code> flag</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>COPY . .</code> before installing dependencies, breaking the cache.</li>
+  <li>Shell form <code>CMD java -jar app.jar</code>, so signals go to <code>sh</code> and graceful shutdown fails.</li>
+  <li>Running as root because there's no <code>USER</code>.</li>
+  <li>Thinking <code>EXPOSE</code> publishes a port.</li>
+  <li>Putting secrets in <code>ENV</code> or <code>ARG</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Dockerfile is the recipe for an image. <code>FROM</code> chooses the base image, like <code>eclipse-temurin:21-jre</code>. <code>RUN</code> executes commands at build time, such as installing packages, and each filesystem change becomes a layer. <code>COPY</code> brings files from the build context in; <code>ADD</code> can also extract archives, but I prefer <code>COPY</code>. <code>WORKDIR</code> sets the directory, <code>ENV</code> sets environment variables and <code>EXPOSE</code> documents the port. <code>CMD</code> and <code>ENTRYPOINT</code> define what runs at start, in exec form so the app gets signals. I always add a <code>USER</code> so it runs as non-root, and I copy the dependency file and install dependencies before copying the source, so code changes reuse the cached dependency layer.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why copy dependency files before source?</strong> So the expensive install layer stays cached when only code changes.</li>
+  <li><strong><code>ARG</code> vs <code>ENV</code>?</strong> <code>ARG</code> exists only during build; <code>ENV</code> persists into the container.</li>
+  <li><strong>How do you pass a secret at build time?</strong> <code>RUN --mount=type=secret</code>, never <code>ARG</code> or <code>COPY</code>.</li>
+</ul>
+</article>
+</body>
+</html>

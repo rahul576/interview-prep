@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-299 · How would you implement graceful shutdown in a Spring Boot application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-299" data-topic="Spring Boot">
+<h1>How would you implement graceful shutdown in a Spring Boot application?</h1>
+<p class="ex-meta">Spring Boot · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Enable <strong>graceful shutdown</strong> (<code>server.shutdown=graceful</code>, default since Spring Boot 3.4) with <code>spring.lifecycle.timeout-per-shutdown-phase</code>, make <strong>Kubernetes</strong> stop routing traffic first (readiness, <strong>preStop</strong>, <strong>terminationGracePeriodSeconds</strong>), and drain <strong>consumers, schedulers and executors</strong> before closing resources.</p>
+
+<h2>Detailed explanation</h2>
+<p>Shutdown happens on every deploy, scale-in and node drain, so it must not drop requests or lose messages. When the JVM receives <strong>SIGTERM</strong>, Spring Boot closes the application context. With graceful shutdown the embedded server (Tomcat, Jetty, Undertow or Netty) <strong>stops accepting new requests</strong> and lets <strong>in-flight requests finish</strong>, up to <code>spring.lifecycle.timeout-per-shutdown-phase</code> (default 30 s). Requests still running when the timeout expires are cut off.</p>
+<p>In <strong>Kubernetes</strong>, removing a pod from Service endpoints and sending SIGTERM happen in parallel, so for a few seconds load balancers and kube-proxy may still send traffic. A short <strong>preStop</strong> sleep (for example 5-10 s) delays SIGTERM until routing has caught up. During shutdown Spring Boot's <strong>readiness state</strong> changes to refusing traffic, so <code>/actuator/health/readiness</code> fails. <code>terminationGracePeriodSeconds</code> (default 30 s) must be larger than preStop plus the Spring timeout, otherwise the kubelet sends SIGKILL.</p>
+<p>HTTP is only part of it. <strong>Kafka listener containers</strong> stop polling and commit offsets for processed records; <strong>schedulers</strong> stop launching new jobs; custom <strong>executor services</strong> are shut down and awaited; and connection pools and clients are closed in <code>@PreDestroy</code> methods or <strong>SmartLifecycle</strong> beans, whose phases control the stop order (consumers before the resources they use).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Kubernetes marks the pod terminating; preStop hook sleeps while endpoints are removed.</li>
+  <li>SIGTERM arrives; Spring starts closing the context and readiness switches to refusing traffic.</li>
+  <li>The web server stops accepting connections and waits for active requests.</li>
+  <li>SmartLifecycle beans stop in reverse phase order: listeners, schedulers, executors.</li>
+  <li><code>@PreDestroy</code> and destroy methods close pools and clients.</li>
+  <li>The JVM exits before terminationGracePeriodSeconds; otherwise SIGKILL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># application.yml
+server:
+  shutdown: graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+  task:
+    scheduling:
+      shutdown:
+        await-termination: true
+        await-termination-period: 20s
+---
+# deployment.yaml (excerpt)
+spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+    - name: orders
+      lifecycle:
+        preStop:
+          exec:
+            command: [&quot;sh&quot;, &quot;-c&quot;, &quot;sleep 10&quot;]
+      readinessProbe:
+        httpGet: { path: /actuator/health/readiness, port: 8080 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Grace period shorter than preStop plus Spring timeout, so pods are SIGKILLed.</li>
+  <li>Running the app via a shell script that doesn't forward SIGTERM to the JVM.</li>
+  <li>No preStop delay, so requests hit a pod that already stopped listening.</li>
+  <li>Forgetting custom thread pools and consumers, losing queued work.</li>
+  <li>Long-running requests or jobs with no idempotency or resume strategy.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I enable server.shutdown=graceful, which is the default in recent Boot versions, and set timeout-per-shutdown-phase, say 25 seconds. On SIGTERM the server stops accepting requests and finishes in-flight ones. In Kubernetes I add a short preStop sleep so endpoints are removed before shutdown begins, use the readiness health group for the probe, and set terminationGracePeriodSeconds longer than preStop plus the Spring timeout. Beyond HTTP, Kafka listeners stop and commit offsets, schedulers and executors are drained, and resources close in PreDestroy or SmartLifecycle beans.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Request longer than the grace period?</strong> It is aborted; the client sees a reset or error, so it should be idempotent and retryable.</li>
+  <li><strong>Why preStop sleep?</strong> Endpoint removal is asynchronous; the sleep avoids routing to a closing pod.</li>
+  <li><strong>How do you control stop order?</strong> SmartLifecycle phases; higher phases stop first.</li>
+</ul>
+</article>
+</body>
+</html>

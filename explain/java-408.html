@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-408 · What Redis data structures do you know, and what are they used for?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-408" data-topic="Caching">
+<h1>What Redis data structures do you know, and what are they used for?</h1>
+<p class="ex-meta">Caching · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Redis offers <strong>strings</strong> (values, counters), <strong>hashes</strong> (objects), <strong>lists</strong> and <strong>streams</strong> (queues and logs), <strong>sets</strong> and <strong>sorted sets</strong> (membership, leaderboards, rate limiters), plus <strong>bitmaps</strong>, <strong>HyperLogLog</strong> and <strong>geospatial</strong> indexes, each with atomic server-side commands.</p>
+
+<h2>Detailed explanation</h2>
+<p>Picking the right structure lets Redis do the work atomically instead of reading, modifying and writing from the application.</p>
+<ul>
+  <li><strong>Strings</strong>: binary-safe values up to 512 MB. Used for cached JSON, feature flags, and atomic counters with <code>INCR</code>/<code>INCRBY</code>. Combined with <code>EXPIRE</code>, a counter per user per minute is a simple fixed-window rate limiter.</li>
+  <li><strong>Hashes</strong>: field-value maps, ideal for objects such as a session or user profile, letting you read or update one field (<code>HSET</code>, <code>HINCRBY</code>) without rewriting the whole value. Small hashes are stored compactly.</li>
+  <li><strong>Lists</strong>: ordered, push/pop from either end. <code>LPUSH</code> + <code>BRPOP</code> (or <code>BLMOVE</code> for reliable processing) implement simple queues; <code>LTRIM</code> keeps &quot;last N&quot; items such as recent activity.</li>
+  <li><strong>Streams</strong>: append-only logs with IDs, <strong>consumer groups</strong>, acknowledgements (<code>XACK</code>) and pending-entry tracking, good for event processing when Kafka is overkill.</li>
+  <li><strong>Sets</strong>: unique unordered members, with intersections and unions: tags, &quot;users who liked&quot;, deduplication.</li>
+  <li><strong>Sorted sets</strong>: members ordered by a score with O(log N) updates: <strong>leaderboards</strong>, priority queues, delayed jobs (score = run time), and <strong>sliding-window rate limiting</strong> (score = timestamp).</li>
+  <li><strong>Bitmaps</strong>: bit operations on strings, for example one bit per user id for daily active users.</li>
+  <li><strong>HyperLogLog</strong>: approximate distinct counts (about 0.81% standard error) in roughly 12 KB per key.</li>
+  <li><strong>Geo</strong>: built on sorted sets; <code>GEOADD</code> and <code>GEOSEARCH</code> find nearby points.</li>
+</ul>
+<p>Redis Stack and Redis 8 also add JSON documents, search, time series and probabilistic structures such as Bloom filters.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Map each use case to its access pattern (lookup, ordering, uniqueness, counting).</li>
+  <li>Choose the structure whose commands perform that pattern atomically.</li>
+  <li>Design key names (<code>user:42:session</code>) and TTLs.</li>
+  <li>Use pipelines or Lua/<code>MULTI</code> when several commands must be combined.</li>
+  <li>Watch memory usage and big keys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">INCR   rate:user:42:202611211030        # fixed-window counter
+EXPIRE rate:user:42:202611211030 60
+HSET   session:abc user 42 role admin    # object
+ZADD   leaderboard 1500 &quot;alice&quot; 1720 &quot;bob&quot;
+ZREVRANGE leaderboard 0 9 WITHSCORES     # top 10
+PFADD  visitors:2026-11-21 u1 u2 u3      # unique count
+PFCOUNT visitors:2026-11-21
+XADD   orders * id 991 total 49.90        # stream
+XREADGROUP GROUP billing w1 COUNT 10 STREAMS orders &gt;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing big objects as JSON strings and rewriting them for every field change.</li>
+  <li>Using <code>KEYS *</code> in production instead of <code>SCAN</code>.</li>
+  <li>Creating huge single keys (a list or set with millions of members) that block Redis.</li>
+  <li>Using lists as reliable queues without acknowledgement, losing messages on crash.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Strings hold simple values and atomic counters with INCR, often with a TTL for rate limits or cached JSON. Hashes store objects like sessions field by field. Lists work as simple queues, and Streams give a persistent log with consumer groups and acknowledgements. Sets give unique membership, and sorted sets keep members ordered by score, which is perfect for leaderboards, delayed jobs and sliding-window rate limiters. There are also bitmaps for compact flags like daily active users, HyperLogLog for approximate unique counts in about 12 KB, and geo commands for nearby searches. I pick the structure so that Redis performs the operation atomically on the server.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Sliding-window rate limiter with a sorted set?</strong> <code>ZREMRANGEBYSCORE</code> old entries, <code>ZADD</code> now, <code>ZCARD</code> to count, all in a Lua script or <code>MULTI</code>.</li>
+  <li><strong>Streams vs Kafka?</strong> Streams are simpler and in-memory; Kafka is better for large retention and very high throughput.</li>
+  <li><strong>Why avoid big keys?</strong> Redis is largely single-threaded per command, so operations on huge keys block other clients.</li>
+</ul>
+</article>
+</body>
+</html>

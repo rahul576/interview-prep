@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-004 · Explain the difference between query context and filter context, and how relevance scoring works.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-004" data-topic="Elasticsearch">
+<h1>Explain the difference between query context and filter context, and how relevance scoring works.</h1>
+<p class="ex-meta">Elasticsearch · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Query context</strong> asks &quot;<strong>how well</strong> does it match?&quot; and computes a <strong>relevance score</strong> (<strong>BM25</strong>). <strong>Filter context</strong> asks &quot;<strong>does</strong> it match, yes or no?&quot;, skips scoring and can be <strong>cached</strong>, so it is faster. A <strong><code>bool</code></strong> query combines <strong><code>must</code></strong> (scored), <strong><code>should</code></strong> (boosts or optional), <strong><code>filter</code></strong> (unscored) and <strong><code>must_not</code></strong> (exclusion, unscored).</p>
+
+<h2>Detailed explanation</h2>
+<p>Every clause in an Elasticsearch query runs in one of two contexts:</p>
+<ul>
+  <li><strong>Query context:</strong> used by <code>must</code>, <code>should</code> and top-level <code>match</code>. Lucene computes a <code>_score</code> for each matching document, and results are sorted by it.</li>
+  <li><strong>Filter context:</strong> used by <code>filter</code>, <code>must_not</code>, <code>constant_score</code> and the filters inside aggregations. A pure yes/no. No scoring work is done, and frequently used filters are stored in the <strong>node query cache</strong> as bitsets.</li>
+</ul>
+<p><strong>Rule of thumb:</strong> anything that is <strong>not about relevance</strong> (status = ACTIVE, price range, date range, tenant id, in stock) belongs in <code>filter</code>. Only full-text intent (&quot;wireless headphones&quot;) goes in <code>must</code> or <code>should</code>.</p>
+<p><strong>bool semantics:</strong></p>
+<ul>
+  <li><code>must</code>: all must match and they contribute to the score.</li>
+  <li><code>should</code>: optional matches that add to the score. If there is no <code>must</code> or <code>filter</code>, at least one <code>should</code> must match (configurable with <code>minimum_should_match</code>).</li>
+  <li><code>filter</code>: must match, no score.</li>
+  <li><code>must_not</code>: must not match, no score.</li>
+</ul>
+<p><strong>BM25 scoring</strong> (the default since Elasticsearch 5) uses three factors:</p>
+<ul>
+  <li><strong>Term frequency (TF):</strong> more occurrences in the field means a higher score, with <strong>saturation</strong> (parameter <code>k1</code>, default 1.2), so the 10th occurrence adds little.</li>
+  <li><strong>Inverse document frequency (IDF):</strong> rare terms across the index count more than common ones (&quot;the&quot; is worth little).</li>
+  <li><strong>Field length normalisation</strong> (<code>b</code>, default 0.75): a match in a short title beats one in a long body.</li>
+</ul>
+<p>Scores are computed <strong>per shard</strong> (IDF uses shard-local statistics), so tiny indices can show inconsistencies. <code>search_type=dfs_query_then_fetch</code> fixes that at extra cost.</p>
+<p>Tune relevance with field boosts (<code>title^3</code>), <code>multi_match</code>, and <code>function_score</code> or <code>rank_feature</code> for freshness or popularity. Recent versions also support hybrid lexical plus vector search.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Parse the bool query.</li>
+  <li>Execute the filters (from cache if possible) to get the candidate set.</li>
+  <li>Score the <code>must</code> and <code>should</code> clauses with BM25 over the candidates.</li>
+  <li>Collect the top N by score per shard, then merge on the coordinating node.</li>
+  <li>Use <code>explain: true</code> or the profile API to inspect scores and cost.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">GET /products/_search
+{
+  &quot;query&quot;: {
+    &quot;bool&quot;: {
+      &quot;must&quot;:     [ { &quot;multi_match&quot;: { &quot;query&quot;: &quot;wireless headphones&quot;,
+                                       &quot;fields&quot;: [&quot;name^3&quot;, &quot;description&quot;] } } ],
+      &quot;should&quot;:   [ { &quot;term&quot;: { &quot;brand&quot;: { &quot;value&quot;: &quot;acme&quot;, &quot;boost&quot;: 2 } } } ],
+      &quot;filter&quot;:   [ { &quot;term&quot;:  { &quot;status&quot;: &quot;ACTIVE&quot; } },
+                    { &quot;range&quot;: { &quot;price&quot;: { &quot;lte&quot;: 200 } } } ],
+      &quot;must_not&quot;: [ { &quot;term&quot;: { &quot;discontinued&quot;: true } } ]
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting exact conditions in <code>must</code>, which wastes CPU on scoring and skews relevance.</li>
+  <li>Expecting <code>filter</code> clauses to affect ranking.</li>
+  <li>Comparing scores across different queries (they are only relative within one query).</li>
+  <li>Confusing a <code>should</code> with no <code>must</code> (where it is required) with <code>should</code> alongside <code>must</code> (optional).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In query context Elasticsearch asks how well a document matches and computes a relevance score, using BM25 by default. That combines term frequency with saturation, inverse document frequency so rare terms count more, and field-length normalisation so short fields matching rank higher. In filter context it only asks yes or no. There's no scoring, and results can be cached, so it's faster. A bool query combines must clauses that score, should clauses that boost, filter clauses for exact conditions like status or date ranges, and must_not for exclusions. I put every non-relevance condition in filter.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Boost newer documents?</strong> A <code>function_score</code> with a <code>gauss</code> decay on the date, or <code>rank_feature</code> / <code>distance_feature</code> queries.</li>
+  <li><strong>Why does the score differ between shards?</strong> IDF is per-shard. Use more data, or <code>dfs_query_then_fetch</code>.</li>
+  <li><strong>How do you debug ranking?</strong> <code>explain: true</code>, the <code>_explain</code> API and the profile API.</li>
+</ul>
+</article>
+</body>
+</html>

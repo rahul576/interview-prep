@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-079 · When should you use batch APIs for LLM workloads, and how do you operate them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-079" data-topic="LLMOps &amp; RAG">
+<h1>When should you use batch APIs for LLM workloads, and how do you operate them?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>batch APIs</strong> for work nobody is waiting on: requests are processed <strong>asynchronously</strong> (within a window such as <strong>24 hours</strong>, often much sooner) at roughly <strong>half price</strong>, with <strong>separate quotas</strong> that protect real-time traffic; operate them by submitting <strong>request files with custom IDs</strong>, polling or being notified, <strong>matching results by ID</strong>, <strong>handling partial failures</strong> and <strong>validating outputs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>What they are.</strong> Anthropic's Message Batches API, OpenAI's Batch API, Azure OpenAI global batch deployments and Vertex AI batch prediction for Gemini all accept large sets of requests for asynchronous processing. Typical properties: a completion window of up to 24 hours, about <strong>50% discount</strong>, and a <strong>separate, larger quota</strong>, so a nightly job can't starve interactive users. Exact limits on batch size and file size vary by provider.</p>
+<p><strong>Good fits:</strong> classifying or tagging an archive of tickets or documents; summarising or translating large collections; generating product descriptions or metadata in bulk; data labelling; running <strong>evaluation suites</strong> and LLM-judge scoring; backfills after a prompt or model change. Bad fits: anything a user waits for, or chains where each step depends on the previous result within minutes.</p>
+<p><strong>Operating them:</strong></p>
+<ol>
+  <li><strong>Build the request file:</strong> JSONL or a request list, each item with a <strong>custom ID</strong> (your record key) and the full request body (model, messages, max tokens).</li>
+  <li><strong>Submit</strong> and store the batch ID with job metadata.</li>
+  <li><strong>Poll</strong> status or receive a notification/webhook; batches move through states like in progress, ended, expired, cancelled.</li>
+  <li><strong>Download results</strong> and match them to records via custom ID; order is not guaranteed.</li>
+  <li><strong>Handle partial failures:</strong> some items error (invalid request, rate or server errors) or expire; collect them and <strong>resubmit</strong> in a new batch with limited retries.</li>
+  <li><strong>Validate</strong> outputs (schema, required fields) before writing to downstream systems; write idempotently keyed by custom ID.</li>
+</ol>
+<p><strong>Orchestration.</strong> Run batches as normal data pipeline jobs (Airflow, Dagster, cloud workflows) with checkpoints, monitoring of completion time and failure rate, and cost tracking. Prompt caching can sometimes combine with batch discounts for shared prefixes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Select records not yet processed.</li>
+  <li>Write JSONL with custom IDs; submit.</li>
+  <li>Poll until ended.</li>
+  <li>Parse results; validate; upsert by custom ID.</li>
+  <li>Resubmit failures; alert if failure rate is high.</li>
+  <li>Mark job complete; record cost.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">batch = client.messages.batches.create(requests=[
+    {&quot;custom_id&quot;: f&quot;ticket-{t.id}&quot;,
+     &quot;params&quot;: {&quot;model&quot;: MODEL_ID, &quot;max_tokens&quot;: 200,
+                &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Classify: {t.text}&quot;}]}}
+    for t in tickets
+])
+# later
+for r in client.messages.batches.results(batch.id):
+    if r.result.type == &quot;succeeded&quot;:
+        save_label(r.custom_id, r.result.message.content[0].text)
+    else:
+        retry_queue.append(r.custom_id)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running large offline jobs on real-time endpoints at full price.</li>
+  <li>Assuming results come back in input order.</li>
+  <li>Ignoring partial failures and expired items.</li>
+  <li>Writing unvalidated outputs into production tables.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Batch APIs from Anthropic, OpenAI, Azure and Google process large sets of requests asynchronously within a window like 24 hours, usually faster, at around half price, and with separate quotas so they don't eat into the rate limits of interactive traffic. I use them whenever nobody waits: classifying archives, bulk summaries, generating metadata, running evaluations. Operationally I build a file of requests with custom IDs, submit, poll or get notified, then match results by custom ID. Some items fail individually, so I resubmit those, validate outputs before writing them downstream, and orchestrate it like any other data job.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Migrating a nightly real-time job?</strong> Run both in parallel for a cycle, compare outputs and timing, then switch.</li>
+  <li><strong>Deadline needs?</strong> If results are needed within an hour, batch may not guarantee it; keep a real-time fallback.</li>
+  <li><strong>Idempotency?</strong> Upsert by custom ID so resubmissions don't duplicate.</li>
+</ul>
+</article>
+</body>
+</html>

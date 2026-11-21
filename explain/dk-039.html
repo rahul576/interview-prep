@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-039 · Compare the bridge, host, none and macvlan network drivers.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-039" data-topic="Docker">
+<h1>Compare the bridge, host, none and macvlan network drivers.</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>bridge</strong> (default) gives containers private IPs behind <strong>NAT</strong> with published ports; <strong>host</strong> shares the <strong>host network stack</strong> with no isolation; <strong>none</strong> gives only <strong>loopback</strong>; <strong>macvlan</strong> gives each container its <strong>own MAC/IP on the LAN</strong>; <strong>overlay</strong> spans <strong>multiple hosts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker network drivers trade isolation against directness.</p>
+<p><strong>bridge</strong> creates a Linux bridge (<code>docker0</code> for the default network, a new one for each user-defined network). Containers get IPs on a private subnet, reach the outside world through <strong>NAT (masquerading)</strong> and are reachable from outside only through <strong>published ports</strong> (<code>-p 8080:80</code>), implemented with iptables or nftables rules and <code>docker-proxy</code>. User-defined bridges add <strong>DNS by container name</strong> and better isolation between applications. It is the right choice for almost everything on a single host.</p>
+<p><strong>host</strong> removes network isolation: the container uses the host's interfaces directly. There is no NAT and no port mapping, so throughput and latency are slightly better and applications that need many dynamic ports or multicast work easily. The costs are <strong>port conflicts</strong> between containers and the host, and the container can see and bind to all host interfaces. On Docker Desktop host networking behaves differently because the &quot;host&quot; is a VM.</p>
+<p><strong>none</strong> gives only a loopback interface, useful for batch jobs that must not touch the network, or for security-sensitive processing.</p>
+<p><strong>macvlan</strong> (and <strong>ipvlan</strong>) attach the container directly to the physical network with its <strong>own MAC and IP address</strong> from the LAN, so it looks like a separate device. This suits legacy applications or network appliances that expect a real LAN address. It needs network support (promiscuous mode, enough addresses), and by default the host cannot talk to its own macvlan containers.</p>
+<p><strong>overlay</strong> uses VXLAN to connect containers on different hosts, used by <strong>Swarm</strong>; Kubernetes uses CNI plugins instead.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>bridge: veth pair connects container to a bridge; NAT for egress, DNAT for published ports.</li>
+  <li>host: container joins the host network namespace.</li>
+  <li>none: container network namespace with only <code>lo</code>.</li>
+  <li>macvlan: sub-interface of a physical NIC with its own MAC.</li>
+  <li>overlay: VXLAN tunnels between hosts with a distributed key-value store.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker network create appnet                                # bridge
+docker run -d --network host prom/node-exporter             # host
+docker run --rm --network none alpine ip addr               # none
+docker network create -d macvlan --subnet 192.168.1.0/24 \
+  --gateway 192.168.1.1 -o parent=eth0 lan
+docker run -d --network lan --ip 192.168.1.50 legacy-app    # macvlan</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Driver</th><th>Isolation</th><th>Reachability</th><th>Typical use</th></tr></thead>
+<tbody>
+<tr><td>bridge</td><td>Yes</td><td>Published ports</td><td>Default apps</td></tr>
+<tr><td>host</td><td>None</td><td>Host ports</td><td>Monitoring agents, high throughput</td></tr>
+<tr><td>none</td><td>Total</td><td>None</td><td>Offline jobs</td></tr>
+<tr><td>macvlan</td><td>Own L2 identity</td><td>LAN IP</td><td>Legacy/appliances</td></tr>
+<tr><td>overlay</td><td>Yes</td><td>Cross-host</td><td>Swarm</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using host networking to avoid learning port mapping.</li>
+  <li>Using the default bridge and expecting name resolution.</li>
+  <li>Expecting the host to reach its macvlan containers without extra setup.</li>
+  <li>Assuming <code>-p</code> publishing is blocked by host firewalls like ufw (Docker's rules often bypass them).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Bridge is the default: containers get private IPs on a virtual bridge, use NAT to go out and are reachable only through published ports, and user-defined bridges add DNS by name. Host removes network isolation so the container uses the host stack directly, with no port mapping and slightly better performance but port conflicts and less security. None gives only loopback for jobs that mustn't use the network. Macvlan gives each container its own MAC and IP on the physical LAN, useful for legacy apps that expect to be a real device. Overlay spans several hosts for Swarm.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When is host networking justified?</strong> Node-level monitoring agents, very high packet rates, multicast or many dynamic ports.</li>
+  <li><strong>Why can published ports bypass ufw?</strong> Docker inserts its own iptables rules before ufw's chains.</li>
+  <li><strong>macvlan vs ipvlan?</strong> ipvlan shares the parent MAC, helpful where switches limit MAC addresses.</li>
+</ul>
+</article>
+</body>
+</html>

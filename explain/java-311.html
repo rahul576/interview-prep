@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-311 · How do Spring Data JPA derived query methods and @Query work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-311" data-topic="Spring Data &amp; JPA">
+<h1>How do Spring Data JPA derived query methods and @Query work?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Spring Data JPA <strong>derives queries from method names</strong> (<code>findByStatusAndCreatedAtAfter</code>), while <strong><code>@Query</code></strong> gives explicit <strong>JPQL or native SQL</strong>; methods accept <strong>Pageable and Sort</strong>, return <strong>Page, Slice or projections</strong>, and update/delete queries need <strong><code>@Modifying</code></strong> plus a transaction because they <strong>bypass the persistence context</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Derived queries.</strong> At startup Spring Data parses repository method names: a subject (<code>find…By</code>, <code>count…By</code>, <code>exists…By</code>, <code>delete…By</code>, <code>findFirst10By</code>), then property expressions joined with <code>And</code>/<code>Or</code> and operators such as <code>GreaterThan</code>, <code>Between</code>, <code>Like</code>, <code>In</code>, <code>IsNull</code>, <code>IgnoreCase</code>, and <code>OrderBy…</code>. <code>findByStatusAndCreatedAtAfter(Status s, Instant t)</code> becomes JPQL <code>where status = ?1 and createdAt &gt; ?2</code>. Typos fail fast at startup. They're great for simple queries but get unreadable beyond two or three conditions.</p>
+<p><strong><code>@Query</code>.</strong> For joins, fetch joins, aggregates or complex conditions, write <strong>JPQL</strong> in <code>@Query</code>, which works on entities and stays portable. Use <code>nativeQuery = true</code> when you need database-specific features such as window functions, JSON operators or hints; native queries return entities, projections or tuples. Prefer named parameters (<code>:status</code> with <code>@Param</code>). For dynamic filters, use <strong>Specifications</strong>, <strong>Querydsl</strong> or Query by Example rather than many method variants.</p>
+<p><strong>Paging and sorting.</strong> Add a <code>Pageable</code> or <code>Sort</code> parameter. Returning <strong><code>Page&lt;T&gt;</code></strong> runs an additional <strong>count query</strong> to know total elements and pages; <strong><code>Slice&lt;T&gt;</code></strong> only fetches one extra row to know whether a next slice exists, which is cheaper for infinite scroll. For deep pagination, consider keyset (<code>ScrollPosition</code>/<code>Window</code> in newer Spring Data) instead of offsets.</p>
+<p><strong>Projections.</strong> Interface projections (<code>interface OrderSummary { Long getId(); String getCustomerName(); }</code>), class/record DTO projections, or constructor expressions in JPQL fetch only needed columns, avoiding entity overhead and lazy-loading issues.</p>
+<p><strong>Modifying queries.</strong> <code>@Query(&quot;update ...&quot;)</code> or <code>delete</code> needs <strong><code>@Modifying</code></strong> and must run inside a transaction (<code>@Transactional</code>). These bulk statements go directly to the database and <strong>bypass the persistence context</strong>: managed entities in memory become stale, and lifecycle callbacks and cascades don't run. Use <code>@Modifying(clearAutomatically = true, flushAutomatically = true)</code> to flush pending changes first and clear afterwards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Repository interface is scanned at startup.</li>
+  <li>Each method is parsed (derived) or its <code>@Query</code> validated.</li>
+  <li>A proxy implementation is created.</li>
+  <li>At call time, parameters bind and the query executes via EntityManager.</li>
+  <li>Results map to entities, projections, Page or Slice.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface OrderRepository extends JpaRepository&lt;Order, Long&gt; {
+
+    List&lt;Order&gt; findByStatusAndCreatedAtAfter(Status status, Instant after);
+
+    Slice&lt;OrderSummary&gt; findByCustomerIdOrderByCreatedAtDesc(long customerId, Pageable page);
+
+    @Query(&quot;select o from Order o join fetch o.customer c where c.country = :country&quot;)
+    Page&lt;Order&gt; findByCountry(@Param(&quot;country&quot;) String country, Pageable page);
+
+    @Query(value = &quot;select * from orders where tags @&gt; cast(:tag as jsonb)&quot;, nativeQuery = true)
+    List&lt;Order&gt; findByTag(@Param(&quot;tag&quot;) String tagJson);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(&quot;update Order o set o.status = 'EXPIRED' where o.createdAt &lt; :cutoff and o.status = 'PENDING'&quot;)
+    int expireOld(@Param(&quot;cutoff&quot;) Instant cutoff);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Page</th><th>Slice</th></tr></thead>
+<tbody>
+<tr><td>Count query</td><td>Yes</td><td>No</td></tr>
+<tr><td>Knows total pages</td><td>Yes</td><td>No, only hasNext</td></tr>
+<tr><td>Cost</td><td>Higher</td><td>Lower</td></tr>
+<tr><td>UI</td><td>Numbered pages</td><td>Infinite scroll</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Extremely long derived method names.</li>
+  <li>Forgetting <code>@Modifying</code> or a transaction for updates.</li>
+  <li>Stale managed entities after bulk updates.</li>
+  <li><code>Page</code> with fetch-joined collections, causing in-memory pagination and slow counts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring Data generates queries from method names like findByStatusAndCreatedAtAfter, which is great for simple cases. For anything complex I use @Query with JPQL, or native SQL when I need database-specific features. Methods can take Pageable and Sort and return Page or Slice. Interface or DTO projections fetch only needed columns. Update and delete queries need @Modifying and a transaction, and because they bypass the persistence context I flush and clear around them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Page vs Slice?</strong> Page runs a count query for totals; Slice only knows if there's a next one.</li>
+  <li><strong>Dynamic search filters?</strong> Specifications, Querydsl or Query by Example.</li>
+  <li><strong>Custom count query?</strong> <code>@Query(countQuery = &quot;...&quot;)</code> for expensive or fetch-join queries.</li>
+</ul>
+</article>
+</body>
+</html>

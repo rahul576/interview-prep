@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-029 · How do you manage secrets in Kubernetes beyond plain Secret objects?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-029" data-topic="Kubernetes">
+<h1>How do you manage secrets in Kubernetes beyond plain Secret objects?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Kubernetes <strong>Secrets are only base64-encoded</strong>, so enable <strong>encryption at rest with a KMS provider</strong>, lock down <strong>RBAC</strong>, keep the source of truth in a <strong>vault</strong> (Vault, AWS Secrets Manager, Azure Key Vault) synced by the <strong>External Secrets Operator</strong> or mounted by the <strong>Secrets Store CSI driver</strong>, use <strong>Sealed Secrets or SOPS</strong> for GitOps, and design for <strong>rotation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A Secret object is stored in etcd and readable by anyone with <code>get</code> on Secrets in that namespace; base64 is an encoding, not encryption. Hardening happens in layers.</p>
+<p><strong>Cluster level:</strong></p>
+<ul>
+  <li><strong>Encryption at rest:</strong> an EncryptionConfiguration with a <strong>KMS v2</strong> provider, so etcd stores ciphertext; managed services offer customer-managed keys.</li>
+  <li><strong>RBAC:</strong> few subjects get <code>get/list</code> on Secrets (<code>list</code> reveals contents), and anyone who can <strong>create pods</strong> can mount the namespace's Secrets.</li>
+</ul>
+<p><strong>Source of truth outside the cluster:</strong> a dedicated secrets manager provides access policies, versioning, audit and <strong>rotation</strong>.</p>
+<ul>
+  <li><strong>External Secrets Operator (ESO):</strong> an <code>ExternalSecret</code> maps vault entries to a Kubernetes Secret and refreshes it on an interval, so rotated values flow in. Apps consume normal Secrets.</li>
+  <li><strong>Secrets Store CSI Driver</strong> with a provider (Vault, AWS, Azure, GCP): mounts secrets as <strong>files</strong> at pod start directly from the provider, optionally syncing to a Secret object if needed; it can avoid storing them in etcd at all.</li>
+  <li><strong>Vault Agent</strong> or Vault's Secrets Operator for dynamic secrets such as short-lived database credentials.</li>
+</ul>
+<p><strong>GitOps:</strong> never commit plain Secrets. <strong>Sealed Secrets</strong> encrypts with a cluster key so only the controller can decrypt; <strong>SOPS</strong> encrypts values with KMS or age keys, decrypted by Flux or Argo CD plugins. Many teams prefer committing only ExternalSecret references.</p>
+<p><strong>Consumption:</strong> prefer mounted <strong>files</strong> over env vars: env vars leak into crash dumps, debug endpoints and child processes, and don't update. Apps should re-read files or be restarted on rotation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Secret stored in a vault with access policy.</li>
+  <li>Pod's service account authenticates to the vault via workload identity.</li>
+  <li>ESO syncs it into a Secret, or the CSI driver mounts it.</li>
+  <li>etcd copy, if any, is KMS-encrypted.</li>
+  <li>Rotation in the vault → refreshed Secret → app reloads or restarts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: db-credentials, namespace: shop }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: aws-secrets-manager }
+  target: { name: db-credentials }
+  data:
+  - secretKey: password
+    remoteRef: { key: prod/shop/db, property: password }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing base64 is protection.</li>
+  <li>Plain Secrets in Git, even private repos.</li>
+  <li>Broad <code>list secrets</code> permissions for CI or monitoring tools.</li>
+  <li>Rotation that requires a code change or manual redeploy everywhere.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A Secret is only base64-encoded, so first I enable encryption at rest with a KMS provider and restrict RBAC, remembering that anyone who can create pods in a namespace can read its secrets. The source of truth lives in a vault such as HashiCorp Vault, AWS Secrets Manager or Azure Key Vault. External Secrets Operator syncs values into Kubernetes Secrets and refreshes them on rotation, or the Secrets Store CSI driver mounts them as files directly from the provider. For GitOps I use Sealed Secrets or SOPS, and I prefer files over env vars because env vars leak into logs and dumps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does a pod authenticate to the vault without a stored credential?</strong> Its projected service account token via workload identity or Vault's Kubernetes auth.</li>
+  <li><strong>ESO or CSI driver?</strong> ESO for normal Secret consumption; CSI to avoid etcd copies and fetch at pod start.</li>
+  <li><strong>How do you rotate without downtime?</strong> Support two valid credentials during overlap, then retire the old one.</li>
+</ul>
+</article>
+</body>
+</html>

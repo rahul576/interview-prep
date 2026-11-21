@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-047 · How does the API Priority and Fairness feature protect the Kubernetes API server?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-047" data-topic="Kubernetes">
+<h1>How does the API Priority and Fairness feature protect the Kubernetes API server?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>API Priority and Fairness (APF)</strong> divides the API server's concurrency budget into <strong>priority levels</strong> (via <strong>PriorityLevelConfigurations</strong>), classifies each request with <strong>FlowSchemas</strong>, and uses <strong>fair queuing between flows</strong> so one noisy client cannot starve others; overflow gets <strong>HTTP 429</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The API server is shared by everything: kubelets, controllers, operators, CI pipelines and humans. Before APF, the only protection was a global limit on in-flight requests (<code>--max-requests-inflight</code>, <code>--max-mutating-requests-inflight</code>). A single buggy controller doing expensive LIST calls could consume all slots, and then kubelet heartbeats or leader-election renewals were rejected, causing cascading failures. APF, stable since Kubernetes 1.29 (<code>flowcontrol.apiserver.k8s.io/v1</code>), replaced that behaviour; those flags now just set the total concurrency that APF shares out.</p>
+<p>Each request is matched against <strong>FlowSchemas</strong> in order of <code>matchingPrecedence</code>. A FlowSchema matches on subject (user, group, ServiceAccount) and resource or verb, and assigns the request to a <strong>PriorityLevelConfiguration</strong>. It also defines the <strong>flow distinguisher</strong>, usually by user or by namespace, which identifies &quot;who&quot; a request belongs to.</p>
+<p>Each priority level gets a share of total concurrency (<code>nominalConcurrencyShares</code>) and can borrow or lend unused seats. Built-in levels include <code>exempt</code> (system masters, health checks), <code>system</code>, <code>leader-election</code>, <code>node-high</code>, <code>workload-high</code>, <code>workload-low</code> and <code>global-default</code>, plus <code>catch-all</code>. Inside a level, requests from different flows go into queues using <strong>shuffle sharding</strong> and are served fairly, so one heavy flow mainly delays itself. Expensive requests like large LISTs cost more seats. When queues are full or wait too long, clients receive <strong>429 Too Many Requests</strong> with Retry-After; client-go backs off automatically.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives; APF matches the highest-precedence FlowSchema.</li>
+  <li>FlowSchema picks the priority level and flow distinguisher.</li>
+  <li>If the level has free seats, the request executes.</li>
+  <li>Otherwise it is queued in a shuffle-sharded queue for its flow.</li>
+  <li>Queues are served fairly; overflow returns 429.</li>
+  <li>Metrics and debug endpoints show who is waiting or rejected.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get flowschemas,prioritylevelconfigurations
+kubectl get --raw /debug/api_priority_and_fairness/dump_priority_levels
+# PromQL: who is being throttled?
+# sum by (flow_schema, priority_level) (rate(apiserver_flowcontrol_rejected_requests_total[5m]))</code></pre>
+<pre><code class="language-yaml">apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: FlowSchema
+metadata: { name: noisy-operator }
+spec:
+  priorityLevelConfiguration: { name: workload-low }
+  matchingPrecedence: 1000
+  distinguisherMethod: { type: ByUser }
+  rules:
+    - subjects:
+        - kind: ServiceAccount
+          serviceAccount: { name: report-operator, namespace: tools }
+      resourceRules:
+        - { verbs: [&quot;*&quot;], apiGroups: [&quot;*&quot;], resources: [&quot;*&quot;], namespaces: [&quot;*&quot;] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raising global in-flight limits instead of finding the noisy client.</li>
+  <li>Putting custom workloads into <code>exempt</code>.</li>
+  <li>Ignoring 429s in custom scripts that retry without backoff.</li>
+  <li>Writing controllers that LIST instead of using informers and watches.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;APF replaced the old max-in-flight limits with a shared concurrency budget. Each request is classified by FlowSchemas, matching user, group, service account or verb, into a priority level. PriorityLevelConfigurations split concurrency between levels like system, leader election and workloads, so critical traffic always has seats. Inside a level, requests are grouped into flows, usually per client, and fair queuing means one misbehaving controller mainly delays itself. When a level is saturated clients get 429s. I use the rejected and wait-time metrics to find the operator or script hammering the API.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>An operator lists all pods every few seconds?</strong> It loads the API server and etcd; switch to informers with watches, label selectors and resync, and isolate it in a low priority level.</li>
+  <li><strong>What is shuffle sharding?</strong> Each flow is hashed to a few queues, so a heavy flow rarely shares all queues with a light one.</li>
+  <li><strong>Why are LISTs expensive?</strong> They may read many objects from etcd or the watch cache and serialise large responses, so APF charges them more seats.</li>
+</ul>
+</article>
+</body>
+</html>

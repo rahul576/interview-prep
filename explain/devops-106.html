@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-106 · What is the difference between immutable artifact promotion and rebuilding per environment?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-106" data-topic="CI/CD Tools">
+<h1>What is the difference between immutable artifact promotion and rebuilding per environment?</h1>
+<p class="ex-meta">CI/CD Tools · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Immutable artifact promotion</strong> means <strong>build once</strong> and move the <strong>exact same artifact</strong>, identified by version or <strong>digest</strong>, through dev, staging and production, injecting <strong>configuration per environment</strong>; rebuilding per environment risks shipping a binary that was <strong>never tested</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the rebuild model, each environment gets its own build. Even from the same commit the output can differ: a dependency range resolves to a newer version, the base image <code>node:22</code> changed overnight, or a build flag differs. Production then runs <strong>an artifact that never passed your tests</strong>, and debugging is harder because you cannot be sure which bits are running.</p>
+<p>In the promotion model, the pipeline builds <strong>once</strong>, typically on merge to main, producing an immutable artifact such as a container image or JAR. It gets a never-reused tag such as the commit SHA, and for images the <strong>digest</strong> (<code>sha256:...</code>), a content hash that is truly immutable. The artifact goes to dev, then staging, then production; &quot;promotion&quot; just changes which version each environment points to, often via a commit to a GitOps repository.</p>
+<p>This requires <strong>separating configuration from the build</strong> (twelve-factor style): URLs, flags and credentials come from environment variables, ConfigMaps, Secrets or a parameter store at deploy or run time. Benefits: test results really apply to production, rollback means redeploying the previous digest, audits trace exactly which build is where, and <strong>signatures</strong> (for example Sigstore cosign) and SBOMs attach to one artifact.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI builds the artifact once from a commit.</li>
+  <li>It is tagged with an immutable identifier (SHA, version) and pushed; registry tag immutability is enabled.</li>
+  <li>The artifact is signed and scanned, and its digest is recorded.</li>
+  <li>Deploy to dev with dev config; run tests.</li>
+  <li>Promote the same digest to staging, then production, changing only config.</li>
+  <li>Rollback redeploys a previous digest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitOps: environments reference the same image digest
+# envs/staging/values.yaml
+image:
+  repository: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders
+  digest: sha256:4f1c9a7e...   # built once from commit 9f2e1ab
+config:
+  DB_HOST: orders-staging.internal
+
+# envs/prod/values.yaml  (promotion = copy the digest)
+image:
+  repository: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders
+  digest: sha256:4f1c9a7e...
+config:
+  DB_HOST: orders-prod.internal</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Promote one artifact</th><th>Rebuild per environment</th></tr></thead>
+<tbody>
+<tr><td>What reaches prod</td><td>Exactly what was tested</td><td>A new, untested build</td></tr>
+<tr><td>Drift risk</td><td>None from the build</td><td>Dependencies, base images, tools</td></tr>
+<tr><td>Rollback</td><td>Redeploy previous digest</td><td>Rebuild old code, hope it matches</td></tr>
+<tr><td>Config</td><td>Injected at deploy/run time</td><td>Often baked in</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using mutable tags such as <code>latest</code> or <code>staging</code>, so the &quot;same tag&quot; is not the same image.</li>
+  <li>Baking environment URLs or secrets into the image.</li>
+  <li>Separate branches per environment, each rebuilt independently.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I build once and promote. The pipeline builds one container image, tags it with the commit SHA and records its digest. That exact digest goes to dev, staging and production; only configuration changes, injected through environment variables, ConfigMaps or a secrets store. Rebuilding per environment lets dependencies or base images drift, so production runs something that never passed tests. With immutable digests, rollback is redeploying the previous digest and auditing is trivial.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid <code>latest</code> in production?</strong> It is mutable and unpredictable, so you cannot know or reproduce what runs, and rollback is unclear.</li>
+  <li><strong>How do you handle environment-specific frontend config?</strong> Load it at runtime from a config endpoint or injected file instead of build-time variables.</li>
+  <li><strong>Where do promotion approvals happen?</strong> In the CD tool or as a reviewed pull request to the GitOps repo for the production environment.</li>
+</ul>
+</article>
+</body>
+</html>

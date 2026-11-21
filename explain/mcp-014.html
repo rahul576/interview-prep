@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-014 · Compare the stdio and Streamable HTTP transports in MCP.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-014" data-topic="MCP Servers">
+<h1>Compare the stdio and Streamable HTTP transports in MCP.</h1>
+<p class="ex-meta">MCP Servers · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>stdio</strong> runs the server as a <strong>local subprocess</strong> exchanging <strong>newline-delimited JSON-RPC</strong> over stdin/stdout (logs on <strong>stderr</strong>), ideal for developer tools; <strong>Streamable HTTP</strong> exposes <strong>one HTTP endpoint</strong> receiving <strong>POSTs</strong> and answering with <strong>JSON or an SSE stream</strong>, for remote, shared servers that need <strong>authentication and network security</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>stdio.</strong> The host launches the server as a child process (e.g. <code>npx some-server</code> or <code>uv run server.py</code>) and writes JSON-RPC messages to its <strong>stdin</strong>; the server writes responses and notifications to <strong>stdout</strong>. Each message is one line of JSON, with no embedded newlines. Because stdout is the protocol channel, <strong>anything else printed there corrupts the stream</strong>, so logs must go to <strong>stderr</strong>, which hosts typically capture into their log files. stdio is simple, fast, works offline and needs no ports. <strong>Trust follows the OS user</strong>: the server runs with the user's permissions, and credentials are usually passed via <strong>environment variables</strong> in the host config. The downsides: it only works on the same machine, each user installs and updates the server, and every user holds their own secrets.</p>
+<p><strong>Streamable HTTP</strong>, introduced in the 2025-03-26 revision, is for <strong>remote servers</strong>. The server exposes a <strong>single endpoint</strong>, such as <code>https://mcp.example.com/mcp</code>. The client sends each JSON-RPC message as an <strong>HTTP POST</strong>, with <code>Accept: application/json, text/event-stream</code>. The server either returns a single <strong>JSON</strong> response or opens a <strong>server-sent events (SSE)</strong> stream for that request when it needs to send progress notifications or several messages before the final response. Handshake-based revisions also allow an optional GET stream for server-initiated messages and an <code>Mcp-Session-Id</code> header.</p>
+<p>Because it is network-reachable, Streamable HTTP needs <strong>TLS</strong>, <strong>authentication</strong> (normally <strong>OAuth 2.1</strong> bearer tokens per the MCP authorization spec), <strong>Origin validation</strong>, <strong>rate limiting</strong>, request size limits and input validation, like any web API. In return it offers central deployment, one place to update and audit, per-user authorisation, and access from web and mobile hosts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>stdio: host spawns process → writes line-delimited JSON to stdin → reads stdout → captures stderr.</li>
+  <li>HTTP: client POSTs JSON-RPC to the endpoint with a bearer token.</li>
+  <li>Server replies <code>Content-Type: application/json</code> or <code>text/event-stream</code>.</li>
+  <li>With SSE, progress notifications stream first, then the final response; the stream closes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">// stdio config in a host
+{ &quot;mcpServers&quot;: { &quot;files&quot;: { &quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-filesystem&quot;, &quot;/home/dev/project&quot;] } } }</code></pre>
+<pre><code class="language-http">POST /mcp HTTP/1.1
+Host: mcp.example.com
+Authorization: Bearer eyJ...
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:5,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{&quot;name&quot;:&quot;search_docs&quot;,&quot;arguments&quot;:{&quot;q&quot;:&quot;refund policy&quot;}}}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>stdio</th><th>Streamable HTTP</th></tr></thead>
+<tbody>
+<tr><td>Location</td><td>Same machine, subprocess</td><td>Remote or local network service</td></tr>
+<tr><td>Auth</td><td>OS user, env vars</td><td>OAuth 2.1 bearer tokens, TLS</td></tr>
+<tr><td>Deployment</td><td>Each user installs</td><td>Central, one version</td></tr>
+<tr><td>Best for</td><td>Developer tools, local files</td><td>Shared, enterprise, SaaS integrations</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Printing logs or banners to stdout in a stdio server.</li>
+  <li>Running an HTTP server without authentication &quot;because it's internal&quot;.</li>
+  <li>Binding a local HTTP server to <code>0.0.0.0</code>.</li>
+  <li>Using the deprecated HTTP+SSE transport for new servers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With stdio, the host launches the server as a local subprocess and exchanges newline-delimited JSON-RPC over stdin and stdout. It's simple and fast, trust follows the OS user, and credentials usually come from environment variables; logs must go to stderr because stdout is the protocol channel. Streamable HTTP is for remote servers: one HTTP endpoint, each message is a POST, and the server answers with plain JSON or an SSE stream when it needs to send progress or several messages. Because it's on the network it needs TLS, OAuth 2.1, rate limiting and normal web security. stdio suits developer tools; HTTP suits shared and enterprise services.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why remote servers even for internal tools?</strong> Central updates, audit, per-user OAuth and no secrets on laptops.</li>
+  <li><strong>Can a stdio server be remote?</strong> Only via a proxy or bridge that wraps it in HTTP.</li>
+  <li><strong>Why SSE inside HTTP?</strong> To stream progress and multiple messages for one request without WebSockets.</li>
+</ul>
+</article>
+</body>
+</html>

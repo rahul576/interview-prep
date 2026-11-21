@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-198 · What is the difference between JDK dynamic proxies and CGLIB proxies?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-198" data-topic="Spring Framework">
+<h1>What is the difference between JDK dynamic proxies and CGLIB proxies?</h1>
+<p class="ex-meta">Spring Framework · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>JDK dynamic proxy</strong> implements the target's <strong>interfaces</strong> via <code>java.lang.reflect.Proxy</code> and an <code>InvocationHandler</code>, so it can only be injected <strong>by interface</strong>; a <strong>CGLIB proxy</strong> generates a <strong>runtime subclass</strong> of the class, so it works without interfaces and by <strong>concrete type</strong>, but cannot proxy <strong>final classes or methods</strong>; <strong>Spring Boot defaults to CGLIB</strong> (<code>proxyTargetClass=true</code>).</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>JDK dynamic proxies</strong> are part of the JDK. <code>Proxy.newProxyInstance</code> creates a class at runtime that implements a given set of interfaces and forwards every call to an <code>InvocationHandler</code>, where Spring runs the advice chain before calling the target. Because the proxy class only implements interfaces and is <strong>not a subclass</strong> of the target, it can be assigned only to interface types. If you inject <code>OrderServiceImpl</code> by its class, Spring fails with <code>BeanNotOfRequiredTypeException</code> (&quot;is expected to be of type OrderServiceImpl but was actually of type jdk.proxy2.$Proxy...&quot;). Methods not declared on an interface cannot be intercepted.</p>
+<p><strong>CGLIB</strong> (repackaged inside Spring core) generates bytecode for a <strong>subclass</strong> of the target class and overrides its non-final methods to route through the advice chain. It works for classes <strong>without interfaces</strong>, can be injected by concrete class, and intercepts public, protected and package-visible methods. Its limits come from inheritance: it cannot subclass <strong>final classes</strong> and cannot override <strong>final methods</strong> (those calls go straight to the proxy instance's own, uninitialised state). Spring uses <strong>Objenesis</strong> to create the proxy instance without calling the target's constructor, so constructors with side effects aren't run twice and no default constructor is required.</p>
+<p><strong>Defaults</strong>: plain Spring Framework uses a JDK proxy when the bean implements at least one interface, and CGLIB otherwise. <strong>Spring Boot</strong> sets <code>spring.aop.proxy-target-class=true</code> by default, so CGLIB is used even when interfaces exist, which avoids the injection-by-class surprise. Kotlin classes are final by default, which is why the <code>kotlin-spring</code> (all-open) plugin exists. Performance differences between the two are negligible today.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Auto-proxy creator decides a bean needs a proxy.</li>
+  <li>It checks <code>proxyTargetClass</code> and whether the bean has interfaces.</li>
+  <li>JDK: create <code>$Proxy</code> implementing the interfaces with an InvocationHandler.</li>
+  <li>CGLIB: generate <code>Target$$SpringCGLIB$$0</code> subclass, instantiate via Objenesis.</li>
+  <li>Calls route through the advice chain to the target instance.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public interface PaymentService { void pay(Order o); }
+
+@Service
+public class StripePaymentService implements PaymentService {
+    @Transactional public void pay(Order o) { ... }
+}
+
+@Component
+class Checkout {
+    // Works with both proxy types:
+    Checkout(PaymentService payments) { }
+    // Works only with CGLIB (Spring Boot default); fails with JDK proxies:
+    // Checkout(StripePaymentService payments) { }
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  aop:
+    proxy-target-class: false   # force JDK proxies when interfaces exist</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>JDK dynamic proxy</th><th>CGLIB proxy</th></tr></thead>
+<tbody>
+<tr><td>Requires interface</td><td>Yes</td><td>No</td></tr>
+<tr><td>Mechanism</td><td>Implements interfaces</td><td>Subclasses class</td></tr>
+<tr><td>Inject by class</td><td>No</td><td>Yes</td></tr>
+<tr><td>Final class/method</td><td>n/a (interface methods)</td><td>Cannot proxy</td></tr>
+<tr><td>Boot default</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Declaring <code>@Transactional</code> methods <code>final</code>, silently losing the transaction with CGLIB.</li>
+  <li>Injecting by implementation class when JDK proxies are in use.</li>
+  <li>Final Kotlin classes without the all-open plugin.</li>
+  <li>Assuming the constructor runs twice with CGLIB (Objenesis avoids it).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A JDK dynamic proxy creates at runtime a class implementing the target's interfaces and routes calls through an InvocationHandler, so it only works with interfaces and can only be injected by interface type. CGLIB generates a runtime subclass of the target class, overriding methods to add advice, so it works without interfaces and can be injected by class, but can't proxy final classes or final methods. Spring Framework uses JDK proxies when interfaces exist, but Spring Boot sets proxyTargetClass to true, so CGLIB is the default.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Error injecting a JDK proxy by class?</strong> BeanNotOfRequiredTypeException.</li>
+  <li><strong>Why does Boot prefer CGLIB?</strong> Avoids injection-by-class failures and intercepts non-interface methods.</li>
+  <li><strong>What does Objenesis do?</strong> Instantiates the proxy without calling the target's constructor.</li>
+</ul>
+</article>
+</body>
+</html>

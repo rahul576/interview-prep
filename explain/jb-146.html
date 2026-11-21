@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-146 · What are window functions? Explain ROW_NUMBER(), RANK(), and DENSE_RANK().</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-146" data-topic="Databases &amp; SQL">
+<h1>What are window functions? Explain ROW_NUMBER(), RANK(), and DENSE_RANK().</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Window functions</strong> compute a value over a set of related rows (the <strong>window</strong>, defined with <code>OVER (PARTITION BY ... ORDER BY ...)</code>) <strong>without collapsing them</strong>; <code>ROW_NUMBER</code> numbers rows uniquely, <code>RANK</code> shares ranks on ties and leaves gaps, and <code>DENSE_RANK</code> shares ranks without gaps.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>GROUP BY</code> turns many rows into one per group, so you lose the detail. A window function keeps every row and adds a computed column based on its &quot;neighbours&quot;. The <code>OVER</code> clause defines the window:</p>
+<ul>
+  <li><strong>PARTITION BY</strong> splits rows into independent groups (like GROUP BY, but without collapsing).</li>
+  <li><strong>ORDER BY</strong> orders rows within each partition, needed for ranking and running totals.</li>
+  <li>An optional <strong>frame</strong> (<code>ROWS BETWEEN 6 PRECEDING AND CURRENT ROW</code>) for moving averages.</li>
+</ul>
+<p>The ranking functions differ only in how they treat ties. For salaries 100, 100, 90, 80:</p>
+<ul>
+  <li><strong>ROW_NUMBER</strong>: 1, 2, 3, 4. Unique; ties ordered arbitrarily unless you add a tie-breaker.</li>
+  <li><strong>RANK</strong>: 1, 1, 3, 4. Olympic-style: ties share the rank, then a gap.</li>
+  <li><strong>DENSE_RANK</strong>: 1, 1, 2, 3. Ties share the rank, no gaps.</li>
+</ul>
+<p>Other useful window functions include <code>SUM() OVER</code> for running totals, <code>LAG</code>/<code>LEAD</code> for comparing with the previous or next row, <code>FIRST_VALUE</code>, and <code>NTILE</code> for buckets.</p>
+<p>Classic uses: top N per group, <strong>deduplication</strong> (keep the latest row per business key with <code>ROW_NUMBER() = 1</code>), latest order per customer, running balances and month-over-month change. Window functions are evaluated after <code>WHERE</code>, <code>GROUP BY</code> and <code>HAVING</code>, so you filter their results in an outer query or CTE. They are supported in PostgreSQL, Oracle, SQL Server and MySQL 8+.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Rows pass FROM, WHERE, GROUP BY and HAVING.</li>
+  <li>Rows are partitioned by the PARTITION BY expression.</li>
+  <li>Each partition is sorted by the ORDER BY expression.</li>
+  <li>The function is computed for each row relative to its partition.</li>
+  <li>An outer query can filter, for example <code>rn = 1</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT name, dept, salary,
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn,
+       RANK()       OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk,
+       DENSE_RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS drnk
+FROM employee;
+
+-- Latest order per customer
+WITH x AS (
+  SELECT o.*, ROW_NUMBER() OVER (PARTITION BY customer_id
+                                 ORDER BY created_at DESC, id DESC) AS rn
+  FROM orders o
+)
+SELECT * FROM x WHERE rn = 1;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Salary</th><th>ROW_NUMBER</th><th>RANK</th><th>DENSE_RANK</th></tr></thead>
+<tbody>
+<tr><td>100</td><td>1</td><td>1</td><td>1</td></tr>
+<tr><td>100</td><td>2</td><td>1</td><td>1</td></tr>
+<tr><td>90</td><td>3</td><td>3</td><td>2</td></tr>
+<tr><td>80</td><td>4</td><td>4</td><td>3</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Filtering <code>WHERE rn = 1</code> in the same query level.</li>
+  <li>Using ROW_NUMBER without a deterministic tie-breaker, giving different results each run.</li>
+  <li>Confusing PARTITION BY with GROUP BY and expecting fewer rows.</li>
+  <li>Forgetting an index on (partition column, order column) for large tables.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Window functions calculate a value across related rows while keeping every row, unlike GROUP BY. The OVER clause defines the window: PARTITION BY splits rows into groups and ORDER BY orders them within each group. ROW_NUMBER gives a unique sequence even for ties, RANK gives ties the same rank and then skips, so 100, 100, 90 become 1, 1, 3, and DENSE_RANK doesn't skip, giving 1, 1, 2. I use them for top N per department, keeping the latest row per key to deduplicate, and with LAG or running SUMs for trends. Since they run after WHERE, I filter on them in a CTE.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Latest order per customer?</strong> ROW_NUMBER partitioned by customer ordered by date descending, keep rn = 1.</li>
+  <li><strong>What do LAG and LEAD do?</strong> Return a value from the previous or next row in the window.</li>
+  <li><strong>Running total?</strong> <code>SUM(amount) OVER (PARTITION BY account ORDER BY created_at)</code>.</li>
+</ul>
+</article>
+</body>
+</html>

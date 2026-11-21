@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-416 · What is the bulkhead pattern, and how does it differ from a circuit breaker?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-416" data-topic="Microservices">
+<h1>What is the bulkhead pattern, and how does it differ from a circuit breaker?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>bulkhead</strong> isolates <strong>resources per dependency</strong>, with its own limited <strong>thread pool or semaphore</strong>, so one slow dependency can exhaust only its own compartment; a <strong>circuit breaker</strong> instead <strong>detects failure and stops calling</strong> the dependency for a while; they are complementary.</p>
+
+<h2>Detailed explanation</h2>
+<p>The name comes from ships: watertight compartments mean a hull breach floods one section, not the whole ship. In a service, the shared resource is usually the <strong>request thread pool</strong> (Tomcat's 200 threads by default) or a connection pool. Suppose your service calls a fast inventory API and a slow third-party tax API. If the tax API starts taking 30 seconds, every request that calls it holds a thread; soon all 200 threads wait on tax, and even requests that never touch tax get no thread. One dependency has taken the whole service down.</p>
+<p>A <strong>bulkhead</strong> caps how many concurrent calls each dependency may use. A <strong>semaphore bulkhead</strong> limits concurrent calls on the caller's thread (cheap, good for most cases, including virtual threads); a <strong>thread-pool bulkhead</strong> runs calls on a dedicated, bounded pool with a queue (stronger isolation, plus asynchronous timeouts). When the compartment is full, extra calls are <strong>rejected immediately</strong> (<code>BulkheadFullException</code>) and can use a fallback, while the rest of the service keeps working. Bulkheads also apply at higher levels: separate connection pools per downstream, separate consumer groups, separate deployments for critical and non-critical traffic.</p>
+<p>A <strong>circuit breaker</strong> answers a different question. It does not cap concurrency; it <strong>watches outcomes</strong> and, when the failure or slow-call rate crosses a threshold, <strong>opens</strong> and fails fast for a period before testing recovery. A breaker reacts after failures accumulate; a bulkhead limits blast radius from the first second. Together with a <strong>timeout</strong> (TimeLimiter), they form the core of resilience; Resilience4j provides all of them. Spring Framework 7 also added a basic <code>@ConcurrencyLimit</code> annotation for simple concurrency throttling.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assign each dependency a max concurrency (e.g. 20).</li>
+  <li>Each call acquires a permit; release it on completion.</li>
+  <li>If none is free within <code>maxWaitDuration</code>, reject and fall back.</li>
+  <li>Timeouts ensure permits are released.</li>
+  <li>The circuit breaker opens if failures persist, so calls fail even faster.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resilience4j:
+  bulkhead:
+    instances:
+      taxApi:
+        maxConcurrentCalls: 20
+        maxWaitDuration: 10ms
+  thread-pool-bulkhead:
+    instances:
+      reportApi:
+        coreThreadPoolSize: 4
+        maxThreadPoolSize: 8
+        queueCapacity: 20</code></pre>
+<pre><code class="language-java">@Bulkhead(name = &quot;taxApi&quot;, fallbackMethod = &quot;estimatedTax&quot;)
+@CircuitBreaker(name = &quot;taxApi&quot;)
+public Tax tax(Order o) { return taxClient.calculate(o); }
+
+Tax estimatedTax(Order o, Throwable t) { return Tax.estimate(o); }</code></pre>
+<p>Sizing: by Little's law, concurrency ≈ throughput × latency. At 50 requests/s and 200 ms normal latency you need about 10 permits; 20 gives headroom.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Bulkhead</th><th>Circuit breaker</th></tr></thead>
+<tbody>
+<tr><td>Question answered</td><td>How many concurrent calls?</td><td>Should we call at all?</td></tr>
+<tr><td>Trigger</td><td>Concurrency limit reached</td><td>Failure/slow rate threshold</td></tr>
+<tr><td>Protects</td><td>Caller's resources</td><td>Caller and the dependency</td></tr>
+<tr><td>Reaction time</td><td>Immediate</td><td>After window fills</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using one shared pool for all downstream calls.</li>
+  <li>Bulkheads without timeouts, so permits stay held.</li>
+  <li>Sizing by guesswork instead of throughput × latency.</li>
+  <li>Thinking a circuit breaker alone prevents thread exhaustion.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A bulkhead isolates resources per dependency, like a separate limited thread pool or a semaphore, so if one downstream becomes slow it can only use up its own compartment instead of every request thread, which stops a cascading failure. A circuit breaker is different: it watches failure and slow-call rates and, when they cross a threshold, stops calling the dependency for a while and fails fast. The bulkhead limits blast radius immediately, the breaker reacts to sustained failure. Resilience4j provides both plus time limiters, and I combine them, sizing bulkheads from expected throughput times latency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you size a bulkhead for a slow third-party API?</strong> Throughput × p99 latency plus headroom, then load-test.</li>
+  <li><strong>Semaphore or thread-pool bulkhead?</strong> Semaphore for most sync code and virtual threads; thread pool when you need async timeouts and stronger isolation.</li>
+  <li><strong>Do virtual threads remove the need for bulkheads?</strong> No; they remove thread scarcity but not downstream overload or connection-pool exhaustion.</li>
+</ul>
+</article>
+</body>
+</html>

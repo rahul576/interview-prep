@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-020 · Describe the Kubernetes architecture: the control plane and worker node components.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-020" data-topic="Kubernetes">
+<h1>Describe the Kubernetes architecture: the control plane and worker node components.</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>The <strong>control plane</strong> (<strong>API server</strong>, <strong>etcd</strong>, <strong>scheduler</strong>, <strong>controller manager</strong>, optionally the <strong>cloud controller manager</strong>) stores and reconciles desired state; each <strong>worker node</strong> runs the <strong>kubelet</strong>, <strong>kube-proxy</strong> and a <strong>container runtime</strong> (containerd, CRI-O), and <strong>everything talks through the API server</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes is a <strong>declarative, reconciling</strong> system: you store desired state as objects, and independent components continuously work to make reality match. Understanding who does what explains almost every troubleshooting session.</p>
+<p><strong>Control plane.</strong></p>
+<ul>
+  <li><strong>kube-apiserver</strong> is the front door. Every request (kubectl, controllers, kubelets) goes through it: <strong>authentication</strong>, <strong>authorisation</strong> (RBAC), <strong>admission control</strong> (mutating and validating webhooks, Pod Security Admission), validation, then persistence. It also serves <strong>watches</strong>, so components react to changes instead of polling.</li>
+  <li><strong>etcd</strong> is a consistent, Raft-replicated key-value store holding all cluster state. Only the API server talks to it. Losing etcd without a backup means losing the cluster's definition.</li>
+  <li><strong>kube-scheduler</strong> watches for pods without a node, filters nodes that fit (resources, affinity, taints, volumes) and scores the rest, then <strong>binds</strong> the pod to the best node.</li>
+  <li><strong>kube-controller-manager</strong> runs controllers: Deployment, ReplicaSet, Node, Job, EndpointSlice, ServiceAccount and more, each a loop comparing desired and actual state.</li>
+  <li><strong>cloud-controller-manager</strong> integrates with the cloud: load balancers for Services, node lifecycle, routes.</li>
+</ul>
+<p><strong>Worker nodes.</strong></p>
+<ul>
+  <li><strong>kubelet</strong> watches pods assigned to its node, asks the runtime (via the <strong>CRI</strong>) to start containers, sets up volumes, runs probes and reports status.</li>
+  <li><strong>Container runtime</strong>: containerd or CRI-O (Docker Engine support via dockershim was removed in 1.24); the <strong>CNI</strong> plugin gives pods their network.</li>
+  <li><strong>kube-proxy</strong> programs iptables, IPVS or nftables rules for Service virtual IPs; some CNIs such as Cilium replace it with eBPF.</li>
+</ul>
+<p>In managed services (EKS, AKS, GKE) the provider runs the control plane; you manage nodes and workloads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl apply</code> sends the Deployment to the API server; it is authenticated, authorised, admitted and stored in etcd.</li>
+  <li>The Deployment controller creates a ReplicaSet; the ReplicaSet controller creates Pods.</li>
+  <li>The scheduler binds each pending Pod to a node.</li>
+  <li>The kubelet on that node pulls images and starts containers via the CRI; CNI assigns an IP.</li>
+  <li>Readiness passes; the EndpointSlice controller adds the pod to its Service.</li>
+  <li>Status flows back through the API server.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl get --raw='/readyz?verbose'          # API server health checks
+kubectl get pods -n kube-system -o wide      # control-plane/addon pods (self-managed)
+kubectl get events --sort-by=.lastTimestamp  # watch reconciliation happen</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying the scheduler starts containers (the kubelet does).</li>
+  <li>No etcd backups on self-managed clusters.</li>
+  <li>Thinking components talk to each other directly rather than via the API server.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The control plane has the API server, the front door that authenticates, authorises, runs admission and stores every object; etcd, the consistent key-value store with all cluster state; the scheduler, which assigns pending pods to nodes; and the controller manager, whose controllers reconcile actual state to desired state, plus a cloud controller manager for load balancers and nodes. Each worker runs the kubelet, which starts containers through the container runtime like containerd and reports status, and kube-proxy, which programs Service rules. Everything communicates through the API server using watches.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens step by step on <code>kubectl apply</code> of a Deployment?</strong> API server stores it, controllers create ReplicaSet and Pods, scheduler binds, kubelet starts containers.</li>
+  <li><strong>What if etcd loses quorum?</strong> The API becomes read-unavailable for writes; running pods continue, but nothing changes.</li>
+  <li><strong>Is kube-proxy required?</strong> Not with CNIs that implement Services in eBPF, such as Cilium.</li>
+</ul>
+</article>
+</body>
+</html>

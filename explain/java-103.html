@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-103 · What is the difference between static and instance members, and when are static blocks executed?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-103" data-topic="Core Java &amp; OOP">
+<h1>What is the difference between static and instance members, and when are static blocks executed?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Static members belong to the class</strong> (one shared copy), <strong>instance members belong to each object</strong>; static methods have <strong>no <code>this</code></strong> and cannot directly use instance state; a <strong>static block runs once</strong>, when the <strong>class is initialised</strong>, typically on first active use.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Instance fields</strong> live in each object on the heap: two <code>Order</code> objects have their own <code>id</code> and <code>total</code>. <strong>Instance methods</strong> run in the context of an object, with <code>this</code> available.</p>
+<p><strong>Static fields</strong> exist once per class (per class loader), shared by all instances and accessible without creating an object: <code>Order.count</code> or constants like <code>Math.PI</code> (<code>static final</code>). <strong>Static methods</strong> belong to the class too. Because there is no object, they <strong>cannot access instance fields or call instance methods directly</strong>, nor use <code>this</code> or <code>super</code>; they can only work with parameters and static state. Static methods are <strong>not overridden</strong>; a subclass method with the same signature <strong>hides</strong> it, and the call is resolved at compile time by the reference type. Good uses: pure utility functions (<code>Math.max</code>, <code>List.of</code>), <strong>factory methods</strong> (<code>Order.of(...)</code>), and constants.</p>
+<p><strong>Static initialiser blocks</strong> (<code>static { ... }</code>) contain code that runs <strong>once when the class is initialised</strong>. Class initialisation is lazy: it happens on the first <strong>active use</strong>, such as creating an instance, calling a static method, reading a non-constant static field, or <code>Class.forName</code>. Static field initialisers and static blocks run in <strong>textual order</strong>. Referencing a compile-time constant (<code>static final int MAX = 10</code>) does not trigger initialisation because the value is inlined. If a static block throws, the class fails with <code>ExceptionInInitializerError</code> and later uses get <code>NoClassDefFoundError</code>. The JVM guarantees initialisation is <strong>thread-safe</strong>, which is the basis of the lazy <strong>holder idiom</strong> for singletons.</p>
+<p><strong>Design concerns</strong>: mutable static state is effectively a global variable. It is shared between all threads (needs synchronisation), survives across tests (order-dependent test failures), makes dependency injection and mocking hard, and can cause memory leaks in application servers that redeploy class loaders. Prefer instance members and injected singleton beans; keep static for constants and stateless helpers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Class loading: the class bytes are loaded and linked.</li>
+  <li>Initialisation on first active use: static fields and static blocks run, top to bottom, once.</li>
+  <li>Each <code>new</code> allocates instance fields, runs instance initialisers and the constructor.</li>
+  <li>Static methods are invoked on the class (<code>invokestatic</code>), with no receiver.</li>
+  <li>Instance methods are invoked on an object, with dynamic dispatch.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Order {
+    private static final Map&lt;String, BigDecimal&gt; TAX_RATES;   // one per class
+    private static int created;                                // shared counter (not thread-safe)
+
+    static {                                                   // runs once at class init
+        TAX_RATES = Map.of(&quot;IN&quot;, new BigDecimal(&quot;0.18&quot;), &quot;UK&quot;, new BigDecimal(&quot;0.20&quot;));
+        System.out.println(&quot;Order class initialised&quot;);
+    }
+
+    private final String id;                                   // per object
+    private final String country;
+
+    public Order(String id, String country) {
+        this.id = id; this.country = country; created++;
+    }
+
+    public BigDecimal taxRate() { return TAX_RATES.get(country); }   // instance uses static: OK
+
+    public static int createdCount() {
+        // return id.length();   // compile error: no instance in a static context
+        return created;
+    }
+}
+
+new Order(&quot;o1&quot;, &quot;IN&quot;);   // prints &quot;Order class initialised&quot; (first use), then constructs
+new Order(&quot;o2&quot;, &quot;UK&quot;);   // static block does not run again</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Static</th><th>Instance</th></tr></thead>
+<tbody>
+<tr><td>Belongs to</td><td>Class</td><td>Each object</td></tr>
+<tr><td>Copies</td><td>One</td><td>One per object</td></tr>
+<tr><td>Access to <code>this</code></td><td>No</td><td>Yes</td></tr>
+<tr><td>Overriding</td><td>No (hiding)</td><td>Yes</td></tr>
+<tr><td>Initialised</td><td>At class initialisation</td><td>At object creation</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using mutable static fields as a cache or global state shared across threads.</li>
+  <li>Thinking static blocks run when the class file is compiled or at JVM start.</li>
+  <li>Calling static methods through instances, suggesting polymorphism that does not exist.</li>
+  <li>Heavy work or I/O in static blocks, causing hard-to-debug initialisation errors.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Static fields and methods belong to the class, so there's one shared copy no matter how many objects exist, while instance members belong to each object. Static methods can't access instance fields or use this directly, because there's no object. A static block runs once, when the class is initialised, which happens lazily on first active use, like creating an instance or calling a static method, and it's used to set up static state. I keep static for constants, factory methods and stateless utilities, because mutable static state hurts testability and thread safety.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>In what order are static blocks, instance initialisers and constructors executed?</strong> Static initialisers once, superclass first, at class initialisation; then for each object: superclass constructor chain, instance field initialisers and instance blocks in textual order, then the constructor body.</li>
+  <li><strong>Can a static method be overridden?</strong> No; a same-signature static method in a subclass hides it.</li>
+  <li><strong>Is static class initialisation thread-safe?</strong> Yes; the JVM locks initialisation, which the holder idiom relies on.</li>
+</ul>
+</article>
+</body>
+</html>

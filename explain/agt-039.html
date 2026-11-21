@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-039 · How do you handle a multi-step agent task that fails halfway through, after some actions already happened?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-039" data-topic="AI Agents &amp; AIOps">
+<h1>How do you handle a multi-step agent task that fails halfway through, after some actions already happened?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Record every completed step and its effects durably</strong>, then decide by error type: <strong>resume from the failed step</strong> for transient issues (safe because tools are <strong>idempotent</strong>), run <strong>compensating actions defined in code</strong> in a <strong>saga</strong> for permanent failures, or <strong>escalate to a human</strong>; always <strong>tell the user exactly what was and was not done</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Agents act across several systems, such as a CRM, a booking system and email, with <strong>no global transaction</strong>. If step four of six fails, steps one to three have already changed the world. Partial failure must be designed for, not improvised.</p>
+<p><strong>Durable record of effects</strong>: the runtime, not the model, records each completed step and its effects in <strong>durable state</strong>: &quot;created ticket 4711&quot;, &quot;reserved room 12 for 14 May&quot;, &quot;charged card, payment ID pi_88&quot;. The model's context may be compacted or lost; the step log is the source of truth.</p>
+<p><strong>Transient failures</strong> (timeouts, rate limits, temporary outages): retry with backoff, or <strong>resume from the failed step</strong> after the cause is fixed. This is only safe if tools are <strong>idempotent</strong>, using idempotency keys per run and step, so a repeated &quot;reserve room&quot; does not create a second reservation and a repeated charge is not taken twice.</p>
+<p><strong>Permanent failures</strong> (business rule violation, resource unavailable, permission denied): the system runs <strong>compensating actions</strong> that semantically undo earlier steps in reverse order, such as cancelling the reservation and refunding the charge. This is the <strong>saga pattern</strong> from distributed systems. Compensations are <strong>defined in code</strong> alongside each action, because the model might improvise incorrect undo steps, skip some, or be manipulated; compensations must themselves be idempotent and retried until they succeed.</p>
+<p><strong>Escalation</strong>: if neither resume nor compensation is possible, for example a non-reversible email was sent, the case goes to a human with full context: what happened, current state and options.</p>
+<p><strong>Honest communication</strong>: in every case, the user receives a clear, factual account generated from the step log: what was done, what was undone, and what still needs attention.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Before each action, record the intent; after success, record the effect and IDs.</li>
+  <li>On failure, classify transient or permanent.</li>
+  <li>Transient: retry or resume from the failed step using the same idempotency keys.</li>
+  <li>Permanent: run compensations for completed steps in reverse order.</li>
+  <li>If compensation fails or is impossible, escalate with context.</li>
+  <li>Report the final state to the user from the step log.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Task: &quot;Book team offsite: room, catering, calendar invites&quot;
+
+Step log
+1 reserve_room      OK   reservation R-551   compensate: cancel_reservation(R-551)
+2 order_catering    OK   order C-930         compensate: cancel_catering(C-930)
+3 send_invites      FAILED  permanent: calendar API rejects external domain
+
+Decision: invites are the goal; partial booking without invites is not useful
+-&gt; compensate 2: cancel_catering(C-930)        OK
+-&gt; compensate 1: cancel_reservation(R-551)     OK
+
+Message to user: &quot;I couldn't send invites (external attendees not allowed by
+calendar policy). I cancelled the room R-551 and catering C-930 so nothing is
+left half-booked. Options: invite internal attendees only, or ask IT to allow
+the partner domain.&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Failure type</th><th>Response</th><th>Requirement</th></tr></thead>
+<tbody>
+<tr><td>Transient</td><td>Retry / resume</td><td>Idempotent tools</td></tr>
+<tr><td>Permanent, reversible</td><td>Compensate (saga)</td><td>Compensations in code</td></tr>
+<tr><td>Irreversible</td><td>Escalate</td><td>Full context, step log</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on the model's memory of what it already did.</li>
+  <li>Retrying non-idempotent steps.</li>
+  <li>Letting the model invent compensating actions.</li>
+  <li>Leaving resources half-created silently.</li>
+  <li>Vague failure messages to the user.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Agents act on several systems without a global transaction, so I plan for partial failure. The runtime records each completed step and its effects, like 'created ticket 4711', in durable state, not just the model's context. For transient failures, the agent resumes from the failed step after a retry, which is safe because tools are idempotent. For permanent failures, the system runs compensating actions to undo earlier steps, like cancelling a reservation, following the saga pattern, with compensations defined in code rather than improvised by the model. If neither works, it escalates to a human with full context. And the user is always told exactly what was done and what wasn't.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why define compensations in code?</strong> They must be correct, complete, idempotent and immune to injection; the model may improvise wrongly.</li>
+  <li><strong>What if a compensation fails?</strong> Retry it durably with backoff, then escalate; never silently drop it.</li>
+  <li><strong>Can every action be compensated?</strong> No; sent emails or payments may need follow-up actions instead, so gate them behind approval.</li>
+</ul>
+</article>
+</body>
+</html>

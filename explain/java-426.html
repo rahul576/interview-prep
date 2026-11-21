@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-426 · How would you design a file upload service that handles large files reliably?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-426" data-topic="System Design">
+<h1>How would you design a file upload service that handles large files reliably?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Large uploads go <strong>directly to object storage via presigned URLs</strong> using <strong>multipart/resumable uploads</strong>, with <strong>metadata in a database</strong>, <strong>asynchronous scanning and processing</strong> triggered by completion events, <strong>limits enforced in the upload policy</strong>, and downloads served via <strong>CDN with signed URLs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Streaming multi-gigabyte files through application servers ties up threads, memory and bandwidth, and a failure at 95% means starting again. The modern pattern makes the app a <strong>control plane</strong> only.</p>
+<p><strong>Presigned URLs:</strong> the client calls <code>POST /uploads</code> with filename, size and content type. The API authorises the user, creates a metadata record (<code>PENDING</code>), and returns <strong>presigned URLs</strong> for <strong>S3 multipart upload</strong> (or Azure Blob SAS with block blobs, or GCS resumable uploads). The client uploads parts (e.g. 8-100 MB each) in parallel directly to storage; failed parts are retried individually, and uploads can resume after a network drop. On completion the client calls <code>CompleteMultipartUpload</code> (or the API does) with the part ETags.</p>
+<p><strong>Validation and limits:</strong> presigned URLs expire quickly; a <strong>presigned POST policy</strong> can enforce max size and content type, and the object key is server-generated (<code>tenant/user/uuid</code>), never the user's filename. Configure lifecycle rules to <strong>abort incomplete multipart uploads</strong> after a day so orphaned parts do not cost money.</p>
+<p><strong>Async processing:</strong> a storage event (S3 Event Notifications -&gt; SQS/EventBridge) triggers workers: <strong>malware scanning</strong>, verifying actual file type by magic bytes, checksums, thumbnails or transcoding. Until processing passes, the file stays in a quarantine prefix and status is <code>PROCESSING</code>; then <code>AVAILABLE</code> or <code>REJECTED</code>.</p>
+<p><strong>Downloads:</strong> served via <strong>CDN</strong> with <strong>signed URLs or cookies</strong> with short expiry, after an authorisation check in the API.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client: <code>POST /uploads {name, size, type}</code>.</li>
+  <li>API: auth, quota check, create record, initiate multipart, return part URLs.</li>
+  <li>Client uploads parts in parallel, retrying failures, then completes.</li>
+  <li>Storage event -&gt; queue -&gt; scanner and processors.</li>
+  <li>Metadata updated to AVAILABLE; event published for other services.</li>
+  <li>Download: API checks permission, returns a short-lived CDN signed URL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">CreateMultipartUploadResponse mpu = s3.createMultipartUpload(b -&gt; b
+        .bucket(&quot;uploads-quarantine&quot;).key(key).contentType(contentType));
+
+List&lt;URL&gt; partUrls = IntStream.rangeClosed(1, partCount).mapToObj(n -&gt;
+        presigner.presignUploadPart(r -&gt; r
+            .signatureDuration(Duration.ofMinutes(15))
+            .uploadPartRequest(p -&gt; p.bucket(&quot;uploads-quarantine&quot;).key(key)
+                                     .uploadId(mpu.uploadId()).partNumber(n)))
+        .url()).toList();
+
+fileRepo.save(new FileRecord(fileId, ownerId, key, size, Status.PENDING, mpu.uploadId()));
+return new UploadInstructions(fileId, mpu.uploadId(), partUrls);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Proxying large files through the API servers.</li>
+  <li>Using the client's filename as the storage key (overwrites, path tricks).</li>
+  <li>Making files available before scanning.</li>
+  <li>Long-lived or public URLs for private files.</li>
+  <li>Forgetting to clean up incomplete multipart uploads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The application never streams large files itself. The client asks the API for presigned URLs and uploads directly to S3 using multipart upload, so parts upload in parallel and only failed parts retry. The API stores metadata like owner, size, type and status. When the upload completes, an S3 event triggers asynchronous virus scanning, type validation and thumbnails, after which the file becomes available. Size and type limits are enforced in the presigned policy and keys are server-generated. Downloads go through a CDN with short-lived signed URLs after an authorisation check.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Preventing access to others' files?</strong> Server-side ownership check before issuing signed URLs; private buckets; per-tenant prefixes.</li>
+  <li><strong>Resuming after app restart?</strong> Store uploadId; <code>ListParts</code> shows completed parts.</li>
+  <li><strong>Deduplication?</strong> Content hash (SHA-256) computed client-side or after upload.</li>
+</ul>
+</article>
+</body>
+</html>

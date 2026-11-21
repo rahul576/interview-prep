@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-076 · How does tool calling work at the message level in LLM APIs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-076" data-topic="LLMOps &amp; RAG">
+<h1>How does tool calling work at the message level in LLM APIs?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The request includes <strong>tool definitions</strong> (name, description, <strong>JSON Schema</strong> parameters); the model replies with a <strong>tool call</strong> (name, JSON arguments, call ID) and a stop reason indicating tool use; the <strong>application executes</strong> the tool (the model never runs code), returns a <strong>tool result message</strong> linked to the call ID, and <strong>loops</strong> until a final answer, with support for <strong>parallel calls</strong>, tool choice options and mandatory <strong>argument validation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Tool calling (function calling) is a message protocol, not code execution by the model.</p>
+<p><strong>1. Request.</strong> The application sends the conversation plus a <code>tools</code> array. Each tool has a <strong>name</strong>, a <strong>description</strong> (which the model relies on to decide when to use it) and a <strong>JSON Schema</strong> for its parameters.</p>
+<p><strong>2. Model decision.</strong> The model may answer in text or emit one or more <strong>tool calls</strong>. In Anthropic's Messages API these are <code>tool_use</code> content blocks with <code>id</code>, <code>name</code> and <code>input</code>, with <code>stop_reason: &quot;tool_use&quot;</code>; in OpenAI's Chat Completions they are <code>tool_calls</code> with <code>id</code>, <code>function.name</code> and <code>function.arguments</code> (a JSON string), with <code>finish_reason: &quot;tool_calls&quot;</code>. The Responses API uses <code>function_call</code> output items. Formats differ, the concept is the same.</p>
+<p><strong>3. Execution by the application.</strong> Your code <strong>parses and validates</strong> the arguments against the schema and business rules, checks the <strong>user's permissions</strong>, executes the real function (database query, HTTP call) with <strong>its own credentials</strong>, and handles errors.</p>
+<p><strong>4. Tool result.</strong> The output is appended as a <strong>tool result</strong> message (<code>tool_result</code> block with <code>tool_use_id</code>, or a <code>role: &quot;tool&quot;</code> message with <code>tool_call_id</code>), together with the assistant's tool call message, so the model can match results to calls. Errors are returned as results too, so the model can correct itself.</p>
+<p><strong>5. Loop.</strong> The model continues: more tool calls or a final answer. The application caps the number of iterations.</p>
+<p><strong>Options.</strong> <strong>Parallel tool calls</strong> in one turn (execute concurrently, return all results), <strong>tool choice</strong> settings (auto, required/any, a specific tool, none), and <strong>strict schema</strong> modes in some APIs that constrain arguments to the schema.</p>
+<p><strong>Security.</strong> Arguments are model output, therefore untrusted; models can produce wrong IDs, or be steered by prompt injection into harmful values. Validate, authorise and require confirmation for impactful actions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Send messages + tool definitions.</li>
+  <li>Receive tool call(s) with IDs and arguments.</li>
+  <li>Validate, authorise, execute.</li>
+  <li>Append assistant tool-call message and tool results.</li>
+  <li>Call the model again; repeat until final text or step limit.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: [
+  {&quot;type&quot;: &quot;tool_use&quot;, &quot;id&quot;: &quot;toolu_01&quot;, &quot;name&quot;: &quot;get_order_status&quot;,
+   &quot;input&quot;: {&quot;order_id&quot;: &quot;A-77812&quot;}}
+]}
+
+{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: [
+  {&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: &quot;toolu_01&quot;,
+   &quot;content&quot;: &quot;{\&quot;status\&quot;: \&quot;shipped\&quot;, \&quot;carrier\&quot;: \&quot;DHL\&quot;, \&quot;eta\&quot;: \&quot;2026-11-24\&quot;}&quot;}
+]}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trusting model-provided user IDs or skipping permission checks.</li>
+  <li>Vague tool descriptions, causing wrong tool choice.</li>
+  <li>Returning huge raw results that blow the context.</li>
+  <li>No iteration limit in the loop.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The request includes tool definitions: a name, a description and a JSON schema for parameters. If the model decides it needs a tool, it returns a tool call instead of text, with the tool name, JSON arguments and an ID, and the stop reason says tool use. The model never executes anything; my application validates the arguments, checks permissions, runs the real function with its own credentials, and sends the output back as a tool result linked to the call ID. The model continues until it gives a final answer. APIs support parallel calls and forcing or disabling tools, and I always validate arguments because they're untrusted model output.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Invalid arguments?</strong> Return a descriptive error as the tool result so the model can retry; cap retries.</li>
+  <li><strong>Long-running tools?</strong> Return a job ID and a status tool, or run asynchronously.</li>
+  <li><strong>How many tools?</strong> Keep the set focused; use tool search or routing for large catalogues.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-068 · You must add a column and change a heavily used table without downtime. How do you plan a zero-downtime schema migration?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-068" data-topic="Scalability &amp; Reliability">
+<h1>You must add a column and change a heavily used table without downtime. How do you plan a zero-downtime schema migration?</h1>
+<p class="ex-meta">Scalability &amp; Reliability · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>expand and contract</strong>: make only <strong>backward-compatible</strong> changes first, deploy code that <strong>dual-writes</strong>, <strong>backfill in batches</strong>, switch reads (behind a flag), verify, and only then <strong>remove the old structure</strong>, using <strong>online schema-change tools</strong> to avoid long locks.</p>
+
+<h2>Detailed explanation</h2>
+<p>During a rolling deploy, old and new code run <strong>side by side</strong> against the same database, and a rollback brings old code back. So every schema state must work with both versions.</p>
+<p>Dangerous operations on big tables: adding a column with a volatile default (older MySQL/Postgres rewrite the table), adding NOT NULL constraints, changing types, renaming, creating indexes without <code>CONCURRENTLY</code>, dropping columns still read by running code.</p>
+<p><strong>Expand:</strong> add new column/table (nullable); create indexes concurrently; use <strong>gh-ost / pt-online-schema-change</strong> for MySQL (copy to shadow table + replay changes + atomic swap). <strong>Migrate:</strong> deploy code writing both old and new; <strong>backfill</strong> existing rows in small batches (e.g. 5,000 rows, sleep, watch replication lag). <strong>Switch:</strong> read from new column behind a feature flag; compare results. <strong>Contract:</strong> stop writing old; later release drops it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Release N: add <code>full_name</code> (nullable).</li>
+  <li>Release N+1: write <code>first/last</code> and <code>full_name</code>; backfill job.</li>
+  <li>Release N+2: read <code>full_name</code> (flag), verify.</li>
+  <li>Release N+3: stop writing old columns.</li>
+  <li>Release N+4: drop old columns.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">ALTER TABLE customers ADD COLUMN full_name text;              -- instant in PG 11+
+CREATE INDEX CONCURRENTLY idx_customers_full_name ON customers(full_name);
+UPDATE customers SET full_name = first_name || ' ' || last_name
+WHERE id BETWEEN $1 AND $2 AND full_name IS NULL;               -- batched</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rename in one step (breaks running old code).</li>
+  <li>Huge single-transaction backfills (locks, replication lag, WAL explosion).</li>
+  <li>Dropping columns in the same release that stops using them.</li>
+  <li>Migrations that auto-run on app start in every pod.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd follow expand and contract. First a backward-compatible change, like adding the new column as nullable, using online tools so the table isn't locked. Then code that writes both old and new, plus a throttled batch backfill. Then switch reads behind a feature flag and verify. Only in a later release, once no running version uses it, drop the old column. Every step is reversible.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Rename a column used by five services?</strong> Add new, dual-write, migrate consumers one by one, then drop.</li>
+  <li><strong>Add NOT NULL?</strong> Add as NOT VALID check constraint, validate later, then set.</li>
+  <li><strong>Who runs migrations?</strong> A dedicated job/pipeline step, not every pod.</li>
+</ul>
+</article>
+</body>
+</html>

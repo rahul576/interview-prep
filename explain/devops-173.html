@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-173 · How do NetworkPolicies work in Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-173" data-topic="Kubernetes">
+<h1>How do NetworkPolicies work in Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>By default <strong>all pods can reach all pods</strong>; a <strong>NetworkPolicy</strong> selects pods with a <strong>podSelector</strong> and allows specific <strong>ingress and egress</strong> by pod labels, namespaces, IP blocks and ports, and once a pod is selected <strong>everything else in that direction is denied</strong>. Start with <strong>default deny</strong>, add explicit allows, remember <strong>DNS egress</strong>, and use a <strong>CNI that enforces</strong> policies.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes networking is flat: any pod can reach any other pod, so a compromised pod can attack everything. NetworkPolicies are the built-in way to segment traffic at L3/L4.</p>
+<p>The semantics are <strong>additive allow-lists</strong>. A policy has a <code>podSelector</code> choosing the pods it applies to and <code>policyTypes</code> (Ingress, Egress). If no policy selects a pod, all traffic is allowed. As soon as at least one policy selects a pod for a direction, only traffic matching some rule in some policy is allowed; there are no deny rules in the core API, and policies are unioned. Rules match peers by <code>podSelector</code>, <code>namespaceSelector</code> (often on the automatic <code>kubernetes.io/metadata.name</code> label), combinations of both, or <code>ipBlock</code> CIDRs, plus ports and protocols.</p>
+<p>A subtle point is the difference between one <code>from</code> entry containing both namespaceSelector and podSelector (AND: these pods in those namespaces) and two separate entries (OR). Another is that policies are <strong>stateful</strong>: allowing ingress automatically allows the reply traffic. And the API only stores intent: enforcement is done by the <strong>CNI plugin</strong>. Calico and Cilium enforce policies; plain Flannel does not, so policies are silently ignored. Calico and Cilium also offer extended policies (cluster-wide, explicit deny, FQDN or L7 rules), and the upstream AdminNetworkPolicy work aims to standardise cluster-wide admin rules.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Apply a default-deny policy (ingress and egress) in each namespace.</li>
+  <li>Allow DNS egress to kube-dns on UDP/TCP 53.</li>
+  <li>Allow ingress to each service only from its known callers and the ingress controller.</li>
+  <li>Allow egress to required databases, other services or external CIDRs.</li>
+  <li>Verify with test pods and CNI flow logs (for example Cilium Hubble).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: shop }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-dns, namespace: shop }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      podSelector: { matchLabels: { k8s-app: kube-dns } }
+    ports: [ { protocol: UDP, port: 53 }, { protocol: TCP, port: 53 } ]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default deny egress without allowing DNS, so everything fails with resolution errors.</li>
+  <li>Writing policies on a CNI that does not enforce them.</li>
+  <li>Confusing AND and OR selectors in <code>from</code> entries.</li>
+  <li>Forgetting the ingress controller or monitoring scrapers as sources.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default every pod can talk to every other pod. A NetworkPolicy selects pods and lists allowed ingress and egress by pod labels, namespaces, CIDRs and ports, and once a pod is selected, anything not allowed in that direction is denied. Policies are additive allow-lists. I start each namespace with default deny, then allow DNS to port 53, traffic from the ingress controller, and the specific service-to-service flows. They only work if the CNI enforces them, like Calico or Cilium, and I test them with probe pods and flow logs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test them?</strong> Run curl or netcat pods in source namespaces in CI, and inspect Hubble or Calico flow logs for drops.</li>
+  <li><strong>Can you allow egress by domain name?</strong> Not in the core API; Cilium and Calico support FQDN policies.</li>
+  <li><strong>Do policies affect host-network pods?</strong> Generally not reliably; they are not normal pod traffic.</li>
+</ul>
+</article>
+</body>
+</html>

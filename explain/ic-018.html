@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-018 · What are handlers in Ansible?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-018" data-topic="Configuration Management">
+<h1>What are handlers in Ansible?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Handlers</strong> are tasks that run <strong>only when notified</strong> by a task that reported <strong>changed</strong>, run <strong>once</strong> per play by default <strong>at the end</strong>, and are typically used to <strong>restart or reload a service</strong> after a configuration change.</p>
+
+<h2>Detailed explanation</h2>
+<p>Restarting a service on every playbook run is wasteful and causes needless downtime. Handlers solve this. A task such as <code>template</code> that writes <code>nginx.conf</code> includes <code>notify: Reload nginx</code>. If the template's output is identical to the file on the host, the task reports <strong>ok</strong> and nothing is notified. If the file changes, the task reports <strong>changed</strong> and the handler is queued.</p>
+<p>Handlers are defined in a <code>handlers:</code> section of the play or in <code>handlers/main.yml</code> of a role. They are matched by <strong>name</strong>, or by a <strong>listen</strong> topic so several handlers can respond to one notification (for example <code>listen: &quot;restart web stack&quot;</code> triggering both nginx and php-fpm restarts). No matter how many tasks notify the same handler, it runs <strong>only once</strong>, and by default after <strong>all tasks in the play</strong> (or in the current section: pre_tasks, roles/tasks, post_tasks) have completed, in the order handlers are <strong>defined</strong>, not the order notified.</p>
+<p>If a later task needs the restart to have already happened, for example a health check right after the config change, use <code>ansible.builtin.meta: flush_handlers</code>, which runs all pending handlers immediately.</p>
+<p>An important edge case: if a task <strong>fails</strong> on a host after a handler was notified, by default the play stops for that host and the <strong>handler does not run</strong>, leaving a changed config without a reload. <code>--force-handlers</code> or <code>force_handlers: true</code> in the play makes notified handlers run anyway.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Task runs and reports changed.</li>
+  <li>Its <code>notify</code> queues the named handler (or listen topic).</li>
+  <li>Duplicate notifications are collapsed.</li>
+  <li>At the end of the section, or at <code>flush_handlers</code>, queued handlers run in definition order.</li>
+  <li>Handlers not notified never run.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">- hosts: web
+  become: true
+  tasks:
+    - name: Deploy nginx config
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        validate: nginx -t -c %s
+      notify: Reload nginx
+
+    - name: Apply handlers now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Health check
+      ansible.builtin.uri:
+        url: http://localhost/health
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Restarting services in normal tasks so they bounce every run.</li>
+  <li>Misspelling the handler name in <code>notify</code> (Ansible errors, but only when notified).</li>
+  <li>Expecting handlers to run in notification order.</li>
+  <li>Forgetting that a later failure skips pending handlers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Handlers are tasks that run only when notified, and only if the notifying task actually reported changed. The classic case is a template task for nginx.conf with notify: reload nginx. The reload happens only when the config really changed, which keeps playbooks idempotent and avoids needless restarts. Even if several tasks notify it, a handler runs once, by default at the end of the play. If I need it earlier, say before a health check, I use meta: flush_handlers. And handlers can listen to a shared topic so one notify triggers several of them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to notified handlers if a later task fails?</strong> They're skipped for that host unless <code>--force-handlers</code> or <code>force_handlers: true</code>.</li>
+  <li><strong>Reload or restart?</strong> Reload when the service supports it, to avoid dropping connections.</li>
+  <li><strong>Can a handler notify another handler?</strong> Yes, handlers can notify other handlers.</li>
+</ul>
+</article>
+</body>
+</html>

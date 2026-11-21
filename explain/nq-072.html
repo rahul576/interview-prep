@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-072 · How would you optimize a stream pipeline that performs multiple operations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-072" data-topic="Coding Exercises">
+<h1>How would you optimize a stream pipeline that performs multiple operations?</h1>
+<p class="ex-meta">Coding Exercises · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Measure first</strong>, then <strong>filter early</strong>, avoid unnecessary <strong>stateful operations</strong> (sorted, distinct), use <strong>short-circuiting</strong> terminals, <strong>primitive streams</strong> to avoid boxing, compute <strong>several aggregates in one pass</strong> (<strong>teeing</strong>, <strong>summaryStatistics</strong>, groupingBy with downstream), avoid side effects, and go <strong>parallel only when justified</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Measure before optimising.</strong> For lists of a few hundred or thousand items, a stream pipeline takes microseconds; the database call that loaded them dominates. Use a profiler or <strong>JMH</strong> benchmarks to find real hot spots. Readability usually matters more than micro-gains.</p>
+<p><strong>Order of operations.</strong> Put <strong>cheap, selective <code>filter</code> steps first</strong>, so expensive <code>map</code> operations (parsing, calculations, object creation) and sorting see fewer elements. Order filters by selectivity and cost.</p>
+<p><strong>Stateful operations.</strong> <code>sorted</code> and <code>distinct</code> must buffer elements (sorted needs all of them) and cost O(n log n) or extra memory. Skip them if the result does not need order or uniqueness; if you need only the top few, <code>sorted().limit(k)</code> is fine but a heap or <code>max</code> may be cheaper.</p>
+<p><strong>Short-circuiting.</strong> <code>anyMatch</code>, <code>allMatch</code>, <code>noneMatch</code>, <code>findFirst</code> and <code>limit</code> stop as soon as the answer is known. <code>filter(...).count() &gt; 0</code> or collecting a list and checking <code>isEmpty()</code> processes everything unnecessarily.</p>
+<p><strong>Primitive streams.</strong> <code>mapToInt</code>, <code>mapToLong</code>, <code>mapToDouble</code> avoid creating wrapper objects; <code>sum</code>, <code>average</code> and <code>summaryStatistics</code> work directly on primitives.</p>
+<p><strong>One pass instead of many.</strong> Streaming the same list five times to compute count, total, min, max and average is wasteful. Use <code>summaryStatistics()</code> / <code>summarizingDouble</code>, <strong><code>Collectors.teeing</code></strong> (Java 12) to combine two collectors in one pass, or <code>groupingBy</code> with a downstream collector instead of grouping then re-streaming each group.</p>
+<p><strong>Avoid side effects and debugging leftovers</strong> such as <code>peek</code> with logging in hot paths; they cost time and complicate parallelism.</p>
+<p><strong>Parallel streams</strong> only for <strong>large, CPU-heavy, independent</strong> work on splittable sources (ArrayList, arrays), and always benchmarked. A loop is also a legitimate optimisation for very hot code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Profile and benchmark to confirm the pipeline is a bottleneck.</li>
+  <li>Reorder: selective filters before expensive maps.</li>
+  <li>Remove unneeded sorted/distinct; use short-circuiting terminals.</li>
+  <li>Switch to primitive streams for numeric work.</li>
+  <li>Merge multiple passes into one combined collector.</li>
+  <li>Benchmark again; consider parallel or a loop if still hot.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// before: three passes, boxing, sorting not needed
+long count = products.stream().filter(p -&gt; p.getStock() &gt; 0).count();
+double total = products.stream().filter(p -&gt; p.getStock() &gt; 0)
+        .map(Product::getPrice).reduce(0.0, Double::sum);
+Product max = products.stream().filter(p -&gt; p.getStock() &gt; 0)
+        .sorted(Comparator.comparingDouble(Product::getPrice).reversed())
+        .findFirst().orElseThrow();
+
+// after: one pass for count/sum, primitive stats
+DoubleSummaryStatistics s = products.stream()
+        .filter(p -&gt; p.getStock() &gt; 0)
+        .mapToDouble(Product::getPrice)
+        .summaryStatistics();
+
+// teeing: total value and most expensive product in one pass
+record Summary(double total, Optional&lt;Product&gt; top) {}
+Summary summary = products.stream()
+        .filter(p -&gt; p.getStock() &gt; 0)
+        .collect(Collectors.teeing(
+                Collectors.summingDouble(Product::getPrice),
+                Collectors.maxBy(Comparator.comparingDouble(Product::getPrice)),
+                Summary::new));
+
+boolean anyOut = products.stream().anyMatch(p -&gt; p.getStock() == 0);  // short-circuits</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising without measuring.</li>
+  <li>Sorting the whole list to find one element.</li>
+  <li>Multiple passes over the same data for related aggregates.</li>
+  <li>Switching to parallel streams for small lists or I/O-bound work.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure, since streams over a few hundred items are rarely the bottleneck. Then I put cheap, selective filters first so expensive maps and sorting see fewer elements, avoid sorted or distinct unless needed because they're stateful and buffer everything, and use short-circuiting terminals like anyMatch or findFirst instead of collecting and checking. I use primitive streams like mapToDouble to avoid boxing, and avoid streaming the same list many times by using a combined collector like Collectors.teeing, summaryStatistics or groupingBy with a downstream collector. I avoid side effects and peek in hot code, and consider parallel only for large CPU-heavy work, after benchmarking.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Collectors.teeing help?</strong> It feeds each element to two collectors and merges their results, so two aggregates need one pass.</li>
+  <li><strong>How do you benchmark reliably?</strong> JMH, with warm-up iterations, to avoid JIT and dead-code effects.</li>
+  <li><strong>Is a for loop faster than streams?</strong> Sometimes slightly in hot code; the difference rarely matters elsewhere.</li>
+</ul>
+</article>
+</body>
+</html>

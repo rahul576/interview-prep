@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-023 · How do containers find and talk to each other on the same host?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-023" data-topic="Docker">
+<h1>How do containers find and talk to each other on the same host?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Attach containers to the same <strong>user-defined bridge network</strong>; Docker's <strong>embedded DNS</strong> then resolves <strong>container and service names</strong>, and they talk directly on the <strong>container port</strong> without publishing anything.</p>
+
+<h2>Detailed explanation</h2>
+<p>Each Docker network is an isolated virtual switch. A <strong>user-defined bridge</strong> created with <code>docker network create</code> gives containers private IP addresses and, importantly, an <strong>embedded DNS server</strong> at <code>127.0.0.11</code> inside each container. That server resolves the names of other containers on the same network, their <code>--network-alias</code> names, and in Compose the <strong>service names</strong>. So an API container simply connects to <code>db:5432</code>.</p>
+<p>Traffic between containers on the same network goes straight over the bridge to the <strong>container port</strong>. <strong>Publishing</strong> with <code>-p 8080:80</code> is only needed for traffic coming from the host or outside world. Not publishing internal services like databases is a security win.</p>
+<p>The legacy <strong>default bridge</strong> network (<code>bridge</code>, used when you do not specify <code>--network</code>) does <strong>not</strong> provide name resolution. Containers there can only use IP addresses or the deprecated <code>--link</code> option, which is why you should always create your own network. Containers on <strong>different</strong> user-defined networks cannot reach each other unless you connect a container to both with <code>docker network connect</code>, which is a useful way to segment front-end and back-end tiers.</p>
+<p><strong>Docker Compose</strong> creates a network called <code>&lt;project&gt;_default</code> automatically, so every service is reachable by its service name; when scaled, the name resolves to all replicas (simple DNS round robin). Container IP addresses change whenever containers are recreated, so names are the only reliable addresses. Across several hosts you need an <strong>overlay</strong> network (Swarm) or an orchestrator's service discovery.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>docker network create appnet</code> creates a bridge and subnet.</li>
+  <li>Containers started with <code>--network appnet</code> get an IP on it.</li>
+  <li>Each container's <code>/etc/resolv.conf</code> points to the embedded DNS.</li>
+  <li>Name lookups for peers are answered by Docker; others are forwarded upstream.</li>
+  <li>Packets travel over the bridge directly to the target port.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker network create appnet
+docker run -d --name db --network appnet -e POSTGRES_PASSWORD=secret postgres:16
+docker run -d --name api --network appnet \
+  -e DB_URL=jdbc:postgresql://db:5432/app -p 8080:8080 registry.local/api:1.4
+docker run --rm --network appnet busybox nslookup db</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the default bridge and expecting names to resolve.</li>
+  <li>Hard-coding container IP addresses.</li>
+  <li>Connecting to the published host port from another container instead of the container port.</li>
+  <li>Publishing database ports when only the API needs them.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I put containers that need to talk on the same user-defined bridge network. Docker runs an embedded DNS server there, so the API can connect to db:5432 by name, using the container port directly without publishing anything to the host. The old default bridge network doesn't do name resolution, so containers there would need IPs or legacy links. Compose creates a network per project automatically, where each service is reachable by its service name. I never hard-code IPs because they change whenever a container is recreated.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why avoid hard-coded container IPs?</strong> They change on every recreation and differ between environments.</li>
+  <li><strong>How do you isolate tiers?</strong> Separate networks; only the API joins both.</li>
+  <li><strong>What about multiple hosts?</strong> Overlay networks or Kubernetes services.</li>
+</ul>
+</article>
+</body>
+</html>

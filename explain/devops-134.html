@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-134 · How do you test and review infrastructure code before it reaches production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-134" data-topic="Infrastructure as Code">
+<h1>How do you test and review infrastructure code before it reaches production?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Treat infrastructure code like application code: every change via <strong>pull request</strong>, CI runs <strong><code>fmt</code>, <code>validate</code>, <code>tflint</code></strong>, <strong>security/policy as code</strong> (Checkov, Trivy, OPA/Conftest, Sentinel), posts the <strong>plan to the PR</strong> for review (Atlantis, HCP Terraform, pipeline), modules are tested with <strong><code>terraform test</code> or Terratest</strong> in <strong>ephemeral accounts</strong>, and changes are <strong>promoted dev → staging → prod</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Infrastructure mistakes are expensive: a public bucket, an open security group or a destroyed database. Testing works in layers, from cheap and fast to slow and realistic.</p>
+<p><strong>Static checks:</strong> <code>terraform fmt -check</code> and <code>terraform validate</code> catch syntax and type errors. <strong>tflint</strong> catches provider-specific problems, such as invalid instance types or deprecated arguments. <strong>Security scanners</strong> like <strong>Checkov</strong> or <strong>Trivy</strong> (which absorbed tfsec) flag misconfigurations: unencrypted storage, <code>0.0.0.0/0</code> ingress, missing logging.</p>
+<p><strong>Policy as code:</strong> organisation rules written as code, for example &quot;all resources must have <code>owner</code> and <code>cost-centre</code> tags&quot;, &quot;no public S3 buckets&quot;, &quot;only approved instance families&quot;. Tools: <strong>OPA/Conftest</strong> evaluating the JSON plan, <strong>Sentinel</strong> or OPA in HCP Terraform, and cloud-native guardrails such as AWS SCPs or Azure Policy as a last line.</p>
+<p><strong>Plan review:</strong> CI posts the <strong>plan output</strong> to the PR (Atlantis, HCP Terraform, Spacelift, or a pipeline). Reviewers approve the <strong>plan, not just the code</strong>: a one-line change can mean &quot;<strong>must be replaced</strong>&quot; for a database. Apply runs the <strong>saved, approved plan</strong>.</p>
+<p><strong>Tests:</strong> the native <strong><code>terraform test</code></strong> framework (Terraform 1.6+, <code>.tftest.hcl</code> files) can run <code>plan</code>-only assertions or real <code>apply</code> runs, with mocked providers in 1.7+. <strong>Terratest</strong> (Go) deploys real infrastructure, checks it works (HTTP endpoint responds, bucket encrypted) and destroys it. Run them in an <strong>isolated sandbox account</strong> with budgets.</p>
+<p><strong>Promotion:</strong> apply to dev, then staging, then production, with the same module version; production applies need approval.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened → fmt, validate, tflint, Checkov/Trivy.</li>
+  <li><code>terraform plan -out</code> → <code>terraform show -json</code> → policy checks.</li>
+  <li>Plan posted as PR comment; reviewers approve.</li>
+  <li>Module tests run on module changes in a sandbox.</li>
+  <li>Merge → apply saved plan to dev → promote to staging/prod with approval.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># tests/bucket.tftest.hcl
+run &quot;bucket_is_encrypted_and_private&quot; {
+  command = plan
+  assert {
+    condition     = aws_s3_bucket_public_access_block.this.block_public_acls == true
+    error_message = &quot;Bucket must block public ACLs&quot;
+  }
+}</code></pre>
+<pre><code class="language-bash">terraform fmt -check -recursive &amp;&amp; terraform validate &amp;&amp; tflint
+checkov -d . --quiet
+terraform plan -out=tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
+conftest test plan.json -p policy/
+terraform test</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reviewing the code diff but not the plan.</li>
+  <li>Applying a fresh plan in CI instead of the reviewed one.</li>
+  <li>Running integration tests in a shared production account.</li>
+  <li>Policies so noisy that everyone adds skip annotations.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every infrastructure change goes through a pull request. CI runs terraform fmt, validate and tflint, then security and policy-as-code checks with Checkov, Trivy or OPA, for things like no public storage and required tags. The plan is posted to the PR by Atlantis, HCP Terraform or our pipeline, and reviewers approve the plan, not just the code, looking especially for destroys and replacements. Modules have tests with the native terraform test framework or Terratest, which create real resources in an ephemeral sandbox account and destroy them. Then changes are applied to dev and staging first and promoted to production with approval, applying exactly the reviewed plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What should a reviewer look for first in a plan?</strong> Destroy and replace actions, especially on stateful resources, then IAM and network changes.</li>
+  <li><strong>How do you protect critical resources?</strong> <code>lifecycle { prevent_destroy = true }</code>, deletion protection and policies.</li>
+  <li><strong>Mocking in terraform test?</strong> <code>mock_provider</code> blocks allow tests without real cloud calls (1.7+).</li>
+</ul>
+</article>
+</body>
+</html>

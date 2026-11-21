@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-099 · What is code execution with MCP, and why do some teams prefer it to direct tool calls?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-099" data-topic="MCP Servers">
+<h1>What is code execution with MCP, and why do some teams prefer it to direct tool calls?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With <strong>code execution with MCP</strong>, the host exposes MCP tools as <strong>functions in a sandboxed code environment</strong> and the model <strong>writes code that calls them</strong>, so tool definitions load <strong>on demand</strong> and intermediate data is <strong>processed in code instead of in the context</strong>, cutting tokens sharply at the cost of needing <strong>secure sandboxing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the classic pattern, the model calls one tool, the full result enters its context, it reasons, calls the next tool, and so on. For data-heavy work, for example reading a 10,000-row spreadsheet, filtering it and updating matching CRM records, that means huge results passing through the model twice: once when read and once when written back. All tool definitions are also loaded up front.</p>
+<p>Code execution changes the shape of the work. The host generates a small <strong>API wrapper</strong> for each MCP server, for instance a TypeScript or Python module per server with one function per tool, placed in a file tree. The model explores the tree, <strong>reads only the definitions it needs</strong>, and writes a script that calls the tools, <strong>loops, filters, joins and transforms</strong> data, and prints only a short final result. That result is all that returns to the model. Anthropic and others have reported very large token reductions for such tasks.</p>
+<p>There are further benefits. <strong>Sensitive intermediate data</strong> can stay in the sandbox and never enter the model context; control flow such as loops and retries is executed reliably by code rather than by many model turns; and scripts can be saved as reusable skills. The trade-off is serious infrastructure: a <strong>secure sandbox</strong> with process isolation, CPU, memory and time limits, restricted network egress, no host credentials, and monitoring. For simple tasks with one or two small tool calls, direct tool calling is simpler and fine.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Host generates function wrappers for each connected MCP server's tools.</li>
+  <li>The model lists available servers and reads only relevant tool files.</li>
+  <li>It writes code that calls those functions and processes the data.</li>
+  <li>The code runs in an isolated sandbox; wrappers route calls to the MCP servers.</li>
+  <li>Only the final small output (or an error) returns to the model.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-typescript">import { getSheet } from &quot;./servers/gdrive&quot;;
+import { updateRecord } from &quot;./servers/salesforce&quot;;
+
+const rows = await getSheet({ sheetId: &quot;abc123&quot; });          // 10,000 rows, stay in sandbox
+const overdue = rows.filter(r =&gt; r.status === &quot;overdue&quot;);
+for (const r of overdue) {
+  await updateRecord({ objectType: &quot;Account&quot;, id: r.accountId, data: { flag: &quot;overdue&quot; } });
+}
+console.log(`Updated ${overdue.length} accounts`);           // only this reaches the model</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Direct tool calls</th><th>Code execution</th></tr></thead>
+<tbody>
+<tr><td>Tool definitions</td><td>Usually all loaded up front</td><td>Loaded on demand</td></tr>
+<tr><td>Intermediate data</td><td>Passes through context</td><td>Stays in sandbox</td></tr>
+<tr><td>Infrastructure</td><td>Simple</td><td>Needs secure sandbox</td></tr>
+<tr><td>Best for</td><td>Few small calls</td><td>Data-heavy, multi-step tasks</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running model-written code without real isolation.</li>
+  <li>Giving the sandbox broad network access or real credentials.</li>
+  <li>Assuming data in the sandbox is safe while logs print it anyway.</li>
+  <li>Using code execution for trivial tasks where it adds latency and complexity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Instead of the model calling tools one at a time with every result flowing through its context, the host exposes MCP tools as functions, say a TypeScript API, and the model writes code that uses them. The code runs in a sandbox, does the looping and filtering, and returns only a small result. Definitions are loaded on demand by reading files for each server. For data-heavy tasks this cuts tokens dramatically and keeps sensitive intermediate data out of the context. The cost is a properly secured sandbox with isolation, resource limits and network restrictions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What new risks does it introduce?</strong> Sandbox escape, data exfiltration via network, resource abuse, and prompt-injected code; mitigate with isolation and egress control.</li>
+  <li><strong>Does it replace tool calling?</strong> No; it complements it for heavy tasks.</li>
+  <li><strong>How are approvals handled?</strong> Sensitive tools still require confirmation, enforced in the wrapper or server.</li>
+</ul>
+</article>
+</body>
+</html>

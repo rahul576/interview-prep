@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-137 · An application cannot connect to a database on another host. How do you troubleshoot network connectivity?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-137" data-topic="Networking">
+<h1>An application cannot connect to a database on another host. How do you troubleshoot network connectivity?</h1>
+<p class="ex-meta">Networking · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Work <strong>up the layers</strong>: confirm <strong>DNS</strong> resolves correctly, test <strong>TCP reachability</strong> to the port (timeout points to <strong>firewalls, security groups or routing</strong>, refused points to <strong>nothing listening</strong>), check the server is <strong>listening on the right interface</strong>, then look at <strong>TLS and authentication</strong> if the connection succeeds.</p>
+
+<h2>Detailed explanation</h2>
+<p>Start by reading the exact error from the application; it often tells you the layer (&quot;could not translate host name&quot;, &quot;connection timed out&quot;, &quot;connection refused&quot;, &quot;SSL error&quot;, &quot;password authentication failed&quot;).</p>
+<p><strong>DNS:</strong> run <code>dig</code> or <code>nslookup</code> from the app host (or pod) to check the hostname resolves, and to the <strong>expected</strong> IP: private versus public address, stale record after a migration, split-horizon zones.</p>
+<p><strong>Reachability:</strong> <code>nc -vz host 5432</code> or <code>curl -v telnet://host:5432</code>. The result type matters:</p>
+<ul>
+  <li><strong>Timeout:</strong> packets are being silently dropped: a <strong>security group, NSG, NACL, host firewall</strong>, missing route, unpeered VPC, or the host is down.</li>
+  <li><strong>Connection refused:</strong> the host answered with a TCP RST: reachable, but no process listens on that port/interface, or a firewall actively rejects.</li>
+  <li><strong>No route to host:</strong> routing or ARP issue, or an ICMP reject.</li>
+</ul>
+<p><strong>Server side:</strong> <code>ss -tlnp</code> shows whether PostgreSQL listens on <code>0.0.0.0:5432</code> or only <code>127.0.0.1:5432</code> (<code>listen_addresses</code>, <code>bind-address</code> for MySQL). Check the host firewall (<code>nft list ruleset</code>, <code>ufw status</code>) and DB access rules such as PostgreSQL's <code>pg_hba.conf</code>.</p>
+<p><strong>Network path:</strong> in the cloud check <strong>security group inbound rules</strong> (source = app's SG or CIDR), <strong>NACLs</strong> (stateless, so ephemeral return ports too), <strong>route tables</strong>, VPC peering or transit gateway routes, and private endpoints. Tools such as AWS Reachability Analyzer or Azure Network Watcher help, as do VPC flow logs (REJECT entries).</p>
+<p><strong>Above TCP:</strong> if the TCP connection succeeds, the problem is TLS (certificate, required SSL mode), authentication, database name, connection limits (<code>max_connections</code>) or the app's connection pool. App and DB logs show these.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the error message and identify the layer.</li>
+  <li>Resolve the hostname from the client host.</li>
+  <li>Test the TCP port from the client.</li>
+  <li>On the server, check listening address and local firewall.</li>
+  <li>Check cloud firewalls, routes and flow logs.</li>
+  <li>If TCP works, check TLS, credentials and DB logs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># from the app host or pod
+dig +short db.internal.example.com
+nc -vz -w 3 db.internal.example.com 5432
+# on the DB host
+ss -tlnp | grep 5432
+sudo grep -E &quot;^listen_addresses&quot; /etc/postgresql/16/main/postgresql.conf
+# once TCP works
+psql &quot;host=db.internal.example.com dbname=app user=app sslmode=require&quot; -c &quot;select 1&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using ping as proof; ICMP is often blocked.</li>
+  <li>Testing from your laptop instead of the app's actual network location.</li>
+  <li>Forgetting that NACLs need return-traffic rules.</li>
+  <li>Looking at network rules when the error is really authentication.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I work up the layers. First DNS: does the name resolve to the expected IP from the app host. Then I test the port with nc or curl. A timeout usually means something drops traffic: a security group, NSG, firewall or missing route. Connection refused means the host is reachable but nothing listens, so I check on the server with ss that the database listens on the right interface, not only localhost. I check routing and peering between networks and flow logs. If TCP connects, the problem is higher up, like TLS or credentials, which the app and database logs show.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Timeout versus refused?</strong> Timeout means packets are dropped silently; refused means a TCP RST came back, so the host is reachable but the port is closed.</li>
+  <li><strong>Why does it work from one subnet but not another?</strong> Different route tables, NACLs or security group sources.</li>
+  <li><strong>What are VPC flow logs useful for?</strong> Showing whether traffic was accepted or rejected at the network interface.</li>
+</ul>
+</article>
+</body>
+</html>

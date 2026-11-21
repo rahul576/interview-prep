@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-072 · A CronJob that sends invoices ran twice one night, and another night it did not run at all. How do you investigate and make it safe?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-072" data-topic="Kubernetes">
+<h1>A CronJob that sends invoices ran twice one night, and another night it did not run at all. How do you investigate and make it safe?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A CronJob creates <strong>about one Job per schedule</strong>, so occasionally <strong>two or none</strong>; extra runs also come from <strong>Job retries</strong> (<code>backoffLimit</code>) and missed runs from controller downtime beyond <strong>startingDeadlineSeconds</strong>. Use <strong>concurrencyPolicy: Forbid</strong>, sensible deadlines and alerts, and above all make the job <strong>idempotent</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Kubernetes documentation states that a CronJob creates a Job <strong>approximately once</strong> per scheduled time, and that it may sometimes create two Jobs or none; jobs must therefore be <strong>idempotent</strong>. The controller lives in kube-controller-manager; controller restarts, leader-election changes, clock problems or control-plane downtime can produce edge cases.</p>
+<p><strong>Two runs</strong> usually have one of these explanations. The Job controller <strong>retried</strong>: the pod failed or its node died halfway, so <code>backoffLimit</code> started a new pod that ran the whole job again, possibly after half the invoices were already sent. With <code>concurrencyPolicy: Allow</code> (default), a slow run overlapped the next scheduled run. Or someone triggered a manual run with <code>kubectl create job --from=cronjob/...</code>.</p>
+<p><strong>No run</strong>: if the controller was down or the previous run was still active with <code>Forbid</code>, and the time since the schedule exceeded <strong>startingDeadlineSeconds</strong>, the run is skipped. If more than 100 schedules were missed without a deadline set, the controller stops scheduling and logs an error. Also check the <strong>timeZone</strong> field; schedules default to the controller's time zone, and DST changes can skip or repeat an hour.</p>
+<p>Investigation: list Jobs with their creation timestamps, read CronJob events, controller-manager logs or managed cluster logs for that window, and the application's own logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List Jobs and pods owned by the CronJob and compare timestamps.</li>
+  <li>Check pod failures and Job retries for the double run.</li>
+  <li>Check control-plane availability for the missed night.</li>
+  <li>Set <code>concurrencyPolicy: Forbid</code>, <code>startingDeadlineSeconds</code>, <code>timeZone</code>.</li>
+  <li>Make the work idempotent with a run record and per-invoice state.</li>
+  <li>Alert on missing successful runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: batch/v1
+kind: CronJob
+metadata: { name: send-invoices }
+spec:
+  schedule: &quot;30 2 * * *&quot;
+  timeZone: Europe/London
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: invoices
+              image: registry.example.com/billing:4.3
+              args: [&quot;send-invoices&quot;, &quot;--run-date=$(date +%F)&quot;]</code></pre>
+<pre><code class="language-sql">INSERT INTO invoice_runs (run_date, status) VALUES ('2026-11-20', 'started')
+ON CONFLICT (run_date) DO NOTHING;          -- second run detects existing record
+UPDATE invoices SET sent_at = now() WHERE id = $1 AND sent_at IS NULL;  -- send only if not sent</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming exactly-once scheduling.</li>
+  <li>Non-idempotent jobs with retries enabled.</li>
+  <li>No alert when a run is missing.</li>
+  <li>Ignoring time zones and DST.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The docs say a CronJob creates about one job per schedule, so it can occasionally create two or none, for example around controller restarts or control-plane downtime. A second run can also be a Job retry after the pod or node failed halfway. A missed run happens if the controller was unavailable longer than startingDeadlineSeconds. I'd check job history, events and control-plane logs. To make it safe I'd use concurrencyPolicy Forbid, a sensible deadline, a time zone and alerts on missing runs, and most importantly make the job idempotent by recording each run and each sent invoice so repeated work is skipped.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Would a workflow engine be better?</strong> For multi-step, long-running or exactly-once-style business processes, yes: Temporal or Argo Workflows give durable state, retries per step and visibility.</li>
+  <li><strong>How do you alert on missed runs?</strong> Alert when the last successful completion time is older than the expected interval.</li>
+  <li><strong>What does Replace do?</strong> Cancels the running Job and starts the new one.</li>
+</ul>
+</article>
+</body>
+</html>

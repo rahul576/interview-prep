@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-072 · How would you structure image layers for a large application to maximise cache reuse?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-072" data-topic="Docker">
+<h1>How would you structure image layers for a large application to maximise cache reuse?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Order layers from <strong>least to most frequently changing</strong>: shared <strong>base image and OS packages</strong>, then the <strong>runtime</strong>, then <strong>third-party dependencies</strong> (installed from lock files), and finally <strong>application code</strong>, splitting large dependency sets further (for example <strong>Spring Boot layered jars</strong>) so most builds and deploys move only a few megabytes.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker caches each layer and reuses it until an instruction or its inputs change; after the first changed layer, <strong>every later layer is rebuilt</strong>. Registries and nodes work the same way: they store and transfer layers by <strong>content digest</strong>, so a node that already has a layer never downloads it again. Good layering therefore speeds up three things at once: builds, pushes and pulls.</p>
+<p>The practical order is:</p>
+<ul>
+  <li><strong>Base OS and system packages</strong>: ideally a <strong>shared company base image</strong> used by every service, so nodes already have it cached.</li>
+  <li><strong>Language runtime</strong>: JRE, Node, Python.</li>
+  <li><strong>Third-party dependencies</strong>: they change weekly at most. Copy only <code>pom.xml</code>, <code>package-lock.json</code> or <code>requirements.txt</code>, install, and only then copy source.</li>
+  <li><strong>Application code</strong>: changes on every commit, so it goes last and should be small.</li>
+</ul>
+<p>For <strong>Java</strong>, a fat jar is one big file, so any code change produces a new 100 MB layer. <strong>Spring Boot layered jars</strong> (<code>java -Djarmode=tools ... extract --layers</code> in Boot 3.3+, previously <code>-Djarmode=layertools</code>) split it into <code>dependencies</code>, <code>spring-boot-loader</code>, <code>snapshot-dependencies</code> and <code>application</code> layers. Jib does a similar split automatically. For Node or Python, separate the lock-file install from the source copy, and consider separate layers for rarely changing large assets.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start <code>FROM</code> a pinned, shared base image.</li>
+  <li>Install OS packages in one <code>RUN</code> with cache cleanup.</li>
+  <li>Copy dependency manifests and install dependencies.</li>
+  <li>Copy and build source in a separate stage.</li>
+  <li>In the runtime stage, copy layers in stable-to-volatile order.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jdk AS build
+WORKDIR /src
+COPY pom.xml .
+RUN --mount=type=cache,target=/root/.m2 mvn -q dependency:go-offline
+COPY src ./src
+RUN --mount=type=cache,target=/root/.m2 mvn -q package -DskipTests
+RUN java -Djarmode=tools -jar target/app.jar extract --layers --launcher --destination /layers
+
+FROM registry.example.com/base/java-21-jre:2026.11
+WORKDIR /app
+COPY --from=build /layers/dependencies/ ./
+COPY --from=build /layers/spring-boot-loader/ ./
+COPY --from=build /layers/snapshot-dependencies/ ./
+COPY --from=build /layers/application/ ./
+ENTRYPOINT [&quot;java&quot;, &quot;org.springframework.boot.loader.launch.JarLauncher&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>COPY . .</code> before installing dependencies.</li>
+  <li>Every team using a different base image, so nothing is shared on nodes.</li>
+  <li>Putting timestamps or build numbers in early layers, which breaks caching every build.</li>
+  <li>Copying the fat jar as one layer.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Layers are cached and transferred in order, and once one changes, everything after it rebuilds, so I order them from least to most frequently changing. At the bottom is a shared company base image with the OS and runtime, which every node already has. Then third-party dependencies installed from the lock file, and on top the application code. For Java I use Spring Boot layered jars or Jib so dependencies and application classes are separate layers. The result is that a typical commit changes only the top layer, a few megabytes, so CI pushes are quick and Kubernetes nodes pull only that small layer when we deploy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does this speed up Kubernetes deploys?</strong> Nodes already hold base and dependency layers, so they pull only the changed top layer and pods start sooner.</li>
+  <li><strong>Many small layers or few big ones?</strong> Group by change frequency, not by count; layer count matters far less than reuse.</li>
+  <li><strong>Does squashing help?</strong> Usually not; it destroys layer sharing.</li>
+</ul>
+</article>
+</body>
+</html>

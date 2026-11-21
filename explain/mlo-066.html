@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-066 · Design the serving architecture for a recommendation system on a high-traffic website.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-066" data-topic="MLOps">
+<h1>Design the serving architecture for a recommendation system on a high-traffic website.</h1>
+<p class="ex-meta">MLOps · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>High-traffic recommendations use a <strong>two-stage pipeline</strong>: fast <strong>candidate generation</strong> (ANN search over embeddings plus other sources) narrows millions of items to hundreds, then a <strong>ranking model</strong> with <strong>real-time features</strong> scores them, followed by <strong>business rules</strong>, with <strong>caching</strong> and <strong>impression/click logging</strong> around it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Scoring every item for every request with a heavy model is impossible at millions of items and thousands of requests per second, so the work is split.</p>
+<p><strong>Candidate generation</strong> must be cheap and high-recall. A <strong>two-tower model</strong> produces user and item <strong>embeddings</strong>; item embeddings are indexed in a <strong>vector index</strong> (FAISS, ScaNN, a vector database or OpenSearch k-NN) and <strong>approximate nearest neighbour (ANN)</strong> search returns a few hundred similar items in milliseconds. Other sources add candidates: trending items, recently viewed, co-purchase lists, new items.</p>
+<p><strong>Ranking</strong> is precise but more expensive: gradient-boosted trees or a deep model scores each candidate using rich features, including <strong>real-time features</strong> from an <strong>online feature store</strong> (items clicked this session, cart contents, time of day). The latency budget is typically tens of milliseconds for the whole call, so features are fetched in batch and models are optimised (ONNX, GPUs or batching).</p>
+<p><strong>Re-ranking and business rules</strong> then remove out-of-stock or already purchased items, enforce <strong>diversity</strong>, apply promotions and legal constraints.</p>
+<p><strong>Caching and precomputation</strong> keep costs down: for anonymous users and popular pages, results are precomputed in batch and cached; personalised results are computed online with a fallback to cached popular lists if a dependency is slow.</p>
+<p><strong>Logging</strong> every impression, click and purchase with the <strong>model version</strong> and position creates training data and powers <strong>A/B tests</strong>. Because the model only learns from what it showed, you need <strong>exploration</strong> (a small share of random or new items) and position-bias correction to avoid <strong>feedback loops</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives with user ID and context.</li>
+  <li>Candidate generators (ANN, trending, history) return about 500 items.</li>
+  <li>Feature store returns user, item and real-time features.</li>
+  <li>Ranker scores candidates; top N kept.</li>
+  <li>Business rules filter and diversify; response returned within the SLO.</li>
+  <li>Impressions and clicks are streamed to the log for training and experiments.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def recommend(user_id, ctx, k=20):
+    u = feature_store.get_user(user_id)            # embedding + realtime features
+    cands = set(ann.search(u.embedding, top_k=400)) | trending(ctx.region, 50) | recent(user_id, 50)
+    feats = feature_store.get_items(cands, user=u)
+    scores = ranker.predict(feats)                 # e.g. LightGBM / ONNX
+    ranked = apply_rules(sorted(zip(cands, scores), key=lambda x: -x[1]), user=u)
+    log_impressions(user_id, ranked[:k], model_version=ranker.version)
+    return ranked[:k]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One heavy model over the whole catalogue: too slow and too expensive.</li>
+  <li>No fallback, so a feature store hiccup returns empty pages.</li>
+  <li>Logging clicks without impressions or positions, which makes training data biased.</li>
+  <li>No exploration, so popular items dominate forever.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use two stages. Candidate generation uses approximate nearest neighbour search over user and item embeddings, plus trending and history sources, to get a few hundred items in milliseconds. A ranking model then scores them using real-time features from an online feature store within a tight latency budget. Business rules filter out-of-stock or purchased items and add diversity. Anonymous and popular cases are precomputed and cached, with a fallback list. Every impression and click is logged with the model version for training and A/B tests, and I add exploration to avoid feedback loops.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid only recommending popular items?</strong> Exploration traffic, popularity-debiased training, diversity constraints and boosts for new items.</li>
+  <li><strong>How do you handle new users (cold start)?</strong> Popular and contextual lists, onboarding preferences, then quickly use session signals.</li>
+  <li><strong>How do you update embeddings?</strong> Retrain periodically, rebuild the index offline and swap atomically.</li>
+</ul>
+</article>
+</body>
+</html>

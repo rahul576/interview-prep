@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-142 · How should passwords and sensitive data be stored?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-142" data-topic="Security">
+<h1>How should passwords and sensitive data be stored?</h1>
+<p class="ex-meta">Security · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Hash passwords</strong> with a slow, adaptive, salted algorithm such as <strong>Argon2id or bcrypt</strong> (via Spring's <strong>PasswordEncoder</strong>), never plain text, encryption or fast hashes; <strong>encrypt other sensitive data</strong> at rest with keys held in a <strong>KMS</strong>, and minimise and restrict access to it.</p>
+
+<h2>Detailed explanation</h2>
+<p>Passwords are special because you never need to read them back, only check them. So they should be <strong>hashed</strong>, not encrypted: encryption is reversible, and whoever steals the key gets every password. Fast hashes like <strong>MD5, SHA-1 or SHA-256</strong> are also wrong, because GPUs can compute billions per second, making brute force and dictionary attacks cheap.</p>
+<p>A <strong>password hashing function</strong> is deliberately slow and tunable. <strong>Argon2id</strong> (memory-hard, OWASP's first choice), <strong>bcrypt</strong>, <strong>scrypt</strong> and <strong>PBKDF2</strong> (for FIPS environments) all take a <strong>work factor</strong>. Each password gets a <strong>unique random salt</strong>, stored with the hash, so identical passwords produce different hashes and precomputed rainbow tables are useless. An optional <strong>pepper</strong>, a secret kept outside the database, adds protection if only the DB leaks. In Spring Security, <code>PasswordEncoderFactories.createDelegatingPasswordEncoder()</code> stores hashes as <code>{bcrypt}$2a$10$...</code>, so you can change algorithms later and still verify old hashes.</p>
+<p>Other sensitive data such as personal data, bank details or API tokens must often be <strong>readable</strong>, so it is <strong>encrypted</strong>: TLS in transit, and at rest with disk or database encryption plus, for the most sensitive fields, <strong>application-level (envelope) encryption</strong>. Keys live in a <strong>KMS or HSM</strong> (AWS KMS, Azure Key Vault, Google Cloud KMS, Vault Transit), not in config files, and are rotated. Equally important: collect less data, mask it in logs, tokenise card numbers (PCI DSS), restrict access by least privilege and audit it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>On registration, generate a random salt and hash the password with the chosen work factor.</li>
+  <li>Store the encoded string (algorithm, parameters, salt, hash) in one column.</li>
+  <li>On login, re-hash the input with the stored parameters and compare in constant time.</li>
+  <li>When the policy changes, re-hash on the next successful login.</li>
+  <li>For other data, encrypt with a data key that is itself encrypted by a KMS master key.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Bean
+PasswordEncoder passwordEncoder() {
+    // stores e.g. {bcrypt}$2a$10$... and can still verify older formats
+    return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+}
+
+// registration
+user.setPasswordHash(passwordEncoder.encode(rawPassword));
+
+// login is handled by DaoAuthenticationProvider calling passwordEncoder.matches(raw, stored)
+// if UserDetailsPasswordService is implemented, Spring upgrades outdated hashes automatically</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Encrypting passwords &quot;so support can see them&quot;.</li>
+  <li>Using SHA-256 with or without a single global salt.</li>
+  <li>A work factor so low it is fast, or never increased.</li>
+  <li>Encryption keys stored next to the data or committed to Git.</li>
+  <li>Logging request bodies that contain passwords or card numbers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Passwords are never stored in plain text, encrypted, or hashed with MD5 or SHA-256, because fast hashes can be brute forced on GPUs. I use a slow adaptive algorithm such as Argon2id or bcrypt through Spring Security's DelegatingPasswordEncoder, which adds a unique salt per password and a work factor I can increase over time, and records the algorithm so I can migrate. Other sensitive data that must be read back is encrypted at rest with keys from a KMS like AWS KMS or Azure Key Vault, with rotation, least-privilege access and audit logs, and I mask it in logs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you upgrade the hashing algorithm for existing users?</strong> Re-hash on next successful login using the delegating encoder; optionally wrap old hashes in the new algorithm.</li>
+  <li><strong>What is a pepper?</strong> A secret added to all hashes and kept outside the DB, for example in a KMS.</li>
+  <li><strong>Hashing vs encryption?</strong> Hashing is one-way for verification; encryption is reversible with a key.</li>
+</ul>
+</article>
+</body>
+</html>

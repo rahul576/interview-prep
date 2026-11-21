@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-006 · What did Terraform 1.14 add with list resources, terraform query and the actions block?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-006" data-topic="Terraform">
+<h1>What did Terraform 1.14 add with list resources, terraform query and the actions block?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Terraform 1.14 added <strong>list resources</strong> in <code>.tfquery.hcl</code> files with the <strong><code>terraform query</code></strong> command to <strong>discover existing infrastructure</strong> and <strong>generate configuration and import blocks</strong>, and the <strong><code>action</code> block</strong> for provider operations <strong>outside create/read/update/delete</strong>, such as invoking a Lambda or invalidating a CDN cache.</p>
+
+<h2>Detailed explanation</h2>
+<p>Two long-standing gaps in Terraform were <strong>adopting existing infrastructure at scale</strong> and <strong>running one-off operational tasks</strong>. Terraform 1.14 (released late 2025) addressed both, with features that rely on <strong>provider support</strong>, so coverage grows as providers add implementations.</p>
+<p><strong>List resources and terraform query.</strong> You write <code>list</code> blocks in files ending in <code>.tfquery.hcl</code>. Each block names a resource type and a provider and contains a <code>config</code> block with filters, for example all EC2 instances with tag <code>team = payments</code>, or all resource groups in a subscription. Running <code>terraform query</code> executes these searches against the real environment and prints the matching objects with their identities. With <code>terraform query -generate-config-out=imported.tf</code>, Terraform writes <strong>resource blocks plus import blocks</strong> for the results. You then review, clean up and apply them through the normal plan and pipeline. Compared with writing import blocks by hand, this makes bulk adoption of unmanaged infrastructure much more practical.</p>
+<p><strong>Actions.</strong> Terraform models everything as resources with a lifecycle, which is awkward for operations that are not &quot;desired state&quot;, like invalidating a CloudFront cache after deploying files, invoking a function to seed data, or stopping an instance. The top-level <strong><code>action</code></strong> block declares such an operation with provider-specific configuration. It can be <strong>triggered from a resource's lifecycle</strong> with <code>action_trigger</code> (for example after create or update), or invoked explicitly from the CLI with <code>terraform apply -invoke=action.&lt;type&gt;.&lt;name&gt;</code>. Actions run during apply, appear in the plan, and do not store state.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write <code>list</code> blocks in a <code>.tfquery.hcl</code> file next to your configuration.</li>
+  <li>Run <code>terraform query</code> to see matching resources.</li>
+  <li>Generate configuration and import blocks, then clean them up.</li>
+  <li>Plan and apply to bring resources under management.</li>
+  <li>Declare <code>action</code> blocks and trigger them from lifecycle events or <code>-invoke</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># discover.tfquery.hcl
+list &quot;aws_instance&quot; &quot;payments&quot; {
+  provider = aws
+  config {
+    filter {
+      name   = &quot;tag:team&quot;
+      values = [&quot;payments&quot;]
+    }
+  }
+}</code></pre>
+<pre><code class="language-hcl"># main.tf
+action &quot;aws_lambda_invoke&quot; &quot;seed&quot; {
+  config {
+    function_name = aws_lambda_function.seed.function_name
+    payload       = jsonencode({ env = var.env })
+  }
+}
+
+resource &quot;aws_dynamodb_table&quot; &quot;orders&quot; {
+  # ...
+  lifecycle {
+    action_trigger {
+      events  = [after_create]
+      actions = [action.aws_lambda_invoke.seed]
+    }
+  }
+}</code></pre>
+<pre><code class="language-bash">terraform query -generate-config-out=imported.tf</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming every resource type supports list or actions; check provider docs.</li>
+  <li>Committing generated configuration without review.</li>
+  <li>Using actions for things that should be real managed resources.</li>
+  <li>Running queries with overly broad filters and importing everything at once.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform 1.14 added two things. List resources go in new <code>.tfquery.hcl</code> files and describe a search, like all EC2 instances with a given tag. <code>terraform query</code> runs those searches against the real environment and can generate configuration plus import blocks, which makes adopting large amounts of unmanaged infrastructure much easier, still through a reviewed plan. The new action block lets providers model operations outside the CRUD lifecycle, such as invoking a Lambda, invalidating a CDN cache or restarting something, triggered from resource lifecycle events or invoked from the CLI. Both depend on provider support, so coverage grows over time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you adopt a large set of unmanaged resources?</strong> Query by tag or resource group, generate config in batches per team, clean up, apply import plans incrementally.</li>
+  <li><strong>Why not use local-exec for these operations?</strong> Actions are typed, provider-implemented and visible in the plan.</li>
+  <li><strong>Do actions affect state?</strong> No, they run as side effects during apply.</li>
+</ul>
+</article>
+</body>
+</html>

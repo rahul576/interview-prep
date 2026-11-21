@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-011 · What does EXPOSE do in a Dockerfile? Does it publish the port?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-011" data-topic="Docker">
+<h1>What does EXPOSE do in a Dockerfile? Does it publish the port?</h1>
+<p class="ex-meta">Docker · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong><code>EXPOSE</code></strong> only <strong>documents</strong> the port(s) the app listens on as image metadata; it <strong>does not publish</strong> anything to the host, which still needs <strong><code>-p</code></strong> (or <strong><code>-P</code></strong>, which publishes all exposed ports to random host ports); containers on the same network can talk on <strong>any port</strong> regardless.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>EXPOSE 8080</code> (or <code>EXPOSE 8080/tcp 5353/udp</code>) records in the image config that the application is expected to listen on those ports. It is a contract and a hint, nothing more:</p>
+<ul>
+  <li>It <strong>does not open firewall rules</strong>, does not make the port reachable from outside, and does not even make the app listen; the application must bind the port itself (on <code>0.0.0.0</code>).</li>
+  <li>To reach the service from the host or the outside world you must <strong>publish</strong>: <code>docker run -p 8080:8080 image</code>, or <code>-P</code> to map <strong>every exposed port</strong> to a random high host port (shown by <code>docker port</code>).</li>
+</ul>
+<p><strong>Inside Docker networks</strong> EXPOSE is not required at all. Two containers on the same user-defined network reach each other by name on whatever port the service listens on (<code>http://api:8080</code>), whether or not it was exposed. Published ports are only for traffic entering from outside the Docker network.</p>
+<p><strong>Why still use it?</strong> Documentation and tooling:</p>
+<ul>
+  <li>People reading the Dockerfile or <code>docker inspect</code> see the intended port immediately.</li>
+  <li><code>-P</code> relies on it.</li>
+  <li>Docker Desktop, some PaaS platforms, Compose tooling and IDE integrations use it to suggest or auto-configure port mappings.</li>
+  <li>It signals intent to reviewers: an image exposing 22 or 2375 deserves questions.</li>
+</ul>
+<p><strong>Kubernetes</strong> ignores EXPOSE; the pod spec's <code>containerPort</code> is likewise mostly informational, and Services do the actual routing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>EXPOSE</code> writes <code>ExposedPorts</code> into the image config.</li>
+  <li><code>docker run</code> without <code>-p</code>: port reachable only from the container's networks.</li>
+  <li><code>-p host:container</code>: NAT rule from host to container port.</li>
+  <li><code>-P</code>: each exposed port mapped to a random host port.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM nginx:1.27
+EXPOSE 80</code></pre>
+<pre><code class="language-bash">docker build -t site .
+docker inspect -f '{{json .Config.ExposedPorts}}' site    # {&quot;80/tcp&quot;:{}}
+docker run -d --name s1 site              # not reachable from host
+docker run -d --name s2 -P site &amp;&amp; docker port s2        # 80/tcp -&gt; 0.0.0.0:32771
+docker run -d --name s3 -p 8080:80 site   # http://localhost:8080
+docker network create web &amp;&amp; docker network connect web s1
+docker run --rm --network web curlimages/curl -s http://s1:80 | head -n 3   # works without -p</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing EXPOSE makes a service publicly reachable.</li>
+  <li>Forgetting <code>-p</code> and blaming the firewall.</li>
+  <li>Exposing a port that differs from what the app actually listens on.</li>
+  <li>Publishing internal-only service ports to the host &quot;because they are exposed&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;EXPOSE only documents which port the application in the image listens on; it's metadata in the image config. It doesn't publish the port or open anything on the host, so the service is unreachable from outside until I run it with -p, or -P, which publishes all exposed ports to random host ports. Containers on the same user-defined network can reach each other on any port anyway, by container name. I still add EXPOSE because it tells people and tools like Docker Desktop how the image is meant to be used.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do two containers talk without published ports?</strong> Same user-defined network, by container or service name and port.</li>
+  <li><strong>Does Kubernetes use EXPOSE?</strong> No; Services and <code>containerPort</code> define networking.</li>
+  <li><strong>UDP ports?</strong> <code>EXPOSE 53/udp</code> and <code>-p 53:53/udp</code>.</li>
+</ul>
+</article>
+</body>
+</html>

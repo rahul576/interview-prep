@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-003 · What are check blocks in Terraform, and how do they differ from preconditions and postconditions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-003" data-topic="Terraform">
+<h1>What are check blocks in Terraform, and how do they differ from preconditions and postconditions?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>check block</strong> (Terraform 1.5+) runs <strong>assertions after plan and apply</strong> that produce <strong>warnings, not errors</strong>, and can use <strong>scoped data sources</strong> to probe real endpoints; <strong>preconditions and postconditions</strong> are <strong>hard guarantees</strong> that <strong>fail the run</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform offers several ways to validate assumptions, and they differ in <strong>where they live</strong> and <strong>what happens on failure</strong>.</p>
+<p><strong>Variable validation</strong> checks inputs. <strong>Preconditions and postconditions</strong> live inside the <code>lifecycle</code> block of a resource, data source or output. A precondition checks assumptions before Terraform acts on the object, for example &quot;the selected AMI must be x86_64&quot;; a postcondition checks the result, for example &quot;the created bucket must have versioning enabled&quot;. If they fail, <strong>the plan or apply fails</strong>, and with postconditions downstream resources are not touched. They are the right tool for <strong>contracts</strong> that must never be violated.</p>
+<p>A <strong>check block</strong> is a top-level block containing one or more <code>assert</code> conditions with error messages. It is evaluated at the end of every plan and apply, and a failed assertion produces a <strong>warning</strong>, so it <strong>never blocks</strong> a deployment. Inside a check you can declare a <strong>scoped data source</strong>, visible only within that check, for example an <code>http</code> data source that calls the new website's health endpoint, or a TLS certificate data source to check expiry. If the scoped data source itself fails, that is also only a warning. This makes checks ideal for <strong>validating overall behaviour</strong> of the infrastructure, functional smoke tests and early warnings, things that should be noticed but should not stop an unrelated change.</p>
+<p>In <strong>HCP Terraform</strong>, <strong>health assessments</strong> include <strong>continuous validation</strong>, which re-evaluates checks (and postconditions) on a schedule and reports failures, alongside drift detection.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform finishes planning or applying the normal graph.</li>
+  <li>Scoped data sources inside checks are read.</li>
+  <li>Each <code>assert</code> condition is evaluated.</li>
+  <li>Failures print warnings with your message; the run still succeeds.</li>
+  <li>Pre/postconditions are evaluated when their resource is planned or applied and fail the run if false.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">check &quot;website_health&quot; {
+  data &quot;http&quot; &quot;home&quot; {
+    url = &quot;https://${aws_lb.web.dns_name}/healthz&quot;
+  }
+  assert {
+    condition     = data.http.home.status_code == 200
+    error_message = &quot;Health endpoint returned ${data.http.home.status_code}&quot;
+  }
+}
+
+resource &quot;aws_instance&quot; &quot;app&quot; {
+  ami           = data.aws_ami.app.id
+  instance_type = var.instance_type
+  lifecycle {
+    precondition {
+      condition     = data.aws_ami.app.architecture == &quot;x86_64&quot;
+      error_message = &quot;The AMI must be x86_64.&quot;
+    }
+  }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Mechanism</th><th>Location</th><th>On failure</th></tr></thead>
+<tbody>
+<tr><td>Variable validation</td><td>variable block</td><td>Error</td></tr>
+<tr><td>Precondition / postcondition</td><td>lifecycle of resource, data, output</td><td>Error, blocks run</td></tr>
+<tr><td>Check block</td><td>Top level</td><td>Warning only</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using checks for rules that must block deployment.</li>
+  <li>Using postconditions for health checks of slow-starting services, which fail applies randomly.</li>
+  <li>Ignoring check warnings in CI output.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A check block, added in Terraform 1.5, contains assertions evaluated at the end of plan and apply, and a failure produces a warning, not an error, so it never blocks a deployment. Inside a check I can declare a scoped data source, like an http call to the new site's health endpoint or a certificate expiry check, and assert on it. That makes checks good for validating that the infrastructure works overall. Preconditions and postconditions live in a resource, data source or output lifecycle and are hard guarantees: if they fail, the run fails, which is right for assumptions like the AMI must be x86. HCP Terraform can run checks continuously as health assessments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you deliberately choose a check?</strong> A health endpoint that may take minutes to come up; you want visibility without failing the apply.</li>
+  <li><strong>Can checks reference resources?</strong> Yes, any resource or data source in the module.</li>
+  <li><strong>Where would you test modules instead?</strong> <code>terraform test</code> with <code>.tftest.hcl</code> files and <code>run</code> blocks.</li>
+</ul>
+</article>
+</body>
+</html>

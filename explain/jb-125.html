@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-125 · What is a minor GC versus a major/full GC?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-125" data-topic="JVM &amp; Performance">
+<h1>What is a minor GC versus a major/full GC?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>minor GC</strong> collects only the <strong>young generation</strong> (Eden and survivors): it is <strong>frequent and short</strong> and <strong>promotes</strong> survivors; a <strong>major GC</strong> targets the <strong>old generation</strong>, and a <strong>full GC</strong> collects the <strong>whole heap</strong>, usually as a <strong>long stop-the-world pause</strong> that signals problems such as a <strong>leak or undersized heap</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Minor (young) GC.</strong> Triggered when Eden fills. The collector traces live young objects (starting from roots plus old-to-young references tracked in card tables or remembered sets), copies them into a survivor space or promotes them to the old generation, and clears Eden. Since most objects die young, there is little to copy, so pauses are typically a few to tens of milliseconds. Frequency depends on allocation rate and young-generation size; several per second can be normal for busy services.</p>
+<p><strong>Major GC.</strong> Loosely means collecting the old generation. With G1 this is not a single event: a <strong>concurrent marking cycle</strong> runs alongside the application, followed by <strong>mixed collections</strong> that evacuate young plus some old regions in normal-sized pauses. With ZGC, old-generation work is almost entirely concurrent. With Parallel GC, old collection is a full stop-the-world compaction.</p>
+<p><strong>Full GC.</strong> Collects and compacts the <strong>entire heap</strong>, often including class unloading from Metaspace, stopping all application threads. On a large heap it can take seconds. In G1 and ZGC it is a <strong>fallback</strong>, so a full GC in logs is a warning sign.</p>
+<p><strong>Common triggers.</strong></p>
+<ul>
+  <li><strong>Promotion failure / evacuation failure</strong>: the old generation has no room for survivors.</li>
+  <li>Concurrent marking cannot keep up with allocation (G1 &quot;to-space exhausted&quot;).</li>
+  <li><strong>Explicit <code>System.gc()</code></strong> calls from code or libraries.</li>
+  <li><strong>Metaspace</strong> reaching its threshold or limit.</li>
+  <li>Heap dumps via <code>jmap -dump:live</code> or <code>jcmd GC.heap_dump</code>.</li>
+  <li>Humongous allocation pressure in G1.</li>
+</ul>
+<p><strong>Interpretation.</strong> If old-generation usage after each full GC keeps climbing, suspect a <strong>leak</strong>. If it drops well but refills quickly, the heap is too small for the live set and allocation rate, or objects are promoted prematurely.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocation fills Eden: minor GC copies survivors, promotes aged objects.</li>
+  <li>Old generation fills gradually through promotion.</li>
+  <li>Collector-specific old-gen work runs (concurrent cycle and mixed GCs in G1).</li>
+  <li>If that fails or is forced, a full stop-the-world GC compacts everything.</li>
+  <li>GC logs record each event's cause and pause.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -Xlog:gc:file=gc.log:time,uptime -jar app.jar</code></pre>
+<pre><code class="language-text">[12.4s] GC(310) Pause Young (Normal) (G1 Evacuation Pause) 2900M-&gt;610M(4096M) 9.8ms
+[85.1s] GC(402) Pause Young (Mixed) (G1 Evacuation Pause) 3300M-&gt;1500M(4096M) 28.4ms
+[903.6s] GC(977) Pause Full (G1 Compaction Pause) 4090M-&gt;3950M(4096M) 2873.5ms</code></pre>
+<p>The last line shows a full GC that freed almost nothing: a classic leak or undersized heap symptom.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Minor</th><th>Major (old gen)</th><th>Full</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>Young generation</td><td>Old generation</td><td>Entire heap (+ Metaspace)</td></tr>
+<tr><td>Frequency</td><td>High</td><td>Lower</td><td>Should be rare</td></tr>
+<tr><td>Pause</td><td>Short</td><td>Collector-dependent</td><td>Long</td></tr>
+<tr><td>Health signal</td><td>Normal</td><td>Normal</td><td>Investigate</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating &quot;major&quot; and &quot;full&quot; as exactly the same in every collector.</li>
+  <li>Worrying about frequent short minor GCs while ignoring full GCs.</li>
+  <li>Not checking the GC cause in logs.</li>
+  <li>Hiding full GCs with a bigger heap instead of finding the leak.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A minor GC collects only the young generation, Eden and the survivor spaces. Most objects die young, so it's frequent and short: live objects are copied to a survivor space, and those that survive enough cycles are promoted to the old generation. A major GC collects the old generation, and in G1 that's done through concurrent marking plus mixed collections. A full GC collects the whole heap, usually as a long stop-the-world pause, so it should be rare. It's triggered by promotion or evacuation failure, System.gc calls, Metaspace exhaustion or heap dumps. Frequent full GCs usually mean a leak or an undersized heap.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you see GC pause times in a running service?</strong> GC logs (<code>-Xlog:gc</code>), <code>jstat -gcutil</code>, JFR, or Micrometer's <code>jvm.gc.pause</code> metric in Prometheus.</li>
+  <li><strong>Is a frequent minor GC a problem?</strong> Only if pauses or CPU add up; reduce allocation or enlarge the young generation.</li>
+  <li><strong>What is premature promotion?</strong> Objects promoted before dying because survivors are too small, filling the old generation.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-089 · A Service of type LoadBalancer stays in Pending without an external IP. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-089" data-topic="Kubernetes">
+<h1>A Service of type LoadBalancer stays in Pending without an external IP. How do you troubleshoot it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A LoadBalancer Service gets its external IP from the <strong>cloud controller manager</strong> (or a load balancer controller), so <code>Pending</code> means that controller is <strong>missing, failing or misconfigured</strong>; <code>kubectl describe service</code> events usually name the exact cause.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes itself does not create load balancers. For <code>type: LoadBalancer</code>, a controller watches the Service and calls the cloud API: the in-tree or external <strong>cloud controller manager</strong> on AKS, GKE and EKS, or the <strong>AWS Load Balancer Controller</strong> when you use its annotations or <code>loadBalancerClass</code>. Until that call succeeds, <code>EXTERNAL-IP</code> shows <code>&lt;pending&gt;</code>.</p>
+<p>The common failures are <strong>permissions</strong>: the cluster identity cannot create load balancers or public IPs, for example on AKS when the managed identity lacks <strong>Network Contributor</strong> on a custom subnet or on the resource group of a static IP. <strong>Quotas</strong> for public IPs or load balancers are exhausted. On AWS, subnets lack the discovery tags <code>kubernetes.io/role/elb</code> (public) or <code>kubernetes.io/role/internal-elb</code> (internal), so the controller cannot choose where to place the load balancer. <strong>Annotations</strong> may be invalid, such as an internal load balancer requested in a non-existent subnet, or a static IP that does not exist in that region.</p>
+<p>On <strong>bare-metal, kind or on-premises</strong> clusters there is no cloud controller at all, so Pending is the expected state. You need an implementation such as <strong>MetalLB</strong>, kube-vip or Cilium's LB IPAM to hand out addresses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl describe svc &lt;name&gt;</code> and read the events (<code>SyncLoadBalancerFailed</code>, <code>EnsuringLoadBalancer</code>).</li>
+  <li>Check which controller should handle it: <code>spec.loadBalancerClass</code>, annotations, add-ons installed.</li>
+  <li>Read that controller's logs (cloud controller manager or <code>aws-load-balancer-controller</code> pods).</li>
+  <li>Verify identity permissions, quotas, subnet tags and the existence of referenced IPs or subnets.</li>
+  <li>Fix and let the controller reconcile; no need to recreate the Service.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe svc web
+# Warning SyncLoadBalancerFailed ... AuthorizationFailed: does not have authorization
+#   to perform action 'Microsoft.Network/virtualNetworks/subnets/join/action'
+az role assignment create --assignee &lt;cluster-identity-id&gt; \
+  --role &quot;Network Contributor&quot; --scope &lt;subnet-resource-id&gt;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Waiting for an IP on a local or bare-metal cluster with no load balancer implementation.</li>
+  <li>Looking only at the Service YAML and never at the controller events or logs.</li>
+  <li>Mixing annotations for the legacy cloud provider and the AWS Load Balancer Controller.</li>
+  <li>Forgetting subnet tags when building VPCs with Terraform.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The external IP is created by the cloud controller manager or a load balancer controller, so Pending means that controller could not do its job. I start with kubectl describe service, because the events usually contain the cloud error, and then the controller logs. Typical causes are missing permissions for the cluster identity, for example Network Contributor on the subnet in AKS, quotas reached, AWS subnets without the elb tags, or annotations pointing to an internal subnet or static IP that does not exist. On bare metal there is no controller, so I install MetalLB or a similar implementation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why prefer one shared ingress or gateway over many LoadBalancer Services?</strong> Fewer cloud load balancers, lower cost, central TLS and routing, and fewer public IPs to secure.</li>
+  <li><strong>How do you keep the same IP across recreations?</strong> Reserve a static IP and reference it through the provider annotation, since <code>spec.loadBalancerIP</code> is deprecated.</li>
+  <li><strong>What is externalTrafficPolicy Local for?</strong> It preserves client source IPs and avoids an extra hop, at the cost of uneven balancing.</li>
+</ul>
+</article>
+</body>
+</html>

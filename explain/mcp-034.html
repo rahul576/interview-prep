@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-034 · Your stdio MCP server works in the Inspector, but the host shows server disconnected or fails to start it. How do you debug it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-034" data-topic="MCP Servers">
+<h1>Your stdio MCP server works in the Inspector, but the host shows server disconnected or fails to start it. How do you debug it?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>If a stdio server works in the Inspector but not in the host, suspect <strong>stdout pollution</strong> (anything non-JSON-RPC on stdout breaks the stream; <strong>log to stderr</strong>) and <strong>environment differences</strong> (PATH, working directory, missing env vars); fix with <strong>absolute paths</strong>, <strong>explicit env</strong> in the config, and read the <strong>host's MCP logs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Cause 1: stdout pollution.</strong> With stdio, <strong>stdout is the protocol channel</strong>: every line must be a JSON-RPC message. A stray <code>print(&quot;Server started&quot;)</code>, a library banner, a deprecation warning, a progress bar or <code>console.log</code> sends non-JSON text, the host fails to parse it and disconnects (&quot;server disconnected&quot;, &quot;invalid JSON&quot;). The Inspector is sometimes more tolerant or the output appears only in certain code paths, so it can work there and fail in the host. All logs must go to <strong>stderr</strong> (or MCP log notifications).</p>
+<p><strong>Cause 2: launch environment.</strong> The host starts the server as a <strong>subprocess with its own environment</strong>, which often differs from your terminal:</p>
+<ul>
+  <li><strong>PATH</strong>: GUI apps on macOS don't load your shell profile, so <code>node</code>, <code>npx</code>, <code>uv</code> or <code>python</code> installed via nvm, pyenv or Homebrew may not be found (&quot;spawn npx ENOENT&quot;).</li>
+  <li><strong>Working directory</strong>: may be <code>/</code> or the app's folder, so <strong>relative paths</strong> to scripts, <code>.env</code> files or data break.</li>
+  <li><strong>Environment variables</strong>: API keys exported in your shell are <strong>not</strong> inherited; they must be in the config's <code>env</code> block (or a secure input mechanism).</li>
+  <li><strong>Versions</strong>: a different Node or Python version than in your terminal.</li>
+</ul>
+<p><strong>Debugging steps</strong>: use <strong>absolute paths</strong> for the command and files; set <code>env</code> explicitly; read the <strong>host's MCP logs</strong>, which capture stderr and the exact spawn error (Claude Desktop writes per-server <code>mcp*.log</code> files, on macOS under <code>~/Library/Logs/Claude/</code>; VS Code shows output in its MCP output channel). Reproduce by running the exact command from the config in a clean shell (<code>env -i</code>). Make the server <strong>fail fast</strong> with a clear stderr message when configuration is missing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open the host's MCP log for that server.</li>
+  <li>Look for spawn errors (ENOENT, permission denied) or JSON parse errors.</li>
+  <li>Search code and dependencies for stdout writes; redirect to stderr.</li>
+  <li>Replace relative paths and bare commands with absolute ones.</li>
+  <li>Add required env vars to the config; restart the host fully.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;orders&quot;: {
+      &quot;command&quot;: &quot;/Users/asha/.local/bin/uv&quot;,
+      &quot;args&quot;: [&quot;--directory&quot;, &quot;/Users/asha/code/orders-mcp&quot;, &quot;run&quot;, &quot;server.py&quot;],
+      &quot;env&quot;: { &quot;ORDERS_API_URL&quot;: &quot;https://api.internal.example&quot;, &quot;LOG_LEVEL&quot;: &quot;debug&quot; }
+    }
+  }
+}</code></pre>
+<pre><code class="language-bash">tail -f ~/Library/Logs/Claude/mcp-server-orders.log
+env -i /Users/asha/.local/bin/uv --directory /Users/asha/code/orders-mcp run server.py   # reproduce clean</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>print()</code> or <code>console.log</code> debugging in a stdio server.</li>
+  <li>Bare <code>npx</code> or <code>python</code> commands that the GUI app cannot find.</li>
+  <li>Relying on shell-exported API keys.</li>
+  <li>Editing the config without fully restarting the host.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The most common cause is something written to stdout that isn't a JSON-RPC message: a print, a library banner or a warning. In stdio, stdout is the protocol channel, so the host sees garbage and disconnects; all logs must go to stderr. The second cause is the environment: the host launches the server with a different PATH, working directory and environment than my terminal or the Inspector, so node or uv isn't found, relative paths break or API keys are missing. I use absolute paths in the host config, pass env vars explicitly, and read the host's MCP logs, which show stderr and the exact launch error.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to fail fast on missing config?</strong> Validate settings at startup and exit with a clear stderr message naming the missing variable.</li>
+  <li><strong>How to find hidden stdout writes?</strong> Run the server manually and pipe stdout through a JSON validator.</li>
+  <li><strong>Why does it work in the Inspector?</strong> Different launch environment, or the Inspector was started from your shell.</li>
+</ul>
+</article>
+</body>
+</html>

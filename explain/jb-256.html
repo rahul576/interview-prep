@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-256 · How would you design an event-driven architecture using Kafka and Spring Boot?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-256" data-topic="Kafka">
+<h1>How would you design an event-driven architecture using Kafka and Spring Boot?</h1>
+<p class="ex-meta">Kafka · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Model <strong>domain events</strong> first, key them by <strong>aggregate id</strong>, publish reliably with a <strong>transactional outbox</strong>, consume with <strong>idempotent <code>@KafkaListener</code> services</strong> in their own groups, govern <strong>schemas</strong> in a registry, and add <strong>retries, DLTs, tracing and lag monitoring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Events and topics.</strong> Start from the business domain, ideally with event storming: facts such as <code>OrderPlaced</code>, <code>PaymentCompleted</code>, <code>ShipmentDispatched</code>. Events describe what happened, in past tense, owned by the producing service. A common layout is one topic per aggregate type or bounded context (<code>orders.events</code>) with the <strong>aggregate id as key</strong>, so all events of an order land in one partition and stay <strong>ordered</strong>. Choose partition counts for peak consumer parallelism; set retention, or compaction for &quot;latest state&quot; topics.</p>
+<p><strong>Reliable production.</strong> Writing to the database and then calling <code>KafkaTemplate.send</code> is a <strong>dual write</strong>: a crash between them loses or invents events. The <strong>transactional outbox</strong> solves it: insert the event into an <code>outbox</code> table in the same transaction as the business change, and let a relay, such as <strong>Debezium</strong> CDC or a poller, publish it. For simpler cases, <code>KafkaTemplate</code> with idempotent producers and <code>acks=all</code> is acceptable.</p>
+<p><strong>Consumers.</strong> Each downstream service has its own <strong>consumer group</strong>, so it receives every event independently and scales up to the partition count. Consumers are <strong>idempotent</strong> (processed-id table or upserts), because delivery is at-least-once. Errors use Spring Kafka's <code>DefaultErrorHandler</code> and <code>@RetryableTopic</code> with a <strong>DLT</strong>.</p>
+<p><strong>Contracts.</strong> Use <strong>Avro, Protobuf or JSON Schema</strong> with a <strong>schema registry</strong> and a <strong>backward-compatible</strong> evolution policy: add optional fields, never remove or repurpose them. Include metadata: event id, type, version, timestamp and trace context.</p>
+<p><strong>Operations.</strong> Propagate trace ids in headers (Micrometer Tracing / OpenTelemetry), monitor <strong>consumer lag</strong> and DLT counts, and document topics in a catalogue.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Order service saves the order and an outbox row in one transaction.</li>
+  <li>Debezium reads the database log and publishes <code>OrderPlaced</code> keyed by <code>orderId</code>.</li>
+  <li>Payment, inventory and notification services consume in separate groups.</li>
+  <li>Each checks its processed-id table, applies its change, emits its own events.</li>
+  <li>Failures go through retry topics to a DLT; dashboards show lag and errors.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Transactional
+public Order placeOrder(PlaceOrder cmd) {
+    Order order = orders.save(Order.from(cmd));
+    outbox.save(new OutboxEvent(UUID.randomUUID(), &quot;Order&quot;, order.getId(),
+            &quot;OrderPlaced&quot;, json(new OrderPlaced(order.getId(), order.total()))));
+    return order;
+}
+
+@KafkaListener(topics = &quot;orders.events&quot;, groupId = &quot;inventory&quot;)
+public void on(OrderPlaced evt, @Header(&quot;eventId&quot;) String eventId) {
+    if (!processed.markIfNew(eventId)) return;
+    inventory.reserve(evt.orderId(), evt.lines());
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  kafka:
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+    consumer:
+      properties:
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Publishing events outside the database transaction (dual write).</li>
+  <li>Using events as remote commands that tightly couple services.</li>
+  <li>Random keys, losing per-entity ordering.</li>
+  <li>No schema governance, so one producer change breaks every consumer.</li>
+  <li>Putting entire entities with sensitive data into every event.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start from the domain events, like OrderPlaced and PaymentCompleted, and design topics per aggregate, keyed by aggregate id so each order's events stay ordered. Producers use the transactional outbox, written in the same transaction as the business change and relayed by Debezium, so we never lose an event. Each consumer is a Spring Boot service with <code>@KafkaListener</code> in its own consumer group, scaled up to the partition count, and idempotent. Events have Avro or JSON Schema contracts in a schema registry with backward-compatible evolution. Around that I add retry topics, a DLT, trace propagation and lag monitoring.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would a new service build its read model from existing events?</strong> Replay from the beginning with a new consumer group if retention allows, or from a compacted topic or a snapshot plus events.</li>
+  <li><strong>Event notification vs event-carried state transfer?</strong> Thin events need a callback; fat events carry the data consumers need.</li>
+  <li><strong>How do you version events?</strong> Backward-compatible schema changes; for breaking changes, a new event type or topic.</li>
+</ul>
+</article>
+</body>
+</html>

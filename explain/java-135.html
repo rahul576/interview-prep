@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-135 · What is reactive programming with Spring WebFlux, and when is it worth it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-135" data-topic="REST &amp; API Design">
+<h1>What is reactive programming with Spring WebFlux, and when is it worth it?</h1>
+<p class="ex-meta">REST &amp; API Design · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Spring WebFlux</strong> is Spring's <strong>non-blocking, reactive</strong> web stack built on <strong>Project Reactor</strong> (<code>Mono</code>, <code>Flux</code>) and usually <strong>Netty</strong>, with <strong>backpressure</strong>; it pays off for <strong>very high concurrency, streaming and gateways</strong>, but you must <strong>never block</strong>, and since Java 21 <strong>virtual threads with Spring MVC</strong> are often the simpler choice.</p>
+
+<h2>Detailed explanation</h2>
+<p>Classic <strong>Spring MVC</strong> uses one thread per request: while a request waits for the database, its thread waits too. <strong>WebFlux</strong> instead runs on a few <strong>event-loop threads</strong> (by default about one per core on Netty). Handlers return <strong>publishers</strong> instead of values: <strong><code>Mono&lt;T&gt;</code></strong> for zero or one item and <strong><code>Flux&lt;T&gt;</code></strong> for zero to many. Work is described as a pipeline of operators (<code>map</code>, <code>flatMap</code>, <code>zip</code>, <code>timeout</code>, <code>retryWhen</code>), and when an I/O result arrives the next stage runs, without any thread sitting idle.</p>
+<p><strong>Backpressure</strong> comes from the <strong>Reactive Streams</strong> specification: subscribers request <code>n</code> items, so a slow consumer controls how fast a producer emits. That matters for streaming large result sets, Server-Sent Events, WebSockets and Kafka pipelines.</p>
+<p>Where WebFlux shines:</p>
+<ul>
+  <li><strong>API gateways</strong> and proxies (Spring Cloud Gateway is built on it).</li>
+  <li><strong>Streaming</strong> responses and long-lived connections.</li>
+  <li>Fan-out to many slow downstream services with high concurrency.</li>
+  <li>End-to-end reactive stacks (R2DBC, reactive MongoDB, reactive Redis).</li>
+</ul>
+<p>The costs:</p>
+<ul>
+  <li>A different <strong>programming model</strong>: composing operators, less readable stack traces, harder debugging (Reactor's checkpoint and <code>Hooks.onOperatorDebug</code> help) and steeper onboarding.</li>
+  <li>The golden rule: <strong>never block an event-loop thread</strong>. A blocking JDBC call or <code>Thread.sleep</code> inside a handler stalls every request on that loop. JDBC/JPA are blocking, so you need <strong>R2DBC</strong>, or must offload blocking code with <code>subscribeOn(Schedulers.boundedElastic())</code>.</li>
+  <li>Context propagation (security, MDC, tracing) uses Reactor <strong>Context</strong> rather than ThreadLocal.</li>
+</ul>
+<p>With <strong>Java 21 virtual threads</strong>, Spring MVC can handle very high numbers of concurrent blocking requests with plain imperative code (<code>spring.threads.virtual.enabled=true</code>). For typical CRUD services on JPA, that is now usually the better trade-off; WebFlux remains valuable for streaming and backpressure-heavy scenarios.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives on a Netty event loop.</li>
+  <li>Handler returns a Mono/Flux pipeline.</li>
+  <li>Non-blocking I/O registers callbacks; thread moves on.</li>
+  <li>Results flow through operators as they arrive.</li>
+  <li>Subscriber demand (backpressure) limits emission.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestController
+class PriceController {
+    private final WebClient client;
+
+    @GetMapping(&quot;/quotes/{sku}&quot;)
+    Mono&lt;Quote&gt; quote(@PathVariable String sku) {
+        Mono&lt;Price&gt; price = client.get().uri(&quot;/prices/{s}&quot;, sku).retrieve().bodyToMono(Price.class);
+        Mono&lt;Stock&gt; stock = client.get().uri(&quot;/stock/{s}&quot;, sku).retrieve().bodyToMono(Stock.class);
+        return Mono.zip(price, stock, Quote::new)
+                   .timeout(Duration.ofSeconds(2));
+    }
+
+    @GetMapping(value = &quot;/prices/stream&quot;, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    Flux&lt;Price&gt; stream() { return priceFeed.updates(); }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling blocking JDBC or <code>block()</code> inside handlers.</li>
+  <li>Choosing WebFlux for a simple CRUD app on JPA.</li>
+  <li>Losing MDC/security context by relying on ThreadLocal.</li>
+  <li>Forgetting nothing happens until something subscribes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;WebFlux is Spring's non-blocking web stack on Project Reactor, usually running on Netty with a small event loop. I return Mono for zero or one value and Flux for many and compose them with operators, and Reactor supports backpressure so slow consumers control the rate. It's worth it for very high concurrency, streaming like SSE, and gateways; Spring Cloud Gateway itself is reactive. The costs are a harder programming model and debugging, and the rule that you must never block, which rules out JDBC unless you use R2DBC or offload to boundedElastic. With Java 21 virtual threads, plain Spring MVC is now often enough for typical services.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if you call a blocking JDBC query inside a WebFlux handler?</strong> It blocks an event-loop thread, stalling all requests on it and collapsing throughput.</li>
+  <li><strong>Mono vs Flux?</strong> Mono emits at most one item; Flux any number.</li>
+  <li><strong>How do you detect blocking calls?</strong> BlockHound in tests.</li>
+</ul>
+</article>
+</body>
+</html>

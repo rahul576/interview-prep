@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-421 · Design a thread-safe in-memory cache with TTL and a maximum size.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-421" data-topic="Low-Level Design">
+<h1>Design a thread-safe in-memory cache with TTL and a maximum size.</h1>
+<p class="ex-meta">Low-Level Design · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Store entries in a <strong><code>ConcurrentHashMap</code></strong> with <strong>value + expiry time</strong>, expire <strong>lazily on read plus a background sweep</strong>, bound size with an <strong>eviction policy (LRU or similar)</strong>, prevent duplicate loads with <strong><code>computeIfAbsent</code></strong>, and in production use <strong>Caffeine</strong> (W-TinyLFU).</p>
+
+<h2>Detailed explanation</h2>
+<p>Requirements: concurrent reads and writes, entries expire after a TTL, total entries never exceed <code>maxSize</code>, and good performance under contention.</p>
+<p><strong>Storage:</strong> <code>ConcurrentHashMap&lt;K, Entry&lt;V&gt;&gt;</code> where <code>Entry</code> holds the value and <code>expiresAtNanos</code> (use <code>System.nanoTime()</code>, which is monotonic). The map gives lock-striped, highly concurrent access.</p>
+<p><strong>Expiry:</strong> check on read (<strong>lazy expiry</strong>): if expired, remove it with <code>map.remove(key, entry)</code> (conditional remove avoids deleting a fresh replacement) and treat as a miss. Entries that are never read again would leak memory, so a <code>ScheduledExecutorService</code> runs a periodic <strong>background cleanup</strong>.</p>
+<p><strong>Size bound:</strong> this is the hard part. True <strong>LRU</strong> needs access-order bookkeeping on every read: a <code>LinkedHashMap(accessOrder=true)</code> with <code>removeEldestEntry</code> is simple but needs a lock around every operation, including reads, which kills concurrency. Concurrent approximations include a <code>ConcurrentLinkedDeque</code> of keys or sampled eviction. <strong>Caffeine</strong> solves this elegantly by buffering reads in lock-free ring buffers and replaying them asynchronously, and uses <strong>W-TinyLFU</strong>, which combines recency and frequency for better hit rates than LRU.</p>
+<p><strong>Loading:</strong> <code>computeIfAbsent</code> ensures only one thread computes a missing value per key, preventing a <strong>cache stampede</strong> on that key; keep the loader fast because it holds a bin lock.</p>
+<p>Interviewers want to see that you can build the basic version and know why you would choose <strong>Caffeine</strong> (or Spring's <code>@Cacheable</code> with a Caffeine backend) in real code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>get(k)</code>: look up entry; if present and not expired, return (and record access for LRU).</li>
+  <li>If expired: conditional remove, return empty or load.</li>
+  <li><code>put(k, v)</code>: insert entry with <code>now + ttl</code>; if size exceeds max, evict least recently used.</li>
+  <li>Scheduled task every few seconds removes expired entries.</li>
+  <li>Metrics: hit rate, evictions, load time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public final class TtlLruCache&lt;K, V&gt; {
+    private record Entry&lt;V&gt;(V value, long expiresAt) {}
+    private final long ttlNanos; private final int maxSize;
+    private final LinkedHashMap&lt;K, Entry&lt;V&gt;&gt; map;
+    private final ReentrantLock lock = new ReentrantLock();
+
+    public TtlLruCache(Duration ttl, int maxSize) {
+        this.ttlNanos = ttl.toNanos(); this.maxSize = maxSize;
+        this.map = new LinkedHashMap&lt;&gt;(16, 0.75f, true) {           // access order = LRU
+            protected boolean removeEldestEntry(Map.Entry&lt;K, Entry&lt;V&gt;&gt; e) { return size() &gt; TtlLruCache.this.maxSize; }
+        };
+        Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory())
+                 .scheduleAtFixedRate(this::purgeExpired, 5, 5, TimeUnit.SECONDS);
+    }
+
+    public Optional&lt;V&gt; get(K key) {
+        lock.lock();
+        try {
+            Entry&lt;V&gt; e = map.get(key);
+            if (e == null) return Optional.empty();
+            if (System.nanoTime() - e.expiresAt() &gt;= 0) { map.remove(key); return Optional.empty(); }
+            return Optional.of(e.value());
+        } finally { lock.unlock(); }
+    }
+
+    public void put(K key, V value) {
+        lock.lock();
+        try { map.put(key, new Entry&lt;&gt;(value, System.nanoTime() + ttlNanos)); } finally { lock.unlock(); }
+    }
+
+    private void purgeExpired() {
+        lock.lock();
+        try { long now = System.nanoTime(); map.values().removeIf(e -&gt; now - e.expiresAt() &gt;= 0); }
+        finally { lock.unlock(); }
+    }
+}
+
+// Production:
+Cache&lt;String, User&gt; users = Caffeine.newBuilder()
+        .maximumSize(10_000).expireAfterWrite(Duration.ofMinutes(5)).recordStats().build();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>HashMap</code> or an unsynchronised <code>LinkedHashMap</code> across threads.</li>
+  <li>Only lazy expiry, so unread entries leak.</li>
+  <li>Comparing <code>nanoTime</code> values with <code>&lt;</code> instead of subtraction.</li>
+  <li>Slow loaders inside <code>computeIfAbsent</code> blocking other keys.</li>
+  <li>Reinventing a cache instead of using Caffeine in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd store entries in a ConcurrentHashMap with each entry holding the value and expiry time. Reads check expiry lazily and conditionally remove expired entries, and a scheduled task sweeps entries that are never read. For the size limit I need eviction like LRU: the simple correct version is an access-ordered LinkedHashMap guarded by a lock, accepting lower concurrency. computeIfAbsent stops multiple threads loading the same key. In production I'd just use Caffeine, which does this with lock-free read buffers and the W-TinyLFU policy for better hit rates.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Cache stampede?</strong> Single-flight loading per key, soft TTL with background refresh (<code>refreshAfterWrite</code>), TTL jitter.</li>
+  <li><strong>LRU vs LFU?</strong> LRU favours recency; LFU favours frequency; W-TinyLFU blends both and resists scans.</li>
+  <li><strong>Weak or soft references?</strong> Let the GC reclaim values, but eviction becomes unpredictable; prefer explicit size bounds.</li>
+</ul>
+</article>
+</body>
+</html>

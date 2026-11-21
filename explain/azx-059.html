@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-059 · How do you pass values between steps, jobs and stages in Azure Pipelines?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-059" data-topic="Azure DevOps &amp; Pipelines">
+<h1>How do you pass values between steps, jobs and stages in Azure Pipelines?</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Within a job use <strong><code>task.setvariable</code></strong>; across jobs mark it <strong><code>isOutput=true</code></strong>, give the step a <strong>name</strong>, add <strong>dependsOn</strong>, and map it with <strong><code>$[ dependencies.Job.outputs['step.var'] ]</code></strong>; across stages use <strong><code>$[ stageDependencies.Stage.Job.outputs['step.var'] ]</code></strong>; these need <strong>runtime expressions</strong> because values don't exist at compile time.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Same job:</strong> a script emits a <strong>logging command</strong>: <code>echo &quot;##vso[task.setvariable variable=imageTag]1.4.2&quot;</code>. Subsequent steps in that job can use <code>$(imageTag)</code>. The variable is not visible in the setting step itself, only after it.</p>
+<p><strong>Another job in the same stage:</strong></p>
+<ol>
+  <li>Mark it as output: <code>##vso[task.setvariable variable=imageTag;isOutput=true]1.4.2</code>.</li>
+  <li>Give the step a <code>name:</code> (e.g. <code>setTag</code>), because the reference uses the step name.</li>
+  <li>The consuming job declares <code>dependsOn: Build</code> and maps the variable: <code>imageTag: $[ dependencies.Build.outputs['setTag.imageTag'] ]</code>.</li>
+</ol>
+<p><strong>Another stage:</strong> the consuming stage <code>dependsOn</code> the producing stage, and the job maps: <code>$[ stageDependencies.BuildStage.Build.outputs['setTag.imageTag'] ]</code>. Stage-level <strong>conditions</strong> can use <code>dependencies.BuildStage.outputs['Build.setTag.imageTag']</code>. For <strong>deployment jobs</strong>, the output path includes the lifecycle hook and resource name, e.g. <code>outputs['Deploy_web.setTag.imageTag']</code> for runOnce (the job name prefixed), which trips many people.</p>
+<p><strong>Why runtime expressions?</strong> Azure Pipelines has three syntaxes:</p>
+<ul>
+  <li><code>${{ }}</code> <strong>template expressions</strong>: evaluated at <strong>compile time</strong>, before any job runs, so they can't see values produced by jobs.</li>
+  <li><code>$( )</code> <strong>macro syntax</strong>: replaced just before a task runs, from variables known at that point.</li>
+  <li><code>$[ ]</code> <strong>runtime expressions</strong>: evaluated at runtime for variable definitions and conditions; required to read <code>dependencies</code> and <code>stageDependencies</code>.</li>
+</ul>
+<p>Secrets: add <code>issecret=true</code> to mask; secret outputs still need explicit mapping. For large data, use <strong>pipeline artifacts</strong> instead of variables.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producing step emits setvariable with isOutput.</li>
+  <li>Agent records the output for the job.</li>
+  <li>Consumer declares dependsOn.</li>
+  <li>Runtime expression resolves the value at job start.</li>
+  <li>Steps use the mapped variable as <code>$(name)</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">stages:
+- stage: BuildStage
+  jobs:
+  - job: Build
+    steps:
+    - bash: echo &quot;##vso[task.setvariable variable=imageTag;isOutput=true]$(Build.BuildId)-$(git rev-parse --short HEAD)&quot;
+      name: setTag
+- stage: Deploy
+  dependsOn: BuildStage
+  jobs:
+  - job: Release
+    variables:
+      imageTag: $[ stageDependencies.BuildStage.Build.outputs['setTag.imageTag'] ]
+    steps:
+    - script: echo &quot;Deploying $(imageTag)&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>name:</code> on the producing step.</li>
+  <li>Missing <code>dependsOn</code>, so the dependency context is empty.</li>
+  <li>Using <code>${{ }}</code> to read outputs.</li>
+  <li>Wrong path for deployment job outputs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Within a job, a step uses the task.setvariable logging command and later steps read it normally. To use it in another job, I add isOutput=true, give the step a name, add dependsOn, and map it with a runtime expression like dependencies.Build.outputs['setTag.imageTag']. Across stages it's stageDependencies with stage, job, step and variable names. It must be a runtime $[ ] expression because the value doesn't exist when the pipeline compiles; template expressions run before any job. Secrets add issecret=true.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can't template expressions read outputs?</strong> They're evaluated at compile time before jobs run.</li>
+  <li><strong>Deployment job outputs?</strong> Prefix with the job or hook name, e.g. <code>&lt;job&gt;.&lt;step&gt;.&lt;var&gt;</code>.</li>
+  <li><strong>Large values?</strong> Use pipeline artifacts.</li>
+</ul>
+</article>
+</body>
+</html>

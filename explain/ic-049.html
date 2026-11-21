@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-049 · How do you decide how to split Terraform state?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-049" data-topic="Infrastructure as Code">
+<h1>How do you decide how to split Terraform state?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Split state to limit <strong>blast radius</strong>: by <strong>environment and account</strong> first, then by <strong>layer</strong> (network, data, application) according to <strong>change frequency and team ownership</strong>; smaller states plan faster, but <strong>too many tiny states</strong> create dependency and boilerplate overhead.</p>
+
+<h2>Detailed explanation</h2>
+<p>A single state for everything is simple at first, but every plan refreshes every resource, one lock blocks all teams, any mistake can affect the whole estate, and everyone needs permissions for everything. Splitting addresses these problems; the question is where to cut.</p>
+<p><strong>Blast radius</strong> is the main reason. A bad apply, a provider bug or a corrupted state then affects only one component. Production and non-production must <strong>never</strong> share a state, and states usually align with <strong>accounts or subscriptions</strong>, which are also security boundaries.</p>
+<p><strong>Layers by change frequency and lifecycle.</strong> Foundational resources such as VPCs, transit gateways, DNS zones and IAM baselines change rarely and are high-risk; shared data stores such as databases and buckets with data are long-lived and must be protected; application stacks like services, queues and alarms change daily. Putting them in separate states means daily deploys never plan against the network, and protective permissions can differ.</p>
+<p><strong>Ownership.</strong> Map states to <strong>teams</strong>. The platform team owns network and clusters; each product team owns its application states. Clear ownership determines who reviews and who has apply permissions.</p>
+<p><strong>Performance and contention.</strong> Smaller states refresh and plan faster and reduce lock waits.</p>
+<p><strong>The opposite extreme.</strong> Hundreds of micro-states, one per resource, mean many cross-state references (remote state, data lookups, parameter stores), manual ordering of applies, duplicated backend and provider boilerplate, and harder refactoring, because <code>moved</code> blocks don't work across states. Aim for components that are <strong>cohesive</strong>: things that change together and are owned by the same team live together. Tools like Terragrunt or HCP Terraform Stacks help manage many states when needed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Separate by environment and account.</li>
+  <li>Within each, split by layer: foundation, data, application.</li>
+  <li>Align with team ownership and pipelines.</li>
+  <li>Connect states through outputs, data sources or parameter stores.</li>
+  <li>Revisit boundaries as the system grows; split with removed/import blocks or state mv.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">live/
+  prod/
+    network/          # VPC, subnets, TGW, DNS  (platform team, rare changes)
+    eks-cluster/      # cluster, node groups    (platform team)
+    data/orders-db/   # RDS, backups            (orders team, prevent_destroy)
+    apps/orders-api/  # ECS service, ALB rules  (orders team, daily)
+  dev/
+    network/ ...</code></pre>
+<pre><code class="language-hcl"># apps/orders-api reads from network via a contract
+data &quot;aws_ssm_parameter&quot; &quot;private_subnets&quot; {
+  name = &quot;/platform/network/prod/private_subnet_ids&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Prod and dev in the same state.</li>
+  <li>One monolithic state that takes 20 minutes to plan.</li>
+  <li>One state per resource, with fragile chains of dependencies.</li>
+  <li>Database and frequently deployed app code in the same state with broad permissions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I split state mainly to limit blast radius, so a bad apply or a corrupted state only affects one part. The natural first boundaries are environment and account: never prod and dev in one state. Then layers with different change frequency and ownership: networking and DNS that rarely change, shared data stores, and application stacks that change daily and belong to product teams. Smaller states also plan faster and reduce lock contention. But hundreds of tiny states create lots of cross-state dependencies, ordering problems and boilerplate, so I aim for components that match how teams work.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Should a database and the application that uses it share a state?</strong> Usually not: the database is long-lived and protected, the app changes daily; separate states with narrower permissions are safer.</li>
+  <li><strong>How do you split an existing state?</strong> removed/import blocks or <code>terraform state mv</code> to a new state, verified by empty plans.</li>
+  <li><strong>How do you order applies across states?</strong> Pipeline dependencies, Terragrunt dependencies or Stacks.</li>
+</ul>
+</article>
+</body>
+</html>

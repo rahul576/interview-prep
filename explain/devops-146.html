@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-146 · A deployment is stuck: new pods stay in Pending or ImagePullBackOff. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-146" data-topic="Troubleshooting">
+<h1>A deployment is stuck: new pods stay in Pending or ImagePullBackOff. How do you fix it?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run <strong><code>kubectl describe pod</code></strong> and read the <strong>events</strong>: <strong>Pending</strong> means the scheduler cannot place the pod (resources, taints, affinity, unbound PVC, quota), <strong>ImagePullBackOff</strong> means the node cannot pull the image (wrong tag, registry auth, network); use <strong>rollout status</strong> and <strong>rollout undo</strong> to protect users while fixing it.</p>
+
+<h2>Detailed explanation</h2>
+<p>A rollout gets stuck because new pods never become Ready, and with the default RollingUpdate strategy the old ReplicaSet keeps serving, so users are often unaffected — but the deployment will eventually exceed <code>progressDeadlineSeconds</code> and report failure.</p>
+<p><strong>Pending</strong> pods have not been scheduled, and the scheduler records why in the events, for example <code>0/6 nodes are available: 3 Insufficient cpu, 3 node(s) had untolerated taint</code>. Causes:</p>
+<ul>
+  <li><strong>Insufficient resources</strong>: requests too large or cluster full; the cluster autoscaler may be adding nodes, or hitting max size or cloud quota.</li>
+  <li><strong>Taints</strong> without matching <strong>tolerations</strong>, such as dedicated GPU or system pools.</li>
+  <li><strong>Node affinity, nodeSelector or pod anti-affinity</strong> rules nothing satisfies.</li>
+  <li>An <strong>unbound PersistentVolumeClaim</strong>: no matching StorageClass, or a zonal disk in another zone.</li>
+  <li>A <strong>ResourceQuota</strong> or LimitRange in the namespace; this shows on the ReplicaSet events (<code>exceeded quota</code>), as pods are never created.</li>
+</ul>
+<p><strong>ImagePullBackOff / ErrImagePull</strong> means the kubelet failed to pull:</p>
+<ul>
+  <li>The <strong>tag or digest does not exist</strong> (typo, image not pushed yet, wrong registry path).</li>
+  <li><strong>Authentication</strong>: missing <code>imagePullSecret</code>, expired secret, or missing AcrPull/ECR permission for the node or workload identity.</li>
+  <li><strong>Network</strong>: nodes cannot reach the registry because of a firewall, private endpoint DNS or proxy.</li>
+  <li>Registry <strong>rate limits</strong>, such as Docker Hub's anonymous limits.</li>
+</ul>
+<p><code>kubectl rollout status</code> shows progress; <code>kubectl rollout undo</code> restores the previous ReplicaSet if needed while the fix is made.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get pods</code> to see status.</li>
+  <li><code>kubectl describe pod &lt;name&gt;</code> and read events at the bottom.</li>
+  <li>For Pending, compare requests with node capacity, taints, affinity, PVC and quota.</li>
+  <li>For image errors, verify the image reference, pull secrets and registry reachability.</li>
+  <li>Fix the manifest or environment; or <code>rollout undo</code> if production is at risk.</li>
+  <li>Confirm with <code>rollout status</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe pod checkout-7c9f-abcde -n shop | sed -n '/Events/,$p'
+#  Warning  Failed  kubelet  Failed to pull image &quot;acr.io/shop/checkout:1.4.l&quot;: not found
+
+kubectl describe rs -n shop | grep -i quota
+kubectl get pvc -n shop
+kubectl rollout status deploy/checkout -n shop --timeout=2m
+kubectl rollout undo deploy/checkout -n shop</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Looking at application logs for a pod that never started.</li>
+  <li>Deleting pods repeatedly instead of reading the events.</li>
+  <li>Missing quota errors because they appear on the ReplicaSet, not the pod.</li>
+  <li>Using mutable <code>latest</code> tags, making pulls unpredictable.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with kubectl describe pod and read the events. For Pending, the scheduler tells me why: insufficient CPU or memory because requests are too big or the cluster is full, taints without tolerations, affinity rules nothing satisfies, an unbound PVC, or a namespace quota, which shows on the ReplicaSet. For ImagePullBackOff, either the tag doesn't exist, the registry needs credentials through an imagePullSecret or workload identity, or the nodes can't reach the registry. I watch rollout status, and if production is at risk I use rollout undo while fixing it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent a tag typo reaching production?</strong> Build once, deploy the CI-produced digest, and verify the image exists in a pipeline step.</li>
+  <li><strong>What is CrashLoopBackOff, by contrast?</strong> The image started but the container keeps exiting; check logs with <code>--previous</code>.</li>
+  <li><strong>Why might autoscaling not help Pending pods?</strong> Max nodes reached, cloud quota, or a request larger than any node size.</li>
+</ul>
+</article>
+</body>
+</html>

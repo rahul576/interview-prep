@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-231 · How does the Outbox pattern maintain consistency between database updates and event publishing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-231" data-topic="Microservices">
+<h1>How does the Outbox pattern maintain consistency between database updates and event publishing?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>The outbox keeps database and events consistent by committing the <strong>business data and the event in one local ACID transaction</strong>, then <strong>publishing asynchronously with retries</strong> until the broker acknowledges, giving <strong>reliable eventual consistency</strong> with <strong>idempotent consumers</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The key move is turning a <strong>dual write</strong> into a <strong>single write</strong>. Because the outbox row lives in the same database as the business data, atomicity comes for free: if the transaction rolls back, there is no event; if it commits, the event is <strong>durably stored</strong> alongside the change. There is never a committed order without its OrderCreated event, or an event for an order that does not exist.</p>
+<p>Publishing becomes a separate, <strong>retryable</strong> step after commit. The relay sends the row to Kafka and only marks it published once the broker acknowledges (with <code>acks=all</code> and an idempotent producer). If Kafka is down for ten minutes, events simply wait in the table; the outage delays notifications but loses nothing. This is the core difference from publishing inside the transaction method, where a broker failure either rolls back the business change or loses the event.</p>
+<p>Two subtleties remain. First, <strong>duplicates</strong>: if the relay crashes after Kafka acknowledged but before the row was marked, the event is sent again. Consumers handle this by deduplicating on a unique <strong>event id</strong> (a processed-messages table updated in the consumer's own transaction) or by being naturally idempotent (setting status to PAID is safe twice). Second, <strong>ordering</strong>: the relay reads rows in commit order and uses the <strong>aggregate id as the partition key</strong>, so all events of one order land on one partition in sequence. Across different aggregates there is no global order, and you should not need one.</p>
+<p>The result is <strong>eventual consistency</strong>: other services learn about the change shortly after commit, reliably, but not instantly. Business processes are designed with that lag in mind.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Local transaction writes business rows and the outbox row.</li>
+  <li>Commit makes both durable together.</li>
+  <li>Relay reads committed rows (polling or CDC from the log).</li>
+  <li>Relay publishes with key = aggregate id; retries with backoff until acked.</li>
+  <li>Relay marks the row as published; a cleanup job removes old rows.</li>
+  <li>Consumers dedupe by event id within their own transaction.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@KafkaListener(topics = &quot;orders&quot;)
+@Transactional
+public void handle(ConsumerRecord&lt;String, String&gt; rec) {
+    String eventId = new String(rec.headers().lastHeader(&quot;id&quot;).value());
+    if (inbox.insertIfAbsent(eventId) == 0) return; // duplicate, skip
+    payments.startFor(rec.key());
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Marking the row as sent before the broker acknowledges.</li>
+  <li>Assuming exactly-once end to end; Kafka transactions do not cover your database.</li>
+  <li>Dedup table written outside the consumer's business transaction.</li>
+  <li>Expecting global ordering across aggregates.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The outbox removes the dual write. The business change and the event row are committed in one local transaction, so they're always consistent: rollback means no event, commit means the event is stored. Publishing happens afterwards and is retried until Kafka acknowledges; only then is the row marked as sent, so a broker outage just delays events. If the relay crashes after sending but before marking, the event goes out again, so consumers dedupe by event id. Using the aggregate id as the Kafka key keeps per-order ordering. Overall we get reliable eventual consistency between services.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is publishing to Kafka inside the @Transactional method not enough?</strong> Kafka isn't part of the database transaction: the send can succeed and the commit fail, or the commit succeed and the send fail.</li>
+  <li><strong>What about Kafka transactions?</strong> They give exactly-once within Kafka, not across your database.</li>
+  <li><strong>How do you monitor the outbox?</strong> Alert on the age of the oldest unpublished row.</li>
+</ul>
+</article>
+</body>
+</html>

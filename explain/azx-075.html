@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-075 · How do engineers and pipelines access a private AKS cluster API server?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-075" data-topic="Azure Kubernetes (AKS)">
+<h1>How do engineers and pipelines access a private AKS cluster API server?</h1>
+<p class="ex-meta">Azure Kubernetes (AKS) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>private AKS cluster</strong> has <strong>no public API endpoint</strong>, so pipelines use <strong>self-hosted agents or Managed DevOps Pools in the network</strong>, engineers use <strong>VPN/ExpressRoute or Bastion to a jump box</strong>, emergencies can use <strong><code>az aks command invoke</code></strong>, and access is still authenticated with <strong>Entra ID and Azure RBAC</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a private cluster the API server is reached through a <strong>private endpoint</strong> in the cluster's VNet (or, with <strong>API server VNet integration</strong>, through an internal load balancer in a delegated subnet). A <strong>private DNS zone</strong> such as <code>privatelink.&lt;region&gt;.azmk8s.io</code> resolves the API server name to the private IP. From the internet, <code>kubectl</code> simply cannot connect, which removes a large attack surface.</p>
+<p><strong>Access patterns:</strong></p>
+<ul>
+  <li><strong>Pipelines:</strong> run on <strong>self-hosted agents</strong> (VMs, VM Scale Set agents or <strong>Managed DevOps Pools</strong> injected into a VNet) or GitHub self-hosted runners in the hub or a peered spoke. Microsoft-hosted agents cannot reach the private endpoint.</li>
+  <li><strong>Engineers:</strong> connect from the corporate network via <strong>VPN or ExpressRoute</strong>, or through <strong>Azure Bastion</strong> to a <strong>jump box</strong> in a peered VNet that has kubectl and kubelogin installed.</li>
+  <li><strong>Emergencies and occasional tasks:</strong> <strong><code>az aks command invoke</code></strong> runs kubectl or helm commands in a temporary pod inside the cluster through the Azure control plane, with no network line of sight needed. It is slower and limited, but handy for break-fix.</li>
+  <li><strong>GitOps:</strong> Flux or Argo CD runs inside the cluster and pulls from Git, so pipelines often do not need API access at all.</li>
+</ul>
+<p><strong>DNS</strong> is the most common source of trouble: peered VNets, hub DNS servers and on-premises resolvers must all resolve the private zone, typically with a <strong>virtual network link</strong> on the zone and <strong>Azure DNS Private Resolver</strong> with conditional forwarding.</p>
+<p>Whatever the network path, every request is still authenticated with <strong>Entra ID</strong>, authorised with <strong>Azure RBAC</strong>, and local accounts should be disabled.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the cluster with <code>--enable-private-cluster</code> (optionally a custom private DNS zone).</li>
+  <li>Link the private DNS zone to hub and agent VNets; configure forwarding for on-premises.</li>
+  <li>Deploy agents or runners in a VNet with line of sight.</li>
+  <li>Give engineers VPN or Bastion access to a jump box.</li>
+  <li>Use <code>command invoke</code> for emergencies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az aks create -g rg-apps -n aks-private --enable-private-cluster \
+  --enable-aad --enable-azure-rbac --disable-local-accounts
+
+# Run kubectl without network access to the API server
+az aks command invoke -g rg-apps -n aks-private \
+  --command &quot;kubectl get pods -n orders&quot;
+
+# Check resolution from an agent
+nslookup aks-private-dns-12345.privatelink.westeurope.azmk8s.io</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting to link the private DNS zone to peered or hub VNets.</li>
+  <li>Expecting Microsoft-hosted agents to reach the cluster.</li>
+  <li>Using shared admin credentials on the jump box instead of personal Entra logins.</li>
+  <li>Making the cluster private but leaving local accounts enabled.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A private cluster exposes the API server only on a private IP with a private DNS zone, so kubectl from the internet doesn't work. Pipelines run on self-hosted agents or Managed DevOps Pools inside the VNet or a peered network. Engineers use VPN or ExpressRoute, or Bastion to a jump box. For emergencies, az aks command invoke runs kubectl through the Azure control plane without network access. API server VNet integration is another model. In all cases access is still Entra ID and Azure RBAC.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Common DNS issues?</strong> Zone not linked to the peered VNet, or custom DNS servers not forwarding to Azure DNS.</li>
+  <li><strong>Does GitOps help?</strong> Yes, the in-cluster agent pulls changes, so CI needs no API access.</li>
+  <li><strong>Limits of command invoke?</strong> Slower, limited file upload, not suitable for routine automation.</li>
+</ul>
+</article>
+</body>
+</html>

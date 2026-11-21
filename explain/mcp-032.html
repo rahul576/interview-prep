@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-032 · How do you keep state across tool calls when the MCP protocol is stateless?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-032" data-topic="MCP Servers">
+<h1>How do you keep state across tool calls when the MCP protocol is stateless?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Without protocol sessions, keep state <strong>explicit</strong>: a tool that starts something <strong>stores state server-side</strong> (database or shared cache) and <strong>returns a handle</strong>; later tools <strong>accept the handle as an argument</strong>; handles are <strong>unguessable, scoped to the authenticated user, validated on every call and expiring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>2026-07-28</strong> revision removed protocol sessions, and even before that, relying on <strong>in-memory session state</strong> broke as soon as a server ran on more than one replica, restarted, or sat behind a load balancer without sticky routing. Many workflows still need state: building a report section by section, a shopping cart, a multi-step migration plan, a database transaction preview.</p>
+<p>The recommended pattern is <strong>explicit handles</strong>:</p>
+<ol>
+  <li>A tool that starts a stateful workflow, such as <code>create_draft_report</code> or <code>open_cart</code>, <strong>creates the state server-side</strong> in a <strong>database</strong> or a <strong>shared cache like Redis</strong>, and returns an <strong>identifier</strong> (<code>report_id: &quot;rpt_7Hc9…&quot;</code>) in its result.</li>
+  <li>Subsequent tools, such as <code>add_section(report_id, …)</code> or <code>checkout(cart_id)</code>, <strong>take the handle as an argument</strong>. Any replica can load the state and continue.</li>
+  <li>The model passes handles naturally, because they appear in the conversation as tool results. Descriptions should mention them: &quot;Use the report_id returned by create_draft_report&quot;.</li>
+</ol>
+<p>This is the same idea as REST resources, and it makes state <strong>visible, debuggable and durable</strong>.</p>
+<p><strong>Security</strong> matters, because a handle is effectively a capability:</p>
+<ul>
+  <li><strong>Unguessable</strong>: random, high-entropy ids (e.g. 128-bit), never sequential integers, which allow <strong>enumeration (IDOR)</strong> attacks.</li>
+  <li><strong>Scoped to the user</strong>: store the owner with the state and <strong>check on every call</strong> that the caller's authenticated identity matches. Never trust the handle alone.</li>
+  <li><strong>Expiring</strong>: TTLs clean up abandoned state and limit exposure.</li>
+  <li><strong>Validated</strong>: unknown or expired handles return a clear, actionable error.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>start_*</code> tool → generate random id → save <code>{owner, data, expires_at}</code> → return id.</li>
+  <li>Later call with id → load → verify owner = caller → apply change → save.</li>
+  <li>Expiry via TTL (Redis <code>EX</code>) or a cleanup job.</li>
+  <li>Errors guide the model: &quot;report_id expired; call create_draft_report again&quot;.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool()
+def create_draft_report(title: str) -&gt; dict:
+    &quot;&quot;&quot;Start a new draft report. Returns report_id for add_section and publish_report.&quot;&quot;&quot;
+    rid = &quot;rpt_&quot; + secrets.token_urlsafe(16)
+    redis.set(f&quot;draft:{rid}&quot;, json.dumps({&quot;owner&quot;: current_user().id, &quot;title&quot;: title, &quot;sections&quot;: []}),
+              ex=86400)
+    return {&quot;report_id&quot;: rid, &quot;expires_in_hours&quot;: 24}
+
+@mcp.tool()
+def add_section(report_id: str, heading: str, body: str) -&gt; dict:
+    &quot;&quot;&quot;Add a section to a draft created with create_draft_report.&quot;&quot;&quot;
+    raw = redis.get(f&quot;draft:{report_id}&quot;)
+    if not raw:
+        raise ToolError(&quot;Unknown or expired report_id. Call create_draft_report again.&quot;)
+    draft = json.loads(raw)
+    if draft[&quot;owner&quot;] != current_user().id:
+        raise ToolError(&quot;You do not have access to this report.&quot;)
+    draft[&quot;sections&quot;].append({&quot;heading&quot;: heading, &quot;body&quot;: body})
+    redis.set(f&quot;draft:{report_id}&quot;, json.dumps(draft), keepttl=True)
+    return {&quot;report_id&quot;: report_id, &quot;sections&quot;: len(draft[&quot;sections&quot;])}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Per-process dictionaries holding state across calls.</li>
+  <li>Sequential or guessable handles.</li>
+  <li>Checking only that the handle exists, not who owns it.</li>
+  <li>No expiry, so drafts accumulate forever.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In the stateless revision there are no protocol sessions, and in-memory session state broke anyway once servers scaled across replicas. So I make state explicit: a tool that starts something, like create_draft_report, stores the state server-side in a database or Redis and returns a handle. Later tools such as add_section take that handle as an argument, so any replica can load the state. The model passes handles naturally because they're in the conversation. Handles must be unguessable, bound to the authenticated user and checked on every call, and expire so abandoned state is cleaned up.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Security issue with sequential handles?</strong> Enumeration: another user guesses ids and accesses others' state (IDOR), unless ownership is checked.</li>
+  <li><strong>Database or cache?</strong> Cache for short-lived drafts; database for anything valuable or long-lived.</li>
+  <li><strong>What if the model loses the handle?</strong> Provide a <code>list_my_drafts</code> tool.</li>
+</ul>
+</article>
+</body>
+</html>

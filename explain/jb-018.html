@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-018 · Are Java objects always created on the heap? Explain escape analysis.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-018" data-topic="JVM &amp; Performance">
+<h1>Are Java objects always created on the heap? Explain escape analysis.</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Logically <strong>every object is on the heap</strong>, but the HotSpot <strong>JIT</strong> runs <strong>escape analysis</strong> on hot code and, for objects that <strong>do not escape</strong> the method or thread, can apply <strong>scalar replacement</strong> (no heap allocation at all) and <strong>lock elision</strong>; it <strong>reduces GC pressure</strong> but is an <strong>optimisation, not a guarantee</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Java language and JVM specification describe objects as heap-allocated and garbage collected. You cannot request stack allocation. But the specification only defines observable behaviour, so the JIT may do anything that gives the same results.</p>
+<p><strong>Escape analysis</strong> is performed by the <strong>C2</strong> compiler (and Graal) on hot, compiled methods, after inlining. For each allocation it determines how far the object's reference can travel:</p>
+<ul>
+  <li><strong>No escape</strong>: the object is only used inside the compiled method, including inlined callees.</li>
+  <li><strong>Argument escape</strong>: passed to a method that is not inlined, but not stored globally.</li>
+  <li><strong>Global escape</strong>: returned, stored in a field or static, put into a collection, passed to another thread or to unknown code.</li>
+</ul>
+<p>For <strong>non-escaping</strong> objects HotSpot uses <strong>scalar replacement</strong>: rather than allocating the object, it treats each field as a separate local variable held in registers or stack slots. The object never exists on the heap, so no allocation cost, no GC work. HotSpot does not literally allocate objects on the stack; it eliminates them. GraalVM adds <strong>partial escape analysis</strong>, which handles objects that escape only on some branches.</p>
+<p><strong>Lock elision</strong>: if a <code>synchronized</code> block locks an object no other thread can see, such as a local <code>StringBuffer</code>, the lock is removed.</p>
+<p><strong>Limits.</strong> It only applies after JIT compilation, so not during warm-up or in the interpreter. It depends on <strong>inlining</strong>: a call to a large or megamorphic method that is not inlined makes objects escape. Arrays that are large or of unknown length, objects merged from different branches into one variable (in C2), and objects stored in fields or collections are not replaced. It is on by default (<code>-XX:+DoEscapeAnalysis</code>). So write clear code, but never rely on it for correctness or as the main memory strategy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Method becomes hot and is compiled by C2.</li>
+  <li>Callees are inlined into it where possible.</li>
+  <li>Escape analysis classifies each allocation.</li>
+  <li>Non-escaping objects are scalar-replaced; their fields become locals.</li>
+  <li>Locks on non-escaping objects are removed.</li>
+  <li>Escaping objects are allocated on the heap normally.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">record Point(int x, int y) {}
+
+int distanceSquared(int x1, int y1, int x2, int y2) {
+    Point a = new Point(x1, y1);          // does not escape
+    Point b = new Point(x2, y2);          // does not escape
+    int dx = a.x() - b.x(), dy = a.y() - b.y();
+    return dx * dx + dy * dy;             // after C2: no Point objects allocated
+}
+
+Point last;
+Point keep(int x, int y) {
+    Point p = new Point(x, y);
+    last = p;                             // global escape: heap allocation
+    return p;
+}
+
+String join(String a, String b) {
+    StringBuffer sb = new StringBuffer();  // synchronized methods, but local:
+    return sb.append(a).append(b).toString(); // locks elided
+}</code></pre>
+<pre><code class="language-bash"># Compare allocation with and without EA in a JMH benchmark
+java -XX:-DoEscapeAnalysis -jar benchmarks.jar -prof gc</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying &quot;Java allocates small objects on the stack&quot;.</li>
+  <li>Expecting escape analysis in the interpreter or during warm-up.</li>
+  <li>Benchmarking without JMH, so the optimisation (or dead-code elimination) distorts results.</li>
+  <li>Designing APIs around assumed escape analysis.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;From the language point of view every object is created on the heap. In practice the HotSpot C2 compiler runs escape analysis on hot code after inlining: it checks whether an object escapes the method or thread, for example by being returned, stored in a field or passed to code that isn't inlined. If it doesn't escape, the JIT can apply scalar replacement, breaking the object into its fields held in registers or stack slots, so there's no heap allocation at all. It can also elide locks on objects only one thread can see. That reduces allocation and GC pressure, but it only happens after warm-up, depends on inlining and is never guaranteed.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which coding patterns stop escape analysis from working?</strong> Storing objects in fields or collections, returning them, passing them to non-inlined or megamorphic methods, and very large methods that defeat inlining.</li>
+  <li><strong>What is partial escape analysis?</strong> Graal's variant that removes allocations on paths where the object does not escape.</li>
+  <li><strong>How do you verify it happens?</strong> JMH with <code>-prof gc</code> showing allocated bytes per operation near zero.</li>
+</ul>
+</article>
+</body>
+</html>

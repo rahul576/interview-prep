@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-064 · One shard of your database is overloaded because a celebrity account gets most of the traffic. How do you handle hot keys and hot partitions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-064" data-topic="Distributed Systems">
+<h1>One shard of your database is overloaded because a celebrity account gets most of the traffic. How do you handle hot keys and hot partitions?</h1>
+<p class="ex-meta">Distributed Systems · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>For hot keys: <strong>identify</strong> them, <strong>cache in layers</strong> (CDN, distributed and in-process), <strong>split writes across sub-keys</strong>, treat <strong>celebrities specially</strong> (fan-out on read), <strong>aggregate counters asynchronously</strong>, and choose <strong>high-cardinality partition keys</strong> or dedicated shards.</p>
+
+<h2>Detailed explanation</h2>
+<p>Sharding assumes load is spread evenly. One celebrity, viral post or giant tenant breaks that assumption: millions of reads or writes hit one key on one shard, while others idle.</p>
+<p><strong>Reads:</strong> a hot key is the easiest case. Put a short-TTL <strong>in-process cache</strong> in each app instance (even 1–5 s removes most load), keep the distributed cache, and serve public data from the <strong>CDN</strong>. Replicate the hot key across several cache nodes (<code>key#1..#N</code>).</p>
+<p><strong>Writes:</strong> e.g. likes on a viral post. Split the counter into N sub-counters (<code>likes:post9:0..15</code>), increment a random one, and sum on read (or periodically). Or buffer increments in a stream and apply aggregated updates every second.</p>
+<p><strong>Fan-out:</strong> in feeds, pushing a celebrity's post to 50M followers' timelines (fan-out on write) is too expensive; instead merge celebrity posts at read time (<strong>fan-out on read</strong>), a hybrid model.</p>
+<p><strong>Data placement:</strong> move very large tenants to dedicated shards; avoid partition keys with skew.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Detect: per-key QPS metrics, sampling, Redis hotkeys, DynamoDB contributor insights.</li>
+  <li>Reads: local cache + replicated cache keys + CDN.</li>
+  <li>Writes: sharded counters / stream aggregation.</li>
+  <li>Architecture: hybrid fan-out; tenant isolation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">shard = random.randrange(16)
+redis.incr(f&quot;likes:{post_id}:{shard}&quot;)
+total = sum(int(x or 0) for x in redis.mget([f&quot;likes:{post_id}:{i}&quot; for i in range(16)]))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding more shards (doesn't help one key).</li>
+  <li>Strongly consistent real-time counters where approximate is fine.</li>
+  <li>Fan-out on write for accounts with millions of followers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I'd confirm which key is hot and whether it's reads or writes. For reads, I'd layer caches: CDN, Redis and a short-lived local cache in each instance, possibly replicating the key. For writes like likes, I'd split the counter into sub-keys or aggregate through a stream. In feeds, celebrities use fan-out on read. Long term, high-cardinality keys and dedicated shards for huge tenants.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>A million likes per minute?</strong> Sharded counters + async aggregation, approximate display.</li>
+  <li><strong>DynamoDB adaptive capacity?</strong> Helps but doesn't remove per-partition limits.</li>
+  <li><strong>Hot tenant?</strong> Move to dedicated shard or cell.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-040 · How do you test a Spring Boot application? Describe your unit and integration testing approach.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-040" data-topic="Testing">
+<h1>How do you test a Spring Boot application? Describe your unit and integration testing approach.</h1>
+<p class="ex-meta">Testing · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>I follow the <strong>test pyramid</strong>: many fast <strong>JUnit 5 + Mockito + AssertJ</strong> unit tests, <strong>slice tests</strong> (<code>@WebMvcTest</code>, <code>@DataJpaTest</code>) for framework layers, and fewer <strong><code>@SpringBootTest</code> integration tests</strong> against real dependencies with <strong>Testcontainers</strong>, plus <strong>WireMock</strong> and <strong>contract tests</strong> for other services, all running in CI.</p>
+
+<h2>Detailed explanation</h2>
+<p>Testing a Spring Boot application is about putting each test at the cheapest level that can catch the bug.</p>
+<p><strong>Unit tests</strong> cover business logic in services and domain classes with no Spring context. Dependencies come in through the constructor and are mocked with Mockito; assertions use AssertJ. Each test follows <strong>given-when-then</strong> and checks one behaviour, including edge cases and failures. They run in milliseconds, so there are hundreds or thousands.</p>
+<p><strong>Slice tests</strong> start only part of the context. <code>@WebMvcTest</code> loads one controller with MockMvc (or <code>MockMvcTester</code> since Boot 3.4) to check request mapping, validation, JSON and error handling, with services replaced by <code>@MockitoBean</code>. <code>@DataJpaTest</code> checks repositories, custom queries and mappings, ideally against a real database via Testcontainers rather than H2, because H2 hides dialect differences.</p>
+<p><strong>Integration tests</strong> with <code>@SpringBootTest</code> start the whole application and use <strong>Testcontainers</strong> for PostgreSQL, Kafka or Redis, often via <code>@ServiceConnection</code>. External HTTP APIs are stubbed with <strong>WireMock</strong> so failures and timeouts can be simulated. Between services, <strong>consumer-driven contract tests</strong> (Pact or Spring Cloud Contract) replace most end-to-end testing.</p>
+<p>A handful of <strong>end-to-end</strong> smoke tests run after deployment. Everything runs in CI on every pull request, with JaCoCo coverage as a signal rather than a target.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write unit tests alongside each service class; mock collaborators.</li>
+  <li>Add <code>@WebMvcTest</code> tests for controller contracts and validation.</li>
+  <li>Add <code>@DataJpaTest</code> tests for non-trivial queries against Testcontainers.</li>
+  <li>Write a few <code>@SpringBootTest</code> flows covering wiring, transactions and messaging.</li>
+  <li>Stub third-party APIs with WireMock; verify inter-service contracts.</li>
+  <li>Run in CI, reuse containers and Spring contexts to keep the build fast.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@WebMvcTest(OrderController.class)
+class OrderControllerTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;
+
+    @Test
+    void returns404WhenOrderMissing() throws Exception {
+        given(service.find(42L)).willThrow(new OrderNotFoundException(42L));
+        mvc.perform(get(&quot;/orders/42&quot;))
+           .andExpect(status().isNotFound())
+           .andExpect(jsonPath(&quot;$.code&quot;).value(&quot;ORDER_NOT_FOUND&quot;));
+    }
+}
+
+@SpringBootTest
+@Testcontainers
+class OrderFlowIT {
+    @Container @ServiceConnection
+    static PostgreSQLContainer&lt;?&gt; db = new PostgreSQLContainer&lt;&gt;(&quot;postgres:16&quot;);
+    // ... call the service, assert DB state
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>@SpringBootTest</code> for everything, making the suite slow.</li>
+  <li>Testing against H2 and discovering SQL problems in production.</li>
+  <li>Mocking so heavily that tests only restate the implementation.</li>
+  <li>Creating many unique context configurations, which defeats Spring's context caching.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I follow the test pyramid. Most tests are plain JUnit 5 unit tests with Mockito and AssertJ, written given-when-then, covering business rules and edge cases without starting Spring. For the framework layers I use slices: WebMvcTest with MockMvc for controllers, and DataJpaTest for repositories. Then a smaller set of SpringBootTest integration tests runs against real PostgreSQL and Kafka in Testcontainers, so behaviour matches production, with WireMock for external APIs and contract tests between our services. It all runs in CI on every pull request, and I keep it fast by reusing containers and Spring contexts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep integration tests fast?</strong> Singleton containers, a shared context configuration, parallel test forks and running only slices where possible.</li>
+  <li><strong>Why Testcontainers over H2?</strong> Same engine as production, so dialect, constraints and migrations are really tested.</li>
+  <li><strong>What is @MockitoBean?</strong> The Spring Framework 6.2 replacement for @MockBean, which replaces a bean in the test context with a Mockito mock.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-025 · An agent tells the user it completed a task, but logs show the tool call failed. How do you prevent false success claims?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-025" data-topic="AI Agents &amp; AIOps">
+<h1>An agent tells the user it completed a task, but logs show the tool call failed. How do you prevent false success claims?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Prevent false success claims with <strong>explicit structured status in tool results</strong>, a <strong>verification step that checks real state</strong> after important actions, a <strong>final report generated from recorded outcomes</strong> rather than the model's narrative, <strong>evals with deliberate failures</strong>, and <strong>evidence</strong> such as links or IDs shown to users.</p>
+
+<h2>Detailed explanation</h2>
+<p>Language models are trained to produce plausible continuations. After planning &quot;create the ticket, then confirm to the user&quot;, the most likely next text is a confirmation, even when the tool call failed. Other causes: the error was buried inside a long output, the result was ambiguous (HTTP 202 accepted but not completed), or the context was compacted and the failure lost. False success is particularly damaging because users stop checking.</p>
+<p>The fix is to make truth <strong>structural</strong>, not dependent on the model's reading.</p>
+<p><strong>Explicit status</strong>: every tool returns a structured result such as <code>{&quot;ok&quot;: false, &quot;error&quot;: &quot;...&quot;, &quot;retryable&quot;: false}</code> at the top, rather than raw text the model must interpret. Asynchronous operations return <code>status: &quot;pending&quot;</code> with a way to check.</p>
+<p><strong>Verification</strong>: after important actions, the system checks the <strong>actual state of the world</strong>: read back the created ticket, query the deployment status, run the tests, fetch the sent message from the outbox. This can be an explicit tool call the agent must make, or a deterministic post-condition check in code. Success may only be reported if verification passes.</p>
+<p><strong>Grounded reporting</strong>: the user-facing summary is generated from the <strong>recorded outcomes in the trace</strong>, for example a structured list of steps and statuses built by code, or at least the model's summary is <strong>checked by code</strong> against the tool results. A claim like &quot;ticket created&quot; must correspond to a successful <code>create_ticket</code> result with an ID.</p>
+<p><strong>Evals for honesty</strong>: test suites inject tool failures, timeouts and partial successes and assert that the agent reports them accurately.</p>
+<p><strong>Evidence</strong>: responses include links, ticket numbers or commit IDs, so users and reviewers can verify quickly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Tools return structured status with explicit success flags.</li>
+  <li>After key actions, run verification against real state.</li>
+  <li>Record each step's outcome in durable run state.</li>
+  <li>Build the final report from recorded outcomes; check model claims.</li>
+  <li>Include evidence links or IDs in the response.</li>
+  <li>Run failure-injection evals regularly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def final_report(run):
+    lines = []
+    for step in run.steps:
+        if step.kind != &quot;action&quot;:
+            continue
+        verified = step.verification and step.verification.ok
+        status = &quot;done&quot; if step.result.ok and verified else &quot;FAILED&quot;
+        evidence = step.result.data.get(&quot;url&quot;, &quot;&quot;) if step.result.ok else step.result.error
+        lines.append(f&quot;- {step.description}: {status} {evidence}&quot;)
+    report = &quot;\n&quot;.join(lines)
+    summary = llm(&quot;Summarise for the user. Do not claim anything not in this list.&quot;, report)
+    assert_claims_match(summary, run.steps)   # code check: no 'created'/'sent' without a matching ok step
+    return summary + &quot;\n\nDetails:\n&quot; + report</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Returning raw API responses and expecting the model to interpret them.</li>
+  <li>Treating &quot;request accepted&quot; as &quot;task completed&quot;.</li>
+  <li>Letting the model write the final summary from memory.</li>
+  <li>Never testing behaviour when tools fail.</li>
+  <li>No evidence in responses.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Models sometimes claim success because they misread an ambiguous result, the error was buried, or they just continue the expected story. I address it from several sides. Tools return explicit structured status, success true or false with an error, not raw text. After important actions a verification step checks the real state, like reading back the ticket or running the tests, and success can only be reported if that passes. The final summary is built from the recorded outcomes in the trace, or checked against them by code. Eval suites inject tool failures to test honest reporting. And responses show evidence like ticket links or commit IDs that users can check.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Design a report where a failed step can never be hidden?</strong> Generate the step list deterministically from run state and append it below any model-written summary.</li>
+  <li><strong>Verification for asynchronous jobs?</strong> Poll status with a dedicated tool until done or timeout, and report pending honestly.</li>
+  <li><strong>Is a judge model enough to catch false claims?</strong> It helps, but deterministic checks against tool results are stronger.</li>
+</ul>
+</article>
+</body>
+</html>

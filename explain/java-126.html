@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-126 · How do you handle exceptions and validation globally in a Spring Boot REST API?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-126" data-topic="Spring Boot">
+<h1>How do you handle exceptions and validation globally in a Spring Boot REST API?</h1>
+<p class="ex-meta">Spring Boot · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Handle errors in one <strong>@RestControllerAdvice</strong> with <strong>@ExceptionHandler</strong> methods, validate DTOs with <strong>Bean Validation</strong> and <strong>@Valid</strong>, return a consistent <strong>ProblemDetail (RFC 9457)</strong> body with <strong>correct status codes</strong>, and <strong>log details server-side</strong> with a correlation id instead of leaking stack traces.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without central handling, each controller has its own try/catch blocks and clients get inconsistent formats, or the default whitelabel or error JSON with internal details. <strong>@RestControllerAdvice</strong> (<code>@ControllerAdvice</code> + <code>@ResponseBody</code>) applies to all controllers; its <strong>@ExceptionHandler</strong> methods catch specific exception types and turn them into responses. Spring picks the handler for the most specific exception type.</p>
+<p><strong>Validation</strong> uses Jakarta Bean Validation (Hibernate Validator via <code>spring-boot-starter-validation</code>). Annotate DTO fields with <code>@NotBlank</code>, <code>@Size</code>, <code>@Email</code>, <code>@Positive</code>, <code>@Pattern</code>, and put <strong>@Valid</strong> on the <code>@RequestBody</code> parameter. Invalid input then throws <code>MethodArgumentNotValidException</code> before the controller body runs. For <code>@RequestParam</code> and <code>@PathVariable</code> constraints, Spring 6.1+ performs built-in method validation and throws <code>HandlerMethodValidationException</code>; with <code>@Validated</code> on a class, <code>ConstraintViolationException</code> is raised instead.</p>
+<p>For the response shape, Spring Framework 6 provides <strong>ProblemDetail</strong>, which implements <strong>RFC 9457 Problem Details</strong> (successor of RFC 7807): <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code>, <code>instance</code>, plus custom properties such as a list of field errors. Extending <strong>ResponseEntityExceptionHandler</strong> gives ProblemDetail responses for Spring MVC's own exceptions too, or set <code>spring.mvc.problemdetails.enabled=true</code>.</p>
+<p><strong>Status codes:</strong> 400 for malformed input or validation errors, 404 not found, 409 conflicts, 422 for business rule violations if your API uses it, 500 for unexpected errors with a generic message. Log the full exception server-side with the trace id, and return that id so support can find it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request DTO is deserialised and validated.</li>
+  <li>Validation or business exceptions propagate out of the controller.</li>
+  <li>The <code>ExceptionHandlerExceptionResolver</code> finds the matching <code>@ExceptionHandler</code>.</li>
+  <li>The handler builds a ProblemDetail with status and details.</li>
+  <li>The response is serialised as <code>application/problem+json</code>; the exception is logged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public record CreateUser(@NotBlank @Size(max = 50) String name, @Email @NotBlank String email) {}
+
+@PostMapping(&quot;/users&quot;)
+ResponseEntity&lt;UserDto&gt; create(@Valid @RequestBody CreateUser req) { ... }
+
+@RestControllerAdvice
+class GlobalErrors extends ResponseEntityExceptionHandler {
+
+    @Override
+    protected ResponseEntity&lt;Object&gt; handleMethodArgumentNotValid(MethodArgumentNotValidException ex,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, &quot;Validation failed&quot;);
+        pd.setProperty(&quot;errors&quot;, ex.getBindingResult().getFieldErrors().stream()
+            .map(f -&gt; Map.of(&quot;field&quot;, f.getField(), &quot;message&quot;, f.getDefaultMessage())).toList());
+        return ResponseEntity.badRequest().body(pd);
+    }
+
+    @ExceptionHandler(UserNotFoundException.class)
+    ProblemDetail notFound(UserNotFoundException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    ProblemDetail unexpected(Exception ex) {
+        log.error(&quot;Unhandled error&quot;, ex);
+        return ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, &quot;Unexpected error&quot;);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>@Valid</code>, so constraints never run.</li>
+  <li>Catch-all handlers returning <code>ex.getMessage()</code> that may expose SQL or internals.</li>
+  <li>Returning 500 for validation errors.</li>
+  <li>Different error formats from different services.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I centralise it in a @RestControllerAdvice with @ExceptionHandler methods, so each exception type maps to one response: not found to 404, validation to 400, conflicts to 409, anything unexpected to 500. Request DTOs carry Bean Validation annotations like @NotBlank and @Size, and @Valid on the request body makes invalid input fail before any business logic runs. The error body is always a ProblemDetail, the RFC 9457 format that Spring 6 supports, including a list of field errors. I never return stack traces; I log the full error with a correlation id and return that id to the client.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you return all field validation errors in one response?</strong> Collect <code>getFieldErrors()</code> from the binding result into a ProblemDetail property.</li>
+  <li><strong>Why extend ResponseEntityExceptionHandler?</strong> It already maps Spring MVC exceptions (415, 405, malformed JSON) to ProblemDetail.</li>
+  <li><strong>Where do business validations go?</strong> In the service layer, throwing domain exceptions mapped by the advice.</li>
+</ul>
+</article>
+</body>
+</html>

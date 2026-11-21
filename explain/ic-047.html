@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-047 · How do you test Terraform code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-047" data-topic="Infrastructure as Code">
+<h1>How do you test Terraform code?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Test Terraform in <strong>layers</strong>: <strong>static checks</strong> (fmt, validate, tflint, security scans), <strong>terraform test</strong> with <code>.tftest.hcl</code> files using <strong>plan or apply runs</strong> and <strong>mock providers</strong> for unit tests, and <strong>Terratest</strong> or apply-mode tests in <strong>ephemeral sandbox accounts</strong> with guaranteed cleanup for integration.</p>
+
+<h2>Detailed explanation</h2>
+<p>Infrastructure code can fail in different ways: syntax and type errors, risky configuration, wrong logic in expressions, and infrastructure that is created but does not actually work. Each layer of testing catches a different class, at a different cost.</p>
+<p><strong>Static checks</strong> run in seconds on every commit: <code>terraform fmt -check</code>, <code>terraform validate</code>, <strong>tflint</strong> and a security scanner such as <strong>Checkov</strong> or <strong>Trivy</strong>. No cloud access needed.</p>
+<p><strong>terraform test</strong> (built in since 1.6) runs test files ending in <code>.tftest.hcl</code>, placed in the module or a <code>tests/</code> directory. Each file has <code>run</code> blocks with <code>command = plan</code> or <code>command = apply</code>, optional <code>variables</code>, and <code>assert</code> blocks with a condition and error message. <strong>Plan-mode</strong> runs check the logic of a module, such as naming, tags, counts and conditional resources, quickly and without creating anything. Since 1.7, <strong>mock providers</strong> (<code>mock_provider &quot;aws&quot; {}</code>) and <strong>overrides</strong> let tests run without any credentials, generating fake computed values, which makes them true <strong>unit tests</strong>. <strong>Apply-mode</strong> runs create real resources in a test account, assert on them, and Terraform <strong>destroys them automatically</strong> at the end of the file.</p>
+<p><strong>Terratest</strong> is a Go library for <strong>integration tests</strong>: it runs <code>terraform init/apply</code> on an example, then uses Go code to check that the infrastructure actually behaves, for example an HTTP endpoint returns 200, a bucket rejects public access, an instance is reachable through the load balancer, and finally runs <code>destroy</code> in a <code>defer</code>. It is more flexible than terraform test for behavioural checks but requires Go skills.</p>
+<p>Integration tests are slow and cost money, so they run in <strong>isolated, ephemeral accounts or subscriptions</strong>, with unique name suffixes, <strong>cleanup guaranteed</strong> even on failure (plus scheduled tools such as cloud-nuke or aws-nuke for leftovers), and they are reserved for <strong>shared modules</strong> and critical paths, often nightly or on release rather than every commit.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pre-commit/CI: static checks.</li>
+  <li>PR: terraform test with plan runs and mock providers.</li>
+  <li>Release or nightly: apply-mode tests or Terratest in a sandbox.</li>
+  <li>Destroy and verify cleanup.</li>
+  <li>Publish the module version only if all layers pass.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># tests/bucket.tftest.hcl
+mock_provider &quot;aws&quot; {}
+
+variables {
+  name = &quot;orders-logs&quot;
+}
+
+run &quot;applies_security_defaults&quot; {
+  command = plan
+  assert {
+    condition     = aws_s3_bucket_public_access_block.this.block_public_acls == true
+    error_message = &quot;Public ACLs must be blocked.&quot;
+  }
+  assert {
+    condition     = startswith(aws_s3_bucket.this.bucket, &quot;orders-logs&quot;)
+    error_message = &quot;Bucket name must start with the given prefix.&quot;
+  }
+}</code></pre>
+<pre><code class="language-go">func TestWebModule(t *testing.T) {
+    opts := &amp;terraform.Options{TerraformDir: &quot;../examples/basic&quot;}
+    defer terraform.Destroy(t, opts)
+    terraform.InitAndApply(t, opts)
+    url := terraform.Output(t, opts, &quot;url&quot;)
+    http_helper.HttpGetWithRetry(t, url, nil, 200, &quot;OK&quot;, 30, 10*time.Second)
+}</code></pre>
+<pre><code class="language-bash">terraform test
+terraform test -filter=tests/bucket.tftest.hcl</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only running <code>validate</code> and calling it testing.</li>
+  <li>Integration tests in shared accounts that leak resources.</li>
+  <li>Asserting on computed values in plan mode that are unknown until apply.</li>
+  <li>Expensive integration tests for every tiny root config.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I test in layers. Static checks first: fmt, validate, tflint and security scanners catch syntax errors and misconfigurations in seconds. Then the built-in terraform test framework: .tftest.hcl files run plan or apply against a module and assert on outputs and attributes, and with mock providers I can test logic without creating real resources. For integration I use Terratest, which applies a module into a real sandbox account, checks it actually works, like an HTTP endpoint responding, and destroys everything. Those run in isolated, ephemeral accounts with guaranteed cleanup and are reserved for shared modules.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which modules deserve expensive integration tests?</strong> Widely shared, security-critical or complex modules (networking, IAM baselines, clusters).</li>
+  <li><strong>How do you avoid name collisions in parallel tests?</strong> Random suffixes via <code>random_id</code> or Terratest's <code>UniqueId</code>.</li>
+  <li><strong>Can terraform test use real providers?</strong> Yes; apply-mode runs create and then destroy real resources.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-036 · How do you refactor Terraform code without destroying resources?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-036" data-topic="Infrastructure as Code">
+<h1>How do you refactor Terraform code without destroying resources?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Renaming or moving resources changes their <strong>address</strong>, which Terraform reads as destroy + create; record the change with <strong>moved blocks</strong> (or the older <strong>terraform state mv</strong>), require a plan with <strong>only moves</strong>, and use <strong>import</strong> and <strong>removed</strong> blocks to adopt or forget resources.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform tracks each real object by its <strong>resource address</strong> in state, such as <code>aws_instance.web</code> or <code>module.app.aws_instance.this[&quot;a&quot;]</code>. Refactoring that changes the address, like renaming a resource, moving it into or out of a module, renaming a module call, or switching from <code>count</code> to <code>for_each</code>, looks to Terraform like one resource removed and a new one added, so the plan proposes <strong>destroying and recreating</strong> it. For a database or network, that is unacceptable.</p>
+<p><strong>moved blocks</strong> (Terraform 1.1+) declare the refactor in code: <code>moved { from = aws_instance.web to = module.web.aws_instance.this }</code>. During the next plan Terraform updates the address in state, and the plan shows &quot;has moved to&quot; with no destroy. Because the block lives in code, <strong>every environment and every state</strong> using that configuration migrates automatically when it next runs, and reviewers see exactly what was renamed. Shared modules should keep moved blocks for a while so consumers on older versions can upgrade safely.</p>
+<p>The older method is <strong>terraform state mv</strong>, a CLI command that edits state directly. It works, but must be run manually against every state, outside the normal review process, which is error-prone.</p>
+<p>Related tools: <strong>import blocks</strong> (1.5+) adopt existing resources into state declaratively, and <code>terraform plan -generate-config-out</code> can draft the configuration; <strong>removed blocks</strong> (1.7+) with <code>lifecycle { destroy = false }</code> stop managing a resource without destroying it, the declarative version of <code>terraform state rm</code>.</p>
+<p>The rule after any refactor: run plan in every environment and confirm it shows <strong>only moves</strong>, no create or destroy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Change the code structure.</li>
+  <li>Add moved blocks mapping old to new addresses.</li>
+  <li>Plan: Terraform matches old state entries to new addresses.</li>
+  <li>Apply updates state without touching infrastructure.</li>
+  <li>Remove moved blocks later once all states have migrated.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Rename and move into a module
+moved {
+  from = aws_instance.web
+  to   = module.web.aws_instance.this
+}
+
+# count -&gt; for_each
+moved {
+  from = aws_iam_user.users[0]
+  to   = aws_iam_user.users[&quot;alice&quot;]
+}
+
+# Adopt an existing bucket
+import {
+  to = aws_s3_bucket.legacy
+  id = &quot;acme-legacy-bucket&quot;
+}
+
+# Stop managing without deleting
+removed {
+  from = aws_s3_bucket.old_logs
+  lifecycle { destroy = false }
+}</code></pre>
+<pre><code class="language-bash">terraform plan   # expect: &quot;has moved to&quot;, &quot;will be imported&quot;, 0 to destroy
+terraform state mv 'aws_instance.web' 'module.web.aws_instance.this'   # older approach</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Refactoring without checking the plan in every environment.</li>
+  <li>Using <code>state mv</code> in one environment and forgetting the others.</li>
+  <li>Removing moved blocks from a shared module too early.</li>
+  <li>Deleting a resource block to &quot;forget&quot; it, which destroys the resource.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform identifies resources by address, so renaming one, moving it into a module or switching count to for_each looks like delete plus create. moved blocks solve that declaratively: moved from aws_instance.web to module.web.aws_instance.this tells Terraform it's the same object at a new address, and state is updated on the next apply in every environment automatically. The older way was terraform state mv, run manually per state. After a refactor the plan must show only moves, no destroy or create. import blocks adopt existing resources, and removed blocks stop managing one without destroying it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you split one large state into two without recreating anything?</strong> Add <code>removed</code> blocks (destroy = false) in the old config and <code>import</code> blocks in the new one, or use <code>terraform state mv -state-out</code>; verify both plans show no changes.</li>
+  <li><strong>Can moved blocks cross state boundaries?</strong> No, only within one state.</li>
+  <li><strong>How do you generate config for imports?</strong> <code>terraform plan -generate-config-out=generated.tf</code>.</li>
+</ul>
+</article>
+</body>
+</html>

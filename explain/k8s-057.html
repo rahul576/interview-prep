@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-057 · A rollout is stuck: kubectl rollout status never finishes and old pods are still serving. How do you investigate and recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-057" data-topic="Kubernetes">
+<h1>A rollout is stuck: kubectl rollout status never finishes and old pods are still serving. How do you investigate and recover?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A rollout waits for <strong>new pods to become Ready</strong> within <strong>maxSurge/maxUnavailable</strong>; if they crash, fail probes, cannot pull or <strong>cannot be scheduled</strong> (capacity, quota), it stalls, reports <strong>ProgressDeadlineExceeded</strong> after <strong>progressDeadlineSeconds</strong>, and you recover with <strong>kubectl rollout undo</strong> or a Git revert.</p>
+
+<h2>Detailed explanation</h2>
+<p>A rolling update creates a new ReplicaSet and shifts replicas gradually. <strong>maxSurge</strong> says how many extra pods may exist above the desired count and <strong>maxUnavailable</strong> how many may be missing. With the defaults of 25 percent each, the controller creates some new pods, waits until they are <strong>Ready</strong> (and stay ready for <code>minReadySeconds</code>), then scales the old ReplicaSet down. If new pods never become ready, it simply waits; old pods keep serving, which is the safety you want.</p>
+<p>So investigate the <strong>new ReplicaSet's pods</strong>. CrashLoopBackOff points to the app or config; Running but not ready points to the <strong>readiness probe</strong> (wrong path, dependency down, slow startup without a <strong>startupProbe</strong>); ImagePullBackOff points to the image; <strong>Pending</strong> points to scheduling. Pending is a hidden classic: with <code>maxSurge: 0</code> there is no room to start a new pod until an old one goes, or with full nodes a surge pod cannot fit, or a <strong>ResourceQuota</strong> forbids the extra pod. PodDisruptionBudgets do not block Deployment rollouts directly, but they affect node drains running at the same time.</p>
+<p><code>progressDeadlineSeconds</code> (default 600) sets the <code>Progressing</code> condition to False with reason <strong>ProgressDeadlineExceeded</strong>. Kubernetes does <strong>not</strong> roll back automatically; it only reports. Pipelines (<code>kubectl rollout status</code> exits non-zero), Argo CD health checks or Argo Rollouts act on it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl rollout status</code> and <code>kubectl describe deploy</code>: conditions and replica counts.</li>
+  <li><code>kubectl get rs</code> to find the new ReplicaSet; inspect its pods.</li>
+  <li>Read events and logs: crash, probe failure, pull error or Pending reason.</li>
+  <li>Check quota and node capacity for surge pods.</li>
+  <li>Recover with <code>kubectl rollout undo</code> or revert in Git.</li>
+  <li>Fix and redeploy; set probes and deadlines sensibly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl rollout status deploy/web --timeout=5m
+kubectl describe deploy web | grep -A4 Conditions
+kubectl get rs -l app=web
+kubectl get pods -l app=web,pod-template-hash=7d9c5b
+kubectl describe pod web-7d9c5b-x2k8q | tail -15
+kubectl rollout undo deploy/web</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Waiting forever with no <code>--timeout</code> in CI.</li>
+  <li>Assuming Kubernetes rolls back automatically.</li>
+  <li><code>maxSurge: 0</code> on nodes with no spare capacity.</li>
+  <li>Slow-starting apps without a startup probe.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A rollout only removes old pods when new ones become ready, according to maxSurge and maxUnavailable, so I look at the new ReplicaSet's pods. If they crash, fail readiness, can't pull the image, or are Pending because of quota or no node capacity, the rollout stalls. kubectl describe deployment shows the Progressing condition, and after progressDeadlineSeconds it reports ProgressDeadlineExceeded, but Kubernetes won't roll back by itself. To recover I run rollout undo or revert the commit in GitOps, then fix the cause, for example a bad config value or a probe that's too strict.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to fail fast in a pipeline?</strong> <code>kubectl rollout status --timeout</code>, a shorter progressDeadlineSeconds, or Argo Rollouts with analysis and automatic abort.</li>
+  <li><strong>Why do old pods still serve?</strong> The controller never scales down old pods until replacements are ready.</li>
+  <li><strong>What does minReadySeconds do?</strong> Requires pods to stay ready for a period before counting as available.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-138 · What is CQRS and event sourcing? When would you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-138" data-topic="Microservices">
+<h1>What is CQRS and event sourcing? When would you use them?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>CQRS</strong> separates the <strong>write model</strong> that handles commands from <strong>read models</strong> optimised for queries; <strong>event sourcing</strong> stores every change as an <strong>append-only stream of events</strong> that is the source of truth, with <strong>projections</strong> building read models; use them for <strong>complex, audit-heavy domains</strong>, not by default.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>CQRS (Command Query Responsibility Segregation)</strong> recognises that writes and reads have different needs. The <strong>command side</strong> enforces business rules and invariants on a normalised model (<code>PlaceOrder</code>, <code>CancelOrder</code>). The <strong>query side</strong> serves screens and APIs from <strong>denormalised read models</strong>: a search index, a reporting table, a cache, each shaped for one use case and scaled independently. CQRS can be as simple as separate query classes on the same database, or as far as separate datastores updated asynchronously.</p>
+<p><strong>Event sourcing</strong> changes how state is stored. Instead of updating a row, the aggregate appends <strong>events</strong> (<code>OrderPlaced</code>, <code>ItemAdded</code>, <code>OrderShipped</code>) to its stream in an <strong>event store</strong> (EventStoreDB/Kurrent, Axon Server, or a Postgres table). Current state is rebuilt by <strong>replaying</strong> events, optimised with periodic <strong>snapshots</strong>. <strong>Projections</strong> subscribe to events and build read models, which is why event sourcing and CQRS fit together naturally. Concurrency is handled with <strong>optimistic locking</strong> on the stream version.</p>
+<p>The benefits are a complete <strong>audit trail</strong>, <strong>temporal queries</strong> (&quot;what did this account look like on 1 March?&quot;), the ability to <strong>rebuild or add new read models</strong> by replaying history, and natural integration through events. The costs are high: <strong>eventual consistency</strong> between write and read sides, <strong>event schema versioning</strong> over years (upcasters), replay times, GDPR erasure in immutable logs (crypto-shredding), more infrastructure and a steeper learning curve. Use them where the domain genuinely benefits: ledgers, payments, bookings, compliance-heavy workflows. A simple CRUD service does not need them.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends a command to the command handler.</li>
+  <li>Handler loads the aggregate by replaying its events (or snapshot + events).</li>
+  <li>Aggregate validates and emits new events.</li>
+  <li>Events are appended with an expected version (optimistic lock).</li>
+  <li>Projections consume events and update read models.</li>
+  <li>Queries read from the projections.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Account {
+    private BigDecimal balance = BigDecimal.ZERO;
+    private final List&lt;Object&gt; changes = new ArrayList&lt;&gt;();
+
+    public static Account rehydrate(List&lt;Object&gt; history) {
+        Account a = new Account();
+        history.forEach(a::apply);
+        return a;
+    }
+    public void withdraw(BigDecimal amt) {
+        if (balance.compareTo(amt) &lt; 0) throw new InsufficientFunds();
+        raise(new MoneyWithdrawn(amt));
+    }
+    private void raise(Object e) { apply(e); changes.add(e); }
+    private void apply(Object e) {
+        if (e instanceof MoneyDeposited d) balance = balance.add(d.amount());
+        if (e instanceof MoneyWithdrawn w) balance = balance.subtract(w.amount());
+    }
+}
+// Projection: on MoneyWithdrawn -&gt; UPDATE account_summary SET balance = ... (read model)</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>CRUD</th><th>CQRS</th><th>CQRS + Event sourcing</th></tr></thead>
+<tbody>
+<tr><td>Source of truth</td><td>Current rows</td><td>Write model</td><td>Event log</td></tr>
+<tr><td>Audit/history</td><td>Manual</td><td>Manual</td><td>Built in</td></tr>
+<tr><td>Read scaling</td><td>Same DB</td><td>Separate read models</td><td>Separate read models</td></tr>
+<tr><td>Complexity</td><td>Low</td><td>Medium</td><td>High</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Applying CQRS/ES to every service by default.</li>
+  <li>Ignoring that read models lag behind writes in the UI.</li>
+  <li>No strategy for evolving event schemas.</li>
+  <li>Treating events as database change logs instead of meaningful domain facts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CQRS splits the model that handles commands and enforces invariants from read models built for queries, so each can be optimised and scaled separately. Event sourcing stores every state change as an immutable event in an append-only stream; current state comes from replaying events, and projections build the read models, so the two fit together. You get a full audit trail, temporal queries and the ability to rebuild new views from history. The cost is eventual consistency, event versioning and much more complexity, so I use them for domains like ledgers or booking systems with strong audit needs, not for simple CRUD.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle event schema changes after years?</strong> Version events, add upcasters that transform old events on read, never rewrite history in place.</li>
+  <li><strong>How do you delete personal data in an event store?</strong> Crypto-shredding: encrypt personal fields per user and delete the key.</li>
+  <li><strong>Why snapshots?</strong> To avoid replaying thousands of events on every load.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-046 · After a deployment, retrieval quality collapsed: almost every search returns unrelated chunks. What do you suspect first?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-046" data-topic="LLMOps &amp; RAG">
+<h1>After a deployment, retrieval quality collapsed: almost every search returns unrelated chunks. What do you suspect first?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Suspect an <strong>embedding mismatch</strong> first: queries embedded with a <strong>different model or version</strong> than the index, or changed <strong>dimensions, normalisation or distance metric</strong>, or the app pointing at the <strong>wrong index or namespace</strong>; <strong>roll back</strong>, then add <strong>embedding version checks</strong> and <strong>retrieval tests in CI</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A sudden, near-total collapse right after a deployment is rarely a data problem; data problems degrade gradually or affect some documents. It is a <strong>configuration problem</strong>, and the most common one is that query vectors and document vectors no longer live in the same space.</p>
+<p>Each embedding model defines its own vector space. Vectors from model A and model B are not comparable even if they have the same dimension, so cosine similarities become essentially random and top results look unrelated. This happens when a client library update changes the default model, a deployment name in config points to a newer embedding deployment, an environment variable differs between staging and production, or someone &quot;upgraded&quot; the embedding model for new documents only.</p>
+<p>Related causes:</p>
+<ul>
+  <li><strong>Dimensions:</strong> models supporting configurable output dimensions (truncated, Matryoshka-style embeddings) set differently for queries than for the index. Many vector stores error on mismatch, but some pipelines pad or truncate silently.</li>
+  <li><strong>Normalisation and metric:</strong> switching from cosine to dot product with unnormalised vectors, or changing index metric, reshuffles rankings.</li>
+  <li><strong>Query/document prefixes:</strong> some models expect task-specific prefixes or input types (query vs document); dropping them degrades quality noticeably.</li>
+  <li><strong>Wrong target:</strong> an empty or test index, a wrong namespace or tenant, or a filter that excludes everything except junk.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Roll back the deployment to restore service.</li>
+  <li>Diff configuration: embedding model, version, dimensions, endpoint, index name.</li>
+  <li>Embed a known document's text and check similarity to its stored vector (should be about 1.0).</li>
+  <li>Fix config or re-embed the corpus with the new model into a new index.</li>
+  <li>Add guards: index metadata with model and dimension, startup check, CI retrieval test.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">meta = index.get_metadata()   # stored at build time
+assert meta[&quot;embedding_model&quot;] == settings.EMBED_MODEL, &quot;embedding model mismatch&quot;
+assert meta[&quot;dimensions&quot;] == settings.EMBED_DIM
+
+# smoke test: a stored chunk must retrieve itself
+probe = index.get(&quot;faq#0001&quot;)
+v = embed(probe.text)
+assert cosine(v, probe.vector) &gt; 0.99
+assert search(v, top_k=1)[0].id == &quot;faq#0001&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Changing embedding models without re-indexing everything.</li>
+  <li>Relying on library defaults for the embedding model.</li>
+  <li>No golden retrieval tests in the deployment pipeline.</li>
+  <li>Debugging chunking or prompts first and losing hours.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A sudden collapse right after a deploy points to configuration, and the classic cause is an embedding mismatch: queries are now embedded with a different model or version than the vectors in the index, for example because a library default or deployment name changed. Vectors from different models aren't comparable, so similarity becomes meaningless. Related causes are changed dimensions, normalisation or distance metric, or pointing at the wrong index. I'd roll back first, then store the embedding model and dimension as index metadata, check them at startup, and run a small golden retrieval test in CI and after every deployment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which test would have caught it?</strong> A golden-query recall test in CI and a post-deploy smoke test.</li>
+  <li><strong>Upgrading embedding models safely?</strong> Build a new index in parallel, evaluate, then switch an alias.</li>
+  <li><strong>Can you mix old and new vectors?</strong> No; re-embed everything.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-162 · A query that used to take 50 milliseconds now takes 5 seconds. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-162" data-topic="Databases &amp; SQL">
+<h1>A query that used to take 50 milliseconds now takes 5 seconds. How do you fix it?</h1>
+<p class="ex-meta">Databases &amp; SQL · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Treat it as a <strong>plan regression</strong>: compare the <strong>execution plan</strong> with <code>EXPLAIN ANALYZE</code>, then look for a missing or unusable <strong>index</strong>, <strong>stale statistics</strong> after data growth, <strong>lock contention</strong>, or a query pattern that no longer scales, fix it and verify the new plan.</p>
+
+<h2>Detailed explanation</h2>
+<p>A query that was fast and became 100 times slower usually changed in one of a few ways. First, I confirm the facts: is it slow every time or only sometimes, did a deployment, schema change or data load happen, and is the database itself overloaded? Slow query logs, <code>pg_stat_statements</code> or the APM trace show the exact statement and its parameters.</p>
+<p>Then I read the plan with <strong><code>EXPLAIN (ANALYZE, BUFFERS)</code></strong> (or <code>EXPLAIN ANALYZE</code> in MySQL 8). Typical findings:</p>
+<ul>
+  <li><strong>Sequential/full scan</strong> where an index scan used to happen: the index is missing, or is no longer usable because the column is wrapped in a function (<code>lower(email)</code>), there is an implicit type cast (comparing a varchar column with a numeric parameter), or a leading wildcard <code>LIKE '%x'</code>.</li>
+  <li><strong>Estimated vs actual rows far apart</strong>: statistics are stale after data growth, so the optimizer picked a nested loop over millions of rows. Fix with <code>ANALYZE</code>.</li>
+  <li><strong>Data growth</strong>: the table went from 100 thousand to 50 million rows, so a plan that was fine is now terrible, or <code>OFFSET</code> pagination became deep.</li>
+  <li><strong>Not the plan at all</strong>: the query is waiting on <strong>locks</strong> held by another transaction, visible in <code>pg_stat_activity</code> or <code>performance_schema</code>.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce with real parameters and capture timing.</li>
+  <li>Run <code>EXPLAIN (ANALYZE, BUFFERS)</code> and find the most expensive node.</li>
+  <li>Compare estimated and actual row counts; refresh statistics if they diverge.</li>
+  <li>Check index usage and sargability of predicates.</li>
+  <li>Check waits and locks during the slow period.</li>
+  <li>Apply one fix (index, rewrite, keyset pagination, fewer columns), then re-run the plan and measure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, total FROM orders
+WHERE customer_id = 42 AND created_at &gt; now() - interval '30 days'
+ORDER BY created_at DESC LIMIT 20;
+-- Seq Scan on orders (rows=48,000,000) ... 5,100 ms
+
+CREATE INDEX CONCURRENTLY idx_orders_cust_created
+    ON orders (customer_id, created_at DESC);
+ANALYZE orders;
+-- Index Scan using idx_orders_cust_created ... 0.9 ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding indexes blindly without reading the plan.</li>
+  <li>Running plain <code>EXPLAIN</code> and trusting estimates instead of actual numbers.</li>
+  <li>Forgetting that <code>CREATE INDEX</code> without <code>CONCURRENTLY</code> blocks writes on a big table.</li>
+  <li>Ignoring lock waits and blaming the query.</li>
+  <li>Fixing in staging with a tiny dataset where the plan differs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd first find the exact statement and parameters from the slow query log or pg_stat_statements and check whether anything changed, like a deployment or a big data load. Then I'd run EXPLAIN ANALYZE with buffers and look at the most expensive step. Usually it's a full scan because an index is missing or unusable, for example a function on the column or a type mismatch, or the row estimates are far off because statistics are stale after growth, which ANALYZE fixes. I'd also check whether the query is actually waiting on locks. Then I'd apply a targeted fix, such as a composite index created concurrently or keyset pagination, and confirm the new plan and latency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you add an index to a 500-million-row table without downtime?</strong> <code>CREATE INDEX CONCURRENTLY</code> in Postgres, or online DDL/gh-ost/pt-online-schema-change in MySQL, during low traffic.</li>
+  <li><strong>What is a sargable predicate?</strong> One the engine can match against an index, with the bare column compared to a value.</li>
+  <li><strong>Why would a parameterised query get a bad plan?</strong> A generic or cached plan chosen for one parameter value can be poor for skewed values.</li>
+</ul>
+</article>
+</body>
+</html>

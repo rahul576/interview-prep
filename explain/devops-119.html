@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-119 · How do you manage multiple environments and clusters with kubectl and Kustomize safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-119" data-topic="Kubernetes">
+<h1>How do you manage multiple environments and clusters with kubectl and Kustomize safely?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Work safely across clusters by making the <strong>current context obvious</strong> (kubeconfig contexts, kubectx/kubens, a prompt showing the cluster), separating <strong>environments by cluster and namespace</strong>, keeping one <strong>Kustomize base with per-environment overlays</strong>, and removing manual changes from production through <strong>GitOps and read-only human access</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>kubectl talks to whatever <strong>current context</strong> in the kubeconfig points to: a combination of cluster, user and default namespace. The biggest operational risk is not YAML errors but running a correct command against the <strong>wrong cluster</strong>, for example a <code>delete</code> meant for staging that hits production. So safety starts with visibility and friction: tools such as <strong>kubectx</strong> and <strong>kubens</strong> to switch deliberately, a shell prompt (kube-ps1, Starship) showing context and namespace in red for production, separate kubeconfig files per environment loaded via <code>KUBECONFIG</code> instead of one giant file, and never relying on a default namespace in scripts.</p>
+<p>For manifests, <strong>Kustomize</strong> avoids copy-pasting YAML. A <strong>base</strong> holds the common Deployment, Service and config; each <strong>overlay</strong> (dev, staging, prod) patches only what differs: replicas, resource requests, image tag, ingress host, ConfigMap values. Because overlays are small, reviewers see exactly what is different in production. <code>kubectl kustomize</code> or <code>kustomize build</code> renders the result so you can diff it.</p>
+<p>Within a cluster, <strong>namespaces</strong> separate teams and environments, with RBAC, quotas and NetworkPolicies per namespace. For production, the strongest control is to stop humans changing it directly: <strong>GitOps</strong> tools such as Argo CD or Flux apply what is merged in Git, humans get <strong>read-only</strong> roles by default, and break-glass write access is time-limited and audited.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>One kubeconfig per cluster; contexts named clearly (<code>prod-eu</code>, <code>staging-eu</code>).</li>
+  <li>Prompt shows context and namespace; production coloured red.</li>
+  <li>Repository has <code>base/</code> and <code>overlays/&lt;env&gt;/</code>.</li>
+  <li>Pull request changes an overlay; CI renders and diffs it.</li>
+  <li>Argo CD or Flux syncs the overlay to the matching cluster.</li>
+  <li>Humans use <code>view</code> roles in prod; emergency access via an audited elevation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">apps/orders/
+  base/        deployment.yaml service.yaml kustomization.yaml
+  overlays/
+    staging/   kustomization.yaml   (replicas: 2)
+    prod/      kustomization.yaml   (replicas: 6, higher limits)</code></pre>
+<pre><code class="language-yaml"># overlays/prod/kustomization.yaml
+resources: [../../base]
+namespace: orders-prod
+replicas:
+- { name: orders, count: 6 }
+images:
+- { name: orders, newTag: &quot;1.42.0&quot; }</code></pre>
+<pre><code class="language-bash">kubectl diff -k overlays/prod --context prod-eu   # always name the context explicitly</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One kubeconfig with every cluster and production as the default context.</li>
+  <li>Scripts that omit <code>--context</code> and <code>-n</code>.</li>
+  <li>Duplicated YAML per environment that silently drifts.</li>
+  <li>Admin credentials for everyone in production.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;kubectl works on the current kubeconfig context, so the main danger is acting on the wrong cluster. I make the context visible with kubectx, kubens and a prompt that turns red for production, keep kubeconfigs separate, and always pass the context explicitly in scripts. Manifests use a Kustomize base with small overlays per environment, so differences are explicit and reviewable. Namespaces separate teams within a cluster. In production, changes go through GitOps with Argo CD or Flux, and humans have read-only access by default with audited break-glass access.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if someone ran <code>kubectl delete</code> in the wrong cluster?</strong> GitOps re-syncs declared resources; restore data from backups or Velero; then review access and add guard rails.</li>
+  <li><strong>Kustomize or Helm?</strong> Kustomize for in-house apps with small differences; Helm for packaged third-party software; they can be combined.</li>
+  <li><strong>How do you prevent drift?</strong> GitOps with self-heal and alerts on out-of-sync resources.</li>
+</ul>
+</article>
+</body>
+</html>

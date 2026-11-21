@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-017 · How do you use virtual threads with ExecutorService?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-017" data-topic="Modern Java (11-21)">
+<h1>How do you use virtual threads with ExecutorService?</h1>
+<p class="ex-meta">Modern Java (11-21) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>Executors.newVirtualThreadPerTaskExecutor()</code></strong>, which starts a <strong>new virtual thread per task</strong>, inside <strong>try-with-resources</strong> so closing <strong>waits for all tasks</strong>; submit tasks and collect <strong>Futures</strong>, or in Spring Boot 3.2+ set <strong><code>spring.threads.virtual.enabled=true</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>ExecutorService</code> is still the convenient API for submitting tasks and getting results, so virtual threads plug into it directly. <code>Executors.newVirtualThreadPerTaskExecutor()</code> returns an executor that <strong>does not pool</strong>: each <code>submit</code> or <code>execute</code> starts a fresh virtual thread, and the thread ends when the task ends. Because virtual threads are cheap, this is exactly what you want.</p>
+<p>Since <strong>Java 19</strong>, <code>ExecutorService</code> implements <strong><code>AutoCloseable</code></strong>. Its <code>close()</code> method calls <code>shutdown()</code> and <strong>waits</strong> for submitted tasks to finish. With try-with-resources you get a clean fan-out/fan-in: start many tasks, and when the block exits, all of them are done.</p>
+<p>Typical uses: calling several suppliers in parallel, processing a batch of independent records that each do I/O, or scatter-gather calls to microservices. You can also use <code>invokeAll</code> for a list of callables, or pass <code>Thread.ofVirtual().factory()</code> to <code>Executors.newThreadPerTaskExecutor(factory)</code> to name threads.</p>
+<p>Important rules:</p>
+<ul>
+  <li><strong>Do not</strong> put virtual threads into <code>newFixedThreadPool(n)</code> to limit concurrency. If you need a limit (say, 20 calls to a partner API), use a <strong><code>Semaphore</code></strong>.</li>
+  <li>Handle errors per future: <code>get()</code> throws <code>ExecutionException</code> wrapping the task's exception. For &quot;fail fast, cancel the rest&quot; semantics, <strong>structured concurrency</strong> (<code>StructuredTaskScope</code>, still preview in Java 25) is the better tool.</li>
+  <li>In <strong>Spring Boot 3.2+</strong>, <code>spring.threads.virtual.enabled=true</code> makes embedded Tomcat/Jetty handle requests on virtual threads and configures the application task executor and scheduler for <code>@Async</code> and <code>@Scheduled</code> to use them.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open the executor in try-with-resources.</li>
+  <li>Submit one task per unit of work.</li>
+  <li>Each task gets a new virtual thread.</li>
+  <li>Collect results from futures.</li>
+  <li>Leaving the block waits for completion and shuts down.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">record Price(String supplier, BigDecimal amount) {}
+
+List&lt;Price&gt; bestPrices(List&lt;String&gt; suppliers) throws Exception {
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        List&lt;Future&lt;Price&gt;&gt; futures = suppliers.stream()
+            .map(s -&gt; executor.submit(() -&gt; fetchPrice(s)))   // blocking HTTP call
+            .toList();
+        List&lt;Price&gt; result = new ArrayList&lt;&gt;();
+        for (Future&lt;Price&gt; f : futures) {
+            try { result.add(f.get(2, TimeUnit.SECONDS)); }
+            catch (ExecutionException | TimeoutException e) { log.warn(&quot;supplier failed&quot;, e); }
+        }
+        return result;
+    }
+}</code></pre>
+<pre><code class="language-properties">spring.threads.virtual.enabled=true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a fixed pool of virtual threads to limit concurrency.</li>
+  <li>Forgetting try-with-resources, leaving the executor open.</li>
+  <li>Ignoring <code>ExecutionException</code> and timeouts on futures.</li>
+  <li>Exhausting the DB pool by submitting thousands of DB tasks at once.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use Executors.newVirtualThreadPerTaskExecutor, which creates a new virtual thread for every task instead of reusing a pool. Since Java 19 ExecutorService is AutoCloseable, so I open it in try-with-resources, submit a task per supplier, collect the futures, and leaving the block waits for everything to finish. If I need to limit concurrency towards a downstream system I use a Semaphore rather than a fixed pool. In Spring Boot 3.2 and later I just set spring.threads.virtual.enabled=true, so Tomcat requests and @Async tasks run on virtual threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should you not put virtual threads in a fixed-size pool?</strong> Pooling defeats their purpose; limit resources with semaphores instead.</li>
+  <li><strong>What does close() do on the executor?</strong> Shuts down and waits for all submitted tasks.</li>
+  <li><strong>What is structured concurrency?</strong> A preview API that treats related subtasks as one unit with joint cancellation and error handling.</li>
+</ul>
+</article>
+</body>
+</html>

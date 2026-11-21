@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-332 · How do you handle read replicas and read/write splitting in a Spring application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-332" data-topic="Spring Data &amp; JPA">
+<h1>How do you handle read replicas and read/write splitting in a Spring application?</h1>
+<p class="ex-meta">Spring Data &amp; JPA · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Scale reads by routing <strong>read-only transactions to replicas</strong> and <strong>writes to the primary</strong>, typically with an <strong>AbstractRoutingDataSource</strong> keyed on <code>@Transactional(readOnly = true)</code> plus <strong>LazyConnectionDataSourceProxy</strong>, while handling <strong>replication lag</strong> (read-your-writes) or delegating routing to a <strong>proxy/reader endpoint</strong> like ProxySQL or Aurora.</p>
+
+<h2>Detailed explanation</h2>
+<p>Most applications read far more than they write. Database <strong>read replicas</strong> receive the primary's changes through replication (usually <strong>asynchronous</strong>) and can serve queries, offloading the primary.</p>
+<p><strong>Routing in Spring.</strong> Define two DataSources (primary and replica pool) and an <strong><code>AbstractRoutingDataSource</code></strong> whose <code>determineCurrentLookupKey()</code> returns <code>REPLICA</code> when <code>TransactionSynchronizationManager.isCurrentTransactionReadOnly()</code> is true, and <code>PRIMARY</code> otherwise. Mark query services with <code>@Transactional(readOnly = true)</code>. The catch: the transaction manager normally obtains a connection <strong>at transaction begin</strong>, possibly before the read-only flag is bound to the thread. Wrapping the routing DataSource in a <strong><code>LazyConnectionDataSourceProxy</code></strong> delays fetching the physical connection until the first statement, when the flag is known. Recent Spring Framework versions (6.1.2+) also let <code>LazyConnectionDataSourceProxy</code> take a separate read-only target DataSource directly, which simplifies this. Alternatively, use an explicit annotation and aspect to select the route.</p>
+<p><strong>Replication lag.</strong> Asynchronous replicas can be milliseconds to seconds behind. A user who just updated a profile and is redirected to a page served by a replica may see old data: <strong>read-your-writes</strong> violation. Options: keep reads that follow a write within the same request or transaction on the primary; pin a user to the primary for a short window after a write (session flag or cookie); compare replication position (for example PostgreSQL LSN or MySQL GTID) before reading; or accept eventual consistency for non-critical views. Also never use replicas for reads that drive writes, such as checking stock before decrementing.</p>
+<p><strong>Infrastructure alternatives.</strong> A database proxy can do the routing: <strong>ProxySQL</strong> for MySQL with query rules, <strong>Pgpool-II</strong> for PostgreSQL, or cloud endpoints such as the <strong>Aurora reader endpoint</strong> (load-balanced across replicas) and the AWS JDBC wrapper's read/write splitting. These keep application code simpler but still need the same lag awareness.</p>
+<p><strong>Operations.</strong> Monitor replica lag, size pools per DataSource, and have a fallback to the primary when replicas are unhealthy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request enters a <code>readOnly = true</code> service method.</li>
+  <li>Transaction begins; read-only flag bound to the thread.</li>
+  <li>First statement: lazy proxy asks the routing DataSource for a connection.</li>
+  <li>Routing chooses replica (read-only) or primary.</li>
+  <li>Writes and read-after-write paths use the primary.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class ReadWriteRoutingDataSource extends AbstractRoutingDataSource {
+    @Override
+    protected Object determineCurrentLookupKey() {
+        return TransactionSynchronizationManager.isCurrentTransactionReadOnly() ? &quot;replica&quot; : &quot;primary&quot;;
+    }
+}
+
+@Configuration
+class DataSourceConfig {
+    @Bean
+    @Primary
+    DataSource dataSource(@Qualifier(&quot;primaryDs&quot;) DataSource primary,
+                          @Qualifier(&quot;replicaDs&quot;) DataSource replica) {
+        var routing = new ReadWriteRoutingDataSource();
+        routing.setTargetDataSources(Map.of(&quot;primary&quot;, primary, &quot;replica&quot;, replica));
+        routing.setDefaultTargetDataSource(primary);
+        routing.afterPropertiesSet();
+        return new LazyConnectionDataSourceProxy(routing);
+    }
+}
+
+@Service
+class ProductQueries {
+    @Transactional(readOnly = true)
+    public Page&lt;ProductView&gt; search(String q, Pageable p) { return repo.search(q, p); }  // replica
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting the lazy connection proxy, so everything goes to the primary.</li>
+  <li>Reading from a replica right after a write in the same user flow.</li>
+  <li>Using replica reads for decisions that lead to writes.</li>
+  <li>No monitoring of lag or fallback when a replica falls behind.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Reads can scale by sending them to replicas while writes go to the primary. In Spring I use an AbstractRoutingDataSource that picks the replica when the current transaction is read-only, using @Transactional(readOnly = true), wrapped in a LazyConnectionDataSourceProxy so the connection is chosen after the flag is set. The main issue is replication lag: a user who just wrote data might read stale results, so read-your-writes flows stay on the primary for a short time. Alternatively a proxy like ProxySQL or the Aurora reader endpoint does the routing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detect lag hurting users?</strong> Monitor replica lag metrics, and log or compare versions/LSNs on read-after-write paths.</li>
+  <li><strong>Why the lazy proxy?</strong> The connection would otherwise be fetched before the read-only flag is known.</li>
+  <li><strong>Synchronous replicas?</strong> Remove lag but add write latency; often used only within a region.</li>
+</ul>
+</article>
+</body>
+</html>

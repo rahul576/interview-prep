@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-094 · How do you configure the Kubernetes or Helm provider in Terraform so credentials do not expire or leak?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-094" data-topic="Terraform">
+<h1>How do you configure the Kubernetes or Helm provider in Terraform so credentials do not expire or leak?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Configure the Kubernetes and Helm providers with the <strong>cluster endpoint, CA certificate and an <code>exec</code> credential plugin</strong> (kubelogin for AKS, <code>aws eks get-token</code> for EKS) so <strong>short-lived tokens are fetched at every run</strong>, keep the providers in a <strong>separate state from cluster creation</strong>, and prefer <strong>GitOps</strong> for workloads.</p>
+
+<h2>Detailed explanation</h2>
+<p>The easy option — writing a kubeconfig with a client certificate or a long-lived service account token, or passing <code>kube_admin_config</code> attributes straight from the cluster resource — has two problems. It <strong>leaks</strong>: the credential is stored in state, in pipeline artifacts or on disk. And it <strong>expires</strong> or gets rotated, so the next run fails with an authentication error long after anyone remembers why.</p>
+<p>The better approach is the provider's <code>exec</code> block. Terraform calls a <strong>credential plugin</strong> whenever it needs a token. For AKS with Entra ID integration and local accounts disabled, <code>kubelogin get-token</code> with <code>--login workloadidentity</code> or <code>azurecli</code> uses the pipeline's federated identity. For EKS, <code>aws eks get-token</code> produces a token signed with the runner's IAM role, mapped to Kubernetes permissions through EKS access entries. Tokens live minutes, are never written to state, and Kubernetes RBAC controls what the pipeline can do.</p>
+<p>The second issue is <strong>provider configuration from unknown values</strong>. If the cluster and the Kubernetes resources share a state, the provider is configured from attributes that are unknown during the first plan, and on destroy or replacement the provider may try to talk to a cluster that is being deleted. Terraform's documentation recommends keeping them in <strong>separate root modules</strong>: one creates the cluster, the other reads it with a data source and manages in-cluster resources.</p>
+<p>Finally, Terraform is good at <strong>bootstrapping</strong> a cluster — namespaces, an ingress controller, Argo CD or Flux — but application workloads change often and are better reconciled continuously by <strong>GitOps</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Root module A creates the cluster and outputs its name.</li>
+  <li>Root module B uses a data source to read the endpoint and CA certificate.</li>
+  <li>The provider <code>exec</code> block runs kubelogin or aws eks get-token at each operation.</li>
+  <li>The pipeline identity is mapped to a Kubernetes role with only the needed rights.</li>
+  <li>B installs bootstrap components; GitOps manages the rest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;azurerm_kubernetes_cluster&quot; &quot;main&quot; {
+  name                = &quot;aks-prod&quot;
+  resource_group_name = &quot;rg-aks-prod&quot;
+}
+
+provider &quot;kubernetes&quot; {
+  host                   = data.azurerm_kubernetes_cluster.main.kube_config[0].host
+  cluster_ca_certificate = base64decode(data.azurerm_kubernetes_cluster.main.kube_config[0].cluster_ca_certificate)
+  exec {
+    api_version = &quot;client.authentication.k8s.io/v1beta1&quot;
+    command     = &quot;kubelogin&quot;
+    args        = [&quot;get-token&quot;, &quot;--login&quot;, &quot;workloadidentity&quot;,
+                   &quot;--server-id&quot;, &quot;6dae42f8-4368-4678-94ff-3960e28e3630&quot;]
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>kube_admin_config</code> credentials, which bypass Entra ID and are stored in state.</li>
+  <li>Writing a kubeconfig file in the pipeline and uploading it as an artifact.</li>
+  <li>Creating the cluster and Helm releases in the same state, then failing on destroy.</li>
+  <li>Managing every application manifest with Terraform instead of GitOps.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I avoid static kubeconfigs because long-lived certificates or tokens leak and expire. I configure the Kubernetes and Helm providers with the endpoint, the CA certificate and an exec block that runs a credential plugin each time: kubelogin for AKS using the pipeline's workload identity, or aws eks get-token for EKS. Tokens are short-lived and never stored. I keep these providers in a separate state from the cluster, because configuring a provider from a cluster created in the same run causes unknown values and destroy problems. And beyond bootstrapping, I hand workloads to GitOps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What breaks if the cluster and Kubernetes resources share a state and you destroy?</strong> Terraform may delete the cluster first, then fail to reach it to delete in-cluster resources.</li>
+  <li><strong>How is the pipeline authorised in EKS?</strong> EKS access entries or aws-auth mapping the IAM role to a Kubernetes group.</li>
+  <li><strong>Why GitOps for workloads?</strong> Continuous reconciliation, faster deploys, and drift correction without a Terraform run.</li>
+</ul>
+</article>
+</body>
+</html>

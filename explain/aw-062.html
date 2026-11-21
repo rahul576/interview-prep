@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-062 · How do you publish custom metrics to CloudWatch?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-062" data-topic="Cloud (AWS)">
+<h1>How do you publish custom metrics to CloudWatch?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Publish custom metrics with the <strong>CloudWatch agent</strong> (memory, disk, StatsD/collectd, Prometheus), the <strong>PutMetricData</strong> API, or the <strong>Embedded Metric Format</strong> in structured logs, organised by <strong>namespace and dimensions</strong>, while avoiding <strong>high-cardinality</strong> dimensions because each unique combination is a billed metric.</p>
+
+<h2>Detailed explanation</h2>
+<p>EC2's default metrics come from the hypervisor: CPU, network, disk operations on instance store, and status checks. <strong>Memory and filesystem usage</strong> are inside the guest OS, so you install the <strong>CloudWatch agent</strong>, configured via a JSON file (often stored in Parameter Store), which collects OS metrics, log files, <strong>StatsD</strong> and <strong>collectd</strong> metrics, and can scrape <strong>Prometheus</strong> endpoints for containers.</p>
+<p>Applications can call <strong>PutMetricData</strong> directly, batching up to 1,000 values per call, with <strong>standard resolution</strong> (one minute) or <strong>high resolution</strong> (one second). It is synchronous and costs per API call, so in high-volume code it is better to aggregate locally.</p>
+<p>The <strong>Embedded Metric Format (EMF)</strong> is ideal for Lambda and containers: the code writes a JSON log line with a <code>_aws</code> metadata block naming metrics, units and dimensions, and CloudWatch Logs extracts metrics asynchronously. You get metrics plus the full log event for context, with no extra API calls or latency. <strong>Powertools for AWS Lambda</strong> implements EMF in a few lines.</p>
+<p>A metric is identified by <strong>namespace</strong>, <strong>name</strong> and <strong>dimensions</strong> (up to 30). Each unique combination of dimension values is a separate metric billed monthly, so dimensions like Service, Environment and Operation are fine but <strong>user id, request id or IP</strong> explode the count and cost. Put such values in log fields and query them with <strong>Logs Insights</strong> instead. Custom metrics support <strong>alarms</strong>, <strong>anomaly detection</strong>, <strong>metric math</strong>, <strong>dashboards</strong>, and <strong>target tracking auto scaling</strong> just like built-in metrics.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide what to measure: business and golden signals.</li>
+  <li>Choose transport: agent, PutMetricData, or EMF logs.</li>
+  <li>Define a namespace and a few low-cardinality dimensions.</li>
+  <li>CloudWatch stores data points and aggregates statistics and percentiles.</li>
+  <li>Build alarms, dashboards and scaling policies on the metric.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from aws_lambda_powertools import Metrics
+from aws_lambda_powertools.metrics import MetricUnit
+
+metrics = Metrics(namespace=&quot;Shop&quot;, service=&quot;checkout&quot;)
+
+@metrics.log_metrics
+def handler(event, context):
+    metrics.add_dimension(name=&quot;Environment&quot;, value=&quot;prod&quot;)
+    metrics.add_metric(name=&quot;OrdersPlaced&quot;, unit=MetricUnit.Count, value=1)
+    metrics.add_metadata(key=&quot;orderId&quot;, value=event[&quot;orderId&quot;])  # log only, not a dimension</code></pre>
+<pre><code class="language-json">{&quot;metrics&quot;:{&quot;append_dimensions&quot;:{&quot;InstanceId&quot;:&quot;${aws:InstanceId}&quot;},
+ &quot;metrics_collected&quot;:{&quot;mem&quot;:{&quot;measurement&quot;:[&quot;mem_used_percent&quot;]},
+  &quot;disk&quot;:{&quot;measurement&quot;:[&quot;used_percent&quot;],&quot;resources&quot;:[&quot;/&quot;]}}}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using request or user IDs as dimensions and getting a huge bill.</li>
+  <li>Calling PutMetricData once per request in hot code paths.</li>
+  <li>Expecting memory metrics on EC2 without the agent.</li>
+  <li>Alarming on averages instead of percentiles for latency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;EC2 does not report memory or disk usage by default, so I install the CloudWatch agent, which also collects logs and StatsD or Prometheus metrics. Code can call PutMetricData, but in Lambda and containers I prefer the Embedded Metric Format: I write structured JSON logs and CloudWatch extracts the metrics asynchronously, with no extra calls. Metrics live in a namespace with dimensions; every unique combination is a billed metric, so I avoid high-cardinality dimensions like user ID. Then they drive alarms, dashboards and auto scaling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a request ID as a dimension a bad idea?</strong> Every request creates a new metric that is billed and useless for aggregation.</li>
+  <li><strong>When use high-resolution metrics?</strong> For fast auto scaling or alarms needing sub-minute reaction.</li>
+  <li><strong>How alert on p99 latency?</strong> Publish raw values or use EMF and alarm on the p99 statistic.</li>
+</ul>
+</article>
+</body>
+</html>

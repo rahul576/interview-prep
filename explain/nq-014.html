@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-014 · What are virtual threads, and how do they differ from platform threads?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-014" data-topic="Modern Java (11-21)">
+<h1>What are virtual threads, and how do they differ from platform threads?</h1>
+<p class="ex-meta">Modern Java (11-21) · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>platform thread</strong> wraps one <strong>OS thread</strong> (heavy, limited to thousands, so we pool them); a <strong>virtual thread</strong> (final in <strong>Java 21</strong>) is a <strong>lightweight JVM-managed thread</strong> that runs on a small pool of <strong>carrier threads</strong> and is <strong>unmounted when it blocks</strong>, so you can have <strong>millions</strong> of them for <strong>I/O-bound</strong> work.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Platform threads</strong> (<code>new Thread(...)</code> before Java 21) map <strong>1:1</strong> to operating system threads. Each reserves a large stack (often around 1 MB of address space by default), creation and context switches go through the kernel, and a server realistically handles a few thousand. That is why servlet containers use thread pools of, say, 200 threads. In the <strong>thread-per-request</strong> model, each request holds a thread for its whole duration, even while it is just waiting 300 ms for a database. When all 200 are waiting, new requests queue, even though the CPU is idle. The usual escape was <strong>asynchronous/reactive</strong> code, which is efficient but harder to write, debug and profile.</p>
+<p><strong>Virtual threads</strong> keep the simple blocking style but make threads cheap. They are ordinary <code>java.lang.Thread</code> objects managed by the JVM. Their stacks live on the <strong>heap</strong> as small, growable chunks, so creating one costs about as much as creating an object. The JVM <strong>mounts</strong> a virtual thread on a <strong>carrier</strong> (a platform thread in a ForkJoinPool) to run it. When the code performs a blocking operation the JDK supports, such as socket I/O, <code>Thread.sleep</code>, <code>BlockingQueue.take</code> or a <code>ReentrantLock</code>, the JVM <strong>unmounts</strong> it, saving its stack, and the carrier runs another virtual thread. When the I/O completes, the virtual thread is scheduled again.</p>
+<p>The result: <strong>throughput</strong> of I/O-bound services scales with the number of concurrent tasks rather than pool size. Virtual threads are not faster per operation and do not help <strong>CPU-bound</strong> work; the number of cores still limits that. They should <strong>not be pooled</strong>: create one per task.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Task starts on a new virtual thread (cheap heap object).</li>
+  <li>Scheduler mounts it on a free carrier thread.</li>
+  <li>Blocking call: stack frames are saved to the heap, carrier released.</li>
+  <li>I/O completes: thread becomes runnable, remounted (maybe on another carrier).</li>
+  <li>Task finishes; the object is garbage collected.</li>
+</ol>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Platform thread</th><th>Virtual thread</th></tr></thead>
+<tbody>
+<tr><td>Backed by</td><td>One OS thread</td><td>JVM, on carrier threads</td></tr>
+<tr><td>Cost</td><td>~MB stack, kernel call</td><td>Small heap object</td></tr>
+<tr><td>Count</td><td>Thousands</td><td>Millions</td></tr>
+<tr><td>Pooling</td><td>Yes</td><td>Never</td></tr>
+<tr><td>Best for</td><td>CPU work, long-lived tasks</td><td>Blocking I/O, per-request tasks</td></tr>
+</tbody>
+</table>
+
+<h2>Example</h2>
+<pre><code class="language-java">Thread vt = Thread.ofVirtual().name(&quot;order-&quot;, 0).start(() -&gt; callInventory());
+Thread pt = Thread.ofPlatform().start(() -&gt; crunchNumbers());
+
+try (var ex = Executors.newVirtualThreadPerTaskExecutor()) {
+    IntStream.range(0, 100_000).forEach(i -&gt;
+        ex.submit(() -&gt; { Thread.sleep(Duration.ofSeconds(1)); return i; }));
+}   // 100k concurrent sleeps finish in about a second</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting CPU-heavy work to get faster.</li>
+  <li>Pooling virtual threads in a fixed pool.</li>
+  <li>Forgetting downstream limits (DB connections) still cap concurrency.</li>
+  <li>Assuming every blocking call unmounts (some native calls pin the carrier).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A platform thread is a thin wrapper around an OS thread: heavyweight, expensive to create, and you only get a few thousand, so we pool them. A virtual thread, final since Java 21, is a lightweight thread managed by the JVM. Lots of virtual threads run on a small pool of carrier platform threads; when one blocks on I/O, the JVM unmounts it, saves its stack to the heap and gives the carrier to another virtual thread, then resumes it when the I/O completes. So I can have millions and keep writing simple blocking thread-per-request code that scales like async code. It doesn't speed up CPU-bound work, and I never pool them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How many carrier threads does the default scheduler use?</strong> By default as many as available processors, tunable with <code>jdk.virtualThreadScheduler.parallelism</code>.</li>
+  <li><strong>Are virtual threads daemon threads?</strong> Yes, always.</li>
+  <li><strong>Do they replace reactive programming?</strong> For most request/response services, yes; reactive still suits streaming and backpressure.</li>
+</ul>
+</article>
+</body>
+</html>

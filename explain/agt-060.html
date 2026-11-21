@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-060 · An auto-remediation rule kept restarting pods of a service and turned a small issue into a full outage. How do you fix the design?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-060" data-topic="AI Agents &amp; AIOps">
+<h1>An auto-remediation rule kept restarting pods of a service and turned a small issue into a full outage. How do you fix the design?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The restarts <strong>removed capacity</strong> and caused a <strong>cascading failure</strong> while the real cause (for example a slow dependency) was <strong>not fixable by restart</strong>; fix the design with <strong>rate limits and maximum attempts</strong>, a <strong>circuit breaker that escalates</strong>, <strong>blast radius limits respecting PDBs</strong>, <strong>verification before repeating</strong>, and <strong>dependency checks first</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The rule mapped a symptom, failing health checks, to an action, restart. But the underlying cause was shared: perhaps a slow database or an exhausted downstream API. Restarting pods cannot fix that. Worse, each restart removed a pod from service and added <strong>startup load</strong> (JVM warm-up, cache filling, connection storms), so remaining pods received more traffic, became slower, failed their checks and were restarted as well. That is a <strong>positive feedback loop</strong>: the automation amplified the incident into a full outage.</p>
+<p>The redesign adds guardrails at several levels. <strong>Rate limits and maximum attempts</strong>: at most N restarts per service per time window. <strong>Circuit breaker</strong>: if the same remediation has not helped after a few attempts, or if many instances fail at once, automation stops and <strong>escalates to a human</strong>. <strong>Blast radius</strong>: restart one or a few pods at a time, honouring <strong>PodDisruptionBudgets</strong> and a minimum healthy capacity threshold. <strong>Verification</strong>: after each action, check whether error rates or health improved before doing anything more.</p>
+<p>Most importantly, add <strong>diagnosis before action</strong>: if failures are <strong>widespread across instances</strong>, the cause is usually shared, and restarts make things worse. The rule should check dependency health and recent changes first. Liveness probes should also not depend on downstream services, which is a common root of this pattern.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Alert triggers remediation evaluation, not immediate action.</li>
+  <li>Check scope: one pod failing or many? Dependencies healthy?</li>
+  <li>If widespread or dependency unhealthy: do not restart; page.</li>
+  <li>Otherwise restart one pod within rate and PDB limits.</li>
+  <li>Verify improvement within a window.</li>
+  <li>Repeat only on success; open the breaker after failures.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">remediation: restart-unhealthy-pod
+preconditions:
+  failing_pods_ratio: &quot;&lt; 0.2&quot;          # widespread = shared cause
+  dependencies_healthy: [orders-db, payments-api]
+  no_recent_deploy_within: 15m
+limits:
+  max_concurrent: 1
+  max_per_hour: 3
+  respect_pdb: true
+  min_available_ratio: 0.8
+verify: { metric: pod_ready_and_error_rate_ok, within: 5m }
+circuit_breaker: { failures: 2, open_for: 2h, on_open: page_owner }</code></pre>
+<p>Also move dependency checks out of liveness probes into readiness probes.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Restarting on symptoms without checking scope.</li>
+  <li>Liveness probes that call the database.</li>
+  <li>No limit on concurrent or total restarts.</li>
+  <li>Not testing remediation under realistic failure conditions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The rule treated a symptom with a restart, but the cause was shared, like a slow database, so restarting couldn't help. Each restart removed capacity and added startup load, so the rest failed too: a cascade. I'd add rate limits and a maximum number of attempts, a circuit breaker that stops and escalates after repeated failures or when many instances are affected, blast radius limits of one or two pods respecting PodDisruptionBudgets, and verification before repeating. And the rule checks dependencies first, because widespread failures almost always mean restarts will make it worse.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Test remediation rules?</strong> Chaos experiments in staging, dry-run mode in production.</li>
+  <li><strong>Liveness vs readiness?</strong> Liveness for deadlocks only; readiness can consider dependencies.</li>
+  <li><strong>Who gets paged when the breaker opens?</strong> The service owner, with automation history attached.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-082 · An agent creates duplicate support tickets whenever the network is unreliable. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-082" data-topic="MCP Servers">
+<h1>An agent creates duplicate support tickets whenever the network is unreliable. How do you fix it?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On unreliable networks a <code>create_ticket</code> call can <strong>succeed on the server while the response is lost</strong>, so the client or agent <strong>retries</strong> and creates a duplicate because the tool is <strong>not idempotent</strong>; fix it with an <strong>idempotency key</strong> that the server stores and checks, <strong>returning the existing ticket</strong> on repeats.</p>
+
+<h2>Detailed explanation</h2>
+<p>This is the classic <strong>at-least-once delivery</strong> problem, made more likely by agents. The sequence: the agent calls <code>create_ticket</code>; the server creates ticket #501; the response is lost to a timeout or connection reset. The client sees a failure. Either the MCP client library retries automatically, or the model sees an error and decides to call the tool again. In the stateless protocol revision, a re-issued request gets a <strong>new JSON-RPC request ID</strong>, so the server has no protocol-level way to recognise it as a repeat. Ticket #502 is created, then perhaps #503.</p>
+<p>The tool is <strong>not idempotent</strong>: calling it twice with the same intent has two effects. The fix belongs on the <strong>server</strong>, because only the server knows whether the effect already happened.</p>
+<p><strong>Idempotency key.</strong> <code>create_ticket</code> accepts an <code>idempotency_key</code>. It should be <strong>stable across retries of the same logical operation</strong>: generated once by the client per operation, or <strong>derived deterministically</strong> from stable inputs such as the conversation or task ID plus a hash of the normalised title and requester. The server stores the key with the created ticket (with a TTL, say 24 hours) in a durable store. When a call arrives with a known key, the server <strong>returns the existing ticket</strong> instead of creating a new one, ideally with a flag like <code>&quot;deduplicated&quot;: true</code>.</p>
+<p>The key must <strong>not be freshly invented by the model on each attempt</strong>: a new key per retry defeats the purpose.</p>
+<p>Also: update the tool <strong>description</strong> to say the tool is safe to retry with the same key, make timeouts sensible, and <strong>clean up existing duplicates</strong> (merge or close them, notify affected users).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client or server derives <code>key = hash(conversation_id + requester + normalised_title)</code>.</li>
+  <li>Server does an atomic &quot;insert if absent&quot; of the key in Redis or a unique-constrained DB column.</li>
+  <li>If inserted: create the ticket, store the ticket ID against the key.</li>
+  <li>If the key exists: return the stored ticket.</li>
+  <li>Handle the in-progress case: if the first call is still running, wait briefly or return &quot;in progress&quot;.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool()
+async def create_ticket(title: str, description: str, requester: str,
+                        idempotency_key: str | None = None, ctx: Context = None):
+    &quot;&quot;&quot;Create a support ticket. Safe to retry: repeated calls with the same
+    idempotency_key return the original ticket instead of creating a new one.&quot;&quot;&quot;
+    key = idempotency_key or sha256(f&quot;{ctx.conversation_id}|{requester}|{normalise(title)}&quot;)
+    existing = await store.get(f&quot;idem:{key}&quot;)
+    if existing:
+        return {&quot;ticket_id&quot;: existing, &quot;deduplicated&quot;: True}
+    if not await store.set(f&quot;idem:{key}&quot;, &quot;pending&quot;, nx=True, ex=86400):
+        return tool_error(&quot;Ticket creation already in progress; check again shortly.&quot;)
+    ticket = await servicedesk.create(title=title, description=description, requester=requester)
+    await store.set(f&quot;idem:{key}&quot;, ticket.id, ex=86400)
+    return {&quot;ticket_id&quot;: ticket.id, &quot;deduplicated&quot;: False}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Relying on the JSON-RPC request ID for deduplication.</li>
+  <li>Letting the model generate a random key on each attempt.</li>
+  <li>Check-then-insert without atomicity, so two concurrent retries both create tickets.</li>
+  <li>Fixing the client only; other clients still create duplicates.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When the network is flaky, create_ticket can succeed on the server while the response is lost. The client or agent sees a timeout and retries, and in the stateless revision the retried request has a new ID, so the server can't tell it's a repeat. Each retry creates a new ticket because the tool isn't idempotent. I'd fix it on the server: create_ticket accepts an idempotency key, either generated by the client once per logical operation or derived from stable inputs like the conversation ID and a hash of the summary, and the server stores it atomically with the ticket. A call with an existing key returns the existing ticket. I'd also clean up the duplicates and make the description say it's safe to retry with the same key.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not a fresh key from the model?</strong> Each retry would look like a new operation.</li>
+  <li><strong>How long keep keys?</strong> Longer than any realistic retry window, often 24 hours.</li>
+  <li><strong>What if two different tickets look alike?</strong> Include requester and conversation so genuine distinct requests get different keys.</li>
+</ul>
+</article>
+</body>
+</html>

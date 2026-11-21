@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-142 · What is a service mesh, and when is it worth the complexity?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-142" data-topic="Service Mesh">
+<h1>What is a service mesh, and when is it worth the complexity?</h1>
+<p class="ex-meta">Service Mesh · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>service mesh</strong> (Istio, Linkerd, Cilium) moves service-to-service concerns into <strong>proxies</strong>, either a <strong>sidecar</strong> per pod or <strong>ambient/node-level</strong> proxies, giving <strong>mTLS with workload identity</strong>, <strong>traffic management</strong> and <strong>uniform observability</strong>; it is worth it for <strong>many services with strong security or traffic-control needs</strong>, and rarely for a handful.</p>
+
+<h2>Detailed explanation</h2>
+<p>In a microservice system every team otherwise reimplements the same things: TLS between services, retries and timeouts, circuit breaking, metrics and tracing headers. A mesh puts a programmable proxy, usually <strong>Envoy</strong> (Linkerd uses its own Rust micro-proxy), in the path of every request, controlled centrally by a <strong>control plane</strong>.</p>
+<p>What you get:</p>
+<ul>
+  <li><strong>Security:</strong> automatic <strong>mutual TLS</strong> with short-lived certificates tied to the workload's service account (SPIFFE identities), and <strong>authorization policies</strong> such as &quot;only <code>checkout</code> may call <code>payments</code> on POST /charge&quot;. This is the core of zero-trust networking inside the cluster.</li>
+  <li><strong>Traffic management:</strong> timeouts, retries with budgets, outlier detection, <strong>weighted traffic splitting</strong> for canaries, header-based routing, mirroring and fault injection.</li>
+  <li><strong>Observability:</strong> golden signals (request rate, errors, latency) per service pair and trace spans, without code changes.</li>
+</ul>
+<p>The cost is real. Sidecars add memory and CPU per pod (multiplied across thousands of pods), a little latency per hop, start-up ordering issues, and an upgrade burden because every pod must be restarted to update its proxy. <strong>Istio ambient mode</strong> addresses this by splitting the mesh: a per-node <strong>ztunnel</strong> handles L4 mTLS and identity, and optional per-namespace <strong>waypoint proxies</strong> handle L7 features only where needed, so pods need no sidecar. Before adopting a mesh, ask whether simpler tools suffice: NetworkPolicies for segmentation, a gateway for edge traffic, OpenTelemetry for tracing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install the control plane (istiod, Linkerd control plane).</li>
+  <li>Enrol namespaces: sidecar injection label or ambient label.</li>
+  <li>Control plane issues certificates and pushes routing and policy config to proxies.</li>
+  <li>All pod traffic is transparently redirected through the proxy.</li>
+  <li>Proxies enforce mTLS, policies and routing and emit telemetry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata: { name: default, namespace: shop }
+spec:
+  mtls: { mode: STRICT }
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: { name: payments-allow-checkout, namespace: shop }
+spec:
+  selector: { matchLabels: { app: payments } }
+  rules:
+  - from:
+    - source: { principals: [&quot;cluster.local/ns/shop/sa/checkout&quot;] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adopting a mesh for five services because it is fashionable.</li>
+  <li>Retries configured both in the mesh and in application code.</li>
+  <li>Enabling STRICT mTLS before all clients are in the mesh.</li>
+  <li>No plan for proxy upgrades and control plane versioning.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A service mesh moves networking concerns like mTLS, retries, timeouts, traffic splitting and telemetry out of application code into proxies managed by a control plane, traditionally Envoy sidecars, or in Istio ambient mode a per-node ztunnel plus optional waypoint proxies. It's worth it when you have many services, need zero-trust mTLS with identity-based authorization, and want consistent canaries and observability across teams. For a handful of services, the extra latency, resource use and operational burden usually outweigh the benefits, and NetworkPolicies plus a gateway and OpenTelemetry are enough.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does ambient mode solve?</strong> Sidecar resource overhead, pod restarts for proxy upgrades and start-up ordering problems.</li>
+  <li><strong>Mesh mTLS vs NetworkPolicy?</strong> NetworkPolicy filters by IP and labels at L3/L4; mesh authenticates workload identity and can authorise at L7.</li>
+  <li><strong>How do you roll out a mesh safely?</strong> Namespace by namespace in permissive mode, then strict.</li>
+</ul>
+</article>
+</body>
+</html>

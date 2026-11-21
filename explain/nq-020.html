@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-020 · What is a lambda expression, and how does it work internally?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-020" data-topic="Java 8+ Features">
+<h1>What is a lambda expression, and how does it work internally?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A lambda is a concise <strong>anonymous function</strong> <code>(params) -&gt; body</code> implementing a <strong>functional interface</strong>; internally javac moves the body into a <strong>private synthetic method</strong> and emits an <strong><code>invokedynamic</code></strong> call site that <strong><code>LambdaMetafactory</code></strong> links at runtime, generating no separate <code>.class</code> file.</p>
+
+<h2>Detailed explanation</h2>
+<p>Conceptually, a lambda is behaviour passed as data. Its type is the <strong>target functional interface</strong>, and its parameter types are usually inferred from it.</p>
+<p><strong>Compilation</strong>: unlike anonymous inner classes, which javac compiles into <code>Outer$1.class</code> files, a lambda's body is <strong>desugared</strong> into a private method of the enclosing class, named like <code>lambda$main$0</code>. It is <strong>static</strong> if the lambda captures nothing from the instance, and an instance method if it uses <code>this</code>. Captured local variables become extra leading parameters of that method. At the place where the lambda is created, javac emits an <strong><code>invokedynamic</code></strong> instruction whose <strong>bootstrap method</strong> is <code>LambdaMetafactory.metafactory</code>.</p>
+<p><strong>Runtime linkage</strong>: the first time that <code>invokedynamic</code> executes, the bootstrap method generates (with hidden classes in modern JDKs) a small class that implements the functional interface and forwards the interface method to the synthetic method. It returns a <code>CallSite</code>; subsequent executions reuse it with no bootstrap cost. For <strong>non-capturing lambdas</strong>, the call site returns the <strong>same instance every time</strong>, effectively a singleton, because it has no state. <strong>Capturing lambdas</strong> create a new small object per evaluation holding the captured values.</p>
+<p><strong>Why this design?</strong> It avoids class-file bloat and class-loading cost per lambda, and it keeps the translation strategy flexible: future JDKs can change how lambdas are implemented without recompiling code. The JIT can also inline lambda calls aggressively. <strong>Method references</strong> use the same mechanism, pointing at the existing method directly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>javac type-checks the lambda against the target interface.</li>
+  <li>The body becomes a private synthetic method (<code>lambda$...</code>).</li>
+  <li>An <code>invokedynamic</code> instruction is placed at the creation site.</li>
+  <li>On first execution, <code>LambdaMetafactory</code> spins a hidden class implementing the interface.</li>
+  <li>The call site is linked and reused; non-capturing lambdas return a cached instance.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Demo {
+    public static void main(String[] args) {
+        Function&lt;Integer, Integer&gt; twice = x -&gt; x * 2;   // non-capturing
+        int base = 10;
+        Function&lt;Integer, Integer&gt; plus = x -&gt; x + base; // capturing 'base'
+        System.out.println(twice.apply(4) + plus.apply(1));
+    }
+}</code></pre>
+<pre><code class="language-bash">javac Demo.java &amp;&amp; javap -p -c Demo
+# private static java.lang.Integer lambda$main$0(java.lang.Integer);
+# private static java.lang.Integer lambda$main$1(int, java.lang.Integer);
+# invokedynamic #7, 0  // InvokeDynamic #0:apply:()Ljava/util/function/Function;
+# invokedynamic #11, 0 // InvokeDynamic #1:apply:(I)Ljava/util/function/Function;</code></pre>
+<p>Note that <code>base</code> became a parameter of <code>lambda$main$1</code>, and no <code>Demo$1.class</code> appears.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying lambdas are compiled into anonymous inner classes.</li>
+  <li>Assuming every lambda evaluation allocates a new object.</li>
+  <li>Relying on lambda identity (<code>==</code>), which is unspecified.</li>
+  <li>Ignoring that capturing lambdas in hot loops can allocate.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A lambda is a concise anonymous function, parameters, arrow and body, that implements the single abstract method of a functional interface, so behaviour can be passed as data. Internally javac doesn't generate an inner class file. It moves the body into a private synthetic method in the enclosing class and emits an invokedynamic instruction at the creation site. The first time it runs, the bootstrap method LambdaMetafactory creates an implementation of the interface that calls that method. For non-capturing lambdas the same instance is reused. It's lighter than inner classes and gives the JVM freedom to optimise.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a non-capturing lambda be a singleton?</strong> It has no state, so one instance behaves identically everywhere.</li>
+  <li><strong>What tool shows the synthetic method?</strong> <code>javap -p -c</code>.</li>
+  <li><strong>Do method references use invokedynamic?</strong> Yes, the same LambdaMetafactory mechanism.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azx-041 · Explain stages, jobs, steps and deployment jobs in Azure Pipelines, including deployment strategies.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="azx-041" data-topic="Azure DevOps &amp; Pipelines">
+<h1>Explain stages, jobs, steps and deployment jobs in Azure Pipelines, including deployment strategies.</h1>
+<p class="ex-meta">Azure DevOps &amp; Pipelines · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A YAML pipeline has <strong>stages → jobs → steps</strong>; each <strong>job runs on one agent</strong>, flow is controlled by <strong>dependsOn</strong> and <strong>conditions</strong>; a <strong>deployment job</strong> targets an <strong>environment</strong> (history, approvals, checks) and uses a <strong>strategy</strong> (<strong>runOnce, rolling, canary</strong>) with <strong>lifecycle hooks</strong> such as <strong>preDeploy, deploy, routeTraffic, postRouteTraffic, on: failure/success</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Stages</strong> are major phases (Build, Test, Prod). By default each stage depends on the previous one; <code>dependsOn: []</code> makes it run in parallel, and <code>condition</code> expressions like <code>and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))</code> decide whether it runs.</p>
+<p><strong>Jobs</strong> are units of work that run on <strong>one agent</strong> (or server jobs with no agent, used for delays or invoking REST APIs). Jobs in a stage run <strong>in parallel</strong> unless they declare <code>dependsOn</code>. They have their own pool, workspace, timeout, variables and can use a <strong>matrix</strong> or <code>parallel</code> strategy for multiple configurations.</p>
+<p><strong>Steps</strong> run sequentially inside a job: <strong>tasks</strong> (<code>AzureCLI@2</code>, <code>DotNetCoreCLI@2</code>) or <strong>scripts</strong> (<code>script</code>, <code>bash</code>, <code>pwsh</code>), plus shortcuts like <code>checkout</code>, <code>publish</code> and <code>download</code>.</p>
+<p>A <strong>deployment job</strong> (<code>- deployment:</code>) targets an <strong>environment</strong>. This gives deployment <strong>history</strong> (which run, commits and work items reached prod), applies the environment's <strong>approvals and checks</strong>, and can target <strong>Kubernetes namespace</strong> or <strong>virtual machine</strong> resources in the environment. It does not check out code automatically and downloads pipeline artifacts by default.</p>
+<p><strong>Strategies:</strong></p>
+<ul>
+  <li><strong>runOnce:</strong> run the hooks once; the most common.</li>
+  <li><strong>rolling:</strong> for VM resources, update <code>maxParallel</code> machines (number or percentage) at a time.</li>
+  <li><strong>canary:</strong> run the hooks for <code>increments</code> like <code>[10, 20]</code> and then 100 percent, typically with Kubernetes manifests creating canary workloads.</li>
+</ul>
+<p><strong>Lifecycle hooks:</strong> <code>preDeploy</code> (e.g. migrations, resource checks), <code>deploy</code>, <code>routeTraffic</code>, <code>postRouteTraffic</code> (monitor health), then <code>on: failure</code> (rollback) or <code>on: success</code> (cleanup).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pipeline compiles; stages scheduled by dependencies.</li>
+  <li>Jobs within a stage dispatched to agents in parallel.</li>
+  <li>Steps execute in order on each agent.</li>
+  <li>Deployment job waits for environment checks.</li>
+  <li>Strategy executes hooks; failure triggers <code>on: failure</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">stages:
+- stage: Deploy
+  jobs:
+  - deployment: aks
+    environment: shop-prod.orders          # environment.namespace resource
+    strategy:
+      canary:
+        increments: [10, 25]
+        preDeploy:
+          steps: [ script: ./check-cluster.sh ]
+        deploy:
+          steps:
+          - task: KubernetesManifest@1
+            inputs: { action: deploy, strategy: canary, percentage: $(strategy.increment), manifests: k8s/*.yaml }
+        postRouteTraffic:
+          steps: [ script: ./verify-slo.sh ]
+        on:
+          failure:
+            steps:
+            - task: KubernetesManifest@1
+              inputs: { action: reject, manifests: k8s/*.yaml }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a normal job for production deploys, losing history and checks.</li>
+  <li>Assuming jobs in a stage run sequentially.</li>
+  <li>Expecting code checkout in a deployment job.</li>
+  <li>Forgetting <code>succeeded()</code> in custom conditions, so jobs run after failures.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A pipeline is stages, which contain jobs, which contain steps. Each job runs on one agent and steps run in order. dependsOn and conditions control flow and parallelism. A deployment job targets an environment, so Azure DevOps records deployment history and enforces that environment's approvals and checks. Deployment jobs support strategies: runOnce, rolling for VMs in batches, and canary with increments like 10 percent then 100. Strategies expose lifecycle hooks, preDeploy, deploy, routeTraffic, postRouteTraffic, and on failure or success for rollback and cleanup.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Pass an output variable to a later stage?</strong> <code>isOutput=true</code> and <code>stageDependencies.Stage.Job.outputs['step.var']</code>.</li>
+  <li><strong>Server job?</strong> An agentless job for delays, manual validation or REST calls.</li>
+  <li><strong>Matrix?</strong> Runs the same job for several configurations in parallel.</li>
+</ul>
+</article>
+</body>
+</html>

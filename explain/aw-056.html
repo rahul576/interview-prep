@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-056 · What are S3 replication and Object Lock used for?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-056" data-topic="Cloud (AWS)">
+<h1>What are S3 replication and Object Lock used for?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>S3 Replication</strong> (Cross-Region or Same-Region) copies objects automatically to another bucket, requiring <strong>versioning</strong>, for <strong>DR, compliance, latency and log aggregation</strong>, while <strong>Object Lock</strong> enforces <strong>WORM retention</strong> in <strong>governance</strong> or <strong>compliance</strong> mode to protect data against deletion and ransomware.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Replication</strong> is configured on the source bucket with rules filtered by prefix or tag, an IAM role S3 assumes, and a destination bucket, which can be in another <strong>region (CRR)</strong>, the <strong>same region (SRR)</strong> or another account. Both buckets must have <strong>versioning</strong> enabled. By default only <strong>new objects</strong> written after the rule exists replicate; <strong>S3 Batch Replication</strong> copies existing objects or retries failed ones. You can change the <strong>storage class</strong> on the destination (for example Glacier for a backup copy), change <strong>ownership</strong> to the destination account, replicate <strong>SSE-KMS</strong> objects with permission on the destination key, and optionally replicate <strong>delete markers</strong>. <strong>Replication Time Control (RTC)</strong> gives a 15-minute SLA for 99.99 percent of objects with metrics. Replication is asynchronous, and replicas do not chain unless configured.</p>
+<p>Use cases: <strong>disaster recovery</strong> in another region, <strong>data residency</strong> copies, <strong>lower latency</strong> for users elsewhere, aggregating <strong>logs</strong> from many accounts into a central bucket, and keeping a <strong>production copy</strong> in a test account.</p>
+<p><strong>Object Lock</strong> stores object versions in <strong>write once, read many</strong> mode. A <strong>retention period</strong> prevents a version from being deleted or overwritten until a date. <strong>Governance mode</strong> lets principals with <code>s3:BypassGovernanceRetention</code> override it; <strong>compliance mode</strong> cannot be shortened or removed by anyone, including the root user, until it expires. <strong>Legal holds</strong> block deletion indefinitely until removed. Object Lock requires versioning and can now be enabled on existing buckets. It satisfies regulations like SEC 17a-4 and protects backups from ransomware or an attacker with admin access.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Enable versioning on source and destination.</li>
+  <li>Create a replication rule with role, filter and destination.</li>
+  <li>New object versions replicate asynchronously; status shows on each object.</li>
+  <li>Enable Object Lock with a default retention on the backup bucket.</li>
+  <li>Deletes create delete markers; locked versions cannot be removed before expiry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;Role&quot;: &quot;arn:aws:iam::111122223333:role/s3-replication&quot;,
+  &quot;Rules&quot;: [{
+    &quot;ID&quot;: &quot;dr-copy&quot;, &quot;Status&quot;: &quot;Enabled&quot;, &quot;Priority&quot;: 1,
+    &quot;Filter&quot;: {&quot;Prefix&quot;: &quot;backups/&quot;},
+    &quot;DeleteMarkerReplication&quot;: {&quot;Status&quot;: &quot;Disabled&quot;},
+    &quot;Destination&quot;: {
+      &quot;Bucket&quot;: &quot;arn:aws:s3:::dr-backups-eu-central-1&quot;,
+      &quot;Account&quot;: &quot;444455556666&quot;,
+      &quot;StorageClass&quot;: &quot;GLACIER_IR&quot;,
+      &quot;AccessControlTranslation&quot;: {&quot;Owner&quot;: &quot;Destination&quot;},
+      &quot;ReplicationTime&quot;: {&quot;Status&quot;: &quot;Enabled&quot;, &quot;Time&quot;: {&quot;Minutes&quot;: 15}},
+      &quot;Metrics&quot;: {&quot;Status&quot;: &quot;Enabled&quot;, &quot;EventThreshold&quot;: {&quot;Minutes&quot;: 15}}
+    }
+  }]
+}</code></pre>
+<pre><code class="language-bash">aws s3api put-object-lock-configuration --bucket dr-backups-eu-central-1 \
+  --object-lock-configuration '{&quot;ObjectLockEnabled&quot;:&quot;Enabled&quot;,
+   &quot;Rule&quot;:{&quot;DefaultRetention&quot;:{&quot;Mode&quot;:&quot;COMPLIANCE&quot;,&quot;Days&quot;:35}}}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting existing objects to replicate without Batch Replication.</li>
+  <li>Replicating delete markers to the DR bucket, so mistakes propagate.</li>
+  <li>Testing with compliance mode and long retention, then being unable to delete test data.</li>
+  <li>Forgetting KMS permissions on the destination key.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;S3 replication automatically copies objects to another bucket, in another region with CRR or the same region with SRR, optionally to another account and storage class. Both buckets need versioning; only new objects replicate by default, and Batch Replication handles existing ones. Replication Time Control adds a 15-minute SLA. I use it for DR, residency, latency and central log aggregation. Object Lock adds WORM retention: governance mode can be overridden by privileged users, compliance mode by nobody, not even root, which protects backups and audit records against ransomware.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why keep backups in a separate account with Object Lock?</strong> A compromised production account cannot delete or encrypt them.</li>
+  <li><strong>Is replication a backup?</strong> Not alone; deletions or corruption can replicate, so combine with versioning and locks.</li>
+  <li><strong>What is a legal hold?</strong> A lock without an end date, removed only explicitly by an authorised user.</li>
+</ul>
+</article>
+</body>
+</html>

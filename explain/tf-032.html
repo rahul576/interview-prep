@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-032 · terraform plan fails with a Cycle error. How do you find and break the cycle?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-032" data-topic="Terraform">
+<h1>terraform plan fails with a Cycle error. How do you find and break the cycle?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>Cycle error</strong> means objects <strong>depend on each other</strong>, so no valid order exists; read the <strong>addresses in the error</strong>, use <strong><code>terraform graph</code></strong> if needed, and break it, typically by replacing <strong>inline rules with separate rule resources</strong>, removing <strong>unneeded <code>depends_on</code></strong>, or <strong>splitting modules</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform must create, update and destroy objects in an order consistent with the <strong>dependency graph</strong>. A <strong>cycle</strong> (A depends on B, B depends on A, possibly through several hops) makes that impossible, and Terraform aborts with <code>Error: Cycle:</code> followed by the list of nodes involved. Those addresses are the starting point. For complex cases, <code>terraform graph</code> outputs the graph in DOT format; render it with Graphviz and look for the loop, or simply read the references between the listed resources.</p>
+<p>The <strong>classic example</strong> is two security groups that reference each other in <strong>inline rules</strong>: the app group allows egress to the database group, and the database group allows ingress from the app group. Each group's definition needs the other's ID, so neither can be created first. The fix is to create the groups <strong>without inline rules</strong> and add <strong>separate rule resources</strong>, such as <code>aws_vpc_security_group_ingress_rule</code> and <code>aws_vpc_security_group_egress_rule</code>. Each rule depends on both groups, but the groups no longer depend on each other, so the order becomes: groups, then rules. The same applies to NSGs and route tables.</p>
+<p>Other causes:</p>
+<ul>
+  <li><strong>Module outputs feeding back into inputs</strong> of the same module, possibly through another module. Split the module, or pass a value that does not depend on the module's own resources.</li>
+  <li><strong>Broad <code>depends_on</code></strong>, especially on modules, which creates edges to everything inside. Remove it or narrow it.</li>
+  <li><strong><code>create_before_destroy</code></strong> during replacement: it reverses destroy ordering, and if a dependency does not also use it, cycles can appear. Make the lifecycle settings consistent.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the cycle node list in the error.</li>
+  <li>Trace references between those nodes in code or with <code>terraform graph</code>.</li>
+  <li>Identify the edge that is unnecessary or can be moved to a separate resource.</li>
+  <li>Refactor; use <code>moved</code> blocks if addresses change.</li>
+  <li>Run plan to confirm the cycle is gone and nothing is replaced unexpectedly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_security_group&quot; &quot;app&quot; { name = &quot;app&quot;, vpc_id = var.vpc_id }
+resource &quot;aws_security_group&quot; &quot;db&quot;  { name = &quot;db&quot;,  vpc_id = var.vpc_id }
+
+resource &quot;aws_vpc_security_group_ingress_rule&quot; &quot;db_from_app&quot; {
+  security_group_id            = aws_security_group.db.id
+  referenced_security_group_id = aws_security_group.app.id
+  ip_protocol = &quot;tcp&quot;
+  from_port   = 5432
+  to_port     = 5432
+}
+
+resource &quot;aws_vpc_security_group_egress_rule&quot; &quot;app_to_db&quot; {
+  security_group_id            = aws_security_group.app.id
+  referenced_security_group_id = aws_security_group.db.id
+  ip_protocol = &quot;tcp&quot;
+  from_port   = 5432
+  to_port     = 5432
+}</code></pre>
+<pre><code class="language-bash">terraform graph -type=plan | dot -Tsvg &gt; graph.svg</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Mixing inline <code>ingress</code> blocks with separate rule resources for the same group.</li>
+  <li>Adding <code>depends_on</code> to &quot;fix&quot; ordering and creating new cycles.</li>
+  <li>Inconsistent <code>create_before_destroy</code> across dependent resources.</li>
+  <li>Huge modules that both produce and consume the same values.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A cycle means two or more objects depend on each other, so there's no valid order. The error lists the addresses involved, and terraform graph helps visualise it if it's not obvious. The classic case is two security groups whose inline rules reference each other. I fix it by creating the groups without inline rules and adding separate rule resources, like aws_vpc_security_group_ingress_rule, which depend on both groups but not on each other. Other causes are module outputs feeding back into inputs, broad depends_on, or inconsistent create_before_destroy during replacement; removing unneeded depends_on or splitting a module usually breaks them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do inline blocks and separate resources conflict?</strong> Both manage the same rules, so each apply removes the other's rules, causing perpetual diffs.</li>
+  <li><strong>Can cycles appear only on destroy?</strong> Yes, especially with create_before_destroy or provider dependencies.</li>
+  <li><strong>How do you avoid cycles in module design?</strong> Clear layering: modules consume inputs and produce outputs, never both for the same data.</li>
+</ul>
+</article>
+</body>
+</html>

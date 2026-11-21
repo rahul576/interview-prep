@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>es-001 · What is Elasticsearch and how does it store and search data?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="es-001" data-topic="Elasticsearch">
+<h1>What is Elasticsearch and how does it store and search data?</h1>
+<p class="ex-meta">Elasticsearch · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Elasticsearch</strong> is a distributed <strong>search and analytics engine built on Apache Lucene</strong>. It stores <strong>JSON documents in indices</strong>, analyses text into terms in an <strong>inverted index</strong> for fast full-text search, uses <strong>doc values</strong> for sorting and aggregations, spreads data across <strong>shards with replicas</strong>, and is <strong>near real-time</strong> (searchable after a <strong>refresh</strong>, every 1 s by default).</p>
+
+<h2>Detailed explanation</h2>
+<p>You send JSON documents to an <strong>index</strong> (roughly a table). Elasticsearch infers or applies a <strong>mapping</strong> (the field types) and indexes each field according to its type.</p>
+<ul>
+  <li><strong>Inverted index.</strong> For <code>text</code> fields, an <strong>analyzer</strong> tokenises and normalises the content (&quot;Quick Brown Foxes&quot; becomes <code>quick</code>, <code>brown</code>, <code>fox</code>). The inverted index maps each <strong>term to a postings list</strong> of the documents (and positions) containing it, like the index at the back of a book. A query for &quot;fox&quot; looks up one term instead of scanning every document. Relevance is scored with <strong>BM25</strong>.</li>
+  <li><strong>Doc values.</strong> A columnar, on-disk structure per field, used for <strong>sorting, aggregations and scripting</strong> on keyword, numeric and date fields.</li>
+  <li><strong>_source.</strong> The original JSON is stored too, so it can be returned and reindexed.</li>
+</ul>
+<p><strong>Distribution.</strong> Each index is split into <strong>primary shards</strong>. Each shard is a full Lucene index, distributed across nodes, and each primary can have <strong>replica</strong> copies on other nodes for high availability and extra read capacity. A search fans out to one copy of every shard, each shard returns its top hits, and the coordinating node merges them.</p>
+<p><strong>Near real-time.</strong> Lucene writes new documents into in-memory buffers. A <strong>refresh</strong> (default every 1 s, though idle indices may skip refreshes until searched) creates a new searchable <strong>segment</strong>. Durability comes from the <strong>translog</strong> (write-ahead log) and periodic <strong>flushes</strong> (Lucene commits). Segments are immutable. Updates are delete-plus-reindex, and background <strong>merges</strong> compact them.</p>
+<p>Typical uses: product and site search, log and observability analytics (the ELK stack), security analytics, and more recently vector or hybrid search. <strong>OpenSearch</strong> is the AWS-led fork with very similar concepts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>PUT /products/_doc/1 {json}</code>: routed to a shard by <code>hash(_id) % primaries</code>.</li>
+  <li>The primary indexes it and writes the translog, then replicates to the replicas.</li>
+  <li>A refresh makes it searchable within about a second.</li>
+  <li>A search query goes to the coordinating node, fans out to the shards, each shard scores its top N, and the results are merged and fetched.</li>
+  <li>Merges and flushes run in the background.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">PUT /products/_doc/42
+{ &quot;name&quot;: &quot;Wireless Noise Cancelling Headphones&quot;, &quot;brand&quot;: &quot;Acme&quot;, &quot;price&quot;: 129.99 }
+
+GET /products/_search
+{
+  &quot;query&quot;: { &quot;match&quot;: { &quot;name&quot;: &quot;noise cancelling&quot; } },
+  &quot;aggs&quot;:  { &quot;brands&quot;: { &quot;terms&quot;: { &quot;field&quot;: &quot;brand.keyword&quot; } } }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using it as the primary system of record without a source of truth for reindexing.</li>
+  <li>Expecting immediate read-after-write search visibility (it is near real-time).</li>
+  <li>Relying on dynamic mappings in production.</li>
+  <li>Creating huge numbers of tiny indices and shards.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Elasticsearch is a distributed search and analytics engine built on Lucene. Data is stored as JSON documents in indices. Text fields are run through analyzers into terms and stored in an inverted index, which maps each term to the documents containing it, so full-text search is fast and BM25 ranks the results. Other fields use doc values for sorting and aggregations. Each index is split into shards, which are Lucene indexes, with replicas for availability and read throughput. It's near real-time: new documents become searchable after a refresh, every second by default.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not a primary database?</strong> Weaker transactional guarantees, no multi-document ACID transactions, and mapping changes need reindexing. Keep a source of truth.</li>
+  <li><strong>Refresh versus flush?</strong> Refresh makes data searchable. Flush commits segments to disk and trims the translog.</li>
+  <li><strong>How are updates done?</strong> Mark the old document deleted and index the new version. Merges reclaim the space.</li>
+</ul>
+</article>
+</body>
+</html>

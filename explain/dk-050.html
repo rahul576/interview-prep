@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-050 · What do common container exit codes mean?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-050" data-topic="Docker">
+<h1>What do common container exit codes mean?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>0</strong> = normal exit, <strong>1</strong> or other small codes = <strong>application error</strong>, <strong>above 128</strong> = killed by a signal (<strong>128 + signal number</strong>): <strong>137 SIGKILL</strong> (often <strong>OOM</strong>), <strong>143 SIGTERM</strong> (normal stop), <strong>139 SIGSEGV</strong>; <strong>125/126/127</strong> are <strong>Docker or command errors</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A container's exit code is simply the exit status of its <strong>main process</strong>, so it follows Unix conventions and immediately narrows down where to look.</p>
+<p><strong>0</strong> means the process finished successfully. For a batch job that is expected; for a web service it is suspicious, because it means the server process ended on purpose, often due to backgrounding or a script that finished. <strong>1</strong> and other small codes (2, 3...) are chosen by the application: an unhandled exception, invalid configuration, failed connection. <code>docker logs</code> tells you which.</p>
+<p>Codes <strong>above 128</strong> mean the process was <strong>terminated by a signal</strong>, and the code is 128 plus the signal number. <strong>137 = 128 + 9 (SIGKILL)</strong>: either the kernel <strong>OOM killer</strong> after the memory limit was exceeded, a <code>docker kill</code>, or Docker escalating after <code>docker stop</code> timed out because the app ignored SIGTERM. <strong>143 = 128 + 15 (SIGTERM)</strong>: the process was asked to stop and exited because of it, the normal result of <code>docker stop</code> for an app without a custom handler exit code. <strong>139 = 128 + 11 (SIGSEGV)</strong>, a segmentation fault, typically in native code or because of an incompatible library (for example glibc binaries on musl). <strong>134</strong> is SIGABRT, for example a JVM or C++ abort.</p>
+<p>Codes <strong>125, 126 and 127</strong> come from Docker or the shell before your app runs: <strong>125</strong> means the <code>docker run</code> command itself failed (bad flag, daemon error); <strong>126</strong> means the command <strong>cannot be executed</strong> (permission denied, missing execute bit); <strong>127</strong> means <strong>command not found</strong>, usually a typo, a missing binary in a slim image, or Windows line endings in a script's shebang.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The main process exits or is killed.</li>
+  <li>The runtime records the wait status.</li>
+  <li>Docker stores <code>State.ExitCode</code>, <code>State.OOMKilled</code> and <code>State.Error</code>.</li>
+  <li>Restart policies and orchestrators react to the code.</li>
+  <li>Kubernetes shows the same code with a reason such as <code>OOMKilled</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker ps -a --format '{{.Names}}\t{{.Status}}'
+docker inspect -f 'code={{.State.ExitCode}} oom={{.State.OOMKilled}} err={{.State.Error}}' api
+dmesg -T | grep -i 'killed process'        # kernel OOM messages on the host
+kubectl get pod api-7d9 -o jsonpath='{.status.containerStatuses[0].lastState.terminated}'</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Code</th><th>Meaning</th><th>First check</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Normal exit</td><td>Is the process meant to run forever?</td></tr>
+<tr><td>1</td><td>App error</td><td><code>docker logs</code></td></tr>
+<tr><td>125</td><td>Docker run failed</td><td>CLI error message</td></tr>
+<tr><td>126 / 127</td><td>Not executable / not found</td><td>CMD, PATH, chmod, line endings</td></tr>
+<tr><td>137</td><td>SIGKILL</td><td>OOMKilled flag, stop timeout</td></tr>
+<tr><td>139</td><td>Segfault</td><td>Native libs, architecture</td></tr>
+<tr><td>143</td><td>SIGTERM</td><td>Normal stop</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming every 137 is an OOM kill.</li>
+  <li>Treating 143 as a failure in alerts.</li>
+  <li>Ignoring exit 0 for services that should keep running.</li>
+  <li>Not checking the kernel log when OOMKilled is unclear.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Exit code 0 means the main process finished successfully, normal for jobs but suspicious for a service. 1 or another small code is an application error, so I check docker logs. Codes above 128 mean killed by a signal, 128 plus the signal number: 137 is SIGKILL, typically the OOM killer or a kill after the stop timeout, and docker inspect shows OOMKilled; 143 is SIGTERM from a normal docker stop; 139 is a segfault. 125 means Docker itself failed to run the container, 126 the command wasn't executable and 127 the command wasn't found.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>OOM kill vs docker kill, both 137?</strong> Check <code>State.OOMKilled</code> and the host kernel log.</li>
+  <li><strong>Why might an app always exit 137 on stop?</strong> It ignores SIGTERM, so Docker sends SIGKILL after the timeout.</li>
+  <li><strong>What does Kubernetes show?</strong> <code>lastState.terminated</code> with exit code and reason.</li>
+</ul>
+</article>
+</body>
+</html>

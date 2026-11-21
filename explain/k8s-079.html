@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-079 · How does cert-manager automate TLS certificates in Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-079" data-topic="Kubernetes">
+<h1>How does cert-manager automate TLS certificates in Kubernetes?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>cert-manager</strong> is a controller that turns certificates into Kubernetes resources: an <strong>Issuer/ClusterIssuer</strong> defines the CA (for example <strong>Let's Encrypt via ACME</strong>), a <strong>Certificate</strong> declares names and the target <strong>Secret</strong>, cert-manager solves <strong>HTTP-01 or DNS-01</strong> challenges, stores the cert and <strong>renews it automatically</strong>; <strong>Ingress or Gateway annotations</strong> request certificates with no extra YAML.</p>
+
+<h2>Detailed explanation</h2>
+<p>Manually issued certificates expire, and expiry outages are embarrassingly common. cert-manager makes certificates <strong>declarative</strong>: you describe the certificate you want and a controller keeps reality matching.</p>
+<p><strong>Issuers</strong>: an <code>Issuer</code> is namespaced, a <code>ClusterIssuer</code> is cluster-wide. Types include <strong>ACME</strong> (Let's Encrypt, ZeroSSL, others), <strong>CA</strong> (a CA key stored in a Secret), <strong>Vault</strong>, <strong>self-signed</strong> (for bootstrapping a private CA), and external issuers for cloud private CAs such as AWS Private CA or Google CAS.</p>
+<p><strong>Certificate flow</strong>: a <code>Certificate</code> lists <code>dnsNames</code>, <code>secretName</code>, <code>issuerRef</code> and optional duration and key settings. cert-manager generates a private key, creates a <strong>CertificateRequest</strong>, and for ACME an <strong>Order</strong> and <strong>Challenges</strong>. For <strong>HTTP-01</strong>, it temporarily routes <code>/.well-known/acme-challenge/&lt;token&gt;</code> through the Ingress or Gateway so the CA can fetch it; this needs the domain to be publicly reachable on port 80. For <strong>DNS-01</strong>, it creates a <code>_acme-challenge</code> TXT record through a DNS provider API (Route 53, Azure DNS, Cloud DNS, Cloudflare); this is required for <strong>wildcard</strong> certificates and works for internal services. The signed certificate and key land in a <code>kubernetes.io/tls</code> Secret.</p>
+<p><strong>Renewal</strong>: by default cert-manager renews when <strong>two thirds</strong> of the lifetime has passed (for a 90-day Let's Encrypt cert, about 30 days before expiry), configurable with <code>renewBefore</code>. Pods using the Secret pick up changes when mounted volumes refresh; some apps need a reload.</p>
+<p><strong>Shortcuts</strong>: annotating an Ingress with <code>cert-manager.io/cluster-issuer</code> (or enabling Gateway API support for Gateways) makes cert-manager create the Certificate automatically. It also injects CA bundles into <strong>webhook configurations</strong> via its CA injector.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install cert-manager (CRDs, controller, webhook, cainjector).</li>
+  <li>Create a ClusterIssuer with ACME account and solver.</li>
+  <li>Create a Certificate or annotate an Ingress/Gateway.</li>
+  <li>cert-manager creates CertificateRequest, Order and Challenge.</li>
+  <li>CA validates; cert stored in the Secret.</li>
+  <li>Renewal happens automatically before expiry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata: { name: letsencrypt-prod }
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: platform@example.com
+    privateKeySecretRef: { name: le-account-key }
+    solvers:
+      - dns01:
+          azureDNS: { resourceGroupName: rg-dns, subscriptionID: 0000-..., hostedZoneName: example.com, managedIdentity: { clientID: 1111-... } }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: shop-tls, namespace: shop }
+spec:
+  secretName: shop-tls
+  dnsNames: [&quot;shop.example.com&quot;, &quot;*.shop.example.com&quot;]
+  issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Testing against Let's Encrypt production and hitting rate limits (use staging).</li>
+  <li>HTTP-01 for wildcards or private hostnames.</li>
+  <li>Ingress class mismatch, so the challenge route is never served.</li>
+  <li>Not monitoring Certificate readiness and expiry.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;cert-manager is a controller that manages certificates as Kubernetes resources. I define an Issuer or ClusterIssuer pointing at a CA, for example Let's Encrypt via ACME, Vault or a private CA. A Certificate lists the DNS names and target Secret; cert-manager creates a key, solves the ACME challenge, HTTP-01 through the ingress or DNS-01 with a TXT record, which wildcards need, and stores the signed certificate in the Secret. It renews automatically, by default after two thirds of the lifetime. Annotating an Ingress or Gateway is enough to get a certificate, and it also injects CA bundles for webhooks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Certificate stuck not ready?</strong> <code>kubectl describe</code> the Certificate, then CertificateRequest, Order and Challenge; the Challenge shows DNS or HTTP errors.</li>
+  <li><strong>HTTP-01 vs DNS-01?</strong> HTTP-01 is simple but needs public port 80; DNS-01 supports wildcards and internal names.</li>
+  <li><strong>How do apps get new certs?</strong> Mounted Secrets update; apps must reload or be restarted (for example with Reloader).</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-066 · Users complain that the assistant is slow during business-hour peaks but fine at night. What is going on?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-066" data-topic="LLMOps &amp; RAG">
+<h1>Users complain that the assistant is slow during business-hour peaks but fine at night. What is going on?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Load-dependent latency points to <strong>capacity</strong>: <strong>provider rate limits</strong> (429s absorbed by <strong>retries with backoff</strong>) or busy shared capacity, <strong>request queueing</strong> on too few <strong>self-hosted replicas</strong>, <strong>slow or mis-signalled autoscaling</strong>, or <strong>saturated shared components</strong> such as vector search; fix with <strong>more quota or provisioned throughput</strong>, <strong>load balancing across deployments</strong>, <strong>scheduled pre-scaling</strong>, <strong>better scaling signals</strong> and moving <strong>batch work off-peak</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Fine at night, slow at 10 am&quot; means the system is close to a limit during peaks. Confirm by plotting, per hour, request rate against <strong>queue time, time to first token (TTFT), tokens per second, 429 rate, retry count</strong> and per-stage latency.</p>
+<p><strong>Hosted APIs.</strong> Quotas are typically expressed as requests and tokens per minute. At peak, the app hits them and receives <strong>429</strong> errors; the SDK retries with exponential backoff, so users never see errors, only slowness. The provider's shared capacity may also be slower at global peak times. Options: request higher quota, buy <strong>provisioned throughput</strong> (reserved capacity, for example PTUs in Azure OpenAI or provisioned throughput in Bedrock and Vertex), <strong>spread load across deployments or regions</strong> via a gateway, and use <strong>priority tiers</strong> where offered.</p>
+<p><strong>Self-hosted models.</strong> Requests queue when concurrent load exceeds what the replicas can batch. TTFT climbs sharply once the KV cache is full. Autoscaling often reacts too late: provisioning a GPU node and loading a large model can take many minutes. It may also scale on <strong>CPU</strong>, which says nothing about GPU load. Use metrics like <strong>queue length, running requests or KV cache utilisation</strong> (vLLM exposes these), <strong>scheduled pre-scaling</strong> before business hours, and warm spare capacity.</p>
+<p><strong>Shared dependencies.</strong> Vector search, rerankers, embedding services, databases and the API layer may saturate too; per-stage traces reveal which.</p>
+<p><strong>Mixed workloads.</strong> Batch jobs sharing the same quota or GPUs steal capacity. Move them to batch APIs, separate deployments, or night time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Hourly dashboards: RPS, 429s, retries, queue time, TTFT, per-stage latency.</li>
+  <li>Identify the saturated component.</li>
+  <li>Hosted: raise quota, provisioned throughput, multi-deployment routing.</li>
+  <li>Self-hosted: scale on queue/KV metrics; pre-scale on schedule.</li>
+  <li>Separate batch from interactive traffic.</li>
+  <li>Load test at expected peak plus headroom.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># KEDA: pre-scale vLLM before office hours and scale on queue depth
+triggers:
+  - type: cron
+    metadata: { timezone: Europe/Berlin, start: &quot;0 8 * * 1-5&quot;, end: &quot;0 19 * * 1-5&quot;, desiredReplicas: &quot;4&quot; }
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus:9090
+      query: sum(vllm:num_requests_waiting)
+      threshold: &quot;5&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retries hiding 429s, so nobody notices the rate limit.</li>
+  <li>Autoscaling GPUs on CPU utilisation.</li>
+  <li>Batch jobs competing with interactive traffic.</li>
+  <li>No load test at real peak concurrency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Latency that tracks load means we're hitting a capacity limit. With a hosted API, peak traffic often hits rate limits, and the client silently retries 429s with backoff, which users experience as slowness. With self-hosted models, requests queue on too few replicas, and autoscaling is too slow because GPU nodes and model loading take minutes, or it scales on CPU. Shared pieces like vector search can saturate too. I'd check hourly metrics for queue time, TTFT, 429s and retries per stage, then add quota or provisioned throughput, balance across deployments, pre-scale before business hours, scale on queue depth, and move batch work off-peak.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Protect interactive users from batch?</strong> Separate deployments or quotas, priority queues, batch APIs.</li>
+  <li><strong>Provisioned throughput worth it?</strong> When steady peak load is high enough that reserved capacity beats pay-as-you-go plus throttling.</li>
+  <li><strong>Graceful degradation?</strong> Smaller model fallback at peak, shorter outputs, queue messages.</li>
+</ul>
+</article>
+</body>
+</html>

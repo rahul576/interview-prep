@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-075 · What is a good testing strategy for infrastructure code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-075" data-topic="Infrastructure as Code">
+<h1>What is a good testing strategy for infrastructure code?</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Test infrastructure code as a <strong>pyramid</strong>: <strong>fast static checks</strong> on every commit, <strong>unit tests with <code>terraform test</code> and mocks</strong>, <strong>policy and security checks on plans</strong>, <strong>integration tests in sandbox accounts</strong> for shared modules, and <strong>post-deploy smoke tests plus continuous compliance</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Infrastructure tests are expensive at the top (real resources cost money and take minutes) and cheap at the bottom, so you run many cheap checks often and few expensive ones selectively, exactly like application testing.</p>
+<p><strong>Static checks (seconds, every commit).</strong> <code>terraform fmt -check</code>, <code>terraform validate</code>, <strong>tflint</strong> (provider-aware rules such as invalid instance types), and security scanners like <strong>Checkov</strong> or <strong>Trivy</strong> (which absorbed tfsec) catch public buckets or missing encryption before anything runs. Pre-commit hooks make them local too.</p>
+<p><strong>Unit tests (seconds).</strong> <strong><code>terraform test</code></strong> (Terraform 1.6+) runs <code>.tftest.hcl</code> files with <code>command = plan</code> to assert on module logic: naming, conditional resources, computed values and variable validation. <strong>Mock providers</strong> (1.7+) let tests run without cloud credentials. These cover the logic most likely to break.</p>
+<p><strong>Policy checks (per plan).</strong> OPA/Conftest, Sentinel or Checkov evaluate the plan JSON against organisational rules: mandatory tags, allowed regions, no deletes of protected types. They run on every PR in live repositories.</p>
+<p><strong>Integration tests (minutes, selective).</strong> For shared modules, tests actually <strong>apply</strong> in an isolated sandbox account, using <code>terraform test</code> with <code>command = apply</code> or <strong>Terratest</strong> in Go, then check behaviour (can a pod reach the database, does the bucket deny public access) and destroy. They run on module releases, nightly or when relevant paths change, with cleanup jobs (for example aws-nuke on sandbox accounts) for leftovers.</p>
+<p><strong>After deployment.</strong> Smoke tests verify endpoints, DNS and connectivity; <strong>continuous compliance</strong> (AWS Config rules, Azure Policy) keeps checking reality, including changes made outside code.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pre-commit: fmt, validate, tflint, Checkov.</li>
+  <li>PR on module: <code>terraform test</code> unit tests with mocks.</li>
+  <li>PR on live repo: plan + policy checks.</li>
+  <li>Module release: integration tests in sandbox, then destroy.</li>
+  <li>Post-apply: smoke tests; continuous compliance alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># tests/naming.tftest.hcl
+mock_provider &quot;aws&quot; {}
+
+variables {
+  app = &quot;pay&quot;
+  env = &quot;prod&quot;
+}
+
+run &quot;bucket_name_follows_convention&quot; {
+  command = plan
+  assert {
+    condition     = aws_s3_bucket.this.bucket == &quot;acme-pay-prod-logs&quot;
+    error_message = &quot;Bucket name does not follow the naming convention.&quot;
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only running <code>validate</code> and calling it testing.</li>
+  <li>Integration tests on every commit, making CI slow and costly.</li>
+  <li>Tests that create resources in shared accounts and leak them.</li>
+  <li>No tests for the policies themselves.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I treat it as a pyramid. On every commit, fast static checks: fmt, validate, tflint and a security scanner like Checkov or Trivy. Then unit tests with terraform test, often with mock providers, checking module logic like naming, conditional resources and outputs without creating anything. Policy checks run against every plan. For shared modules, integration tests actually apply in isolated sandbox accounts, with terraform test or Terratest, verify the resources work, and destroy them. After deployments there are smoke tests, and AWS Config or Azure Policy keep checking continuously.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not run full integration tests on every change?</strong> They are slow and costly; run them on releases or relevant changes.</li>
+  <li><strong>How do you test policies?</strong> Unit tests for Rego or Sentinel with passing and failing sample plans.</li>
+  <li><strong>What do mocks miss?</strong> Real API behaviour, permissions, quotas and eventual consistency.</li>
+</ul>
+</article>
+</body>
+</html>

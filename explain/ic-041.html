@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-041 · How do you run Terraform safely in a CI/CD pipeline?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-041" data-topic="Infrastructure as Code">
+<h1>How do you run Terraform safely in a CI/CD pipeline?</h1>
+<p class="ex-meta">Infrastructure as Code · design · levels mid</p>
+
+<h2>In one line</h2>
+<p>Run Terraform through a <strong>pipeline</strong>: checks and <strong>plan on the pull request</strong> (posted for review), <strong>apply the saved plan</strong> after approval, <strong>OIDC short-lived credentials</strong> with <strong>least-privilege roles per environment</strong>, <strong>locking and serialised runs</strong>, and <strong>no local applies to production</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pull request stage.</strong> Every change goes through a PR. The pipeline runs <code>terraform fmt -check</code>, <code>validate</code>, <strong>tflint</strong> and a security scanner (Checkov or Trivy), then <code>terraform plan -out=tfplan</code> for each affected state. The rendered plan, and often a cost diff from <strong>Infracost</strong> and policy results (OPA/Conftest, Sentinel), are posted as a PR comment. Reviewers approve code <strong>and</strong> plan.</p>
+<p><strong>Apply stage.</strong> After approval and merge, the pipeline applies <strong>exactly the saved plan</strong> from the reviewed run (<code>terraform apply tfplan</code>), or re-plans on main and requires approval of that plan. Production uses a <strong>manual approval gate</strong>, such as a GitHub Environment with required reviewers or a GitLab protected environment. Saved plan files contain sensitive data, so they are stored as short-lived, access-restricted artifacts.</p>
+<p><strong>Credentials.</strong> No long-lived access keys. The CI system authenticates to the cloud through <strong>OIDC federation</strong> (GitHub Actions, GitLab, Azure DevOps to AWS IAM roles, Azure federated credentials, GCP Workload Identity Federation) and gets <strong>short-lived tokens</strong>. Each environment has its own role, trust-limited to the right repository, branch and environment, so a dev pipeline or a PR from a fork cannot touch production. Plan roles can be read-only; apply roles have write access.</p>
+<p><strong>Concurrency.</strong> The backend's <strong>state lock</strong> prevents simultaneous writes, and pipeline <strong>concurrency groups</strong> ensure only one apply per state at a time and runs happen in order. One pipeline owns each state. Nobody applies to production from a laptop; break-glass access exists but is audited.</p>
+<p><strong>Afterwards.</strong> Scheduled drift-detection plans, notifications, and run history for audit. Tools such as <strong>Atlantis</strong>, <strong>HCP Terraform</strong>, Spacelift or env0 package this workflow.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>PR opened → checks → plan → comment with plan, cost and policy results.</li>
+  <li>Review and approval.</li>
+  <li>Merge → apply saved plan (with approval gate for prod).</li>
+  <li>OIDC role per environment provides credentials.</li>
+  <li>Lock and concurrency controls serialise applies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">name: terraform-prod
+on:
+  push:
+    branches: [main]
+permissions:
+  id-token: write
+  contents: read
+concurrency: { group: tf-prod, cancel-in-progress: false }
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/tf-plan-prod
+          aws-region: eu-west-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -input=false &amp;&amp; terraform plan -input=false -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with: { name: tfplan, path: tfplan, retention-days: 1 }
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production        # required reviewers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/tf-apply-prod
+          aws-region: eu-west-1
+      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/download-artifact@v4
+        with: { name: tfplan }
+      - run: terraform init -input=false &amp;&amp; terraform apply -input=false tfplan</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long-lived cloud keys stored as CI secrets.</li>
+  <li>Re-running <code>apply</code> without a plan, applying something nobody reviewed.</li>
+  <li>One all-powerful role for every environment.</li>
+  <li>Parallel pipelines racing on the same state.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every change goes through a pull request. The pipeline runs fmt, validate, tflint and a security scanner, then plan, and posts the plan, often with an Infracost estimate, for reviewers. After approval and merge it applies exactly the saved plan, with a manual approval gate for production, so what was reviewed is what gets applied. Credentials come from OIDC federation as short-lived tokens, with a separate least-privilege role per environment, so there are no long-lived keys and dev pipelines can't touch prod. State locking and concurrency limits prevent parallel applies, and nobody applies to production from a laptop.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What should happen if the state changed between plan and apply?</strong> Terraform rejects the stale saved plan; re-plan and re-review.</li>
+  <li><strong>How do you handle PRs from forks?</strong> No cloud credentials for untrusted runs; plan only after maintainer approval.</li>
+  <li><strong>Plan role vs apply role?</strong> Read-only for plan, write for apply, limiting what an unreviewed run can do.</li>
+</ul>
+</article>
+</body>
+</html>

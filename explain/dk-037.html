@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-037 · How do you run a container as a non-root user?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-037" data-topic="Docker">
+<h1>How do you run a container as a non-root user?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Create a dedicated user</strong> in the Dockerfile, set <strong>ownership with <code>COPY --chown</code></strong>, switch with the <strong><code>USER</code></strong> instruction, listen on a <strong>port above 1024</strong>, and enforce it at runtime with <strong><code>--user</code></strong> or Kubernetes <strong><code>runAsNonRoot</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default the process in a container runs as <strong>root (UID 0)</strong>. Capabilities and seccomp limit what that root can do, but if an attacker exploits the application and then a kernel or runtime bug, root in the container may become root on the host. Running as an unprivileged user removes a whole class of escalation and limits damage to files the user owns.</p>
+<p>In the Dockerfile you <strong>create a system user and group</strong> (<code>adduser</code>/<code>useradd</code>, or <code>addgroup -S</code>/<code>adduser -S</code> on Alpine), copy application files owned by that user with <strong><code>COPY --chown=app:app</code></strong>, and add <strong><code>USER app</code></strong> (or a numeric <code>USER 10001:10001</code>) before <code>CMD</code>. Numeric IDs are better because Kubernetes can only verify <code>runAsNonRoot</code> for numeric UIDs. Many images already include a user: <code>node</code> in Node images, <code>nonroot</code> in distroless images, <code>nginx</code> in <code>nginxinc/nginx-unprivileged</code>.</p>
+<p>The application then has some constraints. Non-root processes cannot bind to <strong>ports below 1024</strong> without the <code>NET_BIND_SERVICE</code> capability, so use 8080 and map it. They can only write where they have permission, so create writable directories (<code>/tmp</code>, <code>/app/data</code>) owned by the user, or use volumes. <strong>Mounted volumes and bind mounts</strong> are a frequent problem: host files owned by another UID can be unreadable, so align UIDs, use <code>fsGroup</code> in Kubernetes, or fix ownership.</p>
+<p>At runtime, <code>docker run --user 1000:1000</code> overrides the user, and Kubernetes enforces it through the <strong>securityContext</strong>: <code>runAsNonRoot: true</code>, <code>runAsUser</code>, <code>allowPrivilegeEscalation: false</code> and <code>readOnlyRootFilesystem</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build stage compiles the application.</li>
+  <li>Runtime stage creates the user and group.</li>
+  <li>Files are copied with correct ownership.</li>
+  <li><code>USER</code> sets the default UID for CMD.</li>
+  <li>The orchestrator verifies non-root at admission or start.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jre
+RUN groupadd --system --gid 10001 app &amp;&amp; useradd --system --uid 10001 --gid app app
+WORKDIR /app
+COPY --chown=app:app target/app.jar app.jar
+USER 10001:10001
+EXPOSE 8080
+CMD [&quot;java&quot;, &quot;-jar&quot;, &quot;app.jar&quot;]</code></pre>
+<pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>RUN chown -R</code> on large directories in a separate layer, doubling image size.</li>
+  <li>Using a username in <code>USER</code> so Kubernetes cannot verify non-root.</li>
+  <li>Binding to port 80 and adding capabilities instead of using 8080.</li>
+  <li>Forgetting writable directories, causing permission errors at runtime.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default containers run as root, which makes a breakout much more dangerous. In the Dockerfile I create a dedicated user and group with a fixed numeric UID, copy the application with COPY --chown, and switch with USER before CMD; many official images already provide one, like node or nonroot. The app then listens on a port above 1024 and writes only to directories it owns or to volumes. At runtime I can force a user with --user, and in Kubernetes I enforce runAsNonRoot, disable privilege escalation and ideally use a read-only root filesystem.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Problems with mounted volumes?</strong> UID mismatch makes files unreadable or unwritable; align UIDs or use fsGroup.</li>
+  <li><strong>Why numeric UIDs?</strong> Kubernetes can verify runAsNonRoot only for numeric users.</li>
+  <li><strong>How do you bind port 80 as non-root?</strong> Map host 80 to container 8080, or grant NET_BIND_SERVICE.</li>
+</ul>
+</article>
+</body>
+</html>

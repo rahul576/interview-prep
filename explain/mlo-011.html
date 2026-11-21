@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-011 · How do you package a trained model for deployment, and why are pickle files risky?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-011" data-topic="MLOps">
+<h1>How do you package a trained model for deployment, and why are pickle files risky?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A deployable model is the <strong>weights plus preprocessing, input/output schema and pinned dependencies</strong>, usually packaged in a <strong>framework-native, ONNX or MLflow format inside a container image</strong>; <strong>pickle</strong> is risky because <strong>loading a pickle can execute arbitrary code</strong>, so prefer <strong>safetensors or ONNX</strong>, trusted signed sources and artefact scanning.</p>
+
+<h2>Detailed explanation</h2>
+<p>Weights alone are not a model you can deploy. The serving system also needs the <strong>preprocessing</strong> (tokeniser, encoders, scalers, vocabularies), the <strong>signature</strong> describing expected inputs and outputs, and the exact <strong>runtime dependencies</strong>. If preprocessing lives in a separate script that the serving team re-implements, you get training-serving skew. Bundling it, for example in a scikit-learn <code>Pipeline</code> or an MLflow pyfunc model, keeps them together.</p>
+<p>Common formats: <strong>framework-native</strong> files (PyTorch state dicts, TensorFlow SavedModel), <strong>pickle/joblib</strong> for scikit-learn, <strong>ONNX</strong> for a portable, framework-independent graph that runs fast in ONNX Runtime, and the <strong>MLflow Models</strong> format, which wraps a model with its flavour, signature and environment (conda or pip requirements). The package is then built into a <strong>container image</strong> with pinned versions and a serving layer (FastAPI, KServe runtime, Triton), so the same artefact runs identically in staging and production.</p>
+<p><strong>Pickle</strong> is not a data format but a small program for Python's unpickler; a crafted file can call <code>os.system</code> during <code>pickle.load</code>. A malicious model from a public hub, or a file swapped in a compromised bucket, can therefore take over the serving host or a data scientist's laptop. joblib and older <code>torch.load</code> behaviour inherit this risk (recent PyTorch defaults to <code>weights_only=True</code>, which helps but does not remove all risk). <strong>safetensors</strong> stores only tensors, with no code execution, and ONNX stores a graph. Controls: load only from a trusted registry, verify hashes and signatures, scan artefacts (tools such as ModelScan or hub-side scanners), and run serving with least privilege.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Train and bundle preprocessing with the model (pipeline or custom wrapper).</li>
+  <li>Save in a safe, appropriate format and record the input/output signature.</li>
+  <li>Generate a lock file of exact dependencies.</li>
+  <li>Build a container image with the serving layer; scan and sign it.</li>
+  <li>Register model and image in the registry with hashes.</li>
+  <li>Serving loads only signed artefacts from the registry.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from safetensors.torch import save_file, load_file
+import mlflow
+
+save_file(model.state_dict(), &quot;model.safetensors&quot;)       # tensors only, no code
+state = load_file(&quot;model.safetensors&quot;)                    # safe to load
+
+# MLflow bundles model, signature and environment
+mlflow.sklearn.log_model(pipeline, &quot;model&quot;,
+                         signature=mlflow.models.infer_signature(X_sample, pipeline.predict(X_sample)))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shipping weights without the exact tokeniser or scaler used in training.</li>
+  <li>Unpinned dependencies, so a new library version changes predictions.</li>
+  <li>Calling <code>pickle.load</code> on files downloaded from the internet.</li>
+  <li>Treating model files as data rather than as executable supply-chain artefacts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A deployable model is more than weights: it needs its preprocessing, an input and output signature and pinned dependencies. I package it in a framework-native, ONNX or MLflow format and build a container image with a serving layer, so it runs the same everywhere. Pickle is dangerous because unpickling can execute arbitrary code, so a malicious file from a hub or a tampered bucket can compromise the host. I prefer safetensors or ONNX for weights, load only from a trusted registry, verify hashes or signatures and scan artefacts in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a model hub download a supply chain risk?</strong> Files can contain executable payloads or backdoored weights, and names can be typosquatted.</li>
+  <li><strong>Is ONNX always better?</strong> It is portable and fast, but not every custom operation converts cleanly, so validate outputs after conversion.</li>
+  <li><strong>Should preprocessing live in the model?</strong> Yes where possible, so training and serving cannot diverge.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-333 · An application suddenly cannot connect to its database. Walk me through your investigation.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-333" data-topic="Troubleshooting">
+<h1>An application suddenly cannot connect to its database. Walk me through your investigation.</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Start from the <strong>exact error</strong> — <strong>timeout</strong> (network path), <strong>connection refused</strong> (nothing listening), <strong>authentication failed</strong> (credentials) — then check <strong>DNS</strong>, the <strong>network path and port</strong>, the <strong>database side</strong> (up, max connections, rotated password, failover) and the app's <strong>connection pool</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Cannot connect to the database&quot; covers very different problems, and the error message is the best map.</p>
+<ul>
+  <li>A <strong>timeout</strong> means packets are not getting a reply: a firewall, security group, NSG or NetworkPolicy dropping traffic, a routing change, or the database host being down.</li>
+  <li><strong>Connection refused</strong> means the host answered but nothing listens on that port: wrong port, the database process stopped, or the app is connecting to the wrong host.</li>
+  <li><strong>Authentication or authorisation errors</strong> mean the network is fine: wrong or <strong>rotated password</strong>, expired token, user locked, or TLS requirements changed.</li>
+  <li><strong>&quot;Too many connections&quot;</strong> or pool timeouts mean the database or the app's pool is exhausted.</li>
+</ul>
+<p><strong>DNS</strong> is a frequent hidden cause. After a <strong>failover</strong>, managed databases update a DNS name to point to the new primary; apps that cache DNS forever (the JVM can, depending on settings) keep connecting to the old address. Private endpoints add private DNS zones that may be misconfigured.</p>
+<p><strong>Network path.</strong> From the application host or pod, <code>nc -vz host 5432</code> tests reachability. Then review recent changes to security groups, firewall rules, private endpoints and Kubernetes NetworkPolicies.</p>
+<p><strong>Database side.</strong> Is the instance up and healthy, in maintenance or failing over? Is it at <code>max_connections</code>? Are there blocking locks? Was a password or certificate rotated?</p>
+<p><strong>Application side.</strong> A <strong>connection pool</strong> can be exhausted by leaked connections (not closed on error paths) or slow queries holding connections, giving errors even though the database is fine.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the exact error and timestamp.</li>
+  <li>Resolve the hostname from the app environment.</li>
+  <li>Test the port with <code>nc</code> or <code>openssl s_client</code>.</li>
+  <li>Review recent network and security changes.</li>
+  <li>Check database health, connections, locks and credential changes.</li>
+  <li>Check pool metrics: active, idle, waiting.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl exec -it deploy/orders -- sh
+nslookup orders-db.postgres.database.azure.com
+nc -vz orders-db.postgres.database.azure.com 5432</code></pre>
+<pre><code class="language-sql">SELECT count(*), state FROM pg_stat_activity GROUP BY state;
+SHOW max_connections;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Restarting the app without reading the error type.</li>
+  <li>Forgetting DNS caching after a failover.</li>
+  <li>Testing connectivity from a laptop instead of from the app's network.</li>
+  <li>Raising max_connections to hide a connection leak.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The exact error tells me where to look: a timeout usually means the network path, connection refused means nothing is listening on that host and port, and an authentication error means credentials. I check DNS first — does the hostname still resolve to the right address, especially after a failover. Then I test the path from the app host or pod with nc, and review security groups, firewall rules and NetworkPolicies for recent changes. On the database side I check it's up, not at max connections, and whether a password was rotated. Finally I look at the app's connection pool, which can be exhausted by leaks or slow queries.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do apps survive failover gracefully?</strong> Short DNS TTL caching, retries with backoff, pool validation and connecting via the cluster endpoint.</li>
+  <li><strong>How do you detect connection leaks?</strong> Pool metrics and leak detection settings such as HikariCP's leakDetectionThreshold.</li>
+  <li><strong>What about TLS errors?</strong> Check certificate trust, required SSL mode and CA rotation.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-071 · A gRPC service has five replicas, but almost all traffic goes to one pod. Why, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-071" data-topic="Kubernetes">
+<h1>A gRPC service has five replicas, but almost all traffic goes to one pod. Why, and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>gRPC uses <strong>long-lived HTTP/2 connections</strong> that multiplex many requests, and a ClusterIP Service balances at <strong>L4 per connection</strong>, so each client sticks to one pod; fix it with <strong>per-request L7 balancing</strong> (mesh or Envoy-based proxy), <strong>client-side load balancing via a headless Service</strong>, or <strong>max connection age</strong> on the server.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>kube-proxy</strong> (iptables, IPVS or nftables mode) and eBPF dataplanes pick a backend when a <strong>TCP connection</strong> is established, and every packet of that connection then goes to the same pod. For HTTP/1.1 with short connections this spreads load well. <strong>gRPC over HTTP/2</strong> opens one connection per client channel and sends thousands of concurrent requests over it. If you have three client pods, at most three server pods get traffic, and when the HPA adds replicas, existing connections never move, so the new pods sit idle.</p>
+<p>The fix is to balance <strong>requests</strong>, not connections, which requires something that understands HTTP/2.</p>
+<p><strong>Service mesh</strong> (Istio sidecar or waypoint, Linkerd) or an Envoy-based gateway terminates HTTP/2 and spreads individual requests across endpoints, transparently to the application. Linkerd does this out of the box; with Istio, L7 load balancing requires a sidecar or, in ambient mode, a waypoint proxy.</p>
+<p><strong>Client-side load balancing</strong>: point the gRPC client at a <strong>headless Service</strong> (<code>clusterIP: None</code>) using the <code>dns:///</code> resolver, so DNS returns all pod IPs, and enable the <code>round_robin</code> policy. The client keeps a connection to each pod. DNS re-resolution happens on connection failure or periodically, so new pods are picked up with some delay. <strong>xDS-based</strong> proxyless gRPC is a more advanced variant.</p>
+<p><strong>MaxConnectionAge</strong> on the server (gRPC keepalive setting) sends GOAWAY after, say, 5 minutes, forcing clients to reconnect and reshuffle; combined with a grace period, in-flight calls finish. This is a cheap mitigation that also works with L4 balancing.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm per-pod request rates are skewed while connection counts are few.</li>
+  <li>Choose: mesh/L7 proxy, client-side LB or connection ageing.</li>
+  <li>For client-side LB, create a headless Service and configure <code>round_robin</code>.</li>
+  <li>Set server <code>MaxConnectionAge</code> and grace.</li>
+  <li>Verify request distribution after scaling events.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: v1
+kind: Service
+metadata: { name: pricing-headless }
+spec:
+  clusterIP: None
+  selector: { app: pricing }
+  ports: [{ name: grpc, port: 50051 }]</code></pre>
+<pre><code class="language-go">conn, err := grpc.NewClient(
+    &quot;dns:///pricing-headless.shop.svc.cluster.local:50051&quot;,
+    grpc.WithDefaultServiceConfig(`{&quot;loadBalancingConfig&quot;:[{&quot;round_robin&quot;:{}}]}`),
+    grpc.WithTransportCredentials(creds))
+
+// server side
+grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{
+    MaxConnectionAge: 5 * time.Minute, MaxConnectionAgeGrace: 30 * time.Second}))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Scaling replicas and expecting load to spread.</li>
+  <li>Using an L4 cloud load balancer for gRPC ingress.</li>
+  <li>Headless Service without changing the client LB policy (pick_first is the default).</li>
+  <li>Very short connection ages causing reconnect storms.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;gRPC runs over HTTP/2, which multiplexes many requests over one long-lived connection. A ClusterIP Service is balanced by kube-proxy at layer 4, per connection, so each client sticks to one pod and new replicas get nothing. I fix it by balancing per request: a mesh like Linkerd or Istio, or an Envoy-based proxy, does it transparently. Alternatively the gRPC client does round robin across pod IPs from a headless Service. Setting a max connection age on the server forces periodic reconnects, which rebalances load after scaling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Does HTTP/1.1 keep-alive have the same problem?</strong> Partly; connections are reused but there are usually many, so skew is milder.</li>
+  <li><strong>Why does the default pick_first matter?</strong> It uses one address only, even with a headless Service.</li>
+  <li><strong>How does a mesh help canaries too?</strong> It can weight requests between versions.</li>
+</ul>
+</article>
+</body>
+</html>

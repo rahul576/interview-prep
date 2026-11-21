@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-055 · How do you upload and download large objects efficiently with S3, and what consistency does S3 provide?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-055" data-topic="Cloud (AWS)">
+<h1>How do you upload and download large objects efficiently with S3, and what consistency does S3 provide?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>multipart upload</strong> (parallel, retryable parts, required above 5 GB) and <strong>byte-range GETs</strong> for large objects, <strong>Transfer Acceleration</strong> for distant clients, spread load across <strong>prefixes</strong> for higher request rates, and rely on S3's <strong>strong read-after-write consistency</strong> for all operations since December 2020.</p>
+
+<h2>Detailed explanation</h2>
+<p>A single PUT can upload at most <strong>5 GB</strong>; objects up to <strong>50 TB</strong> need <strong>multipart upload</strong>: CreateMultipartUpload, then UploadPart for parts of 5 MiB to 5 GiB (up to 10,000 parts), uploaded in parallel and retried individually, then CompleteMultipartUpload. AWS recommends it from around 100 MB. The AWS CLI, SDK <strong>transfer managers</strong> and the <strong>AWS Common Runtime (CRT)</strong> clients do this automatically with tuned concurrency. Incomplete uploads keep their parts stored and billed, so add a <strong>lifecycle rule</strong> to abort them after a few days.</p>
+<p>For downloads, <strong>byte-range GETs</strong> request ranges in parallel and allow resuming failed transfers; CRT clients do this too. <strong>S3 Transfer Acceleration</strong> routes traffic over the CloudFront edge network and AWS backbone, which helps users far from the bucket's region; use its speed comparison tool to verify benefit. For very large one-off moves, <strong>DataSync</strong> or <strong>Snowball</strong> fit better.</p>
+<p><strong>Request rates</strong>: each <strong>prefix</strong> supports at least <strong>3,500 PUT/COPY/POST/DELETE</strong> and <strong>5,500 GET/HEAD</strong> requests per second, and S3 partitions automatically as load grows. Spread hot workloads across many prefixes; there is no limit on prefixes. Expect brief 503 Slow Down errors while S3 scales, so use retries with backoff. For latency-critical access, <strong>S3 Express One Zone</strong> offers single-digit millisecond reads.</p>
+<p><strong>Consistency</strong>: since December 2020, S3 provides <strong>strong read-after-write consistency</strong> for new objects, overwrites, deletes and <strong>LIST</strong> operations, at no cost. Concurrent writers to the same key still follow last-writer-wins, and <strong>conditional writes</strong> (If-None-Match, If-Match) prevent overwrites.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client splits a 20 GB file into 100 MB parts.</li>
+  <li>CreateMultipartUpload returns an upload ID.</li>
+  <li>Parts upload in parallel; failed parts retry alone.</li>
+  <li>CompleteMultipartUpload assembles the object atomically.</li>
+  <li>Readers immediately see the new object; downloads use parallel range GETs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws configure set default.s3.multipart_threshold 100MB
+aws configure set default.s3.multipart_chunksize 100MB
+aws configure set default.s3.max_concurrent_requests 20
+aws s3 cp big-backup.tar s3://backups/2026/11/big-backup.tar
+
+aws s3api get-object --bucket backups --key 2026/11/big-backup.tar \
+  --range bytes=0-104857599 part0.bin</code></pre>
+<pre><code class="language-json">{&quot;Rules&quot;:[{&quot;ID&quot;:&quot;abort-mpu&quot;,&quot;Status&quot;:&quot;Enabled&quot;,&quot;Filter&quot;:{},
+  &quot;AbortIncompleteMultipartUpload&quot;:{&quot;DaysAfterInitiation&quot;:7}}]}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Single-stream uploads of multi-gigabyte files over flaky networks.</li>
+  <li>No lifecycle rule, paying for orphaned multipart parts.</li>
+  <li>Sequential, date-only key prefixes hammered by one hot workload.</li>
+  <li>Assuming S3 is still eventually consistent and adding needless sleeps.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For big files I use multipart upload: parts upload in parallel and retry individually; it is required above 5 GB and recommended from about 100 MB, and the CLI and SDK transfer managers handle it. I add a lifecycle rule to abort incomplete uploads. Downloads use parallel byte-range GETs, and Transfer Acceleration helps distant clients. Each prefix handles at least 3,500 writes and 5,500 reads per second, so I spread keys across prefixes. Since December 2020 S3 has strong read-after-write consistency for PUTs, overwrites, deletes and listings.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why a lifecycle rule for incomplete multipart uploads?</strong> Orphaned parts are invisible in listings but billed indefinitely.</li>
+  <li><strong>How prevent two writers overwriting the same key?</strong> Use conditional writes with If-None-Match or If-Match.</li>
+  <li><strong>When use presigned URLs?</strong> To let clients upload or download directly without AWS credentials.</li>
+</ul>
+</article>
+</body>
+</html>

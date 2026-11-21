@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-081 · How do you deploy and scale agents on Kubernetes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-081" data-topic="AI Agents &amp; AIOps">
+<h1>How do you deploy and scale agents on Kubernetes?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Split into an <strong>API service</strong> and <strong>worker pools</strong>, decouple them with <strong>queues</strong>, keep <strong>all state in external stores</strong>, scale workers on <strong>queue depth with KEDA</strong>, run code execution in <strong>separate isolated sandbox pods</strong>, and handle <strong>graceful shutdown with checkpointing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Agent workloads differ from typical web requests: a run may take seconds or hours, spends most time <strong>waiting on model and tool calls</strong> (I/O-bound), and must survive pod restarts. The architecture reflects that.</p>
+<p>An <strong>API service</strong> accepts requests, authenticates users and streams responses for interactive use (SSE or WebSockets). Longer runs are placed on a <strong>queue</strong>, such as Kafka, RabbitMQ, SQS or Azure Service Bus, which buffers bursts and enables retries. <strong>Worker pools</strong> consume runs and execute the agent loop.</p>
+<p><strong>State lives outside pods</strong>: conversation history, checkpoints, memory and artefacts go to PostgreSQL, Redis or object storage. Any worker can then resume any run, pods can be replaced freely, and deployments do not lose work. <strong>Scaling</strong> uses <strong>KEDA</strong> on queue depth or active runs, because CPU is a poor signal for workers mostly waiting on network calls; concurrency per worker is often high with async code.</p>
+<p><strong>Code execution</strong> runs in separate <strong>sandbox pods</strong> or microVMs with strict NetworkPolicies, gVisor or Kata runtime classes and no service account tokens, never inside the worker. Workers handle <strong>SIGTERM</strong> gracefully: stop taking new runs, <strong>checkpoint</strong> the current step and release the message so another worker resumes; set <code>terminationGracePeriodSeconds</code> accordingly. Model and tool calls go through <strong>gateways</strong> with rate limits, timeouts, retries and per-tenant quotas, since provider rate limits are often the real bottleneck.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client calls API; short runs stream directly, long runs are enqueued.</li>
+  <li>Worker picks a run, loads state, executes steps.</li>
+  <li>Each step checkpoints to the state store.</li>
+  <li>Code execution requests go to sandbox pods.</li>
+  <li>KEDA scales workers by queue length.</li>
+  <li>On SIGTERM, worker checkpoints and requeues.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: agent-workers }
+spec:
+  scaleTargetRef: { name: agent-worker }
+  minReplicaCount: 2
+  maxReplicaCount: 60
+  triggers:
+    - type: rabbitmq
+      metadata:
+        queueName: agent-runs
+        mode: QueueLength
+        value: &quot;10&quot;          # target runs per worker
+---
+# worker Deployment excerpt
+terminationGracePeriodSeconds: 120</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Keeping run state in pod memory.</li>
+  <li>Scaling workers on CPU.</li>
+  <li>Executing generated code inside worker pods.</li>
+  <li>Ignoring model provider rate limits when scaling out.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I split it into an API service that accepts requests and streams responses, and worker pools that execute runs, with a queue in between to buffer bursts and allow retries. All state, conversations, checkpoints and memory, lives in external stores like Postgres, Redis or object storage, so any worker can resume a run. Workers scale on queue depth with KEDA, since CPU is a poor signal for I/O-bound agents. Code execution goes to separate isolated sandbox pods. Workers checkpoint on SIGTERM, and model and tool calls pass through gateways with rate limits and timeouts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Deploying with runs in flight?</strong> Graceful shutdown with checkpoints; version-pinned runs finish on old workers.</li>
+  <li><strong>Streaming with workers?</strong> Workers publish events to Redis or a pub/sub that the API relays.</li>
+  <li><strong>Multi-tenancy?</strong> Per-tenant queues or quotas and namespaces.</li>
+</ul>
+</article>
+</body>
+</html>

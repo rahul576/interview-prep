@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-073 · How do you run Docker containers securely on a production host?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-073" data-topic="Docker">
+<h1>How do you run Docker containers securely on a production host?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Secure production Docker hosts in layers: a <strong>minimal, patched host OS</strong> checked against the <strong>CIS Docker Benchmark</strong>, a <strong>locked-down daemon</strong> (no unauthenticated TCP, <strong>rootless or userns-remap</strong>, log limits, <strong>live-restore</strong>), <strong>hardened containers</strong> (non-root, read-only, dropped capabilities, seccomp, limits), <strong>only signed and scanned images</strong>, and <strong>centralised logs plus runtime detection</strong> such as Falco.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers share the host kernel, so the host is part of the security boundary. Start with a <strong>minimal OS</strong> (a container-optimised distribution or a stripped-down Linux), automatic patching, SSH restricted or replaced with SSM-style access, and a regular check against the <strong>CIS Docker Benchmark</strong> using <code>docker-bench-security</code>.</p>
+<p>The <strong>Docker daemon</strong> runs as root and controls everything, so access to it equals root on the host. Never expose its API over TCP without <strong>mutual TLS</strong>, restrict the <code>docker</code> group, and never mount <code>/var/run/docker.sock</code> into application containers. <strong>Rootless mode</strong> or <strong>user namespace remapping</strong> means root in a container maps to an unprivileged user on the host. Set default <strong>log rotation</strong>, <code>live-restore</code> so containers survive daemon restarts, and <code>no-new-privileges</code> as a default.</p>
+<p>Each <strong>container</strong> runs as a non-root user, with a read-only root filesystem, <code>--cap-drop ALL</code> plus only what is needed, the default <strong>seccomp</strong> and AppArmor/SELinux profiles, and <strong>memory, CPU and PID limits</strong> to contain abuse and fork bombs. Never use <code>--privileged</code> or host namespaces for apps.</p>
+<p><strong>Supply chain:</strong> deploy only images from the private registry that are <strong>scanned</strong> and <strong>signed</strong> (cosign), verified before running. <strong>Detection:</strong> ship host and container logs centrally, audit Docker API calls, and run <strong>Falco</strong> to alert on suspicious behaviour like shells spawning in containers or writes to <code>/etc</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build hosts from a hardened image; patch automatically.</li>
+  <li>Configure <code>daemon.json</code> (userns or rootless, logs, live-restore, no-new-privileges).</li>
+  <li>Run containers with a hardened default profile.</li>
+  <li>Admit only signed, scanned images.</li>
+  <li>Monitor with central logging, auditd and Falco; rescan regularly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;userns-remap&quot;: &quot;default&quot;,
+  &quot;live-restore&quot;: true,
+  &quot;no-new-privileges&quot;: true,
+  &quot;icc&quot;: false,
+  &quot;log-driver&quot;: &quot;json-file&quot;,
+  &quot;log-opts&quot;: { &quot;max-size&quot;: &quot;50m&quot;, &quot;max-file&quot;: &quot;3&quot; }
+}</code></pre>
+<pre><code class="language-bash">docker run -d --user 10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --pids-limit 200 \
+  --memory 512m --cpus 1 registry.example.com/api@sha256:3f1c...</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Exposing the daemon on port 2375 without TLS.</li>
+  <li>Mounting the Docker socket into CI or monitoring containers without understanding it is root access.</li>
+  <li>Hardening images but leaving the host unpatched.</li>
+  <li>No runtime monitoring, so a breach goes unnoticed.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I think of it in layers. The host is minimal, patched and checked against the CIS Docker benchmark with docker-bench-security. The daemon is never exposed over TCP without mutual TLS, uses rootless mode or user namespace remapping, and has log rotation and live-restore. Containers run as non-root with read-only filesystems, dropped capabilities, no-new-privileges, the default seccomp profile and resource limits, and never privileged or with the Docker socket. Only signed, scanned images from our private registry are allowed. Finally, logs are centralised and Falco watches for suspicious behaviour like a shell starting in a container.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What does the CIS Docker Benchmark check?</strong> Host config, daemon settings, file permissions, image and container runtime settings, and operations.</li>
+  <li><strong>Rootless vs userns-remap?</strong> Rootless runs the whole daemon unprivileged; userns-remap keeps a root daemon but maps container root to a high UID.</li>
+  <li><strong>Why is the Docker socket dangerous?</strong> Whoever can talk to it can start a privileged container mounting the host filesystem.</li>
+</ul>
+</article>
+</body>
+</html>

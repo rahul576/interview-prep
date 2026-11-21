@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-021 · What is the transactional outbox pattern, and why is it needed?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-021" data-topic="Data &amp; Storage Design">
+<h1>What is the transactional outbox pattern, and why is it needed?</h1>
+<p class="ex-meta">Data &amp; Storage Design · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>The outbox pattern writes the business change <strong>and</strong> the event into the <strong>same database transaction</strong>, then a relay (or CDC) publishes the event, which removes the <strong>dual-write problem</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>When a service saves an order and then publishes <code>OrderCreated</code> to Kafka, there are two systems and no shared transaction. If the DB commit succeeds but the publish fails (or the pod crashes in between), downstream services never hear about the order. If you publish first and the DB transaction then rolls back, they hear about an order that doesn't exist. Retrying doesn't fully fix it, because you can't atomically do both.</p>
+<p>The outbox solves it with one atomic write: insert the order <strong>and</strong> a row in an <code>outbox</code> table in one transaction. A separate <strong>relay</strong> reads unsent outbox rows and publishes them, marking them sent. With <strong>change data capture</strong> (Debezium reading the WAL/binlog), no polling is needed and ordering follows commit order.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>BEGIN; INSERT INTO orders …; INSERT INTO outbox(id, aggregate_id, type, payload) …; COMMIT;</code></li>
+  <li>Relay polls <code>outbox</code> (or Debezium streams it) and publishes to the broker, keyed by <code>aggregate_id</code> to preserve per-entity order.</li>
+  <li>Mark rows as published, or delete them after a retention period.</li>
+  <li>Consumers deduplicate by event <code>id</code> because delivery is <strong>at least once</strong>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE outbox (
+  id UUID PRIMARY KEY,
+  aggregate_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  published_at TIMESTAMPTZ
+);</code></pre>
+<p>Debezium's outbox event router can route rows to topics by <code>event_type</code> automatically.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Atomic?</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>DB write then publish</td><td>No</td><td>Lost or phantom events</td></tr>
+<tr><td>Outbox + polling relay</td><td>Yes</td><td>Simple, some latency</td></tr>
+<tr><td>Outbox + CDC</td><td>Yes</td><td>Low latency, more infra</td></tr>
+<tr><td>Event sourcing</td><td>Yes</td><td>Events are the source of truth</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Publishing inside the transaction (broker call can succeed and DB roll back).</li>
+  <li>Consumers that aren't idempotent.</li>
+  <li>Letting the outbox table grow forever.</li>
+  <li>Parallel relays that publish out of order for the same entity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Updating the database and publishing an event are two separate writes, so one can fail. With the transactional outbox, I write the event into an outbox table in the same transaction as the business data. A relay, ideally Debezium reading the transaction log, publishes it to Kafka. Delivery is at least once, so consumers deduplicate by event ID.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep per-entity order?</strong> Key messages by aggregate ID; one partition per key.</li>
+  <li><strong>Polling vs CDC?</strong> Polling is simpler; CDC has lower latency and load.</li>
+  <li><strong>What about the inbox pattern?</strong> Consumers store processed IDs in their own DB in the same transaction as their update.</li>
+</ul>
+</article>
+</body>
+</html>

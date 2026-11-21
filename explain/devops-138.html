@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-138 · Explain how TLS works and how you manage certificates in production.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-138" data-topic="Networking">
+<h1>Explain how TLS works and how you manage certificates in production.</h1>
+<p class="ex-meta">Networking · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In <strong>TLS</strong> the server proves its identity with a <strong>certificate chain</strong> to a trusted <strong>CA</strong>, both sides run an <strong>(EC)DHE key exchange</strong> to derive <strong>symmetric session keys</strong>, <strong>TLS 1.3</strong> does this in <strong>one round trip</strong>, <strong>mTLS</strong> adds client certificates, and production certificates are <strong>automated (ACME, cert-manager, cloud managers) with expiry monitoring</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Handshake (TLS 1.3):</strong></p>
+<ol>
+  <li><strong>ClientHello:</strong> supported versions, cipher suites, a key share for ECDHE (for example X25519, or a hybrid post-quantum group such as X25519MLKEM768 now offered by modern browsers), and <strong>SNI</strong> with the hostname.</li>
+  <li><strong>ServerHello:</strong> the server picks parameters, sends its key share; from here everything is encrypted. It sends its <strong>certificate</strong> and chain, a <strong>CertificateVerify</strong> signature proving it holds the private key, and Finished.</li>
+  <li>The client <strong>validates</strong> the chain up to a trusted root, the <strong>hostname</strong> against the SAN, the <strong>validity dates</strong>, and possibly revocation. It sends Finished and data flows, encrypted with AEAD ciphers such as AES-GCM or ChaCha20-Poly1305.</li>
+</ol>
+<p>Because keys come from <strong>ephemeral Diffie-Hellman</strong>, TLS 1.3 always provides <strong>forward secrecy</strong>: stealing the server's private key later doesn't decrypt past traffic. TLS 1.3 removed RSA key exchange, CBC modes and other weak options, and supports <strong>resumption</strong> and optional 0-RTT (replay-sensitive). TLS 1.2 is still acceptable when configured well; TLS 1.0/1.1 are deprecated.</p>
+<p><strong>Certificate chain:</strong> leaf certificate signed by an <strong>intermediate CA</strong>, signed by a <strong>root CA</strong> in the trust store. Servers must send the intermediates; a missing intermediate is a common cause of failures on some clients.</p>
+<p><strong>mTLS:</strong> the server also requests a client certificate and validates it, so both sides authenticate. Common for service-to-service traffic, usually automated by a <strong>service mesh</strong> (Istio, Linkerd) with short-lived certificates.</p>
+<p><strong>Certificate management in production:</strong> use <strong>ACME</strong> with <strong>Let's Encrypt</strong> or another CA; in Kubernetes, <strong>cert-manager</strong> issues and renews certificates into Secrets; in the cloud, <strong>AWS Certificate Manager</strong>, Azure Key Vault or Google Certificate Manager renew automatically for their load balancers. Certificate lifetimes are shrinking (the CA/Browser Forum has approved a phased reduction towards 47 days by 2029), so <strong>manual renewal is no longer viable</strong>. Monitor expiry with alerts (for example Prometheus blackbox exporter <code>probe_ssl_earliest_cert_expiry</code>), keep an inventory, and store private keys in secret managers or HSMs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client connects and sends ClientHello with SNI and key share.</li>
+  <li>Server returns key share, certificate chain and signature.</li>
+  <li>Client validates chain, hostname and dates.</li>
+  <li>Both derive session keys; encrypted data flows.</li>
+  <li>Automation renews certificates well before expiry.</li>
+  <li>Monitoring alerts on anything expiring soon.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: shop-tls, namespace: web }
+spec:
+  secretName: shop-tls
+  dnsNames: [shop.example.com, www.shop.example.com]
+  issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer }
+---
+# alert: certificates expiring within 21 days
+# expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 &lt; 21</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Manual renewals tracked in a spreadsheet.</li>
+  <li>Not serving the intermediate certificate.</li>
+  <li>Disabling certificate verification in clients &quot;temporarily&quot;.</li>
+  <li>Monitoring only public endpoints, not internal and mTLS certificates.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In the handshake the client sends supported options and a key share; the server answers with its key share, its certificate chain and a signature proving it owns the key. The client validates the chain to a trusted CA, the hostname and expiry, and both sides derive symmetric session keys with ECDHE, which gives forward secrecy. TLS 1.3 does this in one round trip and removes weak ciphers. mTLS adds client certificates so both sides authenticate, usually via a service mesh. In production I automate everything with ACME and cert-manager or the cloud certificate manager, and alert on expiry, because expired certificates are a classic outage.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find certificates expiring in 30 days?</strong> Blackbox exporter or a scanner across endpoints, cert-manager status, and cloud certificate inventories, alerting below 30 days.</li>
+  <li><strong>What is forward secrecy?</strong> Session keys come from ephemeral keys, so a later key compromise can't decrypt past sessions.</li>
+  <li><strong>What is SNI for?</strong> Lets one IP host many certificates by sending the hostname in ClientHello.</li>
+</ul>
+</article>
+</body>
+</html>

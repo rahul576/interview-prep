@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-106 · How do generics work in Java, and what is type erasure? Explain wildcards and PECS.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-106" data-topic="Core Java &amp; OOP">
+<h1>How do generics work in Java, and what is type erasure? Explain wildcards and PECS.</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Generics</strong> give <strong>compile-time type safety</strong> without casts; they are implemented by <strong>type erasure</strong>, so type arguments are <strong>removed at runtime</strong>. <strong>Wildcards</strong> (<code>? extends T</code>, <code>? super T</code>) make APIs flexible, following <strong>PECS: Producer Extends, Consumer Super</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Generics</strong> (Java 5) let classes and methods be parameterised by type: <code>List&lt;Order&gt;</code>, <code>Map&lt;String, Customer&gt;</code>, <code>&lt;T&gt; T first(List&lt;T&gt;)</code>. The compiler checks that only <code>Order</code>s go into a <code>List&lt;Order&gt;</code> and inserts casts automatically, so <code>ClassCastException</code>s are caught at compile time.</p>
+<p><strong>Type erasure</strong>: to stay compatible with pre-generics code, the compiler <strong>erases</strong> type parameters, replacing them with their <strong>bound</strong> (<code>Object</code>, or <code>Number</code> for <code>&lt;T extends Number&gt;</code>), inserting casts, and generating <strong>bridge methods</strong> where needed. At runtime <code>List&lt;String&gt;</code> and <code>List&lt;Integer&gt;</code> are both just <code>List</code>. Consequences:</p>
+<ul>
+  <li>No <code>new T()</code>, <code>new T[]</code>, or <code>instanceof List&lt;String&gt;</code> (only <code>instanceof List&lt;?&gt;</code>).</li>
+  <li>No primitive type arguments (<code>List&lt;int&gt;</code>), hence boxing.</li>
+  <li>You cannot overload <code>m(List&lt;String&gt;)</code> and <code>m(List&lt;Integer&gt;)</code>: same erasure.</li>
+  <li><strong>Raw types</strong> and unchecked casts can cause <strong>heap pollution</strong>.</li>
+</ul>
+<p>Workarounds: pass a <code>Class&lt;T&gt;</code> token, or &quot;super type tokens&quot; (as Jackson's <code>TypeReference</code> does). Some generic info survives in class metadata (field and method signatures, superclass declarations), which frameworks read via reflection.</p>
+<p><strong>Invariance and wildcards</strong>: <code>List&lt;Integer&gt;</code> is <strong>not</strong> a <code>List&lt;Number&gt;</code>, even though <code>Integer</code> is a <code>Number</code>; otherwise you could add a <code>Double</code> to a list of integers. Wildcards add controlled variance:</p>
+<ul>
+  <li><strong><code>List&lt;? extends Number&gt;</code></strong> (upper bound, covariant): you can <strong>read</strong> elements as <code>Number</code>, but cannot add anything except <code>null</code>, because the actual list might be <code>List&lt;Double&gt;</code>.</li>
+  <li><strong><code>List&lt;? super Integer&gt;</code></strong> (lower bound, contravariant): you can <strong>add</strong> <code>Integer</code>s, but reading gives only <code>Object</code>.</li>
+  <li><strong><code>List&lt;?&gt;</code></strong>: unknown type, read as <code>Object</code>.</li>
+</ul>
+<p><strong>PECS</strong> (from Effective Java): if a parameter <strong>produces</strong> values you read, use <code>extends</code>; if it <strong>consumes</strong> values you write, use <code>super</code>. <code>Collections.copy(List&lt;? super T&gt; dest, List&lt;? extends T&gt; src)</code> is the textbook example, and <code>Comparator&lt;? super T&gt;</code> is common in sorting APIs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>You declare <code>class Box&lt;T&gt;</code> or a generic method <code>&lt;T&gt;</code>.</li>
+  <li>The compiler type-checks all uses against the type arguments.</li>
+  <li>Erasure replaces <code>T</code> with its bound and inserts casts at use sites.</li>
+  <li>Wildcards relax invariance for method parameters (read with extends, write with super).</li>
+  <li>At runtime, objects carry no type-argument information.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">static double sum(Collection&lt;? extends Number&gt; nums) {      // producer: extends
+    double total = 0;
+    for (Number n : nums) total += n.doubleValue();
+    return total;
+}
+
+static void fillIds(List&lt;? super Integer&gt; out, int count) { // consumer: super
+    for (int i = 1; i &lt;= count; i++) out.add(i);
+}
+
+sum(List.of(1, 2, 3));            // List&lt;Integer&gt; OK
+sum(List.of(1.5, 2.5));           // List&lt;Double&gt; OK
+
+List&lt;Number&gt; numbers = new ArrayList&lt;&gt;();
+fillIds(numbers, 3);              // List&lt;Number&gt; accepts Integers
+List&lt;Object&gt; objects = new ArrayList&lt;&gt;();
+fillIds(objects, 3);              // also OK
+
+static &lt;T&gt; void copy(List&lt;? super T&gt; dest, List&lt;? extends T&gt; src) {
+    for (T item : src) dest.add(item);
+}
+
+List&lt;? extends Number&gt; ro = List.of(1, 2);
+// ro.add(3);                     // compile error: actual type unknown
+// if (ro instanceof List&lt;Integer&gt;) {}   // compile error: erased at runtime</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th><code>List&lt;T&gt;</code></th><th><code>List&lt;? extends T&gt;</code></th><th><code>List&lt;? super T&gt;</code></th></tr></thead>
+<tbody>
+<tr><td>Read as T</td><td>Yes</td><td>Yes</td><td>No (Object)</td></tr>
+<tr><td>Add T</td><td>Yes</td><td>No</td><td>Yes</td></tr>
+<tr><td>Role</td><td>Both</td><td>Producer</td><td>Consumer</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>List&lt;Integer&gt;</code> is a subtype of <code>List&lt;Number&gt;</code>.</li>
+  <li>Using raw types (<code>List</code>) and getting heap pollution.</li>
+  <li>Putting wildcards in return types, which burdens callers.</li>
+  <li>Trying to create generic arrays or call <code>new T()</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Generics give compile-time type safety and remove casts. They're implemented with type erasure: generic type information is removed at runtime and replaced by the bounds or Object, with casts inserted, which is why I can't do new T or instanceof List&lt;String&gt;. Generic types are invariant, so List&lt;Integer&gt; isn't a List&lt;Number&gt;; wildcards add flexibility. A List&lt;? extends Number&gt; can be read as Numbers but not added to, and a List&lt;? super Integer&gt; can accept Integers. The rule is PECS, producer extends, consumer super, as in Collections.copy, where the source extends T and the destination is super T.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can you not add an Integer to a List&lt;? extends Number&gt;?</strong> The actual list could be a List&lt;Double&gt;; the compiler cannot prove the add is safe, so it forbids it.</li>
+  <li><strong>How do frameworks like Jackson get generic types at runtime?</strong> Through type tokens such as TypeReference, which capture the generic superclass signature kept in class metadata.</li>
+  <li><strong>What is a bounded type parameter?</strong> <code>&lt;T extends Comparable&lt;? super T&gt;&gt;</code>, restricting T so you can call its methods.</li>
+</ul>
+</article>
+</body>
+</html>

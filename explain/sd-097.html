@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sd-097 · Design a distributed file system like HDFS or Google File System.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="sd-097" data-topic="Classic Design Problems">
+<h1>Design a distributed file system like HDFS or Google File System.</h1>
+<p class="ex-meta">Classic Design Problems · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A distributed file system like <strong>HDFS/GFS</strong> splits files into <strong>large blocks</strong> (64-128 MB), keeps the <strong>namespace and block map</strong> on a <strong>metadata server (NameNode)</strong>, stores <strong>3 replicas</strong> of each block on <strong>data nodes</strong> across racks, lets clients <strong>stream data directly</strong> to data nodes, and uses <strong>heartbeats</strong> to trigger <strong>re-replication</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>GFS (2003) and HDFS were designed for <strong>very large files</strong>, <strong>high sequential throughput</strong> and <strong>commodity hardware that fails constantly</strong>. They favour <strong>write-once, read-many</strong> (append) workloads such as logs and batch analytics, not low-latency random writes.</p>
+<p><strong>Large blocks</strong> keep metadata small (a 1 TB file is only about 8,000 blocks at 128 MB) and make reads long and sequential. The <strong>metadata server</strong> holds the directory tree, permissions and the block-to-node mapping <strong>in memory</strong> for speed, made durable with a <strong>write-ahead edit log</strong> and periodic <strong>checkpoints</strong> (fsimage). Block locations are not persisted; they are rebuilt from <strong>block reports</strong> sent by data nodes.</p>
+<p><strong>Data nodes</strong> store blocks as local files. Replication (default 3) uses <strong>rack awareness</strong>: e.g. one replica on the writer's rack and two on another rack, so losing a whole rack loses no data. Writes flow through a <strong>replication pipeline</strong>: client -&gt; DN1 -&gt; DN2 -&gt; DN3, with acknowledgements back, so the client sends data once.</p>
+<p>Because data never flows through the metadata server, it is not a bandwidth bottleneck; it is, however, a <strong>single point of failure and a memory limit</strong>. HDFS addresses this with <strong>HA NameNodes</strong> (active/standby sharing edits via a JournalNode quorum and ZooKeeper failover) and <strong>federation</strong> to split the namespace. Modern systems (Colossus, and object stores like S3) shard metadata across a distributed database.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client asks the NameNode to create a file; NameNode picks data nodes for the first block.</li>
+  <li>Client streams the block through the DN pipeline; each DN writes and forwards.</li>
+  <li>After all blocks are written, the NameNode records the file as complete.</li>
+  <li>To read, the client gets block locations and reads from the closest replica, verifying checksums.</li>
+  <li>DNs heartbeat every few seconds and send block reports.</li>
+  <li>If a DN misses heartbeats, the NameNode schedules copies of its blocks to restore the replication factor.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">hdfs dfs -put clickstream-2026-11-20.log /data/raw/
+hdfs fsck /data/raw/clickstream-2026-11-20.log -files -blocks -locations
+# Shows each 128 MB block and the 3 data nodes (on 2 racks) holding it
+hdfs dfs -setrep -w 2 /data/archive/old.log   # lower replication for cold data</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying the client sends data through the NameNode.</li>
+  <li>Ignoring the small-files problem: millions of tiny files exhaust NameNode memory.</li>
+  <li>Placing all three replicas on one rack.</li>
+  <li>Forgetting checksums to detect silent disk corruption.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;These systems target huge files and throughput. Files are split into 128 MB blocks. A metadata server, the NameNode, keeps the namespace and block locations in memory, with an edit log and checkpoints for durability. Data nodes store blocks, each replicated three times across racks. Clients get block locations from the NameNode, then read and write directly to data nodes, with writes going through a replication pipeline. Heartbeats and block reports detect failures and trigger re-replication. The NameNode is made highly available with a standby and a shared edit log, and federation splits the namespace for scale.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are small files a problem?</strong> Each file and block costs NameNode memory and adds per-file overhead; combine them into sequence files or larger Parquet files.</li>
+  <li><strong>How is consistency handled?</strong> Single writer per file with leases; data visible after close or hflush.</li>
+  <li><strong>Erasure coding?</strong> HDFS 3 supports it for cold data, cutting storage overhead from 200% to about 50%.</li>
+</ul>
+</article>
+</body>
+</html>

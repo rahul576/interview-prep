@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-046 · Terraform wants to destroy a subnet, but the destroy fails because something is still using it. How do you handle destroy ordering problems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-046" data-topic="Terraform">
+<h1>Terraform wants to destroy a subnet, but the destroy fails because something is still using it. How do you handle destroy ordering problems?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A destroy fails when <strong>something Terraform does not know about still uses the resource</strong>, such as NICs or load balancers created by Kubernetes, or when a <strong>dependency is missing from the graph</strong>; clean up <strong>external objects first</strong> and <strong>express ordering</strong> with references or <code>depends_on</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform destroys resources in <strong>reverse dependency order</strong>: dependents first, then the things they depend on. That works only if the graph is complete and Terraform owns everything attached. Two situations break it.</p>
+<p><strong>External objects.</strong> Kubernetes creates cloud resources on its own: a <code>Service</code> of type <code>LoadBalancer</code> creates a load balancer rule and frontend IP in the subnet, persistent volumes create disks, ingress controllers create application gateways or ALBs. Other teams may also have attached VMs, private endpoints or NICs. Terraform has never heard of them, so when it tries to delete the subnet, the cloud API refuses with &quot;InUseSubnetCannotBeDeleted&quot; or &quot;DependencyViolation&quot;. Deleting the cluster before its services also orphans those load balancers, which then block the subnet forever.</p>
+<p><strong>Missing graph edges.</strong> If the AKS cluster uses a route table attached to its subnet, but the code never references the association, Terraform may delete the route or NSG association while the cluster still needs it, or try to destroy them in parallel. Implicit references create edges; when the relationship is not visible in arguments, <code>depends_on</code> adds it.</p>
+<p>Investigation is straightforward: read the error message, which usually names the blocking resource ID, and look it up in the portal or CLI. Then decide whether it should be cleaned up first, imported into Terraform, or moved to a separate state that is destroyed earlier.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Destroy runs in reverse dependency order.</li>
+  <li>The API rejects deletion because an unknown object is attached.</li>
+  <li>Identify the blocker from the error and the cloud console.</li>
+  <li>Remove external objects first: Kubernetes services, Helm releases, PVCs.</li>
+  <li>Add references or <code>depends_on</code> so Terraform orders the rest correctly.</li>
+  <li>Re-run destroy and verify nothing remains.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Teardown script for an ephemeral environment
+kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer
+helm uninstall ingress-nginx -n ingress
+kubectl delete pvc --all -A
+terraform destroy -auto-approve</code></pre>
+<pre><code class="language-hcl">resource &quot;azurerm_kubernetes_cluster&quot; &quot;main&quot; {
+  # ...
+  depends_on = [azurerm_subnet_route_table_association.aks]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Destroying the cluster before Kubernetes-managed load balancers, leaving orphans.</li>
+  <li>Manually deleting random resources until destroy passes, without understanding why.</li>
+  <li>Overusing <code>depends_on</code> instead of real attribute references.</li>
+  <li>Mixing resources managed by Kubernetes or another team into the same subnet without documenting it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Destroy fails when something Terraform doesn't know about is still attached, typically network interfaces or load balancers that Kubernetes created for LoadBalancer services, or resources from another team. The other cause is a missing dependency in the graph, so Terraform deletes things in the wrong order. I read the error, which names the blocking object, and find it in the console. Then I clean up external objects first, such as deleting services or uninstalling Helm releases before destroying the cluster, and add references or depends_on so the order is correct next time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you make teardown reliable in automation?</strong> A pre-destroy step that removes Kubernetes-managed resources, then destroy, then a tag-based sweeper for leftovers.</li>
+  <li><strong>Why not import the Kubernetes load balancer?</strong> Kubernetes would keep changing it; ownership would conflict.</li>
+  <li><strong>What about deletion locks?</strong> Locks or <code>prevent_destroy</code> also block destroy and must be removed deliberately.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-036 · Design a highly available and scalable web application on AWS.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-036" data-topic="Cloud (AWS)">
+<h1>Design a highly available and scalable web application on AWS.</h1>
+<p class="ex-meta">Cloud (AWS) · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Build it <strong>multi-AZ at every layer</strong>: <strong>CloudFront + WAF + Route 53</strong> at the edge, an <strong>ALB</strong> in front of a <strong>stateless, auto-scaled</strong> app tier, <strong>Multi-AZ RDS/Aurora with read replicas</strong>, <strong>ElastiCache</strong> and <strong>SQS</strong> for decoupling, all in <strong>IaC</strong> with <strong>monitoring, backups and defined RPO/RTO</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>High availability on AWS starts with the assumption that <strong>an instance or a whole AZ will fail</strong>. So each tier runs in at least two, preferably three, availability zones, and no state lives on individual servers.</p>
+<p>At the <strong>edge</strong>, <strong>Route 53</strong> resolves the domain with health checks, <strong>CloudFront</strong> caches static assets and absorbs traffic spikes close to users, and <strong>AWS WAF</strong> filters common attacks and bots; Shield Standard covers network DDoS. An <strong>Application Load Balancer</strong> spans the AZs and routes to healthy targets only.</p>
+<p>The <strong>application tier</strong> is <strong>stateless</strong>: sessions in ElastiCache or DynamoDB, uploads in S3. It runs on ECS/Fargate, EKS or an EC2 Auto Scaling group, using <strong>target tracking</strong> on CPU or requests per target, with health checks so failed tasks are replaced automatically. Slow or bursty work (emails, image processing, exports) goes through <strong>SQS</strong> to workers that scale on queue depth, so a spike does not overload the web tier.</p>
+<p>The <strong>data tier</strong> is usually the hardest. <strong>RDS Multi-AZ</strong> keeps a synchronous standby and fails over automatically in about a minute or two; <strong>Aurora</strong> stores six copies of data across three AZs and fails over to a replica faster. <strong>Read replicas</strong> offload reads, and <strong>ElastiCache Redis</strong> caches hot data. Backups use automated snapshots with <strong>point-in-time recovery</strong>, copied to another region or account.</p>
+<p>Everything is defined in <strong>Terraform</strong>, deployed through a pipeline with rolling or blue/green deployments, and observed with CloudWatch metrics, logs, alarms and tracing. <strong>RPO/RTO</strong> targets drive how much DR you need.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User → Route 53 → CloudFront (+WAF) → static from S3, dynamic to ALB.</li>
+  <li>ALB → app tasks in three AZs, scaled by target tracking.</li>
+  <li>App → ElastiCache for cache/sessions → Aurora writer for writes, replicas for reads.</li>
+  <li>Async jobs → SQS → worker service.</li>
+  <li>CloudWatch alarms → on-call; backups → cross-region copies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_appautoscaling_policy&quot; &quot;api_cpu&quot; {
+  name               = &quot;api-cpu-60&quot;
+  policy_type        = &quot;TargetTrackingScaling&quot;
+  service_namespace  = &quot;ecs&quot;
+  resource_id        = &quot;service/prod/api&quot;
+  scalable_dimension = &quot;ecs:service:DesiredCount&quot;
+  target_tracking_scaling_policy_configuration {
+    target_value = 60
+    predefined_metric_specification {
+      predefined_metric_type = &quot;ECSServiceAverageCPUUtilization&quot;
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Multi-AZ app servers but a single-AZ database or a single NAT gateway.</li>
+  <li>Sticky sessions or local files that make instances non-disposable.</li>
+  <li>Auto scaling with a maximum too low, or minimum of one task.</li>
+  <li>Backups that are never restore-tested.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I design for AZ failure: everything spans at least three availability zones. Route 53 and CloudFront with WAF sit at the edge, then an ALB in front of a stateless app tier on ECS or EKS that auto-scales on CPU or request count. Sessions go to ElastiCache, files to S3, background work to SQS. The database is Aurora or RDS Multi-AZ with read replicas, plus point-in-time recovery and cross-region backup copies. It's all Terraform, monitored with CloudWatch alarms, and the DR level, from backup-and-restore to warm standby in another region, follows the agreed RPO and RTO.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if it must survive a region outage?</strong> Warm standby or active-active in a second region with Aurora Global Database or DynamoDB global tables and Route 53 failover.</li>
+  <li><strong>How do you deploy without downtime?</strong> Rolling or blue/green behind the ALB with health checks and connection draining.</li>
+  <li><strong>Where do sessions live?</strong> ElastiCache or stateless JWTs, never on the instance.</li>
+</ul>
+</article>
+</body>
+</html>

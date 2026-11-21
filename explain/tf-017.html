@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-017 · What does terraform plan -refresh-only do, and when do you use it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-017" data-topic="Terraform">
+<h1>What does terraform plan -refresh-only do, and when do you use it?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>terraform plan -refresh-only</code> reads real infrastructure and shows <strong>how state would change to match it</strong>, i.e. <strong>drift</strong>, <strong>without proposing changes to resources</strong>; <code>apply -refresh-only</code> <strong>accepts</strong> those updates into state after review, replacing the deprecated, unreviewed <code>terraform refresh</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Drift</strong> means real infrastructure no longer matches what Terraform last recorded: someone resized a database during an incident, an autoscaler changed a count, a tag was added by a policy, or a resource was deleted. A normal <code>terraform plan</code> detects drift during refresh but immediately proposes <strong>changes to the real infrastructure</strong> to make it match the code again, which may revert a deliberate fix.</p>
+<p><strong>Refresh-only mode</strong> answers a different question: &quot;what has changed outside Terraform?&quot;. <code>terraform plan -refresh-only</code> refreshes every resource and reports the differences as <strong>&quot;Objects have changed outside of Terraform&quot;</strong>, without planning any create, update or destroy actions. <code>terraform apply -refresh-only</code> shows the same and, after your approval, <strong>writes the refreshed values into state</strong>. Real resources are never modified.</p>
+<p>It replaced <code>terraform refresh</code>, which updated state <strong>silently</strong>, with no review. That was dangerous: if credentials pointed at the wrong account or region, refresh would conclude every resource was gone and drop them all from state. <code>terraform refresh</code> still exists as an alias for <code>apply -refresh-only -auto-approve</code> but is deprecated.</p>
+<p>Typical use: someone made an <strong>intentional out-of-band change</strong>, such as increasing a database instance class during an incident. You run refresh-only to see it and accept it into state, then <strong>update the code to match</strong>; otherwise the next normal apply reverts it. If the drift was a mistake, skip refresh-only and let a normal apply restore the desired configuration. Scheduled refresh-only plans in CI, or <strong>HCP Terraform drift detection</strong>, report drift continuously.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform reads each resource in state via the provider.</li>
+  <li>It compares refreshed values with stored state.</li>
+  <li>Differences are shown as changes outside Terraform.</li>
+  <li>No resource actions are planned.</li>
+  <li>On apply, only state is updated.</li>
+  <li>You then align code with reality, or revert with a normal apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform plan -refresh-only
+#   ~ resource &quot;aws_db_instance&quot; &quot;orders&quot; {
+#       ~ instance_class = &quot;db.r6g.large&quot; -&gt; &quot;db.r6g.xlarge&quot;
+#     }
+# This is a refresh-only plan, so Terraform will not take any actions to undo these.
+
+terraform apply -refresh-only      # review, type yes
+# then change instance_class in code to &quot;db.r6g.xlarge&quot; and open a PR</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accepting refresh-only changes without reading them.</li>
+  <li>Forgetting to update the code afterwards, so the next apply reverts the fix.</li>
+  <li>Running refresh with the wrong credentials and losing resources from state.</li>
+  <li>Using refresh-only to &quot;fix&quot; a plan instead of understanding the drift.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;<code>terraform plan -refresh-only</code> reads the real infrastructure and shows how the state would change to match it, without proposing any changes to the resources, so it's essentially a drift report. <code>terraform apply -refresh-only</code> writes those changes into state after I approve them. It replaced <code>terraform refresh</code>, which updated state silently and is deprecated. I use it when someone made an intentional out-of-band change, like resizing a database in an incident, to record reality in state. Afterwards I update the code to match, otherwise the next normal apply reverts it; if the drift was a mistake, a normal apply puts things back.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risks of accepting without reading?</strong> A resource deleted by mistake or wrong credentials could drop resources from state.</li>
+  <li><strong>How do you detect drift regularly?</strong> Scheduled refresh-only plans with <code>-detailed-exitcode</code>, or HCP Terraform drift detection.</li>
+  <li><strong>What does <code>-refresh=false</code> do?</strong> Skips refresh entirely, the opposite trade-off.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-057 · How do you keep container images up to date with security patches?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-057" data-topic="Docker">
+<h1>How do you keep container images up to date with security patches?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Never patch running containers; <strong>rebuild and redeploy</strong>: let <strong>Renovate/Dependabot</strong> bump base images, <strong>rebuild on a schedule</strong>, <strong>continuously rescan</strong> images in the registry for new CVEs, <strong>automatically test and redeploy</strong>, and <strong>track which image versions run where and how old they are</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Containers are <strong>immutable</strong>. Running <code>apt-get upgrade</code> inside a running container changes only its writable layer: the fix disappears on the next restart, other replicas stay vulnerable, and the image in the registry still contains the old packages. Patching means producing a <strong>new image</strong> and rolling it out.</p>
+<p>Vulnerabilities enter images through the <strong>base OS packages</strong>, the <strong>language runtime</strong> and the <strong>application dependencies</strong>, and new CVEs are published every day against images that were clean when built. So patching has two triggers. First, <strong>upstream updates</strong>: <strong>Renovate</strong> or <strong>Dependabot</strong> watch <code>FROM</code> lines (tags and pinned digests) and dependency lock files and open pull requests when new versions appear, which then run through the normal CI tests. Second, <strong>time</strong>: a <strong>scheduled rebuild</strong> (for example weekly) rebuilds images even without code changes so they pick up refreshed base images, using <code>--pull</code> and a fresh cache for the package layer.</p>
+<p><strong>Continuous scanning</strong> catches what is already deployed. Registries (ECR enhanced scanning, ACR with Defender, Harbor with Trivy, Docker Scout) or a scheduled Trivy job rescan stored images and alert on new <strong>critical</strong> findings, ideally filtered by whether a fix is available and whether the image is actually running. The <strong>pipeline</strong> then tests and <strong>redeploys automatically</strong>, with a progressive rollout so a bad base update is caught early.</p>
+<p>Finally, keep an <strong>inventory</strong>: which image digest runs in which cluster, from which commit, and how old it is. Alert on images older than a policy (say 30 days) and use <strong>SBOMs</strong> to answer &quot;are we affected by this CVE?&quot; within minutes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Bots open PRs for new base images and dependencies.</li>
+  <li>CI builds, tests and scans the new image.</li>
+  <li>A schedule rebuilds unchanged services regularly.</li>
+  <li>Registry scanning re-evaluates stored images daily.</li>
+  <li>CD deploys patched images progressively and records versions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;extends&quot;: [&quot;config:recommended&quot;, &quot;docker:pinDigests&quot;],
+  &quot;packageRules&quot;: [
+    { &quot;matchDatasources&quot;: [&quot;docker&quot;], &quot;matchUpdateTypes&quot;: [&quot;patch&quot;, &quot;digest&quot;], &quot;automerge&quot;: true }
+  ]
+}</code></pre>
+<pre><code class="language-yaml"># GitHub Actions: weekly rebuild
+on:
+  schedule: [{ cron: &quot;0 3 * * 1&quot; }]
+jobs:
+  rebuild:
+    steps:
+      - run: docker buildx build --pull --no-cache-filter runtime -t ghcr.io/acme/api:${{ github.sha }} --push .
+      - run: trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed ghcr.io/acme/api:${{ github.sha }}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Patching inside running containers.</li>
+  <li>Scanning only at build time.</li>
+  <li>Automerging major base image upgrades without tests.</li>
+  <li>No inventory, so nobody knows which services run the vulnerable version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Containers are immutable, so I never apt upgrade inside a running container; I rebuild the image and redeploy. Renovate or Dependabot open PRs when a new base image version or digest is published, and a scheduled pipeline rebuilds images weekly even without code changes so they get patched OS packages. The registry or Trivy continuously rescans stored images because new CVEs appear in old images, and alerts on critical ones. The pipeline tests and redeploys automatically with a progressive rollout. I also keep an inventory of which image versions run where and alert when an image is too old.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid breaking apps on automatic base updates?</strong> Pin majors, automerge only patch/digest updates after tests, canary deployments.</li>
+  <li><strong>How do you prioritise CVEs?</strong> Severity, fix availability, exploitability, and whether the package is actually used at runtime.</li>
+  <li><strong>What helps answer &quot;are we affected&quot;?</strong> SBOMs stored per image.</li>
+</ul>
+</article>
+</body>
+</html>

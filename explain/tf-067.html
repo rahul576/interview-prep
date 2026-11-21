@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-067 · terraform plan shows that resources you never touched will be destroyed. How do you investigate before anyone applies?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-067" data-topic="Terraform">
+<h1>terraform plan shows that resources you never touched will be destroyed. How do you investigate before anyone applies?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Never apply a plan with <strong>unexpected destroys</strong>: first check you are on the <strong>right workspace, backend key and variable file</strong>, then inspect <strong>git history</strong> for removed code or bad merges, <strong>changed for_each/count keys</strong>, and <strong>module or provider version changes</strong>, then fix with restored code, <strong><code>moved</code> blocks</strong> or corrected inputs.</p>
+
+<h2>Detailed explanation</h2>
+<p>An unexpected destroy is one of the most dangerous moments in Terraform work. The plan is telling you that the configuration no longer contains objects the state knows about, or that their addresses changed. Investigate systematically, from the cheapest explanation to the hardest.</p>
+<p><strong>Wrong target.</strong> The most common cause: the wrong <strong>workspace</strong>, <strong>backend key</strong> or <strong>tfvars</strong> file. Prod variables against the dev state (or the reverse) make Terraform want to replace or delete large parts of the environment. Check the backend configuration printed by init, <code>terraform workspace show</code> and the var files in the command.</p>
+<p><strong>Code removed.</strong> Someone deleted a resource or module block, intentionally without realising the consequence, or through a <strong>bad merge</strong> or rebase. <code>git log -p</code> and the branch diff against main reveal it.</p>
+<p><strong>Address changes.</strong> A renamed resource label, a changed <code>for_each</code> key (for example renaming a map key from <code>web</code> to <code>frontend</code>), or an item removed from the middle of a <code>count</code> list all change addresses. Terraform sees &quot;old address destroyed, new address created&quot;.</p>
+<p><strong>Version changes.</strong> A <strong>module version bump</strong> may have renamed internal resources or switched from count to for_each; a <strong>provider upgrade</strong> may introduce force-new attributes. The module changelog should mention required <code>moved</code> blocks.</p>
+<p>Once found: restore the code, add <code>moved</code> blocks for renames, correct the inputs, or, if the removal is intentional but the object must survive, use a <code>removed</code> block with <code>destroy = false</code>. Re-plan until only intended changes remain.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stop: no apply, notify reviewers.</li>
+  <li>Verify workspace, backend key, var files and credentials.</li>
+  <li>Diff the branch and recent merges for deleted blocks.</li>
+  <li>Compare addresses: look for key or index changes.</li>
+  <li>Check module and provider version changes.</li>
+  <li>Fix and re-plan until destroys are gone or intentional.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform workspace show
+grep -A5 'backend' .terraform/terraform.tfstate | head
+git diff origin/main...HEAD --stat
+git log -p -S 'azurerm_storage_account' -- '*.tf'
+terraform show -json tfplan | jq -r '.resource_changes[] | select(.change.actions|index(&quot;delete&quot;)) | .address'</code></pre>
+<pre><code class="language-hcl">moved {
+  from = module.app.azurerm_linux_web_app.this[&quot;web&quot;]
+  to   = module.app.azurerm_linux_web_app.this[&quot;frontend&quot;]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming the plan is wrong and applying anyway.</li>
+  <li>Fixing symptoms with <code>state rm</code> instead of finding the cause.</li>
+  <li>Running local plans with leftover <code>.terraform</code> pointing at another backend.</li>
+  <li>Upgrading modules without reading their changelog.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I never approve unexpected destroys. First I check we're pointing at the right state: workspace, backend key and variable file, because prod variables against a dev state produce exactly this. Then git history and the branch diff: someone may have removed a resource or module, maybe through a bad merge. Then key changes: a renamed for_each key or an item removed from a count list destroys and recreates. A module or provider upgrade can also rename resources. Once I know the cause I restore the code, add moved blocks or fix inputs, and re-plan until only intended changes remain.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can CI flag destroys automatically?</strong> Parse the JSON plan and require extra approval or fail on deletes of protected types.</li>
+  <li><strong>What protects critical resources?</strong> <code>prevent_destroy</code>, cloud deletion locks and policy checks.</li>
+  <li><strong>Why prefer for_each keys?</strong> Stable names instead of positions.</li>
+</ul>
+</article>
+</body>
+</html>

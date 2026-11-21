@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-070 · for_each fails with an error saying the value cannot be a set of objects or contains sensitive values. How do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-070" data-topic="Terraform">
+<h1>for_each fails with an error saying the value cannot be a set of objects or contains sensitive values. How do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>for_each</code> accepts only a map or a set of strings</strong>, so convert a set or list of objects into a <strong>map keyed by a unique attribute</strong>; it also rejects <strong>sensitive values</strong> because keys appear in <strong>resource addresses and logs</strong>, so restructure input to keep <strong>secrets in values, not keys</strong>, or use <strong><code>nonsensitive</code></strong> on keys that are not actually secret.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every instance created by <code>for_each</code> gets an address such as <code>azuread_user.this[&quot;alice&quot;]</code>. Terraform needs a <strong>string key</strong> per instance, known at plan time. A <strong>list or set of objects</strong> has no natural key, so Terraform refuses with an error like &quot;the for_each argument must be a map, or set of strings, and you have provided a value of type set of object&quot;.</p>
+<p>The fix is a <strong>for expression</strong> that builds a map using a unique attribute: <code>{ for u in var.users : u.name =&gt; u }</code>. Choose a stable, unique attribute (name, email, logical ID), not a list index, so additions and removals affect only that item. A plain list of strings can be converted with <code>toset()</code>.</p>
+<p>The second error is about <strong>sensitivity</strong>. If the collection is marked sensitive, for example it came from a <code>sensitive = true</code> variable, a secret data source, or was built from a sensitive value, Terraform says sensitive values cannot be used as for_each arguments. Keys become part of <strong>resource addresses</strong>, which are printed in plan output, logs, state and UI, and cannot be redacted. Allowing them would leak secrets.</p>
+<p>Solutions: <strong>restructure</strong> the input so keys are non-secret names and secret material lives only in the values, for example a map from user name to an object containing the password. Values of a non-sensitive map can still be sensitive and remain redacted. If the keys are genuinely not secret, and the sensitivity only propagated from a wider object, wrap the keys with <strong><code>nonsensitive()</code></strong>, but only after confirming that, since it removes protection deliberately.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform evaluates the for_each expression.</li>
+  <li>It rejects non-map, non-string-set types.</li>
+  <li>It rejects values marked sensitive.</li>
+  <li>Convert objects to a map keyed by a stable attribute.</li>
+  <li>Separate secret values from keys, or apply <code>nonsensitive</code> to safe keys.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;app_secrets&quot; {
+  type      = map(string)    # name =&gt; secret value
+  sensitive = true
+}
+
+resource &quot;azurerm_key_vault_secret&quot; &quot;this&quot; {
+  # keys (secret names) are not secret; values stay sensitive
+  for_each     = toset(nonsensitive(keys(var.app_secrets)))
+  name         = each.key
+  value        = var.app_secrets[each.key]
+  key_vault_id = azurerm_key_vault.kv.id
+}
+
+resource &quot;azuread_user&quot; &quot;this&quot; {
+  for_each            = { for u in var.users : u.upn =&gt; u }
+  user_principal_name = each.key
+  display_name        = each.value.display_name
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>nonsensitive</code> on the whole map, exposing secret values.</li>
+  <li>Keying by list index, causing churn when lists change.</li>
+  <li>Using secret values such as tokens as keys.</li>
+  <li>Building keys from attributes unknown until apply.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;for_each only accepts a map or a set of strings, because each instance needs a string key for its address. So a list or set of objects fails, and I convert it with a for expression keyed by a unique attribute, like name. The sensitive error happens when the collection is marked sensitive, since keys show up in addresses and logs. I restructure the input so keys are non-secret names and secrets are only in the values, or if the keys genuinely aren't secret, wrap them with nonsensitive. Secrets should never become part of resource addresses.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why would secret keys leak even with sensitive outputs?</strong> Addresses appear in plans, logs, state and run UIs unredacted.</li>
+  <li><strong>Can values be sensitive?</strong> Yes, values remain redacted when keys are not.</li>
+  <li><strong>What about unknown keys?</strong> Keys must be known at plan time; derive them from inputs.</li>
+</ul>
+</article>
+</body>
+</html>

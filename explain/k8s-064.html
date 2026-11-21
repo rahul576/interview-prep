@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-064 · Deployments start failing with toomanyrequests errors when pulling public images. What is happening and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-064" data-topic="Kubernetes">
+<h1>Deployments start failing with toomanyrequests errors when pulling public images. What is happening and how do you fix it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>toomanyrequests</strong> is the <strong>Docker Hub pull rate limit</strong>; nodes behind one <strong>NAT IP</strong> share the anonymous quota and exhaust it during scale-ups. Short-term, <strong>authenticate pulls</strong> and use <strong>IfNotPresent</strong>; properly, use a <strong>pull-through cache</strong> or <strong>mirror approved images into a private registry</strong> referenced by <strong>digest</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker Hub limits pulls for <strong>unauthenticated</strong> clients per source IP, and for free accounts per user, over a time window; paid plans have much higher limits. The exact numbers have changed over time, so check Docker's current policy rather than relying on memory. In a cluster, private nodes reach the internet through a <strong>NAT gateway</strong>, so dozens or hundreds of nodes appear as <strong>one IP</strong>. A normal day may stay under the limit, but a node pool scale-up, a cluster upgrade replacing all nodes, or a CI burst pulls the same images many times at once and hits it. Pods then fail with <code>ErrImagePull</code> / <code>ImagePullBackOff</code> and the message <code>toomanyrequests</code>.</p>
+<p>Short-term fixes: <strong>authenticate</strong> to Docker Hub with an organisation account via <code>imagePullSecrets</code> (or node-level credentials), and make sure <code>imagePullPolicy</code> is <strong>IfNotPresent</strong> with immutable tags so nodes reuse cached images. Note that using <code>:latest</code> implies <code>Always</code>.</p>
+<p>The real fix is to <strong>stop depending on Docker Hub at runtime</strong>. A <strong>pull-through cache</strong> (ECR pull-through cache rules, ACR cache rules, Artifact Registry remote repositories, Harbor proxy cache) fetches once and serves all nodes. Better still, <strong>copy approved base and third-party images into your private registry</strong> as part of a controlled process: scan them, sign them, version them, and reference them by <strong>digest</strong>. This also protects against upstream images being changed, deleted or compromised. Containerd can be configured with registry <strong>mirrors</strong> for docker.io so existing manifests still work.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm the error text in pod events.</li>
+  <li>Add authenticated pulls to stop the immediate failures.</li>
+  <li>Check <code>imagePullPolicy</code> and avoid <code>latest</code>.</li>
+  <li>Create a pull-through cache or mirror in your cloud registry.</li>
+  <li>Rewrite image references (or configure containerd mirrors).</li>
+  <li>Add a policy that only allows approved registries.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># ECR pull-through cache for Docker Hub
+aws ecr create-pull-through-cache-rule --ecr-repository-prefix dockerhub \
+  --upstream-registry-url registry-1.docker.io \
+  --credential-arn arn:aws:secretsmanager:eu-west-1:111122223333:secret:ecr-pullthroughcache/dockerhub
+
+# image reference becomes
+# 111122223333.dkr.ecr.eu-west-1.amazonaws.com/dockerhub/library/nginx@sha256:...</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>:latest</code> everywhere, forcing pulls on every start.</li>
+  <li>Fixing only CI, not cluster nodes.</li>
+  <li>Relying on public images that can change underneath you.</li>
+  <li>Forgetting init containers and sidecars that also pull from Docker Hub.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;toomanyrequests is Docker Hub's rate limit. In a cluster all nodes usually leave through one NAT gateway, so they share one IP and hit the anonymous limit fast, especially when many new nodes pull at once. Short-term I authenticate pulls with an organisation account and use IfNotPresent with immutable tags. The proper fix is not depending on Docker Hub at runtime: a pull-through cache in ECR, ACR or Harbor, or better, copying approved images into our private registry where they're scanned, signed and referenced by digest. That also protects us if an upstream image changes or disappears.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is <code>latest</code> risky beyond rate limits?</strong> Different nodes may run different code, rollbacks are impossible, and changes arrive unreviewed.</li>
+  <li><strong>Pull-through cache vs mirroring?</strong> Cache is automatic and lazy; mirroring is controlled and lets you scan and approve first.</li>
+  <li><strong>How do you enforce approved registries?</strong> An admission policy (Kyverno, Gatekeeper) rejecting other registries.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-093 · How do you manage Entra ID applications, service principals and their secrets with Terraform safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-093" data-topic="Terraform">
+<h1>How do you manage Entra ID applications, service principals and their secrets with Terraform safely?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use the <strong>azuread provider</strong> for app registrations, service principals, groups and role assignments, run it with a <strong>tightly controlled identity with Graph permissions</strong>, prefer <strong>federated identity credentials</strong> over secrets, and when secrets are unavoidable <strong>rotate them with overlap</strong> and store them in <strong>Key Vault</strong>, remembering they land in <strong>state</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <code>azuread</code> provider manages Microsoft Entra ID objects: <code>azuread_application</code>, <code>azuread_service_principal</code>, groups and memberships, app roles and <code>azuread_app_role_assignment</code>. Because these objects live in the directory, not in a subscription, Azure RBAC roles like Owner do not help; the Terraform identity needs <strong>Microsoft Graph application permissions</strong> such as <code>Application.ReadWrite.OwnedBy</code> (only apps it owns) or a directory role like <strong>Application Administrator</strong>. These are powerful — an identity that can add credentials to apps can impersonate them — so that pipeline needs strict approvals, a separate state and limited people.</p>
+<p>The best secret is no secret. <strong>Federated identity credentials</strong> (<code>azuread_application_federated_identity_credential</code>) let GitHub Actions, Azure DevOps, Kubernetes workload identity or another cloud exchange their own OIDC token for an Entra token, with no client secret to leak or rotate. Managed identities do the same for Azure-hosted workloads.</p>
+<p>When a client secret is unavoidable (for example a third-party SaaS integration), create it with <code>azuread_application_password</code> and drive rotation with a <code>time_rotating</code> resource. Its ID goes in <code>rotate_when_changed</code>, so Terraform creates a new password when the period passes. To avoid outages, keep <strong>two overlapping passwords</strong> — create the new one before the old expires — and write the value to <strong>Key Vault</strong> where consumers read it. Since the secret value is stored in <strong>state</strong>, the backend must be encrypted and access-restricted.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A dedicated pipeline identity with scoped Graph permissions runs the identity state.</li>
+  <li>Terraform creates the application, service principal and owners.</li>
+  <li>For CI/CD or workloads, add federated credentials matching the issuer and subject.</li>
+  <li>For unavoidable secrets, create passwords with an end date and <code>time_rotating</code>.</li>
+  <li>Store the secret in Key Vault; consumers read the latest version.</li>
+  <li>Remove old passwords after consumers switch.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azuread_application&quot; &quot;api&quot; {
+  display_name = &quot;orders-api&quot;
+  owners       = [data.azuread_client_config.current.object_id]
+}
+
+resource &quot;azuread_service_principal&quot; &quot;api&quot; {
+  client_id = azuread_application.api.client_id
+}
+
+resource &quot;azuread_application_federated_identity_credential&quot; &quot;gh&quot; {
+  application_id = azuread_application.api.id
+  display_name   = &quot;github-main&quot;
+  issuer         = &quot;https://token.actions.githubusercontent.com&quot;
+  subject        = &quot;repo:org/orders:ref:refs/heads/main&quot;
+  audiences      = [&quot;api://AzureADTokenExchange&quot;]
+}
+
+resource &quot;time_rotating&quot; &quot;secret&quot; { rotation_days = 90 }
+
+resource &quot;azuread_application_password&quot; &quot;partner&quot; {
+  application_id      = azuread_application.api.id
+  rotate_when_changed = { rotation = time_rotating.secret.id }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Giving the pipeline Global Administrator because Graph permissions are confusing.</li>
+  <li>Creating long-lived client secrets for GitHub Actions instead of federation.</li>
+  <li>Rotating by replacing the only secret, causing an outage until consumers update.</li>
+  <li>Leaving the state backend readable by many people while it contains secrets.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use the azuread provider for applications, service principals, groups and app role assignments. The identity running it needs Microsoft Graph permissions like Application.ReadWrite.OwnedBy or Application Administrator, which are powerful, so that pipeline is tightly controlled. Wherever possible I avoid secrets with federated identity credentials, so GitHub Actions or Kubernetes workload identity authenticate without a client secret. If a secret is unavoidable, I create it with azuread_application_password, rotate it with time_rotating, keep an overlap window, and store it in Key Vault for consumers. Since the secret ends up in state, the state must be protected.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid an outage on rotation?</strong> Keep two valid passwords, publish the new one to Key Vault, let consumers pick it up, then remove the old.</li>
+  <li><strong>Why OwnedBy instead of ReadWrite.All?</strong> It limits the pipeline to applications it created.</li>
+  <li><strong>Managed identity or app registration?</strong> Managed identity for Azure-hosted workloads; app registrations for external or multi-tenant use.</li>
+</ul>
+</article>
+</body>
+</html>

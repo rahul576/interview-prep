@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-115 · Pods pass health checks, but about 3 percent of requests return 503 errors. How do you diagnose it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-115" data-topic="Kubernetes">
+<h1>Pods pass health checks, but about 3 percent of requests return 503 errors. How do you diagnose it?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Intermittent 503s from &quot;healthy&quot; pods are usually a <strong>timing problem</strong>, not a broken app: most often the <strong>termination race</strong> between endpoint removal and <strong>SIGTERM</strong>, a <strong>readiness probe</strong> that lies, or a <strong>keep-alive timeout mismatch</strong> between the load balancer and the app. Find the pattern in the <strong>ingress logs</strong> first, then fix that cause.</p>
+
+<h2>Detailed explanation</h2>
+<p>Health checks show that a pod is up when they run, not what happens in the seconds when pods start, stop or move, which is where a steady few-percent error rate usually comes from. So the first question is <strong>correlation</strong>: do the 503s cluster around deployments, scale-down, autoscaler consolidation or node drains?</p>
+<p>The classic cause is the <strong>termination race</strong>. When a pod is deleted, the kubelet sends SIGTERM <strong>in parallel</strong> with the EndpointSlice update that kube-proxy, the ingress controller and cloud load balancers must pick up. Propagation takes up to several seconds, so traffic still reaches a process that has stopped listening. The fix is a <strong>preStop sleep</strong> of 5-15 seconds, an app that finishes in-flight requests after SIGTERM, and a long enough <code>terminationGracePeriodSeconds</code>.</p>
+<p>The second family is <strong>start-up</strong>: a readiness probe that passes before caches, pools or warm-up are done. The third is <strong>keep-alive mismatch</strong>: if the app closes idle connections after 5 seconds but the load balancer reuses them for 60, some requests land on just-closed connections. The app's idle timeout must be <strong>longer</strong> than the load balancer's. Others are too few replicas or <strong>OOMKilled</strong> pods.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plot 503s over time against deploy, scale and drain events.</li>
+  <li>Read ingress or load balancer logs: which upstream pod answered, upstream status, &quot;connection reset&quot; or &quot;no live upstreams&quot;.</li>
+  <li>If errors hit terminating pods, add a preStop delay and graceful SIGTERM handling.</li>
+  <li>If errors hit new pods, make readiness check real dependencies and add a startupProbe.</li>
+  <li>If errors are random, compare idle and keep-alive timeouts along the chain.</li>
+  <li>Check restarts and OOMKilled events with <code>kubectl get pods</code> and <code>kubectl describe</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+  - name: api
+    lifecycle:
+      preStop:
+        sleep:
+          seconds: 10      # let endpoints and LBs stop sending traffic
+    readinessProbe:
+      httpGet: { path: /ready, port: 8080 }
+      periodSeconds: 5</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating &quot;pods are healthy&quot; as proof the platform is fine without looking at upstream logs.</li>
+  <li>A preStop sleep longer than the grace period, so the app is SIGKILLed mid-request.</li>
+  <li>Readiness probes that only check that the process listens.</li>
+  <li>App keep-alive timeout shorter than the load balancer idle timeout.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd correlate the 503s with deployments, scaling and drains, and read ingress logs to see which upstream pod returned them. If they hit terminating pods, it's the endpoint-removal race, so I'd add a preStop sleep and graceful SIGTERM handling. If they hit new pods, readiness passes too early. If random, I'd check that the app's keep-alive timeout exceeds the load balancer's. Then I'd verify with a load test during a rolling restart.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you verify the fix before production?</strong> Run a constant load test in staging while doing <code>kubectl rollout restart</code> and scale-down; expect zero 5xx.</li>
+  <li><strong>Why can't Kubernetes remove the pod from endpoints first?</strong> Endpoint updates are eventually consistent across many independent components; there is no global barrier.</li>
+  <li><strong>What about long-lived connections like WebSockets?</strong> Drain them actively on SIGTERM and give a longer grace period.</li>
+</ul>
+</article>
+</body>
+</html>

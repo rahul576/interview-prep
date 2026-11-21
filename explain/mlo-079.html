@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-079 · How do you version models and their APIs so that consumers do not break?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-079" data-topic="MLOps">
+<h1>How do you version models and their APIs so that consumers do not break?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Separate the <strong>model version</strong> (changes every retrain) from the <strong>API contract version</strong> (what consumers integrate with): compatible retrains ship <strong>behind the same API</strong>, <strong>breaking changes</strong> to inputs, outputs or score meaning get a <strong>new API version run in parallel</strong>, enforced with <strong>schema validation</strong> and communicated with <strong>deprecation timelines</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Consumers care about the contract: request fields, response fields, label values and what the score means. They don't care that the model was retrained, as long as the contract holds. Coupling the two means every retrain forces consumer changes, or, worse, retrains silently break consumers.</p>
+<p><strong>Compatible changes</strong> (same inputs, same output format, same meaning) are deployed behind the existing endpoint, say <code>/v1/score</code>, using canary or blue-green. The response includes <code>model_version</code> for traceability.</p>
+<p><strong>Behavioural changes inside a compatible contract</strong> still need communication. If the new model's scores are distributed differently, a consumer's hard-coded threshold of 0.7 may suddenly approve twice as many cases. Mitigate by <strong>calibrating</strong> scores so meaning is stable, by returning a decision or band rather than a raw score, and by announcing distribution shifts with before and after statistics.</p>
+<p><strong>Breaking changes</strong> need a new version, <code>/v2/score</code>: a new required feature, removed or renamed output fields, new label sets, or a change in score semantics (probability of fraud versus risk tier). v1 and v2 run <strong>in parallel</strong> during a migration window, with usage metrics per version, and v1 is <strong>deprecated on a published timeline</strong> (headers such as <code>Deprecation</code> and <code>Sunset</code>).</p>
+<p><strong>Enforcement:</strong> request and response schemas (OpenAPI, Pydantic, Protobuf) and the <strong>model signature</strong> (for example MLflow signatures) are validated at the endpoint, so a missing or mistyped feature fails with a clear 4xx error instead of producing a garbage prediction. Contract tests in CI check that a new model matches the API schema.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the API contract (OpenAPI or Protobuf) and version it semantically.</li>
+  <li>Store model signatures in the registry and check compatibility in CI.</li>
+  <li>Deploy compatible model versions behind the same API with canary.</li>
+  <li>Publish release notes on output distribution changes.</li>
+  <li>For breaking changes, launch v2 alongside v1 and track consumer migration.</li>
+  <li>Sunset v1 after the deprecation period.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">class ScoreRequestV1(BaseModel):
+    customer_id: str
+    amount: condecimal(ge=0)
+    country: constr(min_length=2, max_length=2)
+class ScoreResponseV1(BaseModel):
+    score: confloat(ge=0, le=1)       # calibrated probability, meaning fixed for v1
+    decision: Literal[&quot;approve&quot;, &quot;review&quot;, &quot;decline&quot;]
+    model_version: str                # e.g. &quot;fraud-2026-11-14.3&quot;
+
+@app.post(&quot;/v1/score&quot;, response_model=ScoreResponseV1)
+def score(req: ScoreRequestV1): ...</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tying the URL to the model version (<code>/model-42/predict</code>), forcing consumers to change each retrain.</li>
+  <li>Changing score meaning without a version bump.</li>
+  <li>No input validation, so missing features become zeros.</li>
+  <li>Removing old versions without usage data or notice.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I separate the model version from the API contract. A retrain with the same inputs and outputs is deployed behind the same API version, so consumers don't change anything, but I tell them about significant shifts in score distributions, because their thresholds may depend on them, and I keep scores calibrated. A change in required inputs, output fields, labels or score meaning is breaking and gets a v2 running in parallel with v1 during migration. The endpoint validates requests against the schema and model signature, responses include the model version, and deprecations follow a published timeline.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a better model break a consumer?</strong> Different score distributions shift outcomes at fixed downstream thresholds even if accuracy improved.</li>
+  <li><strong>How do you know who still uses v1?</strong> Per-version request metrics and client identifiers.</li>
+  <li><strong>Raw score or decision?</strong> Returning a decision or band plus score decouples consumers from model changes.</li>
+</ul>
+</article>
+</body>
+</html>

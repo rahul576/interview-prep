@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-214 · How would you reduce REST API response time from 5 seconds to 500 milliseconds?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-214" data-topic="REST &amp; API Design">
+<h1>How would you reduce REST API response time from 5 seconds to 500 milliseconds?</h1>
+<p class="ex-meta">REST &amp; API Design · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Measure first</strong> with <strong>distributed tracing and profiling</strong> to see where the 5 seconds go, then fix the biggest contributors: <strong>database</strong> (indexes, N+1, projections), <strong>downstream calls</strong> (parallelise, remove, timeouts), <strong>caching</strong>, <strong>smaller payloads</strong>, and <strong>moving non-essential work async</strong>, and <strong>re-measure under load</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Guessing wastes time; a 5-second endpoint is usually dominated by one or two causes.</p>
+<p><strong>1. Measure.</strong> Use <strong>distributed tracing</strong> (OpenTelemetry with Jaeger, Tempo, Datadog, Dynatrace) to break the request into spans: database queries, downstream HTTP calls, serialisation. Check <strong>p50/p95/p99</strong> latency, not just averages. Enable SQL logging or Hibernate statistics to count queries. A profiler (async-profiler, JFR) shows CPU hot spots, lock contention or GC pauses. Reproduce with realistic data volumes.</p>
+<p><strong>2. Database (most common).</strong></p>
+<ul>
+  <li><strong>N+1 queries</strong>: loading 100 orders and lazily fetching lines per order makes 101 queries. Fix with fetch joins, <code>@EntityGraph</code> or batch fetching.</li>
+  <li><strong>Missing indexes</strong>: check <code>EXPLAIN ANALYZE</code> for sequential scans; add composite indexes matching filters and sorts.</li>
+  <li><strong>Over-fetching</strong>: use <strong>DTO projections</strong> instead of loading full entity graphs; paginate.</li>
+  <li>Connection pool waits: check Hikari metrics.</li>
+</ul>
+<p><strong>3. Downstream calls.</strong> Five sequential 800 ms calls are 4 seconds. Run independent ones <strong>in parallel</strong> (<code>CompletableFuture</code>, virtual threads, structured concurrency), remove unnecessary ones, request bulk endpoints instead of one-by-one calls, and set <strong>strict timeouts</strong> with circuit breakers so one slow dependency does not dominate.</p>
+<p><strong>4. Caching.</strong> Cache expensive, rarely changing data: <strong>Caffeine</strong> in-process for reference data, <strong>Redis</strong> for shared data, HTTP caching with ETags for clients. Define TTLs and invalidation.</p>
+<p><strong>5. Payload and work.</strong> Return only needed fields, paginate large lists, enable <strong>gzip/br compression</strong>. Move non-essential work, such as sending emails, audit logs, analytics or PDF generation, to <strong>asynchronous</strong> processing via a queue or Kafka, returning 202 Accepted where appropriate.</p>
+<p><strong>6. Verify and protect.</strong> Load-test (Gatling, k6, JMeter) to confirm p95 under 500 ms at expected traffic, then add <strong>latency SLO alerts</strong> and performance tests in CI to prevent regressions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Trace a slow request; identify the largest spans.</li>
+  <li>Fix database issues (queries, indexes, N+1).</li>
+  <li>Parallelise or eliminate downstream calls with timeouts.</li>
+  <li>Cache stable data.</li>
+  <li>Trim payloads and offload async work.</li>
+  <li>Load-test and monitor p95/p99.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Before: sequential calls ~2.4 s
+Customer c = customerClient.get(id);
+List&lt;Order&gt; o = orderClient.recent(id);
+Loyalty l = loyaltyClient.points(id);
+
+// After: parallel on virtual threads, ~0.8 s (slowest call), with timeouts in the clients
+try (var ex = Executors.newVirtualThreadPerTaskExecutor()) {
+    var fc = ex.submit(() -&gt; customerClient.get(id));
+    var fo = ex.submit(() -&gt; orderClient.recent(id));
+    var fl = ex.submit(() -&gt; loyaltyClient.points(id));
+    return new Dashboard(fc.get(), fo.get(), fl.get());
+}</code></pre>
+<pre><code class="language-sql">EXPLAIN ANALYZE SELECT * FROM orders WHERE customer_id = 42 ORDER BY created_at DESC LIMIT 20;
+CREATE INDEX CONCURRENTLY ix_orders_customer_created ON orders (customer_id, created_at DESC);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising without measuring.</li>
+  <li>Adding a cache to hide an N+1 or missing index.</li>
+  <li>Looking only at averages.</li>
+  <li>Parallelising calls without timeouts.</li>
+  <li>Not re-testing under realistic load.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I don't guess; I measure where the five seconds go with distributed tracing, OpenTelemetry into Jaeger or Datadog, plus a profiler, broken down into database, downstream calls and CPU. Usually the database dominates, so I fix slow queries with indexes based on EXPLAIN ANALYZE, remove N+1 patterns with fetch joins or entity graphs, and use projections to fetch only needed columns. Sequential downstream calls get parallelised with CompletableFuture or virtual threads, or removed, with strict timeouts. Stable, expensive data goes into Caffeine or Redis. I reduce the payload with pagination and compression, and move emails and audit writes to async processing. Then I load-test again and add latency alerts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you prevent the response time from regressing after you fix it?</strong> Latency SLO alerts, performance tests in CI, and query-count assertions in tests.</li>
+  <li><strong>How do you find N+1 queries?</strong> SQL logs, Hibernate statistics, or tracing showing many identical query spans.</li>
+  <li><strong>When is caching the wrong fix?</strong> When data must be fresh or the real issue is a bad query.</li>
+</ul>
+</article>
+</body>
+</html>

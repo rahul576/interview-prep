@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-042 · How would you safely expose kubectl or other CLI tools to an AI agent through MCP?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-042" data-topic="MCP Servers">
+<h1>How would you safely expose kubectl or other CLI tools to an AI agent through MCP?</h1>
+<p class="ex-meta">MCP Servers · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Never expose a generic <strong><code>run_command</code></strong> or raw <code>kubectl</code> tool; build <strong>specific, validated tools</strong> (<code>list_pods</code>, <code>get_pod_logs</code>, <code>describe_deployment</code>) using the <strong>Kubernetes API client without shell interpolation</strong>, <strong>read-only by default</strong> under a <strong>scoped RBAC service account</strong>, with <strong>separate, approved mutating tools</strong>, <strong>audit logging</strong>, and <strong>truncated, secret-filtered output</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A tool that passes model-generated strings to a shell (<code>run_command(&quot;kubectl &quot; + args)</code>) is dangerous: <strong>command injection</strong> (<code>; rm -rf</code>, <code>$(curl …)</code>) and destructive commands such as <code>kubectl delete namespace prod</code> become <strong>one hallucination or one prompt injection away</strong>. Logs, tickets or web pages the agent reads can contain instructions designed to trigger exactly that.</p>
+<p><strong>Specific tools.</strong> Expose the operations agents actually need: <code>list_pods(namespace, label_selector)</code>, <code>get_pod_logs(namespace, pod, container, since_minutes, tail_lines)</code>, <code>describe_deployment(namespace, name)</code>, <code>get_events(namespace, since_minutes)</code>. Parameters are <strong>validated</strong> (namespace allowlist, Kubernetes name regex, bounded numbers) and executed through the <strong>Kubernetes API client</strong> library, or at least <code>subprocess</code> with <strong>argument arrays and no shell</strong>, so nothing is interpolated.</p>
+<p><strong>Least privilege.</strong> The server runs with its own <strong>service account</strong> whose <strong>RBAC Role</strong> allows only <code>get</code>, <code>list</code> and <code>watch</code> on needed resources in <strong>permitted namespaces</strong>, and explicitly <strong>not secrets</strong>. Even if the model or server misbehaves, the cluster refuses anything more. For per-user accountability, use impersonation or user-scoped tokens where possible.</p>
+<p><strong>Mutating tools</strong> such as <code>rollout_restart(namespace, deployment)</code> or <code>scale_deployment(namespace, deployment, replicas)</code> are <strong>separate</strong>, annotated <strong>destructive</strong>, restricted to <strong>non-production or allowlisted namespaces</strong> and bounded values (replicas 1–10), use a separate, more privileged identity, and <strong>require human approval</strong> in the host. Production changes may go through GitOps pull requests instead.</p>
+<p><strong>Audit and output hygiene.</strong> Log every call with <strong>user identity</strong>, arguments, result and correlation id. <strong>Truncate logs</strong> (tail lines, time windows) and <strong>filter secrets</strong>: redact tokens, passwords and keys in log lines, and never return environment variables or Secret contents.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define a minimal tool set from real troubleshooting tasks.</li>
+  <li>Validate inputs; call the Kubernetes API, never a shell.</li>
+  <li>Bind a read-only Role in allowed namespaces; deny Secrets.</li>
+  <li>Put write tools behind a separate identity, limits and host approval.</li>
+  <li>Redact and truncate outputs; audit every call.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: mcp-readonly, namespace: payments-staging }
+rules:
+  - apiGroups: [&quot;&quot;]
+    resources: [pods, pods/log, events, services]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch]</code></pre>
+<pre><code class="language-python">NAME = re.compile(r&quot;^[a-z0-9]([-a-z0-9]*[a-z0-9])?$&quot;)
+
+@mcp.tool(annotations={&quot;readOnlyHint&quot;: True})
+def get_pod_logs(namespace: str, pod: str, tail_lines: int = 200) -&gt; str:
+    &quot;&quot;&quot;Last lines of a pod's logs (max 500) in an allowed namespace. Secrets are redacted.&quot;&quot;&quot;
+    if namespace not in ALLOWED_NS or not NAME.match(pod):
+        raise ToolError(f&quot;Namespace must be one of {sorted(ALLOWED_NS)} and pod a valid name.&quot;)
+    text = core_v1.read_namespaced_pod_log(pod, namespace, tail_lines=min(tail_lines, 500))
+    audit.log(user=current_user(), tool=&quot;get_pod_logs&quot;, ns=namespace, pod=pod)
+    return redact_secrets(text)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>shell=True</code> with model-provided strings.</li>
+  <li>Using a cluster-admin kubeconfig for the server.</li>
+  <li>Granting <code>get</code> on Secrets &quot;for debugging&quot;.</li>
+  <li>Mutating tools without approval or namespace limits.</li>
+  <li>Returning entire, unredacted logs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I wouldn't expose a generic run_command or kubectl tool, because command injection or a destructive command becomes one hallucination or prompt injection away. Instead I'd build specific tools like list_pods, get_pod_logs, describe_deployment and get_events, with validated parameters, calling the Kubernetes API client with no shell interpolation. They're read-only by default, and the server's service account has RBAC for only get, list and watch in permitted namespaces, no Secrets. Mutating tools like rollout_restart or scale are separate, marked destructive, limited to allowed namespaces and need human approval. Every call is audited with user identity, and logs are truncated and filtered for secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Keeping secrets out of model context?</strong> No access to Secrets via RBAC, redaction of log lines, and never returning env vars.</li>
+  <li><strong>Production changes?</strong> Prefer GitOps PRs generated by the agent and approved by humans.</li>
+  <li><strong>Per-user identity?</strong> Kubernetes impersonation or OIDC tokens so audit logs show the real user.</li>
+</ul>
+</article>
+</body>
+</html>

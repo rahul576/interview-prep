@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-250 · What is database partitioning?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-250" data-topic="Databases &amp; SQL">
+<h1>What is database partitioning?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Partitioning</strong> splits a large table into smaller physical <strong>partitions</strong> that still look like <strong>one table</strong>, typically within one database, using <strong>range, list or hash</strong> on a <strong>partition key</strong>, giving <strong>partition pruning</strong>, smaller indexes and cheap <strong>archiving</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A table with billions of rows becomes hard to query, index, vacuum and clean up. Partitioning divides it while the application keeps writing <code>SELECT ... FROM orders</code>.</p>
+<p><strong>Horizontal partitioning</strong> (the usual meaning) splits rows:</p>
+<ul>
+  <li><strong>Range</strong>: by date or numeric range, for example one partition per month. Ideal for time-series and data with retention policies.</li>
+  <li><strong>List</strong>: by discrete values, such as region or country.</li>
+  <li><strong>Hash</strong>: by hash of a key modulo N, spreading rows evenly when there is no natural range.</li>
+  <li><strong>Composite / sub-partitioning</strong>: range by month, then hash by customer.</li>
+</ul>
+<p><strong>Vertical partitioning</strong> splits columns: rarely used or large columns (a BLOB, a JSON payload) move to a separate table with the same key, keeping the main table narrow and cache-friendly.</p>
+<p>Benefits:</p>
+<ul>
+  <li><strong>Partition pruning</strong>: a query filtering on the partition key scans only relevant partitions.</li>
+  <li><strong>Smaller per-partition indexes</strong> that fit in memory better.</li>
+  <li><strong>Maintenance</strong>: <code>DROP</code> or <code>DETACH</code> an old partition instead of deleting millions of rows; vacuum, reindex and backups per partition.</li>
+  <li>Possibly placing old partitions on cheaper storage.</li>
+</ul>
+<p>Caveats: queries that do <strong>not</strong> filter on the partition key must scan all partitions, sometimes slower than one table. In PostgreSQL, unique constraints and primary keys must include the partition key, and too many partitions (thousands) increase planning overhead. Partitioning is not sharding: it all still runs on one server's CPU, memory and disk.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose a partition key matching the most common filter and retention rule.</li>
+  <li>Create the parent table with a partitioning method.</li>
+  <li>Create partitions for ranges or values, plus a default partition if needed.</li>
+  <li>Inserts are routed to the right partition automatically.</li>
+  <li>Queries with the key in WHERE are pruned at planning or execution time.</li>
+  <li>Automate creating future partitions and dropping old ones (for example with pg_partman).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE orders (
+  id BIGINT, customer_id BIGINT, created_at TIMESTAMPTZ NOT NULL, total NUMERIC,
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE orders_2026_10 PARTITION OF orders
+  FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE TABLE orders_2026_11 PARTITION OF orders
+  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+
+-- Only scans orders_2026_11
+EXPLAIN SELECT SUM(total) FROM orders WHERE created_at &gt;= '2026-11-01';
+
+-- Retention: instant instead of a huge DELETE
+ALTER TABLE orders DETACH PARTITION orders_2024_01;
+DROP TABLE orders_2024_01;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Good for</th><th>Watch out</th></tr></thead>
+<tbody>
+<tr><td>Range</td><td>Time series, retention</td><td>Newest partition is hot</td></tr>
+<tr><td>List</td><td>Regions, categories</td><td>Uneven sizes</td></tr>
+<tr><td>Hash</td><td>Even spread</td><td>No pruning for ranges</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Partitioning by a column queries rarely filter on.</li>
+  <li>Creating thousands of tiny partitions.</li>
+  <li>Expecting partitioning to scale beyond one server.</li>
+  <li>Forgetting to pre-create future partitions, causing insert failures without a default partition.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Partitioning divides a large table into smaller physical partitions while it still appears as one table, usually within one database server. Horizontal partitioning splits rows, by range such as month, by list such as region, or by hash for an even spread; vertical partitioning moves large or rarely used columns to another table. The benefits are partition pruning, so queries filtering on the key scan only relevant partitions, smaller indexes, and easy maintenance, such as dropping an old month instead of deleting millions of rows. The key must match common query filters, otherwise every query scans all partitions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you partition a 2-billion-row orders table?</strong> Range by month on created_at, possibly hash sub-partitions, with automated creation and retention.</li>
+  <li><strong>What is partition pruning?</strong> The planner skipping partitions that cannot contain matching rows.</li>
+  <li><strong>Does partitioning replace indexing?</strong> No; each partition still needs indexes for its queries.</li>
+</ul>
+</article>
+</body>
+</html>

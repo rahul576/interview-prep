@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-050 · How do you serve many models efficiently on shared GPU infrastructure?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-050" data-topic="MLOps">
+<h1>How do you serve many models efficiently on shared GPU infrastructure?</h1>
+<p class="ex-meta">MLOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Share GPUs by running <strong>multi-model servers like Triton</strong> with <strong>dynamic batching</strong>, partitioning GPUs with <strong>MIG</strong> (isolated slices) or <strong>time-slicing</strong> (no isolation), and using <strong>ModelMesh-style dynamic loading</strong> for large fleets of rarely used models, while managing <strong>noisy neighbours, GPU memory limits and isolation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A dedicated GPU per model is wasteful when most models are small or lightly used: a single model may use 5 percent of an A100 or H100 most of the day.</p>
+<p><strong>Multi-model servers.</strong> <strong>NVIDIA Triton</strong> loads several models on the same GPU, runs them concurrently with configurable instance groups, and applies <strong>dynamic batching</strong> per model to raise throughput. <strong>Ray Serve</strong> and KServe's multi-model serving can also co-locate models. LLM engines like <strong>vLLM</strong> can serve multiple <strong>LoRA adapters</strong> on one base model, a powerful pattern for many fine-tuned variants.</p>
+<p><strong>GPU partitioning.</strong> <strong>Multi-Instance GPU (MIG)</strong> on A100, H100 and newer data-centre GPUs splits one GPU into up to seven isolated instances with dedicated memory and compute slices, giving predictable performance and fault isolation—good for multi-tenant serving and notebooks. <strong>Time-slicing</strong> (via the NVIDIA device plugin) lets several pods share a GPU in turns, with no memory or performance isolation; cheap but risky for latency-sensitive workloads. <strong>MPS</strong> allows concurrent kernels from multiple processes with partial isolation.</p>
+<p><strong>Dynamic loading.</strong> For thousands of models, such as one per customer, <strong>KServe ModelMesh</strong> (or similar) keeps frequently used models in memory, loads rare ones on demand from storage and evicts by LRU, packing models densely across a pool of servers.</p>
+<p><strong>Trade-offs.</strong> <strong>Noisy neighbours</strong> raise tail latency; <strong>GPU memory limits</strong> cause eviction, cold loads or out-of-memory errors; <strong>weaker isolation</strong> between teams (security and fault blast radius); and more complex <strong>capacity planning and cost attribution</strong>. Dedicated GPUs remain right for high-traffic, latency-critical or very large models.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Profile each model: memory, throughput, traffic pattern, latency SLO.</li>
+  <li>Group small, compatible models onto shared multi-model servers.</li>
+  <li>Choose MIG profiles for isolation needs; time-slicing for dev and batch.</li>
+  <li>Use dynamic loading for long-tail model fleets.</li>
+  <li>Enable dynamic batching and monitor GPU utilisation and memory.</li>
+  <li>Reserve dedicated GPUs for top-traffic or critical models.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text"># Triton model_repository/ (one server, one GPU)
+ranker/       config.pbtxt -&gt; instance_group [{count: 2, kind: KIND_GPU}], dynamic_batching {}
+embedder/     config.pbtxt -&gt; max_batch_size: 64, dynamic_batching {max_queue_delay_microseconds: 2000}
+toxicity/     config.pbtxt -&gt; instance_group [{count: 1, kind: KIND_GPU}]</code></pre>
+<pre><code class="language-yaml"># Kubernetes pod requesting a MIG slice of an H100
+resources:
+  limits:
+    nvidia.com/mig-1g.10gb: 1</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Time-slicing GPUs for latency-critical production models.</li>
+  <li>Packing models without checking combined GPU memory.</li>
+  <li>No per-model metrics on shared servers, hiding noisy neighbours.</li>
+  <li>One GPU per tiny model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Giving every model its own GPU wastes money. I'd use multi-model servers like Triton to load several models per GPU with dynamic batching, and partition big GPUs with MIG into isolated slices where predictable performance matters, using time-slicing only for dev or batch work. For large fleets, like a model per customer, ModelMesh-style dynamic loading keeps popular models in memory and loads rare ones on demand. The trade-offs are noisy neighbours, GPU memory limits and weaker isolation, so critical high-traffic models keep dedicated GPUs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you decide which models deserve dedicated GPUs?</strong> High traffic, strict latency SLOs, large memory or strong isolation requirements.</li>
+  <li><strong>MIG vs time-slicing?</strong> MIG isolates memory and compute; time-slicing just shares turns.</li>
+  <li><strong>How to serve many fine-tuned LLMs?</strong> Multi-LoRA serving on a shared base model.</li>
+</ul>
+</article>
+</body>
+</html>

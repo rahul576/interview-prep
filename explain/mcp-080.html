@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-080 · How do you deploy and scale a remote MCP server in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-080" data-topic="MCP Servers">
+<h1>How do you deploy and scale a remote MCP server in production?</h1>
+<p class="ex-meta">MCP Servers · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Package the server as a <strong>container</strong>, run it on <strong>Kubernetes, Container Apps or serverless</strong> behind <strong>TLS and a gateway</strong> handling <strong>OAuth, rate limits and logging</strong>, keep it <strong>stateless</strong> so any replica serves any request, put handles, tasks and tokens in <strong>external state</strong> (Redis, database), <strong>autoscale on request rate, concurrency and latency</strong>, and ship with <strong>health checks, observability and gradual rollouts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A remote MCP server is a web service with some special traits: long-running tool calls, possibly streaming responses, and clients that are models whose behaviour depends on your tool descriptions.</p>
+<p><strong>Packaging and platform.</strong> Build a container image and run it where your organisation runs services: Kubernetes, Azure Container Apps, Cloud Run, ECS, or serverless functions for light, short tools. Put it behind <strong>TLS</strong> and an <strong>API or MCP gateway</strong> that validates OAuth tokens, applies rate limits and logs calls.</p>
+<p><strong>Statelessness.</strong> Design the server so <strong>any replica can handle any request</strong>. Older protocol revisions used an initialisation handshake and an <code>Mcp-Session-Id</code>, tempting servers to keep session state in memory, which breaks behind load balancers. The newer stateless revision (2026-07-28) makes stateless operation the default, so an ordinary load balancer works without sticky sessions. Anything that must persist, such as <strong>handles</strong>, long-running <strong>tasks</strong>, idempotency keys and stored <strong>OAuth refresh tokens</strong>, goes into <strong>external state</strong> like Redis or a database.</p>
+<p><strong>Scaling.</strong> Tool calls are usually <strong>I/O-bound</strong>, waiting on downstream APIs, so CPU is a poor scaling signal. Autoscale on <strong>request rate, in-flight concurrency and latency</strong> (KEDA or HPA with custom metrics). Set timeouts per downstream and use connection pools.</p>
+<p><strong>Operations.</strong> Liveness and readiness probes, metrics and traces per tool, alerts, and <strong>gradual rollouts</strong> (canary or blue-green). Treat <strong>tool description changes</strong> as behaviour changes: run an evaluation set of realistic prompts before promoting a version, because a reworded description can change which tools models choose.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>CI builds and signs the image, runs unit tests and tool-selection evals.</li>
+  <li>Deploy to a canary with a small share of traffic via the gateway.</li>
+  <li>Replicas are stateless; Redis stores tasks, handles and idempotency keys.</li>
+  <li>Autoscaler scales on concurrency and p95 latency.</li>
+  <li>Metrics and evals look good; promote to full rollout.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: orders-mcp }
+spec:
+  scaleTargetRef: { name: orders-mcp }
+  minReplicaCount: 2
+  maxReplicaCount: 30
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus:9090
+        query: sum(mcp_inflight_requests{service=&quot;orders-mcp&quot;})
+        threshold: &quot;20&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>In-memory session or task state with multiple replicas.</li>
+  <li>Scaling on CPU for an I/O-bound server.</li>
+  <li>Deploying description changes without evaluation.</li>
+  <li>Validating OAuth inconsistently in each server instead of at a shared layer plus the server.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I package the server as a container and run it on Kubernetes, Container Apps or serverless, behind TLS and a gateway that handles OAuth validation, rate limiting and logging. It's stateless, which the 2026-07-28 revision makes the default, so any replica can serve any request and a normal load balancer works without sticky sessions; anything that must persist, like handles, tasks or refresh tokens, goes in Redis or a database. I autoscale on request rate, concurrency and latency rather than CPU, because tool calls mostly wait on downstream APIs. Health checks, metrics, traces and alerts are in place, and new versions roll out gradually with evals of tool behaviour, because a description change can change how models act.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Older clients with sessions?</strong> Support the older transport at the gateway with sticky routing, or store session data externally.</li>
+  <li><strong>Serverless suitable?</strong> For short tools yes; long tasks need external state and async patterns.</li>
+  <li><strong>Minimum replicas?</strong> At least two across zones for availability.</li>
+</ul>
+</article>
+</body>
+</html>

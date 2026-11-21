@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-031 · After upgrading a provider major version, the plan wants to replace dozens of resources. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-031" data-topic="Terraform">
+<h1>After upgrading a provider major version, the plan wants to replace dozens of resources. What do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Do not apply.</strong> Major provider versions <strong>rename arguments, change defaults, split resources or change ForceNew behaviour</strong>; read the <strong>upgrade guide</strong>, adapt the code (explicit settings, <strong>moved blocks</strong> or state migration), iterate until the plan shows <strong>only intended changes</strong>, and roll out <strong>through lower environments first</strong> with <strong>pinned versions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A plan full of replacements after a provider upgrade almost never means the infrastructure really needs rebuilding. It means the <strong>code no longer describes the existing objects</strong> in the way the new provider expects. Replacing dozens of resources could cause outages and data loss, so the plan is a signal to work, not to approve.</p>
+<p>Typical reasons, documented in each provider's <strong>upgrade guide</strong>:</p>
+<ul>
+  <li><strong>Renamed or removed arguments</strong>, for example deprecated attributes finally removed.</li>
+  <li><strong>Changed defaults</strong>: a value you never set is now defaulted differently, so Terraform wants to change it, sometimes with forced replacement.</li>
+  <li><strong>Resources split</strong> into several, as happened with the AWS provider's S3 bucket refactor (versioning, encryption, lifecycle as separate resources) or AzureRM's split of <code>azurerm_virtual_machine</code> into Linux and Windows types.</li>
+  <li><strong>Changed ForceNew rules</strong> or new validation.</li>
+</ul>
+<p>The process: <strong>pin providers</strong> so upgrades only happen deliberately, via a pull request that bumps the version constraint and <strong><code>.terraform.lock.hcl</code></strong>. Read the upgrade guide and changelog. Run the plan and go through it <strong>resource by resource</strong>. Set changed defaults <strong>explicitly</strong> to their current values. Migrate to new resource types with <strong><code>moved</code> blocks</strong> where the provider supports cross-type moves, or with <strong><code>removed</code> plus <code>import</code></strong> blocks otherwise. Remove deprecated settings. Iterate until the plan shows <strong>no changes</strong>, or only intended ones. Then roll out in <strong>dev, then staging, then production</strong>, comparing plans at each step.</p>
+<p>For many root modules, upgrade gradually: modules first, then root configurations in batches, with Renovate PRs and CI plans per configuration.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Bump provider version in a branch; <code>terraform init -upgrade</code>.</li>
+  <li>Read the upgrade guide; run plan.</li>
+  <li>Classify every replace or update in the plan.</li>
+  <li>Adjust code, add moved/removed/import blocks.</li>
+  <li>Repeat until plan is clean; apply in lower environments first.</li>
+  <li>Merge lock file; promote to production.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">terraform {
+  required_providers {
+    aws = {
+      source  = &quot;hashicorp/aws&quot;
+      version = &quot;~&gt; 6.0&quot;        # was &quot;~&gt; 5.0&quot;; bumped deliberately in this PR
+    }
+  }
+}</code></pre>
+<pre><code class="language-bash">terraform init -upgrade
+terraform plan -out=tfplan | tee plan.txt
+grep -E &quot;must be replaced|forces replacement&quot; plan.txt</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unpinned providers, so a major version arrives in a random pipeline run.</li>
+  <li>Applying replacements &quot;because the provider says so&quot;.</li>
+  <li>Upgrading production first.</li>
+  <li>Upgrading Terraform and several providers at the same time.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I stop and don't apply. Major provider versions often rename arguments, change defaults, split one resource into several or change which arguments force replacement, so a plan full of replacements usually means the code needs adapting, not that the infrastructure needs rebuilding. I read the upgrade guide and changelog, go through the plan resource by resource, set changed defaults explicitly, move to new resource types with moved blocks or state migration, and remove deprecated settings, until the plan shows only intended changes, ideally none. I upgrade in a lower environment first, with the provider pinned and the lock file committed, so the upgrade is a deliberate pull request.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Splitting a large upgrade across many root modules?</strong> Batch by risk, Renovate PRs per configuration, CI plans, and a tracking dashboard.</li>
+  <li><strong>Can you roll back a provider upgrade?</strong> Only if state schemas were not upgraded; otherwise restore state, so test first.</li>
+  <li><strong>Why not upgrade Terraform at the same time?</strong> One change at a time makes diffs explainable.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-047 · How do you improve MCP server performance and latency for interactive agents?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-047" data-topic="MCP Servers">
+<h1>How do you improve MCP server performance and latency for interactive agents?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Every tool call adds latency to every agent step, so <strong>measure per tool</strong>, <strong>cache tool lists and slow-changing data</strong> with TTL hints, <strong>pool downstream connections</strong>, <strong>combine multi-step operations into one tool</strong>, <strong>stream progress</strong> for slow work, and <strong>deploy near the host and its dependencies</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Interactive agents run in loops: think, call a tool, read the result, think again. A tool that takes two seconds called eight times in a task adds sixteen seconds, and slow tools have second-order effects: models may time out, retry, or switch to a worse approach. Performance work therefore starts with <strong>per-tool latency measurement</strong>, broken down into server processing and downstream dependency time.</p>
+<p><strong>Caching</strong> is the cheapest win. Tool lists rarely change, so clients should not re-fetch them every turn; newer protocol revisions add caching hints such as a TTL on list results so clients know how long they are valid. On the server side, cache expensive lookups such as schemas, catalogs or permission checks.</p>
+<p><strong>Connection management</strong> matters because many servers create a new HTTP client per call. Use <strong>connection pooling</strong> and keep-alive to downstream APIs and databases.</p>
+<p><strong>Tool design</strong> often has the biggest impact. A model round trip (the model reading results and deciding the next call) usually costs more than the API call itself, often a second or more. A single <code>get_order_with_shipping_status</code> tool beats three chained low-level tools. Returning compact results also reduces tokens the model must read.</p>
+<p>For unavoidably slow operations, send <strong>progress notifications</strong> or use <strong>tasks</strong> so the client is not left waiting blindly. Finally, place the server in the <strong>same region</strong> as the host and the systems it calls.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Trace a realistic task and attribute time to model calls, MCP calls and downstream calls.</li>
+  <li>Cache static data (tool lists, schemas) with explicit TTLs; cache expensive reads server-side.</li>
+  <li>Reuse pooled HTTP and database connections.</li>
+  <li>Merge chained calls into task-level tools; trim result payloads.</li>
+  <li>Use progress notifications or tasks for operations over a few seconds.</li>
+  <li>Co-locate server, host and downstream systems; re-measure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import httpx
+from cachetools import TTLCache
+
+http = httpx.AsyncClient(timeout=5.0, limits=httpx.Limits(max_keepalive_connections=50))
+schema_cache = TTLCache(maxsize=256, ttl=3600)
+
+async def get_order_overview(order_id: str):
+    # one tool instead of get_order + get_shipment + get_invoice
+    order, shipment, invoice = await asyncio.gather(
+        http.get(f&quot;{ORDERS}/orders/{order_id}&quot;),
+        http.get(f&quot;{SHIPPING}/shipments?order={order_id}&quot;),
+        http.get(f&quot;{BILLING}/invoices?order={order_id}&quot;),
+    )
+    return summarise(order.json(), shipment.json(), invoice.json())</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising server CPU while model round trips dominate total task time.</li>
+  <li>Returning huge JSON payloads that slow the next model call.</li>
+  <li>Creating a new client or database connection per tool call.</li>
+  <li>Blocking silently for 60 seconds, so the host times out and retries.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Agents call tools in loops, so every extra second multiplies, and slow tools make models retry or give up. I start by measuring latency per tool and per downstream dependency. Then caching: tool lists and slow-changing data like schemas are cached with TTL hints, and the server caches expensive lookups. Downstream calls use connection pooling. The biggest win is usually tool design: combining a multi-step operation into one tool removes model round trips, which are typically slower than the API calls. For slow operations I stream progress or use tasks rather than blocking. And I deploy the server in the same region as the host and the systems it calls.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do model round trips dominate?</strong> Each one means generating and reading tokens, typically hundreds of milliseconds to seconds.</li>
+  <li><strong>How big should results be?</strong> As small as the task needs; paginate or summarise large data.</li>
+  <li><strong>Parallel tool calls?</strong> Many hosts let models issue independent calls in parallel, which helps if the server handles concurrency.</li>
+</ul>
+</article>
+</body>
+</html>

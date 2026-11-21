@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-151 · Users report intermittent 500 errors from one microservice. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-151" data-topic="Troubleshooting">
+<h1>Users report intermittent 500 errors from one microservice. How do you investigate?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Scope</strong> the errors with metrics by <strong>instance, endpoint, version and time</strong>, find the <strong>stack traces</strong> in logs via <strong>correlation ids</strong>, use <strong>traces</strong> to see whether a <strong>dependency</strong> fails or times out, check <strong>resource exhaustion</strong> (pools, timeouts, memory, GC) and <strong>one bad pod</strong>, then <strong>reproduce, fix, and add a test and an alert</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Intermittent&quot; means the failure depends on something that varies: an instance, traffic level, a specific input, a dependency's health or timing. The investigation is about finding that variable.</p>
+<p><strong>Scope with metrics:</strong> break the 5xx rate down by <strong>pod</strong>, <strong>endpoint</strong>, <strong>version</strong>, <strong>client</strong> and <strong>time</strong>. Patterns are revealing:</p>
+<ul>
+  <li>one pod out of five → a node or instance problem (bad configuration, memory pressure, full disk, a failed cache warm-up, a stale DNS entry or certificate);</li>
+  <li>one endpoint → a code path or a dependency only that endpoint uses;</li>
+  <li>correlated with <strong>traffic peaks</strong> → resource exhaustion;</li>
+  <li>started at a <strong>deployment</strong> or config change → the change;</li>
+  <li>periodic (every hour) → scheduled jobs, token or certificate refresh, batch loads.</li>
+</ul>
+<p><strong>Logs:</strong> filter for level ERROR on that service, group by exception type and message, and use the <strong>correlation or trace id</strong> from a failing request to see the full story across services. Make sure the error is logged once with the stack trace and the cause chain.</p>
+<p><strong>Traces:</strong> look at failed traces to see whether the 500 originates in this service or is propagated from a downstream timeout, connection refused or 503. A dependency failing occasionally without retries or a circuit breaker often looks like &quot;our service is flaky&quot;.</p>
+<p><strong>Resources:</strong> intermittent 500s frequently come from <strong>exhaustion</strong>: Hikari &quot;Connection is not available, request timed out&quot;, thread pool rejections, HTTP client connection pool limits, timeouts set too low for the dependency's p99, memory pressure and long GC pauses, file descriptor limits. Also check concurrency bugs: race conditions, non-thread-safe shared objects (e.g. <code>SimpleDateFormat</code>), optimistic locking failures not mapped to 409.</p>
+<p><strong>Reproduce:</strong> with the failing input, under load in staging, or by injecting the fault. Then fix, add a regression test, map expected errors to proper 4xx codes, and add an alert on the error rate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Break down error rate by pod, endpoint, version and time.</li>
+  <li>Pull logs and stack traces for failing requests by trace id.</li>
+  <li>Inspect traces for downstream failures and timeouts.</li>
+  <li>Check pool saturation, GC, memory and node health.</li>
+  <li>Reproduce with the identified condition.</li>
+  <li>Fix, test, and alert on recurrence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql"># 5xx rate per pod: is it one instance?
+sum by (pod) (rate(http_server_requests_seconds_count{app=&quot;orders&quot;, status=~&quot;5..&quot;}[5m]))
+
+# Pool exhaustion?
+max by (pod) (hikaricp_connections_pending{app=&quot;orders&quot;})</code></pre>
+<pre><code class="language-text">ERROR trace.id=9f2c... o.h.e.j.s.SqlExceptionHelper :
+  HikariPool-1 - Connection is not available, request timed out after 30000ms
+  (total=10, active=10, idle=0, waiting=37)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Looking only at aggregate error rate and missing that one pod is the culprit.</li>
+  <li>Restarting pods and declaring victory without finding the cause.</li>
+  <li>Swallowing the root cause in logs (<code>log.error(e.getMessage())</code>).</li>
+  <li>Returning 500 for client errors like validation or conflicts, polluting the signal.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I scope it with metrics: error rate by instance, endpoint and version, and whether it lines up with traffic peaks or a deployment. Then I search the logs by trace id to get the stack traces behind the 500s, and use distributed traces to see whether a downstream dependency is failing or timing out. Intermittent errors are often resource exhaustion, so I check connection and thread pools, timeouts, memory and GC, and whether one pod is unhealthy. Once I can reproduce it, I fix it, add a regression test and an alert on the error rate so we catch it earlier next time.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Errors on one of five pods?</strong> Instance-specific: node issues, configuration drift, memory pressure, bad local state; compare it with healthy pods or drain it.</li>
+  <li><strong>What if the 500 comes from a downstream service?</strong> Add timeouts, retries with backoff, circuit breaker and map it to 502/503.</li>
+  <li><strong>How do you reproduce intermittent issues?</strong> Replay failing inputs, load test, or inject faults in staging.</li>
+</ul>
+</article>
+</body>
+</html>

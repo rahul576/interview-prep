@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-067 · How should MCP servers handle secrets and credentials for downstream systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-067" data-topic="MCP Servers">
+<h1>How should MCP servers handle secrets and credentials for downstream systems?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep secrets <strong>out of shared config files and Git</strong>; prefer <strong>per-user OAuth tokens stored securely server-side</strong>, take unavoidable service credentials from a <strong>secret store</strong> (Key Vault, Secrets Manager, Vault) via <strong>workload identity</strong>, <strong>rotate and scope</strong> them, and <strong>never return secrets in tool results, errors or logs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>MCP servers sit between an AI agent and powerful downstream systems, so how they hold credentials largely decides how bad a compromise can be.</p>
+<p>The most common mistake is with <strong>local servers</strong>: API keys pasted into the <code>env</code> block of a host config file, which then gets committed to a repo, synced to cloud storage or shared in a chat. Local secrets should come from the <strong>OS keychain</strong> or a secret manager CLI at launch, and tokens should be fine-grained and least-privilege.</p>
+<p>For <strong>remote servers</strong>, the best model is <strong>per-user OAuth</strong>. Each user authorizes the server against the downstream system, and the server stores the resulting refresh tokens <strong>server-side</strong>, <strong>encrypted</strong>, keyed to the user. Every action then uses that user's permissions, and revocation is per user. Where the downstream supports it, <strong>token exchange</strong> avoids storing long-lived tokens at all.</p>
+<p>Sometimes a <strong>service credential</strong> is unavoidable, such as a database password or a vendor API key. It belongs in a <strong>secret store</strong> such as Azure Key Vault, AWS Secrets Manager or HashiCorp Vault, fetched at runtime using <strong>workload identity</strong> (managed identity, IAM role, Kubernetes service account federation), so there is no bootstrap secret. Credentials are <strong>rotated</strong> regularly and <strong>scoped</strong> narrowly.</p>
+<p>Finally, <strong>output hygiene</strong>. Anything a tool returns enters the <strong>model's context</strong>, where it may be repeated to the user, stored in conversation history, sent to other tools or exfiltrated through prompt injection. Tools must never return secrets, and the server must <strong>scrub downstream error messages</strong> (connection strings, stack traces with keys) before returning them, and redact secrets from logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>User connects the server; OAuth flow yields a refresh token for the downstream.</li>
+  <li>Server encrypts it with a KMS key and stores it per user.</li>
+  <li>For service credentials, the pod's workload identity reads the secret from the vault at startup and on rotation.</li>
+  <li>Each tool call uses the user's delegated token or the scoped service credential.</li>
+  <li>Results and errors pass through a redaction filter before returning and logging.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+vault = SecretClient(&quot;https://mcp-kv.vault.azure.net&quot;, DefaultAzureCredential())
+db_password = vault.get_secret(&quot;orders-db-readonly&quot;).value   # workload identity, no stored key
+
+def safe_error(exc):
+    msg = str(exc)
+    msg = re.sub(r&quot;(password|pwd|token|secret)=[^;\s]+&quot;, r&quot;\1=***&quot;, msg, flags=re.I)
+    return tool_error(f&quot;Database query failed: {msg[:200]}&quot;)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tokens in <code>mcp.json</code> checked into a repository.</li>
+  <li>One shared admin key used by the server for all users.</li>
+  <li>Returning raw exception messages containing connection strings.</li>
+  <li>Never rotating service credentials because &quot;it might break something&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Secrets should never sit in shared host config files or Git, which is a common mistake with local servers. For remote servers, the best model is per-user OAuth: users authorize the server against the downstream system, and the server stores the refresh tokens securely server-side, encrypted and tied to the user, so each action uses that user's permissions. Service-level credentials, when unavoidable, come from a secret store like Key Vault, Secrets Manager or Vault, accessed via workload identity, rotated and narrowly scoped. Tools must never return secrets in results or logs, because anything in a result enters the model context and could be exposed or exfiltrated, so I also scrub downstream error messages.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a secret in a tool result worse?</strong> The model may repeat it, send it to another tool, or leak it via injection.</li>
+  <li><strong>How rotate without downtime?</strong> Support two active credentials and reload from the vault on change.</li>
+  <li><strong>Local server secrets?</strong> OS keychain or secret manager CLI, injected at launch.</li>
+</ul>
+</article>
+</body>
+</html>

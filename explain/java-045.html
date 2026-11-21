@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-045 · After a deployment, the p99 latency of your Spring Boot API jumps from 100 milliseconds to 2 seconds. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-045" data-topic="Troubleshooting">
+<h1>After a deployment, the p99 latency of your Spring Boot API jumps from 100 milliseconds to 2 seconds. How do you investigate?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Scope</strong> the regression with dashboards and APM, <strong>correlate it with the deployment</strong> and <strong>roll back first</strong> if users suffer, then use <strong>traces, the code and config diff, database metrics, Hikari pool waits, GC and CPU data, thread dumps and JFR profiles</strong> to find the cause, and finish with a <strong>regression guard</strong> such as a performance test and p99 alert.</p>
+
+<h2>Detailed explanation</h2>
+<p>A p99 jump from 100 ms to 2 s right after a deploy is a strong signal the change caused it, but confirm before assuming. The order of work matters: <strong>mitigate first, diagnose second</strong>.</p>
+<p><strong>Scope:</strong> is it every endpoint or one? All pods or only new ones (during a canary)? All customers or some? Did traffic change at the same time? Compare old and new versions side by side if both are running. If impact is significant, <strong>roll back</strong> (or shift the canary back): it restores service and, if latency recovers, confirms the release is responsible.</p>
+<p><strong>What changed:</strong> read the diff including <strong>dependency upgrades</strong> (Spring Boot, Hibernate, drivers, HTTP client), configuration (pool sizes, timeouts, log levels), JVM flags, base image and infrastructure (CPU limits, new sidecars). A changed default is a common culprit.</p>
+<p><strong>Where the time goes:</strong> pick slow requests in <strong>distributed tracing</strong> and look at the span breakdown. Typical findings:</p>
+<ul>
+  <li><strong>Database:</strong> a new query without an index, N+1 queries introduced by a changed fetch type, larger result sets; check slow query logs and execution plans.</li>
+  <li><strong>Connection pool:</strong> <code>hikaricp_connections_pending</code> &gt; 0 and high acquisition time means threads wait for connections, often because transactions got longer or a call to a remote service now happens inside a transaction.</li>
+  <li><strong>Downstream:</strong> a new remote call, missing timeout or retries amplifying latency.</li>
+  <li><strong>Own code:</strong> synchronous logging, regex, serialisation of large objects, lock contention.</li>
+</ul>
+<p><strong>JVM:</strong> GC pause time and frequency (a new cache increasing allocation), CPU usage and <strong>container CPU throttling</strong>, heap pressure. <strong>Thread dumps</strong> (<code>jcmd &lt;pid&gt; Thread.print</code>, several seconds apart) show where threads block; <strong>Java Flight Recorder</strong> profiles and <strong>flame graphs</strong> (JFR, async-profiler) show hot methods, locks and allocation.</p>
+<p><strong>Close the loop:</strong> fix, verify on canary, then add a load or performance test in the pipeline and a <strong>p99 latency alert</strong> tied to the SLO.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm impact and scope on dashboards; correlate with deploy time.</li>
+  <li>Roll back or halt the canary if users are affected.</li>
+  <li>Review the diff, dependencies and configuration.</li>
+  <li>Use traces to locate the slow span.</li>
+  <li>Drill into DB, pool, downstream or JVM metrics accordingly.</li>
+  <li>Capture thread dumps and JFR profiles to confirm.</li>
+  <li>Fix, verify, add regression tests and alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Thread dumps, three samples 5 s apart
+for i in 1 2 3; do jcmd 1 Thread.print &gt; /tmp/td-$i.txt; sleep 5; done
+grep -c &quot;HikariPool.getConnection&quot; /tmp/td-*.txt
+
+# 60-second Flight Recorder profile
+jcmd 1 JFR.start duration=60s filename=/tmp/latency.jfr settings=profile</code></pre>
+<pre><code class="language-text">&quot;http-nio-8080-exec-187&quot; WAITING
+   at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:181)
+   at org.springframework.orm.jpa.JpaTransactionManager.doBegin(...)
+-&gt; 190 of 200 request threads waiting for a DB connection</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Debugging for an hour in production instead of rolling back.</li>
+  <li>Looking at average latency, which may barely move.</li>
+  <li>Ignoring dependency and configuration changes, focusing only on application code.</li>
+  <li>Fixing without adding a performance check, so the regression returns.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I scope it on dashboards and APM: which endpoints, which instances, and does it line up exactly with the deploy? If users are badly affected I roll back first, which also confirms the cause. Then I review the diff, including dependency upgrades and config. I use traces to find the slow span: database, a downstream call or our code. For the database I check slow queries, missing indexes, N+1 and Hikari pending connections. For the JVM I look at GC pauses, CPU and throttling, and take thread dumps and a JFR profile to spot blocking or contention. After the fix I add a performance test in the pipeline and a p99 alert.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>200 threads waiting on HikariPool.getConnection?</strong> The pool is exhausted: connections held too long (slow queries, remote calls inside transactions, leaks) or the pool is too small for the concurrency.</li>
+  <li><strong>Why roll back before diagnosing?</strong> It limits user impact and confirms causation; diagnosis can continue on a canary or staging.</li>
+  <li><strong>How do you catch this before production?</strong> Canary analysis on p99 and a performance test stage.</li>
+</ul>
+</article>
+</body>
+</html>

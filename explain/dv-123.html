@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-123 · How do you handle secrets and credentials in CI/CD pipelines?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-123" data-topic="DevOps &amp; CI/CD">
+<h1>How do you handle secrets and credentials in CI/CD pipelines?</h1>
+<p class="ex-meta">DevOps &amp; CI/CD · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Secrets <strong>never go in code or pipeline YAML</strong>: use the CI platform's <strong>encrypted, masked secret store</strong> at minimum, prefer <strong>short-lived credentials via OIDC federation</strong>, keep application secrets in an <strong>external vault</strong>, and apply <strong>least privilege, rotation and secret scanning</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>CI/CD systems are high-value targets: they hold credentials that can deploy to production, and they run code from many contributors and third-party actions or plugins. A leaked cloud key from a pipeline can mean full account compromise, so secrets handling is layered.</p>
+<p><strong>Layer 1: never commit secrets.</strong> Anything in Git history is effectively permanent and is copied into every clone. <strong>Secret scanning</strong> (GitHub push protection, gitleaks, trufflehog) blocks commits containing keys.</p>
+<p><strong>Layer 2: the CI secret store.</strong> GitHub Actions secrets, GitLab CI/CD variables, Jenkins credentials and Azure DevOps variable groups encrypt values, <strong>mask</strong> them in logs and can be scoped to <strong>protected branches or environments</strong>, so a pull request from a fork cannot read production secrets. Environment-level secrets with required reviewers add an approval gate.</p>
+<p><strong>Layer 3: no long-lived cloud keys.</strong> With <strong>OIDC federation</strong>, the CI platform issues a signed identity token for each job, and AWS, Azure or GCP exchanges it for <strong>short-lived credentials</strong> for a specific role. The cloud trust policy can restrict this to a particular repository, branch or environment. Nothing is stored that could leak or need rotation.</p>
+<p><strong>Layer 4: an external vault</strong> for application secrets: HashiCorp Vault, AWS Secrets Manager, Azure Key Vault or GCP Secret Manager. Pipelines or the running application fetch them at deploy or run time, for example via the Kubernetes External Secrets Operator, with access audited and rotation automated.</p>
+<p>Finally, <strong>least privilege</strong> per pipeline, pinned third-party actions, and a clear process for rotation and leaks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer pushes code; secret scanning rejects anything that looks like a key.</li>
+  <li>The job requests an OIDC token from the CI platform.</li>
+  <li>The cloud provider validates the token's claims and returns temporary role credentials.</li>
+  <li>The job deploys; logs mask any secret values.</li>
+  <li>The application reads its database password from the vault at runtime.</li>
+  <li>Secrets rotate on schedule; access is logged.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># GitHub Actions: deploy to AWS without stored keys
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/gh-deploy-orders
+          aws-region: eu-west-1
+      - run: aws ecs update-service --cluster prod --service orders --force-new-deployment</code></pre>
+<p>The IAM role's trust policy only accepts tokens whose <code>sub</code> is <code>repo:acme/orders:environment:production</code>.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Secrets in YAML, Dockerfiles or <code>.env</code> files committed to Git.</li>
+  <li>Printing secrets in logs with <code>echo</code> or debug mode.</li>
+  <li>One admin key shared by every pipeline.</li>
+  <li>Exposing secrets to pull requests from forks.</li>
+  <li>Never rotating credentials.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Secrets never go in code or pipeline files, and secret scanning blocks accidental commits. The minimum is the CI platform's secret store, encrypted, masked in logs and scoped to protected branches or environments. Better is to remove long-lived cloud keys entirely with OIDC federation, so each job gets short-lived credentials for a narrowly scoped role. Application secrets live in a vault such as Vault, Secrets Manager or Key Vault and are fetched at deploy or run time. Each pipeline gets least privilege, and secrets are rotated regularly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>A secret was pushed to a public repo: what now?</strong> Revoke and rotate it immediately, check logs for misuse, then clean history.</li>
+  <li><strong>Why is OIDC better than stored keys?</strong> Credentials are short-lived, scoped per job and never stored.</li>
+  <li><strong>How do you protect secrets from malicious pull requests?</strong> Don't expose secrets to fork pull requests; require approval for workflows from outside contributors.</li>
+</ul>
+</article>
+</body>
+</html>

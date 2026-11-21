@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-013 · What are scoped values in Java?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-013" data-topic="Modern Java (11-21)">
+<h1>What are scoped values in Java?</h1>
+<p class="ex-meta">Modern Java (11-21) · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Scoped values</strong> (<code>java.lang.ScopedValue</code>, preview in Java 21, <strong>final in Java 25</strong>) share an <strong>immutable value</strong> with all code called within a <strong>bounded scope</strong>, without parameters; they are a safer, cheaper alternative to <strong>ThreadLocal</strong>, especially with <strong>virtual threads</strong> and <strong>structured concurrency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Applications often need &quot;ambient&quot; context, such as the current user, tenant or request id, deep in the call stack. Traditionally this is a <strong>ThreadLocal</strong>, but ThreadLocal has problems: values are <strong>mutable</strong> (any code can <code>set</code> them), they live as long as the thread unless someone calls <code>remove()</code>, causing <strong>leaks</strong> in thread pools, and <strong>InheritableThreadLocal</strong> copies values into every child thread, which is expensive with millions of virtual threads.</p>
+<p>A <strong>ScopedValue</strong> binds a value for the <strong>dynamic extent</strong> of a method call:</p>
+<ol>
+  <li>Declare <code>static final ScopedValue&lt;User&gt; USER = ScopedValue.newInstance();</code></li>
+  <li>Bind and run: <code>ScopedValue.where(USER, user).run(() -&gt; handle());</code> (or <code>call</code> to return a value).</li>
+  <li>Anywhere inside <code>handle()</code>, read <code>USER.get()</code>; outside, <code>USER.isBound()</code> is false.</li>
+</ol>
+<p>Properties:</p>
+<ul>
+  <li><strong>Immutable</strong> for the scope: there is no <code>set</code>; you can only <strong>rebind</strong> a new value for a nested scope, which ends when that inner call returns.</li>
+  <li><strong>Bounded lifetime</strong>: when <code>run</code> returns, the binding is gone, so nothing leaks into the next task on the thread.</li>
+  <li><strong>Cheap inheritance</strong>: child tasks forked in a <strong>StructuredTaskScope</strong> automatically see the parent's bindings without copying.</li>
+  <li>Fast reads, designed for many virtual threads.</li>
+</ul>
+<p>History: incubator in Java 20, preview in 21-24, finalised in <strong>Java 25 (JEP 506)</strong>. On Java 21 you need <code>--enable-preview</code>; the API changed slightly across previews (for example <code>orElse</code> no longer accepts null in the final version), so prefer the final API on 25. Structured concurrency itself is still a preview in Java 25.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A <code>ScopedValue</code> key is declared once, usually static final.</li>
+  <li><code>where(key, value).run(op)</code> creates a binding on the current thread.</li>
+  <li>Code inside <code>op</code> reads it with <code>get()</code>.</li>
+  <li>Forked structured-concurrency subtasks inherit the binding.</li>
+  <li>Binding disappears when <code>op</code> returns.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public final class RequestContext {
+    public static final ScopedValue&lt;String&gt; TENANT = ScopedValue.newInstance();
+}
+
+// in a filter / entry point
+ScopedValue.where(RequestContext.TENANT, tenantId)
+           .run(() -&gt; orderService.process(request));
+
+// deep inside
+String tenant = RequestContext.TENANT.get();
+
+// nested rebinding for a sub-call
+ScopedValue.where(RequestContext.TENANT, &quot;admin&quot;).run(this::auditAsAdmin);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ThreadLocal</th><th>ScopedValue</th></tr></thead>
+<tbody>
+<tr><td>Mutability</td><td>set/remove any time</td><td>Immutable per scope</td></tr>
+<tr><td>Lifetime</td><td>Until removed or thread dies</td><td>Bounded by <code>run</code></td></tr>
+<tr><td>Child threads</td><td>Copied (Inheritable)</td><td>Shared cheaply in structured tasks</td></tr>
+<tr><td>Leak risk</td><td>High in pools</td><td>None</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating it as a mutable holder.</li>
+  <li>Expecting bindings to be visible in threads started with a plain executor (only structured tasks inherit).</li>
+  <li>Using preview APIs in production without accounting for changes.</li>
+  <li>Calling <code>get()</code> outside a binding (throws <code>NoSuchElementException</code>).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Scoped values let me share an immutable value, like the current user or tenant, with everything called inside a bounded scope, without passing it through every method. I declare a static final ScopedValue, then ScopedValue.where(USER, user).run(...), and code inside reads USER.get(). Unlike ThreadLocal, the value can't be changed, it disappears when the scope ends so there's no leak, and subtasks forked in a structured task scope inherit it cheaply, which matters with millions of virtual threads. It was a preview in Java 21 and became final in Java 25.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What problems does ThreadLocal cause with virtual threads?</strong> Per-thread copies multiply memory, inheritance copying is costly, and forgotten values leak.</li>
+  <li><strong>Can you change a scoped value?</strong> Only by rebinding it for a nested scope.</li>
+  <li><strong>Is it available in Java 21 production code?</strong> Only with --enable-preview; it's final from Java 25.</li>
+</ul>
+</article>
+</body>
+</html>

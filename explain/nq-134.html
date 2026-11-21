@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-134 · How does object ownership and lifecycle differ in these three relationships?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-134" data-topic="Core Java &amp; OOP">
+<h1>How does object ownership and lifecycle differ in these three relationships?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>In <strong>association</strong> nobody owns anybody and lifecycles are <strong>independent</strong>; in <strong>aggregation</strong> the whole <strong>holds but does not control</strong> the parts' lifecycle; in <strong>composition</strong> the whole <strong>exclusively owns and controls</strong> the parts' creation and destruction, which in JPA means <strong>cascade + orphanRemoval</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Ownership answers the question &quot;who is responsible for this object's existence?&quot;</p>
+<p><strong>Association: no ownership.</strong> Both objects are created and destroyed independently by other code. A customer references their relationship manager; deleting the customer doesn't delete the manager, and vice versa. Each side just keeps a reference. Removing the link only removes the reference.</p>
+<p><strong>Aggregation: weak ownership.</strong> The whole groups parts and may manage <strong>membership</strong>, but not <strong>existence</strong>. A department holds professors; closing the department means professors are reassigned, not deleted. A part can belong to several wholes or move between them. The aggregating object must therefore never assume it can free, mutate the identity of, or delete its parts.</p>
+<p><strong>Composition: exclusive ownership.</strong> The whole controls the part's full lifecycle:</p>
+<ul>
+  <li><strong>Creation</strong>: parts are created by or through the whole (<code>order.addLine(...)</code>).</li>
+  <li><strong>Exclusivity</strong>: a part belongs to exactly one whole and cannot be moved.</li>
+  <li><strong>Destruction</strong>: deleting the whole deletes its parts; removing a part from the whole means the part ceases to exist.</li>
+  <li><strong>Consistency</strong>: invariants spanning whole and parts (order total, max lines) are enforced by the whole, which is the DDD <strong>aggregate root</strong> idea.</li>
+</ul>
+<p><strong>Persistence consequences</strong> are where mistakes get expensive:</p>
+<ul>
+  <li>Composition: <code>@OneToMany(mappedBy = &quot;order&quot;, cascade = CascadeType.ALL, orphanRemoval = true)</code>; or <code>@Embedded</code> / <code>@ElementCollection</code> for value objects. Saving the order saves lines; removing a line from the collection deletes its row; deleting the order deletes all lines. DB foreign keys can use <code>ON DELETE CASCADE</code>.</li>
+  <li>Aggregation and association: no <code>REMOVE</code> cascade, often no cascade at all; deleting the whole should just remove join rows or null out foreign keys, typically with <code>ON DELETE SET NULL</code> or restricted deletes.</li>
+</ul>
+<p>In memory, Java's GC handles destruction, but ownership still matters for <strong>who may modify</strong> the parts, <strong>thread safety</strong>, and <strong>defensive copying</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide who creates the part.</li>
+  <li>Decide whether the part can be shared or moved.</li>
+  <li>Decide what happens to the part when the whole is deleted or the link is removed.</li>
+  <li>Encode it: creation methods, encapsulation, cascades and FK rules.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class PurchaseOrder {                               // composition
+    @Id @GeneratedValue Long id;
+    @OneToMany(mappedBy = &quot;order&quot;, cascade = CascadeType.ALL, orphanRemoval = true)
+    private List&lt;OrderLine&gt; lines = new ArrayList&lt;&gt;();
+    void addLine(String sku, int qty) { lines.add(new OrderLine(this, sku, qty)); }
+    void removeLine(OrderLine l)      { lines.remove(l); }   // row deleted by orphanRemoval
+}
+
+@Entity
+class Department {                                  // aggregation
+    @Id @GeneratedValue Long id;
+    @OneToMany(mappedBy = &quot;department&quot;)             // no cascade remove
+    private Set&lt;Professor&gt; professors = new HashSet&lt;&gt;();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Association</th><th>Aggregation</th><th>Composition</th></tr></thead>
+<tbody>
+<tr><td>Who creates part</td><td>Others</td><td>Others</td><td>The whole</td></tr>
+<tr><td>Part shared/moved</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+<tr><td>Delete whole</td><td>Link removed</td><td>Parts survive</td><td>Parts deleted</td></tr>
+<tr><td>JPA</td><td>No cascade</td><td>No REMOVE cascade</td><td>ALL + orphanRemoval</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>CascadeType.ALL</code> on <code>@ManyToMany</code> or on aggregations, deleting shared data.</li>
+  <li>Exposing composition parts so other entities hold them.</li>
+  <li>Forgetting <code>orphanRemoval</code>, leaving orphan rows.</li>
+  <li>Modelling each composition part as an independently managed repository entity.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In association nobody owns anybody: both objects are created and destroyed independently and just reference each other. In aggregation the whole holds the parts but doesn't control their life: removing a department doesn't delete its professors, who can join another department. In composition the whole exclusively owns the parts: creating an order creates its lines, deleting the order deletes them, and a line can't move to another order. This matters in persistence: in JPA I map composition with cascade ALL and orphanRemoval, while aggregations must never cascade deletes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What could go wrong if you cascade deletes on an aggregation?</strong> Deleting the whole wipes shared parts still used elsewhere.</li>
+  <li><strong>What does orphanRemoval do?</strong> Deletes a child row when it is removed from the parent's collection.</li>
+  <li><strong>How does this relate to DDD aggregates?</strong> The aggregate root owns its internal entities as compositions.</li>
+</ul>
+</article>
+</body>
+</html>

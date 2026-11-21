@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-009 · What is a CNI plugin, and how do Calico, Cilium and Flannel differ?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-009" data-topic="Kubernetes">
+<h1>What is a CNI plugin, and how do Calico, Cilium and Flannel differ?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>CNI plugin</strong> implements the <strong>Container Network Interface</strong>: it gives each pod an interface and <strong>IP address</strong> and routes so <strong>every pod reaches every pod without NAT</strong>. <strong>Flannel</strong> is a simple overlay <strong>without NetworkPolicy</strong>, <strong>Calico</strong> offers <strong>BGP or overlay routing and strong policy</strong>, <strong>Cilium</strong> uses <strong>eBPF</strong> with <strong>L7 policy and observability</strong>, and cloud CNIs give pods <strong>VPC IPs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Kubernetes network model requires that every pod gets its own IP and can reach every other pod without NAT, but Kubernetes does not implement this itself. When the kubelet (via the container runtime) creates a pod sandbox, it calls the configured <strong>CNI plugin</strong> binary with ADD; the plugin creates a veth pair or similar interface, allocates an IP via <strong>IPAM</strong>, and programmes routes. DEL cleans up when the pod is removed.</p>
+<p>How the major options differ:</p>
+<ul>
+  <li><strong>Flannel:</strong> allocates a subnet per node and connects nodes with a <strong>VXLAN overlay</strong> (encapsulating pod packets in UDP). Easy to run, but it does not enforce <strong>NetworkPolicy</strong>; it is often paired with Calico for that (the &quot;Canal&quot; combination) or used in small or lab clusters.</li>
+  <li><strong>Calico:</strong> can route pod traffic <strong>natively with BGP</strong> (no encapsulation, good performance, routable pod IPs) or use VXLAN/IP-in-IP where the network does not allow BGP. It is widely used for <strong>NetworkPolicy</strong> plus its own global and deny policies, and offers an eBPF dataplane option.</li>
+  <li><strong>Cilium:</strong> an <strong>eBPF</strong> dataplane that can replace kube-proxy, enforce identity-based policy at L3/L4 and <strong>L7</strong> (HTTP method and path, Kafka topics, DNS names), provide <strong>Hubble</strong> flow visibility, transparent encryption (WireGuard or IPsec) and service mesh features.</li>
+  <li><strong>Cloud CNIs:</strong> AWS VPC CNI, Azure CNI and GKE's dataplane assign pods <strong>real VPC addresses</strong>, so they integrate directly with security groups and load balancers, at the cost of consuming subnet IPs.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod scheduled; runtime creates the sandbox network namespace.</li>
+  <li>Runtime calls CNI ADD with the configuration in <code>/etc/cni/net.d</code>.</li>
+  <li>Plugin creates the interface and allocates an IP.</li>
+  <li>Plugin installs routes or overlay tunnels between nodes.</li>
+  <li>Policy agent (Calico/Cilium) enforces NetworkPolicies.</li>
+  <li>On pod deletion, CNI DEL releases the IP.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">ls /etc/cni/net.d/          # which CNI is configured on this node
+kubectl get pods -n kube-system -o wide | grep -E 'calico|cilium|flannel|aws-node'
+cilium connectivity test    # end-to-end checks with Cilium</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Flannel</th><th>Calico</th><th>Cilium</th></tr></thead>
+<tbody>
+<tr><td>Dataplane</td><td>VXLAN overlay</td><td>BGP or overlay; iptables or eBPF</td><td>eBPF</td></tr>
+<tr><td>NetworkPolicy</td><td>No</td><td>Yes, plus extensions</td><td>Yes, plus L7</td></tr>
+<tr><td>Observability</td><td>Basic</td><td>Flow logs</td><td>Hubble flows</td></tr>
+<tr><td>Complexity</td><td>Low</td><td>Medium</td><td>Medium-high</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Writing NetworkPolicies on Flannel and assuming they are enforced.</li>
+  <li>Running out of VPC IPs with cloud CNIs on small subnets.</li>
+  <li>Pod CIDR overlapping with corporate or VPC ranges.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CNI is the plugin contract the runtime calls when a pod is created: the plugin creates the interface, allocates an IP and sets up routes, so every pod can reach every other pod without NAT. Flannel is the simplest, a VXLAN overlay that doesn't enforce NetworkPolicy. Calico can route natively with BGP or use an overlay and is strong on NetworkPolicy. Cilium uses eBPF, can replace kube-proxy, supports L7-aware policy and gives Hubble flow visibility. Cloud CNIs like AWS VPC CNI give pods real VPC addresses.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do pods on different nodes fail with a wrong MTU?</strong> Encapsulation adds header bytes; large packets get dropped or fragmented, so small requests work and big ones hang.</li>
+  <li><strong>Can you change CNI on a live cluster?</strong> Possible but disruptive; usually migrate node pools or rebuild.</li>
+  <li><strong>What is IPAM?</strong> IP address management: how the plugin allocates pod IPs per node or subnet.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-229 · What is the Strangler Fig pattern, and how does it support incremental monolith migration?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-229" data-topic="Microservices">
+<h1>What is the Strangler Fig pattern, and how does it support incremental monolith migration?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>Strangler Fig pattern</strong> migrates a monolith <strong>incrementally</strong>: a <strong>routing layer</strong> sits in front of it, one capability at a time is rebuilt as a new service and traffic for it is switched over, until the old code can be <strong>retired</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The name comes from the strangler fig, which grows around a host tree and eventually replaces it. A big-bang rewrite freezes features for months, has to match years of hidden behaviour and usually ships late; the Strangler Fig avoids that by keeping the system in production the whole time.</p>
+<p>First you put a <strong>facade</strong> in front of the monolith: an <strong>API gateway</strong>, reverse proxy (NGINX, Envoy) or Spring Cloud Gateway. At the start it routes everything to the monolith. Then you pick one capability with clear boundaries and real value, such as notifications, product catalogue or invoicing, build it as a new service, and change the routes for its endpoints. Everything else still goes to the monolith. Once the new service is stable, you delete the corresponding code from the monolith and repeat.</p>
+<p>Risk is low because both systems run side by side: if the new service misbehaves you <strong>route back</strong>. You can also release gradually with a percentage of traffic, canary or <strong>feature flags</strong>, or run the new service in <strong>shadow mode</strong> and compare its responses with the monolith's before switching.</p>
+<p>The hard part is <strong>data</strong>. The monolith usually has one shared database. The new service should own its data, so during the transition you keep both sides in sync, often with <strong>change data capture</strong> (Debezium) from the monolith tables, or by having the monolith publish events. An <strong>anti-corruption layer</strong> translates the monolith's model into the new service's clean domain model so the legacy design does not leak in.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Put a gateway or proxy in front of the monolith; route 100% to it.</li>
+  <li>Identify bounded contexts and choose a first, loosely coupled capability.</li>
+  <li>Build the new service with its own database; sync data via CDC or events.</li>
+  <li>Shadow traffic or canary a small percentage; compare results.</li>
+  <li>Switch the routes fully; keep the rollback route ready.</li>
+  <li>Remove the dead code and tables from the monolith; repeat.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  cloud:
+    gateway:
+      routes:
+        - id: notifications-new
+          uri: http://notification-service
+          predicates: [ Path=/api/notifications/** ]
+        - id: legacy
+          uri: http://monolith:8080
+          predicates: [ Path=/** ]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Extracting the most tangled module first (orders, billing core) instead of an easy win.</li>
+  <li>Sharing the monolith's database tables with the new service indefinitely.</li>
+  <li>Never deleting the old code, so you maintain two implementations.</li>
+  <li>Migrating without observability, so regressions are invisible.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Strangler Fig means replacing a monolith piece by piece instead of rewriting it. I put a gateway in front of the monolith, then extract one capability, say notifications, as a new service and route only its endpoints there, while everything else still hits the monolith. I can canary or shadow traffic and route back if something breaks, so risk stays low. Once it is stable I delete the old code and move to the next capability. The tricky part is data: the new service gets its own schema, kept in sync with CDC during the transition, and an anti-corruption layer keeps the legacy model out of the new design.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which capability would you extract first, and why?</strong> A low-coupling, high-value one like notifications or catalogue, to prove the platform and deliver quick wins.</li>
+  <li><strong>How do you handle writes during the transition?</strong> One side owns writes for an entity at a time; the other is synced via CDC or events.</li>
+  <li><strong>How do you know a capability is fully migrated?</strong> No traffic reaches the old code paths in monitoring, then you remove them.</li>
+</ul>
+</article>
+</body>
+</html>

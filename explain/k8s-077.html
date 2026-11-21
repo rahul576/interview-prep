@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-077 · Your cluster has 40 nodes, but monitoring shows average CPU usage of only 15 percent. Yet new pods cannot be scheduled. Explain and fix it.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-077" data-topic="Kubernetes">
+<h1>Your cluster has 40 nodes, but monitoring shows average CPU usage of only 15 percent. Yet new pods cannot be scheduled. Explain and fix it.</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>scheduler uses requests, not actual usage</strong>: if teams <strong>request far more than they use</strong>, nodes look full while real CPU is 15 percent; compare <strong>requests with usage per workload</strong>, <strong>rightsize</strong> with <strong>VPA recommendations or Goldilocks</strong>, and also check <strong>memory requests</strong> and <strong>pods-per-node or IP limits</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>For each node, the scheduler subtracts the <strong>sum of requests</strong> of pods already placed from the node's <strong>allocatable</strong> capacity. Usage is irrelevant to that calculation. So a pod requesting 2 CPU and using 0.1 still blocks 2 CPU. Multiply by hundreds of pods and a 40-node cluster can be &quot;full&quot; at 15 percent utilisation; new pods sit <strong>Pending</strong> with <code>Insufficient cpu</code>, and the cluster autoscaler adds expensive nodes.</p>
+<p>Typical reasons for over-requesting: copy-pasted Helm defaults, requests set during a load test years ago, sidecars with generous defaults, fear of throttling (which actually comes from limits, not requests), or setting requests equal to peak rather than typical usage.</p>
+<p>The analysis: compare <code>kube_pod_container_resource_requests</code> (from kube-state-metrics) with real usage (<code>container_cpu_usage_seconds_total</code> rate, <code>container_memory_working_set_bytes</code>) at p95 or p99 over a few weeks. Usually a small number of workloads hold most of the unused reservation, so start there.</p>
+<p>Rightsizing: <strong>VPA</strong> in <code>Off</code>/recommendation mode or <strong>Goldilocks</strong> suggests values; teams apply them via their manifests, keeping headroom (for example p95 plus 20-30 percent for CPU, peak plus buffer for memory). With in-place pod resize now GA, VPA can apply changes with fewer restarts.</p>
+<p>Also check the <strong>other constraints</strong>: <strong>memory requests</strong> are often the actual bottleneck even if CPU looks fine; <code>maxPods</code> per node (110 by default, lower on some managed CNIs) and <strong>IP addresses</strong> per node or subnet can block scheduling while CPU and memory are free; and DaemonSet overhead on every node.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check Pending reasons: <code>Insufficient cpu</code>, <code>memory</code>, or <code>Too many pods</code>.</li>
+  <li>Compare requested vs used per namespace and workload.</li>
+  <li>Prioritise the biggest gaps.</li>
+  <li>Apply VPA or Goldilocks recommendations with headroom.</li>
+  <li>Verify node count drops and SLOs stay healthy.</li>
+  <li>Add policy: LimitRange defaults, reviews of large requests.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql"># CPU requested minus used, by namespace (cores)
+sum by (namespace) (kube_pod_container_resource_requests{resource=&quot;cpu&quot;})
+-
+sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=&quot;&quot;}[30m]))</code></pre>
+<pre><code class="language-bash">kubectl describe node ip-10-0-1-23 | sed -n '/Allocated resources/,/Events/p'
+#  cpu     3800m (95%)   memory  12Gi (80%)   &lt;- requested, not used</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Looking only at average usage dashboards.</li>
+  <li>Rightsizing CPU but ignoring memory.</li>
+  <li>Cutting requests to the average and causing contention at peak.</li>
+  <li>Forgetting pod count and IP limits.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The scheduler places pods by requests, not actual usage. If teams request far more than they use, nodes look full to the scheduler while utilisation is 15 percent, so pods stay Pending and the autoscaler adds nodes. I'd compare requests with real usage per workload in Prometheus or a cost tool; usually a few deployments reserve most of the capacity. Then I'd rightsize with VPA recommendations or Goldilocks, starting with the biggest gaps and keeping headroom. I'd also check memory requests, often the real constraint, and max pods per node or IP limits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to convince teams?</strong> Show their own data and cost, change in small steps with SLO monitoring and easy rollback.</li>
+  <li><strong>Why not schedule by usage?</strong> Usage fluctuates; requests are the contract that guarantees resources.</li>
+  <li><strong>What is allocatable?</strong> Capacity minus system and kubelet reservations.</li>
+</ul>
+</article>
+</body>
+</html>

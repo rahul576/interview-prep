@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-011 · What are Terraform workspaces, and when are they a good or bad idea?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-011" data-topic="Infrastructure as Code">
+<h1>What are Terraform workspaces, and when are they a good or bad idea?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>CLI workspaces</strong> give one configuration <strong>several state files</strong> (<code>terraform workspace new/select</code>, <code>terraform.workspace</code>); they suit <strong>identical, short-lived copies</strong>, but <strong>separate directories/backends</strong> are safer for long-lived environments like dev and prod.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default a configuration has one state, in the <code>default</code> workspace. <code>terraform workspace new feature-x</code> creates another, independent state in the same backend (for S3, under an <code>env:/</code> prefix), and <code>terraform workspace select</code> switches between them. Inside the code, <code>terraform.workspace</code> returns the current name, often used in resource names or to look up settings.</p>
+<p>They work well for <strong>identical, short-lived stacks</strong>: an environment per feature branch or per developer, a test copy spun up and destroyed by CI. The code is the same, only the state differs, and cleanup is <code>terraform destroy</code> plus <code>workspace delete</code>.</p>
+<p>They are a poor fit for <strong>long-lived environments that differ</strong>. All workspaces share the same <strong>code version</strong>, <strong>backend</strong>, and usually the same <strong>credentials</strong>, so you cannot easily give prod stricter access or deploy a new code version to dev first. Differences end up as conditionals on <code>terraform.workspace</code> scattered through the code. Worst of all, the active workspace is invisible state on your machine, so it is easy to run <code>apply</code> in the wrong one. For dev, staging and prod I prefer <strong>separate root modules or directories</strong>, each with its own backend configuration, variables, credentials and pipeline, sharing logic through versioned modules.</p>
+<p><strong>HCP Terraform workspaces</strong> are a different concept: each has its own state, variables, permissions, run history and optionally its own VCS branch or directory, so they behave more like separate root configurations.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>terraform workspace new &lt;name&gt;</code> creates an empty state.</li>
+  <li><code>terraform workspace select &lt;name&gt;</code> switches the active state.</li>
+  <li>Plans and applies operate only on the selected workspace's state.</li>
+  <li><code>terraform.workspace</code> exposes the name to expressions.</li>
+  <li><code>terraform workspace delete</code> removes an empty workspace.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">terraform workspace new pr-1423
+terraform apply -var-file=preview.tfvars
+terraform workspace show        # pr-1423
+terraform destroy &amp;&amp; terraform workspace select default &amp;&amp; terraform workspace delete pr-1423</code></pre>
+<pre><code class="language-hcl">resource &quot;aws_s3_bucket&quot; &quot;assets&quot; {
+  bucket = &quot;shop-assets-${terraform.workspace}&quot;
+}</code></pre>
+<p>Preferred layout for long-lived environments:</p>
+<pre><code class="language-text">envs/dev/main.tf      backend: state/dev.tfstate   role: tf-dev
+envs/prod/main.tf     backend: state/prod.tfstate  role: tf-prod
+modules/app/          shared, versioned</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using workspaces for dev and prod with identical credentials.</li>
+  <li>Forgetting which workspace is selected and applying to the wrong one.</li>
+  <li>Heavy <code>terraform.workspace == &quot;prod&quot; ? ... : ...</code> logic everywhere.</li>
+  <li>Confusing CLI workspaces with HCP Terraform workspaces.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CLI workspaces let a single configuration have multiple independent states. I create them with terraform workspace new, switch with select, and terraform.workspace gives the name for resource naming. They're great for identical, short-lived copies, like a preview environment per pull request. For long-lived environments like dev and prod that differ in size, settings and access, they're risky: everything shares the backend, credentials and code version, and it's easy to apply to the wrong one. For those I use separate directories or root modules, each with its own backend, role and pipeline.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do HCP Terraform workspaces differ?</strong> Each is a full unit with its own state, variables, permissions and runs.</li>
+  <li><strong>Where does S3 store workspace states?</strong> Under the <code>env:/&lt;workspace&gt;/</code> prefix by default (<code>workspace_key_prefix</code>).</li>
+  <li><strong>How do you avoid wrong-workspace applies?</strong> Pipelines select explicitly; show the workspace in the prompt.</li>
+</ul>
+</article>
+</body>
+</html>

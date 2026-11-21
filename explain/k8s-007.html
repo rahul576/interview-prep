@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-007 · How does DNS-based service discovery work inside a Kubernetes cluster?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-007" data-topic="Kubernetes">
+<h1>How does DNS-based service discovery work inside a Kubernetes cluster?</h1>
+<p class="ex-meta">Kubernetes · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>CoreDNS</strong> serves cluster DNS; each Service gets <strong><code>&lt;service&gt;.&lt;namespace&gt;.svc.cluster.local</code></strong>, pointing to its ClusterIP (or pod IPs if headless); <strong>search domains</strong> in <code>/etc/resolv.conf</code> let you use short names, but <strong><code>ndots:5</code></strong> makes external names try every search domain first, so busy clusters use <strong>FQDNs</strong>, tuned <strong>dnsConfig</strong> and <strong>NodeLocal DNSCache</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every cluster runs a DNS add-on, almost always <strong>CoreDNS</strong>, behind a Service usually named <code>kube-dns</code> in <code>kube-system</code>. The kubelet writes that Service's IP into each pod's <code>/etc/resolv.conf</code>, along with search domains and options. CoreDNS's kubernetes plugin watches Services and EndpointSlices and answers:</p>
+<ul>
+  <li><code>orders.shop.svc.cluster.local</code> → ClusterIP of Service <code>orders</code> in namespace <code>shop</code>.</li>
+  <li>Headless Services → A records for each ready pod, plus per-pod names for StatefulSets.</li>
+  <li>SRV records for named ports.</li>
+</ul>
+<p>A typical resolv.conf in namespace <code>shop</code>:</p>
+<pre><code class="language-text">nameserver 10.96.0.10
+search shop.svc.cluster.local svc.cluster.local cluster.local
+options ndots:5</code></pre>
+<p>The search list is why <code>orders</code> works in the same namespace and <code>orders.shop</code> from another namespace.</p>
+<p>The cost is <strong><code>ndots:5</code></strong>: any name with fewer than five dots is treated as relative and tried with each search domain before being tried as-is. So <code>api.stripe.com</code> produces lookups for <code>api.stripe.com.shop.svc.cluster.local</code>, <code>...svc.cluster.local</code>, <code>...cluster.local</code> (and any cloud search domains), each failing with NXDOMAIN, often for both A and AAAA, before the real query. That multiplies CoreDNS load and adds latency. Conntrack races on UDP can also drop queries, producing the classic <strong>5-second timeouts</strong>.</p>
+<p>Mitigations: use trailing-dot FQDNs for external names (<code>api.stripe.com.</code>), lower <code>ndots</code> to 2 via <code>dnsConfig</code> for pods calling many external hosts, scale CoreDNS (or use its autoscaler), enable caching, and deploy <strong>NodeLocal DNSCache</strong>, a DaemonSet caching resolver on each node that avoids conntrack and cuts latency.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pod calls <code>orders</code>.</li>
+  <li>Resolver appends the first search domain: <code>orders.shop.svc.cluster.local</code>.</li>
+  <li>Query goes to the node-local cache or CoreDNS.</li>
+  <li>CoreDNS answers from its Service/EndpointSlice cache.</li>
+  <li>External names are forwarded to upstream resolvers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  dnsConfig:
+    options:
+    - { name: ndots, value: &quot;2&quot; }
+  containers:
+  - name: payments
+    image: registry.example.com/payments:4.0
+    env:
+    - { name: STRIPE_HOST, value: &quot;api.stripe.com.&quot; }   # trailing dot = absolute name</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hard-coding pod IPs instead of Service names.</li>
+  <li>Ignoring ndots overhead in services making many external calls.</li>
+  <li>Running two CoreDNS replicas for a large cluster.</li>
+  <li>Apps that cache DNS forever (old JVM defaults), missing changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cluster DNS is served by CoreDNS, and the kubelet points every pod's resolv.conf at it. A Service resolves as service.namespace.svc.cluster.local, to its ClusterIP or to pod IPs if it's headless. Search domains let me use just orders in the same namespace or orders.shop from another. The catch is ndots 5: external names are first tried with every search domain, creating several failed lookups. In busy clusters I use FQDNs with a trailing dot, lower ndots per pod, scale CoreDNS and deploy NodeLocal DNSCache to cut latency and load.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find intermittent 5-second DNS delays?</strong> CoreDNS metrics and logs, tcpdump on port 53, conntrack insert failures; NodeLocal DNSCache usually fixes it.</li>
+  <li><strong>What is dnsPolicy?</strong> ClusterFirst (default), Default (node's resolver), None (custom dnsConfig).</li>
+  <li><strong>How do you resolve a Service in another cluster?</strong> Multi-cluster services or external DNS, not plain cluster DNS.</li>
+</ul>
+</article>
+</body>
+</html>

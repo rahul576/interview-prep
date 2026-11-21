@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-215 · How would you design a backend API that supports 10,000 concurrent users?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-215" data-topic="System Design">
+<h1>How would you design a backend API that supports 10,000 concurrent users?</h1>
+<p class="ex-meta">System Design · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>10,000 concurrent users is about <strong>not holding resources per user</strong>: <strong>stateless services scaled horizontally</strong> behind a load balancer, <strong>deliberately sized thread and connection pools</strong> (or <strong>virtual threads</strong>), <strong>caching and read replicas</strong> to protect the database, <strong>queues for heavy work</strong>, plus <strong>rate limiting, load testing, autoscaling and observability</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>First translate &quot;10,000 concurrent users&quot; into <strong>requests per second</strong>. If each active user makes a request every 10 seconds, that is about 1,000 RPS; with 100 ms average latency, <strong>Little's Law</strong> (concurrency = throughput x latency) gives about 100 requests in flight. That is modest; the danger is slow dependencies that stretch latency and multiply in-flight work.</p>
+<p><strong>Stateless services:</strong> no in-memory sessions; use JWTs or a session store in <strong>Redis</strong>, so any instance can serve any request. Run several replicas across zones behind a load balancer, with <strong>Kubernetes HPA</strong> autoscaling on CPU or RPS.</p>
+<p><strong>Threading and pools:</strong> classic Spring MVC uses a Tomcat thread per request (default max 200). For I/O-heavy endpoints, <strong>Java 21 virtual threads</strong> (<code>spring.threads.virtual.enabled=true</code> in Spring Boot 3.2+) remove the thread bottleneck, or use WebFlux. But the <strong>database connection pool</strong> (HikariCP) is the real limit: size it per instance so that <code>instances x poolSize</code> stays below what the database can handle. Set <strong>timeouts</strong> on every outbound call.</p>
+<p><strong>Database protection:</strong> it is usually the bottleneck. Add proper <strong>indexes</strong>, keep transactions short, use <strong>caching</strong> (Caffeine locally, Redis shared) for hot reads, <strong>read replicas</strong> for read-heavy traffic, and pagination everywhere.</p>
+<p><strong>Async work:</strong> reports, emails and exports go to a <strong>queue</strong> (Kafka, RabbitMQ, SQS) processed by workers, so requests return quickly.</p>
+<p><strong>Protection and proof:</strong> <strong>rate limiting</strong> per user, circuit breakers on dependencies, a CDN for static assets. Validate with <strong>load tests</strong> (Gatling, k6, JMeter) at 2-3x expected peak, and monitor <strong>p95/p99 latency</strong>, error rate, saturation, pool usage.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Estimate RPS and in-flight requests with Little's Law.</li>
+  <li>Make services stateless; deploy 3+ replicas with autoscaling.</li>
+  <li>Configure Tomcat/virtual threads, Hikari pool and timeouts.</li>
+  <li>Add caching, indexes, read replicas.</li>
+  <li>Move heavy work to queues.</li>
+  <li>Load test, find the bottleneck, fix, repeat.</li>
+  <li>Dashboards and alerts on latency percentiles and saturation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spring:
+  threads:
+    virtual:
+      enabled: true          # Spring Boot 3.2+, Java 21+
+  datasource:
+    hikari:
+      maximum-pool-size: 20  # x 6 pods = 120 &lt; DB max_connections
+      connection-timeout: 2000
+  data:
+    redis:
+      timeout: 200ms
+server:
+  tomcat:
+    connection-timeout: 5s</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Equating concurrent users with concurrent requests without doing the maths.</li>
+  <li>Huge connection pools per instance that overwhelm the database.</li>
+  <li>Sticky in-memory sessions blocking horizontal scaling.</li>
+  <li>No timeouts, so a slow dependency exhausts all threads.</li>
+  <li>Never load testing before launch.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Ten thousand concurrent users is mainly about not holding resources per user. I'd keep services stateless, with sessions in tokens or Redis, and scale horizontally behind a load balancer with Kubernetes autoscaling. In each instance I'd size thread and connection pools deliberately, or use virtual threads for I/O-heavy endpoints, with timeouts everywhere. The database is usually the bottleneck, so caching, read replicas, indexes and short transactions. Heavy work goes to a queue. I'd protect it with rate limiting, prove it with Gatling or k6 load tests and monitor p95 and p99 latency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Estimating instances and connections?</strong> Little's Law for in-flight requests, per-instance throughput from load tests, and DB capacity divided across instances.</li>
+  <li><strong>Virtual threads and pinning?</strong> Avoid long <code>synchronized</code> blocks around I/O on older JDKs; JDK 24 removed most pinning.</li>
+  <li><strong>WebFlux or virtual threads?</strong> Virtual threads keep blocking code simple; WebFlux suits streaming and backpressure.</li>
+</ul>
+</article>
+</body>
+</html>

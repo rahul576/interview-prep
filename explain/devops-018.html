@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-018 · What is the difference between CMD and ENTRYPOINT in a Dockerfile?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-018" data-topic="Docker">
+<h1>What is the difference between CMD and ENTRYPOINT in a Dockerfile?</h1>
+<p class="ex-meta">Docker · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>ENTRYPOINT</strong> sets the <strong>executable that always runs</strong>, <strong>CMD</strong> supplies the <strong>default command or default arguments</strong> to it; <code>docker run</code> arguments <strong>replace CMD</strong>, while replacing ENTRYPOINT needs <code>--entrypoint</code>; use the <strong>exec (JSON) form</strong> so your process is <strong>PID 1 and receives signals</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Docker builds the container's command line as <strong>ENTRYPOINT + CMD</strong>:</p>
+<ul>
+  <li>Only <strong>CMD</strong> set: CMD is the whole command, and <code>docker run image something</code> replaces it entirely. Good for general-purpose images where users often run other commands.</li>
+  <li>Only <strong>ENTRYPOINT</strong> set: it always runs, and <code>docker run</code> arguments are appended to it.</li>
+  <li><strong>Both</strong>: ENTRYPOINT is the executable, CMD the default arguments. <code>docker run image --port 9090</code> keeps the entrypoint and swaps the arguments. This makes an image behave like a binary.</li>
+</ul>
+<p><strong>Exec form vs shell form.</strong> The exec form <code>[&quot;java&quot;, &quot;-jar&quot;, &quot;app.jar&quot;]</code> runs the program directly as <strong>PID 1</strong>. The shell form <code>java -jar app.jar</code> is wrapped as <code>/bin/sh -c &quot;java -jar app.jar&quot;</code>, so <strong>sh</strong> becomes PID 1. Many shells do not forward <code>SIGTERM</code> to the child, so <code>docker stop</code> or a Kubernetes pod termination waits for the grace period and then <strong>SIGKILLs</strong> the app, skipping graceful shutdown: in-flight requests drop and connections are not closed. The shell form also ignores CMD arguments when used for ENTRYPOINT.</p>
+<p>A common pattern is an <strong>entrypoint script</strong> that prepares configuration and ends with <code>exec &quot;$@&quot;</code>, which replaces the shell with the real process so it inherits PID 1 and receives signals.</p>
+<p><strong>PID 1 is special:</strong> the kernel does not apply default signal handlers to it, and it must reap orphaned child processes. If your app spawns children, use a tiny init like <strong>tini</strong> (<code>docker run --init</code>) to forward signals and reap <strong>zombies</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Docker reads ENTRYPOINT and CMD from the image config.</li>
+  <li><code>docker run image args</code> → args replace CMD.</li>
+  <li><code>docker run --entrypoint sh image</code> → replaces ENTRYPOINT (and clears the image CMD).</li>
+  <li>Final argv is executed as PID 1 in the container.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM eclipse-temurin:21-jre
+COPY app.jar /app/app.jar
+COPY docker-entrypoint.sh /usr/local/bin/
+ENTRYPOINT [&quot;docker-entrypoint.sh&quot;]
+CMD [&quot;java&quot;, &quot;-jar&quot;, &quot;/app/app.jar&quot;, &quot;--server.port=8080&quot;]</code></pre>
+<pre><code class="language-bash">#!/bin/sh
+# docker-entrypoint.sh
+set -e
+[ -n &quot;$DB_PASSWORD_FILE&quot; ] &amp;&amp; export DB_PASSWORD=&quot;$(cat &quot;$DB_PASSWORD_FILE&quot;)&quot;
+exec &quot;$@&quot;          # hand PID 1 to the real process</code></pre>
+<pre><code class="language-bash">docker run shop-api                                  # default CMD
+docker run shop-api java -jar /app/app.jar --debug   # override CMD
+docker run --entrypoint sh -it shop-api              # override ENTRYPOINT</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shell-form ENTRYPOINT, so SIGTERM never reaches the app.</li>
+  <li>Entrypoint scripts that forget <code>exec</code>.</li>
+  <li>Putting configuration flags in ENTRYPOINT that users then cannot override.</li>
+  <li>Thinking <code>docker run image arg</code> overrides ENTRYPOINT.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ENTRYPOINT defines the executable that always runs; CMD gives the default command, or default arguments when there's an ENTRYPOINT. Arguments to docker run replace CMD, while changing the ENTRYPOINT needs the --entrypoint flag. My usual pattern is ENTRYPOINT with the binary or a small script ending in exec, and CMD with default flags. I always use the exec JSON form, so the app runs as PID 1 and receives SIGTERM directly; with the shell form, sh is PID 1 and may not forward signals, so the container gets killed instead of shutting down gracefully.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Zombie processes?</strong> Use <code>--init</code>/tini or a proper init as PID 1 to reap children.</li>
+  <li><strong>Why does stop take 10 seconds?</strong> SIGTERM is ignored, so Docker waits and then SIGKILLs.</li>
+  <li><strong>How does Kubernetes map these?</strong> <code>command</code> overrides ENTRYPOINT, <code>args</code> overrides CMD.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-068 · How do you sandbox local MCP servers to limit damage if one is malicious or compromised?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-068" data-topic="MCP Servers">
+<h1>How do you sandbox local MCP servers to limit damage if one is malicious or compromised?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Sandbox local servers by running them in <strong>containers or lightweight VMs</strong>, <strong>mounting only the directories they need</strong> (read-only where possible), <strong>restricting network egress</strong> to required hosts, running <strong>as non-root with dropped capabilities</strong>, and passing <strong>only the credentials that server needs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default a local stdio server is just a process running as you. If it is malicious, compromised by a supply-chain attack, or tricked through prompt injection into running something harmful, it can read your SSH keys and cloud credentials, modify source code and send everything anywhere on the internet. Sandboxing reduces that blast radius to what the server legitimately needs.</p>
+<p><strong>Isolation boundary.</strong> Containers (Docker, Podman) are the usual choice; they work over stdio with <code>docker run -i</code>. For higher-risk servers, such as ones that execute code or browse arbitrary websites, <strong>lightweight VMs</strong> (Firecracker-style micro-VMs, or desktop sandboxes) give a stronger boundary than a shared kernel.</p>
+<p><strong>Filesystem.</strong> Mount only what is needed. A filesystem server gets the project directory, <strong>read-only</strong> if it only reads. Never mount the home directory, <code>~/.ssh</code>, <code>~/.aws</code> or the Docker socket.</p>
+<p><strong>Network egress.</strong> This is as important as filesystem limits. Restricting outbound traffic to the specific hosts a server needs (for example <code>api.github.com</code>) blocks <strong>exfiltration</strong> to arbitrary destinations, which is the end goal of most attacks. Servers that need no network should get <code>--network none</code>.</p>
+<p><strong>Privileges.</strong> Run as a <strong>non-root user</strong>, drop Linux <strong>capabilities</strong>, use a read-only root filesystem, no <code>--privileged</code>, and set memory and CPU limits.</p>
+<p><strong>Credentials.</strong> Pass only the <strong>scoped token</strong> that server needs as an environment variable, not the user's whole environment or credential files.</p>
+<p>Some hosts and tools offer <strong>built-in sandboxing</strong> for MCP servers, which makes consistent policy across an organisation much easier than relying on every developer's docker flags.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Package the server as a container image pinned by digest.</li>
+  <li>Define mounts: project dir only, read-only by default.</li>
+  <li>Attach the container to a network with an egress proxy allowlist, or no network.</li>
+  <li>Run as non-root, drop capabilities, set resource limits.</li>
+  <li>Inject one scoped secret; nothing else from the host environment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">docker run -i --rm \
+  --user 10001:10001 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --memory 512m --pids-limit 128 \
+  -v &quot;$PWD&quot;:/workspace:ro \
+  --network mcp-egress-github \
+  -e GITHUB_TOKEN=&quot;$GH_FINEGRAINED_RO&quot; \
+  ghcr.io/github/github-mcp-server@sha256:&lt;digest&gt; stdio</code></pre>
+<p>The <code>mcp-egress-github</code> network routes through a proxy that only allows <code>api.github.com</code>.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Mounting <code>$HOME</code> so the server &quot;can find things&quot;.</li>
+  <li>Default bridge networking with unrestricted internet access.</li>
+  <li>Mounting <code>/var/run/docker.sock</code>, which is root on the host.</li>
+  <li>Passing the full host environment with <code>--env-file</code> containing every secret.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Local servers run with the user's permissions by default, so a malicious one can read anything and contact anywhere. I sandbox them in containers, or lightweight VMs for higher-risk ones, so they only see what's mounted: a filesystem server gets just the project directory, read-only if it doesn't need to write. Network egress is restricted to the hosts the server needs, like the GitHub API, which blocks exfiltration. Containers run as non-root with dropped capabilities and no privileged mode, and each server only gets the scoped credentials it needs, not my whole environment. Where hosts offer built-in sandboxing I prefer that, because it's easier to apply consistently across an organisation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is egress as important as filesystem?</strong> Reading data is harmless if it cannot leave; exfiltration needs a network path.</li>
+  <li><strong>Container vs VM?</strong> VMs give a stronger boundary for servers that run untrusted code.</li>
+  <li><strong>What about servers that need GUI or browser?</strong> Run the browser inside the sandbox too, with egress controls.</li>
+</ul>
+</article>
+</body>
+</html>

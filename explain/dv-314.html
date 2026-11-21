@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-314 · How do you manage secrets in a GitOps workflow?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-314" data-topic="GitOps &amp; Helm">
+<h1>How do you manage secrets in a GitOps workflow?</h1>
+<p class="ex-meta">GitOps &amp; Helm · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Never commit plain Kubernetes Secrets (they are only <strong>base64-encoded</strong>); either keep secrets <strong>out of Git</strong> with the <strong>External Secrets Operator</strong> syncing from <strong>Vault, AWS Secrets Manager or Azure Key Vault</strong>, or store them <strong>encrypted in Git</strong> with <strong>Sealed Secrets</strong> or <strong>SOPS + KMS</strong>, authenticate with <strong>workload identity</strong>, and let the secret store handle <strong>rotation and access control</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>GitOps wants everything in Git, but a Kubernetes Secret manifest only base64-encodes values, which anyone can decode. Git history is permanent and widely cloned, so a leaked secret must be considered compromised forever. Two patterns solve this.</p>
+<p><strong>1. Reference, don't store: External Secrets Operator (ESO).</strong> Git contains an <strong>ExternalSecret</strong> resource that says &quot;fetch <code>prod/orders/db-password</code> from this store and create a Kubernetes Secret named <code>orders-db</code>&quot;. A <strong>SecretStore/ClusterSecretStore</strong> describes how to reach the provider. ESO polls the provider (<code>refreshInterval</code>), so a <strong>rotated</strong> value in Vault or Secrets Manager flows into the cluster automatically. The vault keeps <strong>access policies, audit logs and rotation</strong>. The <strong>Secrets Store CSI Driver</strong> is a file-mount alternative.</p>
+<p><strong>2. Encrypt in Git: Sealed Secrets or SOPS.</strong> <strong>Sealed Secrets</strong> uses a controller with a private key in the cluster; developers encrypt with <code>kubeseal</code> using the public key, and only that controller can decrypt the resulting <code>SealedSecret</code>. Simple, but secrets are tied to the cluster key, which must be backed up, and rotation means re-sealing. <strong>SOPS</strong> encrypts values in YAML files with <strong>AWS KMS, Azure Key Vault, GCP KMS, age or PGP</strong>; Flux decrypts natively, Argo CD via plugins such as KSOPS or helm-secrets.</p>
+<p><strong>Authentication</strong> to the store should use <strong>workload identity</strong> (IRSA or EKS Pod Identity, Azure Workload Identity, GKE Workload Identity, or Vault's Kubernetes auth) rather than static keys stored as yet another secret.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Secret value lives in the vault (or encrypted in Git).</li>
+  <li>Git contains only an ExternalSecret reference (or encrypted SealedSecret/SOPS file).</li>
+  <li>Argo CD/Flux applies it to the cluster.</li>
+  <li>ESO (or the Sealed Secrets controller/SOPS) creates the real Kubernetes Secret.</li>
+  <li>Pods consume it; rotation in the vault propagates on the next refresh.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: orders-db, namespace: orders }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: ClusterSecretStore, name: aws-secrets-manager }
+  target: { name: orders-db }
+  data:
+    - secretKey: password
+      remoteRef: { key: prod/orders/db, property: password }</code></pre>
+<pre><code class="language-bash">kubectl create secret generic api-key --from-literal=key=s3cr3t --dry-run=client -o yaml \
+  | kubeseal --format yaml &gt; sealed-api-key.yaml   # safe to commit</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>External Secrets</th><th>Sealed Secrets</th><th>SOPS</th></tr></thead>
+<tbody>
+<tr><td>Secret in Git</td><td>Reference only</td><td>Encrypted</td><td>Encrypted</td></tr>
+<tr><td>Rotation</td><td>Automatic from store</td><td>Re-seal</td><td>Re-encrypt</td></tr>
+<tr><td>Dependency</td><td>External vault</td><td>Cluster key</td><td>KMS/age keys</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Committing base64 Secrets and thinking they are encrypted.</li>
+  <li>Losing the Sealed Secrets controller key, making every sealed secret undecryptable.</li>
+  <li>Using long-lived cloud access keys for ESO instead of workload identity.</li>
+  <li>Forgetting that apps need restarting or reloading to pick up rotated values.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Plain Kubernetes Secrets are just base64, so they never go into Git. I prefer keeping secrets out of Git entirely: the External Secrets Operator reads them from Vault, AWS Secrets Manager or Azure Key Vault and creates Kubernetes Secrets in the cluster, and Git only contains a reference saying which secret to fetch. That keeps rotation, audit and access control in the vault. The alternative is encrypted secrets in Git, either Sealed Secrets, which only the in-cluster controller can decrypt, or SOPS with a cloud KMS key. Either way, the operator authenticates with workload identity instead of static keys, and RBAC and etcd encryption protect the resulting Secrets.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Sealed Secrets vs ESO?</strong> Sealed Secrets is self-contained but harder to rotate; ESO needs a vault but gives central rotation and audit.</li>
+  <li><strong>How do pods pick up rotated secrets?</strong> Mounted volumes update automatically; env vars need a restart, for example via Reloader.</li>
+  <li><strong>What if a secret was already committed?</strong> Rotate it immediately; rewriting history is not enough.</li>
+</ul>
+</article>
+</body>
+</html>

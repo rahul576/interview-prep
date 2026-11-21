@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-053 · How do you handle configuration files for containers across environments?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-053" data-topic="Docker">
+<h1>How do you handle configuration files for containers across environments?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Build <strong>one image for all environments</strong> and <strong>inject configuration at runtime</strong>: <strong>environment variables</strong> for simple settings, <strong>mounted files</strong> (bind mounts, Docker configs, Kubernetes <strong>ConfigMaps</strong>) for structured config, <strong>secrets separately</strong>, optional <strong>templating at start-up</strong>, and <strong>validation with fail-fast</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>twelve-factor</strong> principle of separating config from code is essential for containers. If you build a different image per environment, the image tested in staging is not the one deployed to production, and promotion becomes rebuilding. So the image contains the application and sensible defaults, and everything that differs, such as URLs, feature flags, log levels and credentials, is supplied when the container starts.</p>
+<p><strong>Environment variables</strong> suit simple key-value settings: <code>SPRING_PROFILES_ACTIVE=prod</code>, <code>LOG_LEVEL=info</code>, <code>DB_HOST=db.prod</code>. Most frameworks map them to configuration automatically. For <strong>larger or structured configuration</strong>, such as <code>nginx.conf</code>, <code>application.yml</code> or a JSON rules file, mount a <strong>file</strong>: a <strong>bind mount</strong> on a single host or Compose, a <strong>Docker config</strong> in Swarm, or a <strong>ConfigMap</strong> in Kubernetes mounted as a volume. Files are easier to review, can be reloaded by some apps without restart, and avoid huge environment blocks.</p>
+<p><strong>Secrets</strong> are handled separately because they need encryption, access control and rotation: <strong>Docker secrets</strong> in Swarm or Compose, <strong>Kubernetes Secrets</strong> (ideally encrypted at rest, or synced from <strong>Vault</strong>, AWS Secrets Manager or Azure Key Vault via the Secrets Store CSI driver or External Secrets Operator). Mount them as files with restrictive permissions rather than environment variables, which leak into <code>docker inspect</code>, crash dumps and child processes.</p>
+<p>When a third-party app only reads a static file, an <strong>entrypoint</strong> can render a template with <code>envsubst</code> or a tool like <code>gomplate</code>. Finally, the application should <strong>validate configuration at start-up</strong> and <strong>fail fast</strong> with a clear message, instead of failing on the first request.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Build a single image with defaults.</li>
+  <li>Define per-environment values in Compose overrides, Helm values or Kustomize overlays.</li>
+  <li>Inject env vars and mount config files at start.</li>
+  <li>Mount secrets from a secret store.</li>
+  <li>App validates config and refuses to start if invalid.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Kubernetes
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: orders-config }
+data:
+  application.yml: |
+    orders:
+      max-items: 50
+---
+spec:
+  containers:
+    - name: orders
+      image: ghcr.io/acme/orders@sha256:&lt;digest&gt;
+      env:
+        - { name: SPRING_PROFILES_ACTIVE, value: prod }
+      volumeMounts:
+        - { name: config, mountPath: /config, readOnly: true }
+        - { name: db-secret, mountPath: /run/secrets/db, readOnly: true }
+  volumes:
+    - name: config
+      configMap: { name: orders-config }
+    - name: db-secret
+      secret: { secretName: orders-db, defaultMode: 0400 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Baking environment-specific config or secrets into the image.</li>
+  <li>Secrets in plain environment variables committed to Compose files.</li>
+  <li>No validation, so a typo only surfaces under traffic.</li>
+  <li>Changing ConfigMaps without rolling pods, so apps never pick up changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The rule is one image for every environment with configuration injected at runtime, so what was tested is exactly what runs in production. Simple settings come from environment variables. Larger structured config like nginx.conf or application.yml is mounted as a file: a bind mount on a single host, a Docker config in Swarm or a ConfigMap in Kubernetes. Secrets are handled separately through Docker or Kubernetes secrets or an external vault, mounted as files with restricted permissions. If a file needs env-specific values, the entrypoint renders a template with envsubst, and the app validates config at startup and fails fast.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why never bake env config into the image?</strong> It breaks build-once-promote and can leak secrets.</li>
+  <li><strong>Env vars vs files for secrets?</strong> Files are less likely to leak via inspect, logs or child processes.</li>
+  <li><strong>How do apps pick up ConfigMap changes?</strong> Mounted files update eventually; env vars need a restart, often triggered by a checksum annotation.</li>
+</ul>
+</article>
+</body>
+</html>

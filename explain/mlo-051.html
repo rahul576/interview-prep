@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-051 · When and how would you cache model predictions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-051" data-topic="MLOps">
+<h1>When and how would you cache model predictions?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Cache predictions when <strong>identical inputs repeat</strong> and inference is expensive; build the <strong>key from normalised inputs plus the model version</strong>, set the <strong>TTL by how fast the underlying data changes</strong>, <strong>precompute in batch</strong> for known entities, <strong>invalidate on deployment</strong>, and watch <strong>hit rates, permissions and privacy</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Caching pays off when the same inputs are scored repeatedly: recommendations for popular items, classification of duplicate documents, <strong>embeddings</strong> for repeated texts, risk scores for the same merchant, or identical LLM prompts. It saves compute and latency.</p>
+<p><strong>Cache key.</strong> Build it from <strong>normalised input features</strong>—sorted keys, consistent rounding, trimmed and lower-cased text—hashed, plus the <strong>model name and version</strong> (and feature-pipeline version). Including the version means a new model never serves old predictions; deployment naturally bypasses old entries, and you can also purge explicitly.</p>
+<p><strong>TTL.</strong> Match it to how quickly inputs and the world change. A credit or fraud score that depends on real-time features can only be cached for seconds, or not at all. A product category prediction or an embedding of unchanging text can be cached for days or indefinitely.</p>
+<p><strong>Precomputation.</strong> For a known set of entities, <strong>batch-score</strong> them and store predictions in a key-value store (Redis, DynamoDB, Bigtable). Serving becomes a lookup, with <strong>fallback to online inference</strong> for new or missing entities. This is caching taken to its limit.</p>
+<p><strong>Semantic caching</strong> for LLMs reuses answers for similar (not identical) prompts using embedding similarity, but needs care because near-matches can be wrong.</p>
+<p><strong>Operational concerns.</strong> Monitor <strong>hit rate</strong>, latency saved and staleness. Make sure cached results respect <strong>permissions</strong>: if the output depends on who asks, the user or tenant must be in the key. Personal data in cache keys or values needs encryption, TTLs and deletion handling.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Confirm repetition: measure duplicate input rate in logs.</li>
+  <li>Define normalisation and the key including model version.</li>
+  <li>Choose TTL per use case.</li>
+  <li>On request: compute key, return cached value or score and store.</li>
+  <li>Invalidate or bypass on deployment.</li>
+  <li>Monitor hit rate and correctness.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import hashlib, json
+
+MODEL_VERSION = &quot;doc-classifier:7&quot;
+
+def cache_key(features: dict) -&gt; str:
+    norm = {k: (round(v, 4) if isinstance(v, float) else str(v).strip().lower())
+            for k, v in sorted(features.items())}
+    raw = MODEL_VERSION + json.dumps(norm, sort_keys=True)
+    return &quot;pred:&quot; + hashlib.sha256(raw.encode()).hexdigest()
+
+def predict(features):
+    k = cache_key(features)
+    if (hit := redis.get(k)) is not None:
+        return json.loads(hit)
+    out = model.predict(features)
+    redis.set(k, json.dumps(out), ex=24 * 3600)
+    return out</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving the model version out of the key.</li>
+  <li>Caching predictions that depend on fast-changing real-time features.</li>
+  <li>Ignoring per-user permissions in shared caches.</li>
+  <li>Not normalising inputs, so the hit rate stays near zero.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Caching makes sense when identical inputs repeat and inference is expensive, like popular items, duplicate documents or embeddings. The key is built from normalised features plus the model version, so a new model never serves stale predictions. The TTL depends on how fast the underlying data changes: a real-time fraud score barely at all, a product category for days. For known entities I precompute in batch into a key-value store with online fallback. I monitor hit rates and make sure cached results respect permissions and privacy.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What goes wrong if the key ignores the model version?</strong> Old predictions are served after a deployment, hiding the new model and breaking rollbacks and audits.</li>
+  <li><strong>What is semantic caching?</strong> Reusing results for similar inputs by embedding similarity, mainly for LLMs.</li>
+  <li><strong>Cache or precompute?</strong> Precompute for a known, bounded entity set; cache for open-ended inputs.</li>
+</ul>
+</article>
+</body>
+</html>

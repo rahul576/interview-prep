@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agt-013 · How should agents handle errors from tools and external systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="agt-013" data-topic="AI Agents &amp; AIOps">
+<h1>How should agents handle errors from tools and external systems?</h1>
+<p class="ex-meta">AI Agents &amp; AIOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Handle tool errors deliberately: <strong>retry transient errors with backoff in tool code</strong>, return other errors to the model as <strong>actionable observations</strong> for self-correction, <strong>stop or escalate on permanent errors</strong>, use <strong>compensating actions</strong> for partial work, and <strong>never accept success without verification</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Errors are normal in agent work: APIs time out, rate limits hit, files are missing, permissions are denied. The design question is <strong>who handles which error</strong>.</p>
+<p><strong>Transient errors</strong> such as timeouts, HTTP 429 and 503, and connection resets should be retried <strong>inside the tool implementation</strong> with exponential backoff and jitter, respecting <code>Retry-After</code>. The model should not spend steps and tokens on network blips, and it has no better strategy than code.</p>
+<p><strong>Correctable errors</strong> are returned to the model as <strong>observations</strong> with <strong>actionable messages</strong>: &quot;file not found: src/app.py; did you mean src/main/app.py?&quot;, &quot;date must be ISO format YYYY-MM-DD&quot;. Good error messages turn failures into self-correction. A bare &quot;500 Internal Server Error&quot; causes guessing and loops.</p>
+<p><strong>Permanent errors</strong>, such as permission denied, resource does not exist, or business rule violated, should make the agent stop that path and <strong>report or escalate</strong>, not try endless variants. Tools can mark errors with a type such as <code>retryable: false</code> to make this clear, and the runtime can stop after repeated identical errors.</p>
+<p>For multi-step tasks that fail halfway, the system needs a record of completed steps and, where needed, <strong>compensating actions</strong>, the saga pattern, defined in code rather than improvised by the model.</p>
+<p>Finally, models sometimes report success after a failed step because they misread the output or continue the expected story. So important outcomes are <strong>verified</strong>: tests actually pass, the record exists, the deployment is healthy, and the final report is checked against recorded tool results.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Tool code retries transient errors with backoff, then gives up with a clear status.</li>
+  <li>Errors return structured: ok=false, type, message, hint.</li>
+  <li>Model corrects arguments for fixable errors.</li>
+  <li>Permanent errors trigger stop, alternative plan or escalation.</li>
+  <li>Partial failures trigger compensation from durable step records.</li>
+  <li>Verification confirms the final state before reporting success.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def create_ticket(project: str, title: str, body: str) -&gt; dict:
+    for attempt in range(4):
+        try:
+            resp = jira.create(project=project, title=title, body=body, timeout=10)
+            return {&quot;ok&quot;: True, &quot;ticket&quot;: resp.key, &quot;url&quot;: resp.url}
+        except RateLimited as e:
+            time.sleep(e.retry_after or (2 ** attempt + random.random()))
+        except ProjectNotFound:
+            return {&quot;ok&quot;: False, &quot;retryable&quot;: False, &quot;error&quot;: f&quot;Project '{project}' does not exist.&quot;,
+                    &quot;hint&quot;: &quot;Call list_projects to find valid project keys.&quot;}
+        except PermissionDenied:
+            return {&quot;ok&quot;: False, &quot;retryable&quot;: False, &quot;error&quot;: &quot;No permission to create issues in this project.&quot;,
+                    &quot;hint&quot;: &quot;Stop and ask the user to request access.&quot;}
+    return {&quot;ok&quot;: False, &quot;retryable&quot;: False, &quot;error&quot;: &quot;Jira unavailable after 4 attempts.&quot;}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Letting the model retry network errors step by step.</li>
+  <li>Raw stack traces or HTTP codes as the only error information.</li>
+  <li>Not distinguishing permanent from transient errors.</li>
+  <li>No record of completed side effects when a later step fails.</li>
+  <li>Trusting the model's claim of success.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Errors are normal, so I handle them deliberately. Transient ones like timeouts and rate limits are retried with backoff inside the tool code, so the model doesn't waste steps. Other errors go back to the model as observations with actionable messages, like 'file not found, did you mean this path' or 'the API needs an ISO date', so it can self-correct. Permanent errors like permission denied should make the agent stop that path and report or escalate rather than try variants. If a multi-step task fails halfway, we need a record of what was done and compensating actions. And the agent never claims success without verification, like checking the tests pass or the record exists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detect success claims without work?</strong> Compare the final message against the trace with code; require evidence like IDs that are verified.</li>
+  <li><strong>Should tool errors raise exceptions?</strong> Inside the runtime, convert them into structured results the model can read.</li>
+  <li><strong>What is a saga?</strong> A sequence of steps where each has a compensating action used to undo it on failure.</li>
+</ul>
+</article>
+</body>
+</html>

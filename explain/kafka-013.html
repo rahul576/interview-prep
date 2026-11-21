@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kafka-013 · How do you manage message schemas and evolve them safely?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="kafka-013" data-topic="Kafka">
+<h1>How do you manage message schemas and evolve them safely?</h1>
+<p class="ex-meta">Kafka · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use a <strong>schema registry</strong> (Confluent, Apicurio, AWS Glue) with <strong>Avro, Protobuf or JSON Schema</strong>, where messages carry a <strong>schema ID</strong> and the registry enforces a <strong>compatibility mode</strong> (backward, forward, full); safe evolution means <strong>adding optional fields with defaults</strong>, checked in <strong>CI</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kafka itself treats messages as bytes. Without a contract, a producer that renames a field silently breaks every consumer. A <strong>schema registry</strong> stores versioned schemas per <strong>subject</strong> (by default <code>&lt;topic&gt;-value</code>). The producer's serializer registers or looks up the schema and prefixes each message with a small header containing the <strong>schema ID</strong>; the consumer's deserializer fetches that schema (cached) and decodes reliably, even if its own code was compiled against a different version.</p>
+<p><strong>Compatibility modes</strong> decide which changes are allowed:</p>
+<ul>
+  <li><strong>BACKWARD</strong> (Confluent default): consumers using the <strong>new</strong> schema can read data written with the <strong>previous</strong> one. Upgrade <strong>consumers first</strong>. Deleting fields and adding fields with defaults are allowed.</li>
+  <li><strong>FORWARD</strong>: consumers on the <strong>old</strong> schema can read data written with the <strong>new</strong> one. Upgrade <strong>producers first</strong>. Adding fields is allowed; deleting only optional fields with defaults.</li>
+  <li><strong>FULL</strong>: both directions; only add or remove optional fields with defaults.</li>
+  <li>The <code>_TRANSITIVE</code> variants check against <strong>all</strong> previous versions, not just the last, which matters for topics with long retention or replays.</li>
+</ul>
+<p>Safe changes are <strong>adding optional fields with defaults</strong>. Dangerous ones are renaming fields, changing types, removing required fields or changing Protobuf field numbers. For a breaking change, create a <strong>new topic or subject version</strong> (for example <code>orders.v2</code>) and dual-publish during migration.</p>
+<p>Make it a pipeline step: run the registry's compatibility check (Maven/Gradle plugin or REST call) in <strong>CI</strong> before a producer deploys, and set <code>auto.register.schemas=false</code> in production so only reviewed schemas are registered.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer changes the <code>.avsc</code> or <code>.proto</code> file.</li>
+  <li>CI calls the registry compatibility endpoint; fails the build if incompatible.</li>
+  <li>Pipeline registers the new version.</li>
+  <li>Producer serializes with the new schema ID.</li>
+  <li>Consumers resolve the writer schema by ID and project it onto their reader schema.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;record&quot;, &quot;name&quot;: &quot;Order&quot;, &quot;fields&quot;: [
+  { &quot;name&quot;: &quot;id&quot;, &quot;type&quot;: &quot;string&quot; },
+  { &quot;name&quot;: &quot;amount&quot;, &quot;type&quot;: &quot;long&quot; },
+  { &quot;name&quot;: &quot;currency&quot;, &quot;type&quot;: &quot;string&quot;, &quot;default&quot;: &quot;EUR&quot; },
+  { &quot;name&quot;: &quot;couponCode&quot;, &quot;type&quot;: [&quot;null&quot;, &quot;string&quot;], &quot;default&quot;: null } ] }</code></pre>
+<pre><code class="language-bash">curl -X POST -H &quot;Content-Type: application/vnd.schemaregistry.v1+json&quot; \
+  --data @order-v3.json \
+  http://registry:8081/compatibility/subjects/orders-value/versions/latest</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Plain JSON with no schema, discovered breaking at runtime.</li>
+  <li>Adding a required field without a default.</li>
+  <li>Auto-registering schemas from any producer in production.</li>
+  <li>Using non-transitive compatibility on long-retention topics.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use a schema registry with Avro or Protobuf. Producers register schemas and each message carries a schema ID, so consumers can always decode it. The registry enforces a compatibility mode: backward means new consumers read old data, forward means old consumers read new data, and full means both. Safe changes are adding optional fields with defaults; renames, type changes or removing required fields break consumers, so those need a new topic version. Compatibility checks run in CI before a producer deploys.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Mode for an event used by ten teams?</strong> FULL_TRANSITIVE, so producers and consumers can upgrade independently.</li>
+  <li><strong>Avro vs Protobuf?</strong> Avro has compact schema resolution; Protobuf has strong codegen and gRPC reuse.</li>
+  <li><strong>Where is the schema ID stored?</strong> A magic byte plus a 4-byte ID at the start of the payload.</li>
+</ul>
+</article>
+</body>
+</html>

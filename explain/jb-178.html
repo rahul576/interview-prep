@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-178 · What is transaction propagation? Explain REQUIRED, REQUIRES_NEW, and SUPPORTS.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-178" data-topic="Spring Boot">
+<h1>What is transaction propagation? Explain REQUIRED, REQUIRES_NEW, and SUPPORTS.</h1>
+<p class="ex-meta">Spring Boot · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Propagation</strong> decides what a transactional method does when it is called while a transaction may already exist: <strong>REQUIRED</strong> joins or creates one, <strong>REQUIRES_NEW</strong> suspends the outer and starts an independent one, and <strong>SUPPORTS</strong> joins if present, otherwise runs without a transaction.</p>
+
+<h2>Detailed explanation</h2>
+<p>Services call other services, so a transactional method is often called from inside another transaction. Propagation is the rule that tells the <strong>PlatformTransactionManager</strong> whether to reuse, suspend or refuse the existing transaction.</p>
+<p><strong>REQUIRED</strong> is the default. If a transaction exists, the method joins it; otherwise a new one starts. Inner and outer work form one unit: they commit together or roll back together. If an inner REQUIRED method throws, the shared transaction is marked <strong>rollback-only</strong>, even if the outer method catches the exception.</p>
+<p><strong>REQUIRES_NEW</strong> always suspends the current transaction and starts a brand-new physical transaction on a <strong>second connection</strong>. It commits or rolls back on its own, independently of the outer one. This suits an <strong>audit log</strong> or failure record that must survive even when the business transaction fails. The cost is an extra connection per nested level: under load, if every request holds one connection and waits for a second, the pool can be exhausted and threads deadlock waiting on each other.</p>
+<p><strong>SUPPORTS</strong> joins a transaction if one exists, otherwise runs non-transactionally. It fits read-only helpers that can be called from both contexts.</p>
+<p>The other options are <strong>MANDATORY</strong> (must already be in a transaction, else exception), <strong>NEVER</strong> (exception if a transaction exists), <strong>NOT_SUPPORTED</strong> (suspends any transaction and runs without one) and <strong>NESTED</strong> (a savepoint inside the existing transaction, supported by <code>DataSourceTransactionManager</code> and, for JDBC access, <code>JpaTransactionManager</code>).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The outer method starts a transaction (REQUIRED) and binds connection A to the thread.</li>
+  <li>An inner method with REQUIRED finds the bound transaction and simply participates.</li>
+  <li>An inner method with REQUIRES_NEW suspends A, opens connection B and starts a new transaction.</li>
+  <li>When the inner REQUIRES_NEW method finishes, B commits or rolls back and A is resumed.</li>
+  <li>SUPPORTS checks for a bound transaction and runs inside it, or without one.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class PaymentService {
+    @Transactional                                   // REQUIRED
+    public void pay(Order o) {
+        try { gateway.charge(o); }
+        catch (PaymentException e) {
+            auditService.recordFailure(o, e);       // survives the rollback
+            throw e;
+        }
+    }
+}
+
+@Service
+class AuditService {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordFailure(Order o, Exception e) { auditRepo.save(new Audit(o, e)); }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Propagation</th><th>Existing transaction</th><th>No transaction</th></tr></thead>
+<tbody>
+<tr><td>REQUIRED</td><td>Join</td><td>Create new</td></tr>
+<tr><td>REQUIRES_NEW</td><td>Suspend, create new</td><td>Create new</td></tr>
+<tr><td>SUPPORTS</td><td>Join</td><td>Run without</td></tr>
+<tr><td>MANDATORY</td><td>Join</td><td>Throw exception</td></tr>
+<tr><td>NESTED</td><td>Savepoint</td><td>Create new</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling the REQUIRES_NEW method on <code>this</code>, so the proxy is bypassed and no new transaction starts.</li>
+  <li>Using REQUIRES_NEW everywhere and exhausting the connection pool.</li>
+  <li>Expecting a caught inner exception under REQUIRED not to affect the outer commit.</li>
+  <li>Confusing NESTED (savepoint, same connection) with REQUIRES_NEW (separate transaction).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Propagation defines what happens when a transactional method is called while a transaction may already exist. REQUIRED, the default, joins it or creates one, so everything commits or rolls back together. REQUIRES_NEW suspends the outer transaction and runs an independent one; I use it for audit entries that must be saved even if the business operation fails, keeping in mind it needs a second connection. SUPPORTS joins if there is a transaction and otherwise runs without one, which suits read helpers. There are also MANDATORY, NEVER, NOT_SUPPORTED and NESTED, which uses savepoints.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Inner REQUIRED throws and the outer catches it?</strong> The transaction is rollback-only, so the outer commit throws UnexpectedRollbackException.</li>
+  <li><strong>NESTED vs REQUIRES_NEW?</strong> NESTED rolls back to a savepoint but commits with the outer; REQUIRES_NEW commits independently.</li>
+  <li><strong>Why can REQUIRES_NEW deadlock a pool?</strong> Each request holds one connection and waits for another; with a small pool all threads wait.</li>
+</ul>
+</article>
+</body>
+</html>

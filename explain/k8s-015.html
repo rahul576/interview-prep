@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-015 · What are PriorityClasses and preemption in Kubernetes, and when do you use them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-015" data-topic="Kubernetes">
+<h1>What are PriorityClasses and preemption in Kubernetes, and when do you use them?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>PriorityClass</strong> gives pods an integer <strong>priority</strong>; the scheduler orders the pending queue by it and, if a high-priority pod cannot fit, may <strong>preempt</strong> lower-priority pods. Critical system pods use <strong>system-cluster-critical / system-node-critical</strong>, batch work gets low priority, and <strong><code>preemptionPolicy: Never</code></strong> lets a pod jump the queue <strong>without evicting</strong> others.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without priorities, a flood of batch jobs can fill the cluster and leave a production rollout Pending. Priorities let the scheduler make value judgements.</p>
+<p>A <strong>PriorityClass</strong> is cluster-scoped, with a <code>value</code> (higher wins, user classes up to one billion), optional <code>globalDefault</code>, and <code>preemptionPolicy</code> (<code>PreemptLowerPriority</code> by default, or <code>Never</code>). Pods reference it via <code>priorityClassName</code>; admission resolves it to <code>spec.priority</code>.</p>
+<p>Effects:</p>
+<ul>
+  <li><strong>Scheduling order:</strong> higher-priority Pending pods are tried first.</li>
+  <li><strong>Preemption:</strong> if no node fits a pod, the scheduler looks for a node where evicting lower-priority pods would make room, picks victims minimising impact, sets <code>nominatedNodeName</code>, and deletes the victims gracefully (honouring their termination grace period). It tries to respect <strong>PodDisruptionBudgets</strong> but will violate them if there's no other option.</li>
+  <li><strong>Node-pressure eviction</strong> also considers priority after usage over requests.</li>
+</ul>
+<p>Kubernetes ships <code>system-cluster-critical</code> and <code>system-node-critical</code> (values around two billion) for CoreDNS, CNI and CSI agents, kube-proxy and similar, so applications can never push them out.</p>
+<p>A practical scheme has only a few classes: <strong>critical</strong> customer-facing services, <strong>default</strong> for normal services, <strong>low</strong> for batch, CI runners and dev workloads, which tolerate preemption and retry. Risks: everyone marks their service critical; preemption cascades, where evicted pods preempt still-lower ones; and preempted batch jobs that never get to finish. Restrict high classes with <strong>ResourceQuota scoped by priority class</strong> so only approved namespaces can use them. <code>preemptionPolicy: Never</code> suits important batch jobs: they queue ahead but wait for free capacity.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define PriorityClasses; set a sensible global default.</li>
+  <li>Workloads set <code>priorityClassName</code>.</li>
+  <li>Scheduler sorts pending pods by priority.</li>
+  <li>If a high-priority pod doesn't fit, scheduler simulates removing lower-priority pods per node.</li>
+  <li>Victims are evicted gracefully; the pod is bound once room is free.</li>
+  <li>Autoscaler can add nodes for the preempted pods afterwards.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: prod-critical }
+value: 100000
+description: Customer-facing production services
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: batch-low }
+value: 1000
+preemptionPolicy: Never
+description: Batch and CI work; waits for capacity</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making every workload high priority, which equals no priority.</li>
+  <li>No quota restricting who uses critical classes.</li>
+  <li>Assuming PDBs fully protect against preemption.</li>
+  <li>Putting application pods in system-critical classes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A PriorityClass gives pods an integer priority. The scheduler orders pending pods by it, and if a high-priority pod can't fit, it can preempt lower-priority pods on a node, evicting them gracefully. Kubernetes uses system-cluster-critical and system-node-critical for components like CoreDNS and CNI agents. I keep a few classes: critical customer-facing, default, and low for batch and CI that can be retried. The risk is starvation or eviction cascades, so I restrict high classes with priority-scoped quotas and use preemptionPolicy Never for work that should queue ahead without evicting anything.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does priority interact with PDBs?</strong> Preemption tries to respect PDBs but violates them if no other victims exist.</li>
+  <li><strong>What is nominatedNodeName?</strong> The node the scheduler plans to place the preemptor on after victims leave.</li>
+  <li><strong>Does preemption work across nodes?</strong> It picks victims on a single node per scheduling attempt.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-228 · How does event-driven choreography work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-228" data-topic="Microservices">
+<h1>How does event-driven choreography work?</h1>
+<p class="ex-meta">Microservices · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>In <strong>event-driven choreography</strong> each service does its own <strong>local transaction</strong>, then publishes a <strong>domain event</strong>; other services <strong>subscribe and react</strong> with their own local work, so the business flow emerges from events instead of a central coordinator.</p>
+
+<h2>Detailed explanation</h2>
+<p>Choreography is one of the two ways to implement a <strong>saga</strong> (the other is <strong>orchestration</strong>). There is no service that &quot;runs&quot; the order process. The order service saves an order in state PENDING and publishes <strong>OrderCreated</strong> to a broker such as <strong>Kafka</strong>. The payment service consumes it, charges the card in its own database transaction and publishes <strong>PaymentCompleted</strong> or <strong>PaymentFailed</strong>. Inventory listens for PaymentCompleted, reserves stock and publishes <strong>StockReserved</strong>. The order service listens to the outcome events and moves the order to CONFIRMED or CANCELLED.</p>
+<p>The broker <strong>decouples producers and consumers</strong>: the order service does not know who listens, services can be down for a while and catch up from the log, and a new consumer (say, a loyalty-points service) can be added without changing existing code. Failures are handled by <strong>compensation</strong>: when PaymentFailed arrives, the order service cancels the order; if stock reservation fails after payment, a StockFailed event makes payment issue a refund.</p>
+<p>The price of this loose coupling is visibility. The flow is spread across many services, so you need <strong>correlation ids</strong> (usually the order id) on every event and <strong>distributed tracing</strong> to see where a given order is stuck. Reliability also needs discipline: events must be published with the <strong>transactional outbox</strong>, because a crash between commit and publish would silently break the chain, and consumers must be <strong>idempotent</strong>, since Kafka delivers <strong>at least once</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Order service commits the order (PENDING) and an outbox row in one transaction.</li>
+  <li>A relay publishes OrderCreated with key = orderId and a correlation id header.</li>
+  <li>Payment consumes it, checks whether this event id was already processed, charges, and publishes PaymentCompleted or PaymentFailed via its own outbox.</li>
+  <li>Inventory reacts to PaymentCompleted and publishes StockReserved or StockFailed.</li>
+  <li>Order service updates its status from outcome events; failure events trigger compensations.</li>
+  <li>Timeouts or a reconciliation job flag orders stuck in PENDING.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@KafkaListener(topics = &quot;orders.events&quot;)
+public void on(OrderCreated e, @Header(&quot;eventId&quot;) String eventId) {
+    if (processed.existsById(eventId)) return;          // idempotency
+    PaymentResult r = gateway.charge(e.orderId(), e.amount());
+    outbox.save(r.ok()
+        ? new PaymentCompleted(e.orderId())
+        : new PaymentFailed(e.orderId(), r.reason()));
+    processed.save(new ProcessedEvent(eventId));        // same transaction
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Choreography</th><th>Orchestration</th></tr></thead>
+<tbody>
+<tr><td>Control</td><td>Distributed, via events</td><td>Central orchestrator</td></tr>
+<tr><td>Coupling</td><td>Very loose</td><td>Services know the orchestrator</td></tr>
+<tr><td>Visibility</td><td>Needs tracing</td><td>State in one place</td></tr>
+<tr><td>Best for</td><td>Short flows, few steps</td><td>Long, complex flows</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Publishing the event outside the database transaction (dual write).</li>
+  <li>Non-idempotent consumers that charge twice on redelivery.</li>
+  <li>No correlation id, so nobody can trace a broken flow.</li>
+  <li>Cyclic event chains that become impossible to reason about as steps grow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In choreography each service does its local transaction and publishes a domain event, and other services react to it. For an order, the order service publishes OrderCreated, payment charges and publishes PaymentCompleted or PaymentFailed, inventory reserves stock, and the order service updates the status from those outcomes. Failures trigger compensations, like cancelling the order on PaymentFailed. No service calls another directly; Kafka decouples them. To make it reliable I publish through an outbox, make every consumer idempotent and carry the order id as a correlation id for tracing. For long flows with many steps I would switch to orchestration.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if the same event is delivered twice?</strong> The consumer checks a processed-event table or uses a natural idempotent update, so the second delivery is a no-op.</li>
+  <li><strong>When would you prefer orchestration?</strong> When the flow has many steps, branches or timeouts and you want its state in one place.</li>
+  <li><strong>How do you keep event order per order?</strong> Use the order id as the Kafka message key so all its events land on one partition.</li>
+</ul>
+</article>
+</body>
+</html>

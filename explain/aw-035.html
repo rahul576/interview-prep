@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aw-035 · What are VPC endpoints, and what is the difference between gateway and interface endpoints?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="aw-035" data-topic="Cloud (AWS)">
+<h1>What are VPC endpoints, and what is the difference between gateway and interface endpoints?</h1>
+<p class="ex-meta">Cloud (AWS) · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>VPC endpoints</strong> give private subnets access to <strong>AWS services without the internet or NAT</strong>; <strong>gateway endpoints</strong> exist only for <strong>S3 and DynamoDB</strong>, work via <strong>route tables</strong> and are <strong>free</strong>, while <strong>interface endpoints</strong> (PrivateLink) create <strong>ENIs with private IPs</strong> for many services, use <strong>private DNS</strong>, cost <strong>per hour and per GB</strong>, and both support <strong>endpoint policies</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default, a call from a private instance to <code>s3.eu-west-1.amazonaws.com</code> resolves to a public IP and travels through the NAT gateway, costing NAT processing fees and requiring internet egress. Endpoints keep that traffic on the AWS network.</p>
+<p><strong>Gateway endpoints</strong> support only <strong>Amazon S3 and DynamoDB</strong>. You create one in the VPC and associate it with route tables; AWS adds a route with a <strong>prefix list</strong> of the service's IP ranges pointing to the endpoint. There is <strong>no charge</strong>, no ENI and no DNS change, so they should be enabled in virtually every VPC. They only work for traffic originating in that VPC, not from on-premises or peered networks.</p>
+<p><strong>Interface endpoints</strong>, powered by <strong>PrivateLink</strong>, place an <strong>elastic network interface</strong> with a private IP in each chosen subnet. They exist for most AWS services: <strong>ECR (api and dkr)</strong>, <strong>STS</strong>, <strong>Secrets Manager</strong>, <strong>SSM</strong>, <strong>SQS</strong>, <strong>SNS</strong>, <strong>CloudWatch Logs and monitoring</strong>, <strong>KMS</strong> and S3 too. With <strong>private DNS</strong> enabled, the normal service hostname resolves to the endpoint's private IPs, so SDKs and CLIs work unchanged. They are protected by <strong>security groups</strong> and can be reached from on-premises through VPN or Direct Connect. They cost per endpoint per AZ per hour plus per GB processed, so in multi-account setups teams often <strong>centralise</strong> them in a shared VPC.</p>
+<p><strong>Endpoint policies</strong> are resource policies on the endpoint restricting what can be done through it, for example only access to company buckets, preventing data exfiltration to arbitrary S3 buckets. Combine with bucket policies using <code>aws:SourceVpce</code> to require that data be accessed only through the endpoint.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create a gateway endpoint for S3/DynamoDB and attach route tables.</li>
+  <li>Create interface endpoints in private subnets for other services.</li>
+  <li>Enable private DNS; allow HTTPS (443) from the VPC in the endpoint security group.</li>
+  <li>Attach endpoint policies.</li>
+  <li>Traffic bypasses NAT and the internet.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws ec2 create-vpc-endpoint --vpc-id vpc-0abc --vpc-endpoint-type Gateway \
+  --service-name com.amazonaws.eu-west-1.s3 --route-table-ids rtb-private-a rtb-private-b
+
+for svc in ecr.api ecr.dkr sts logs; do
+  aws ec2 create-vpc-endpoint --vpc-id vpc-0abc --vpc-endpoint-type Interface \
+    --service-name com.amazonaws.eu-west-1.$svc --subnet-ids subnet-a subnet-b \
+    --security-group-ids sg-endpoints --private-dns-enabled
+done</code></pre>
+<p>A private EKS cluster needs at least <code>ecr.api</code>, <code>ecr.dkr</code>, the <strong>S3 gateway endpoint</strong> (image layers are stored in S3), <code>sts</code> for IAM roles for service accounts, plus <code>ec2</code> and <code>logs</code> depending on add-ons.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Gateway endpoint</th><th>Interface endpoint</th></tr></thead>
+<tbody>
+<tr><td>Services</td><td>S3, DynamoDB</td><td>Most AWS services, S3</td></tr>
+<tr><td>Mechanism</td><td>Route table entry</td><td>ENI with private IP</td></tr>
+<tr><td>Cost</td><td>Free</td><td>Per hour per AZ + per GB</td></tr>
+<tr><td>On-prem access</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No S3 gateway endpoint, paying NAT fees for S3 traffic.</li>
+  <li>Interface endpoint security group blocking port 443.</li>
+  <li>Forgetting private DNS, so traffic still goes to public endpoints.</li>
+  <li>Missing the S3 endpoint when pulling ECR images privately.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;VPC endpoints let resources in private subnets reach AWS services without the internet or a NAT gateway. Gateway endpoints exist only for S3 and DynamoDB; they're added as route table targets and cost nothing, so I enable them almost everywhere. Interface endpoints use PrivateLink to create ENIs with private IPs in my subnets for services like ECR, Secrets Manager, STS, SQS or CloudWatch, with private DNS so SDKs work unchanged; they cost per hour and per GB. Endpoint policies restrict what can be accessed through them. Together they improve security and often save a lot of NAT cost.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Endpoints for a private EKS cluster to pull from ECR?</strong> <code>ecr.api</code>, <code>ecr.dkr</code>, S3 gateway, plus <code>sts</code> and others as needed.</li>
+  <li><strong>How do you restrict a bucket to the endpoint?</strong> Bucket policy denying requests where <code>aws:SourceVpce</code> is not your endpoint.</li>
+  <li><strong>Can on-prem use gateway endpoints?</strong> No; use interface endpoints for S3 instead.</li>
+</ul>
+</article>
+</body>
+</html>

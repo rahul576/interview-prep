@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-016 · What are topology spread constraints, and how do they differ from pod anti-affinity?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-016" data-topic="Kubernetes">
+<h1>What are topology spread constraints, and how do they differ from pod anti-affinity?</h1>
+<p class="ex-meta">Kubernetes · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Topology spread constraints</strong> distribute matching pods <strong>evenly</strong> across domains defined by a <strong>topologyKey</strong> (zone, node), with <strong>maxSkew</strong> as the allowed imbalance and <strong>whenUnsatisfiable</strong> choosing <strong>DoNotSchedule</strong> (hard) or <strong>ScheduleAnyway</strong> (soft); <strong>pod anti-affinity</strong> only says &quot;not together&quot;, which doesn't balance and doesn't scale to many replicas.</p>
+
+<h2>Detailed explanation</h2>
+<p>High availability needs replicas in different failure domains. If a scheduler packs six of nine replicas into one zone, a zone outage removes two thirds of capacity.</p>
+<p>A spread constraint has:</p>
+<ul>
+  <li><strong>topologyKey:</strong> a node label defining domains, such as <code>topology.kubernetes.io/zone</code> or <code>kubernetes.io/hostname</code>.</li>
+  <li><strong>labelSelector:</strong> which pods to count (usually the app's own label); <strong>matchLabelKeys</strong> such as <code>pod-template-hash</code> counts only pods of the same rollout revision.</li>
+  <li><strong>maxSkew:</strong> maximum allowed difference between the domain with the most and the fewest matching pods. With 3 zones and 9 replicas, maxSkew 1 enforces 3/3/3, tolerating 4/3/3 during changes.</li>
+  <li><strong>whenUnsatisfiable:</strong> <code>DoNotSchedule</code> keeps the pod Pending rather than break the rule; <code>ScheduleAnyway</code> treats it as a scoring preference.</li>
+  <li><strong>minDomains</strong> (with DoNotSchedule) requires a minimum number of eligible domains, useful with autoscalers that create new zones' nodes on demand.</li>
+</ul>
+<p><strong>Pod anti-affinity</strong> expresses only pairwise exclusion: &quot;don't schedule me where a pod with label X runs&quot;. <strong>Required</strong> anti-affinity per hostname means at most one replica per node, so 20 replicas need 20 nodes and scale-ups go Pending. <strong>Preferred</strong> anti-affinity is just a score; it gives no guarantee of even distribution. Anti-affinity is also more expensive for the scheduler at scale.</p>
+<p>A common production pattern is two constraints: spread by zone with maxSkew 1 (often DoNotSchedule) and by hostname with ScheduleAnyway. Combined with a <strong>PodDisruptionBudget</strong>, node drains and zone failures only ever remove a bounded share of replicas. Cluster-level default constraints can also be configured in the scheduler.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduler counts matching pods per domain of the topologyKey.</li>
+  <li>For each candidate node, computes the skew if the pod lands there.</li>
+  <li>Filters out nodes that would exceed maxSkew (hard) or scores them lower (soft).</li>
+  <li>Places the pod; counts update for the next pod.</li>
+  <li>Scale-down and later changes are not rebalanced automatically.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">spec:
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector: { matchLabels: { app: orders } }
+    matchLabelKeys: [pod-template-hash]
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector: { matchLabels: { app: orders } }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Required per-node anti-affinity for large replica counts.</li>
+  <li>labelSelector not matching the pod's own labels, so nothing is counted.</li>
+  <li>Hard zone spreading while the node pool exists in only two zones.</li>
+  <li>Expecting the scheduler to rebalance after scale-down.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Topology spread constraints tell the scheduler to spread matching pods evenly across domains given by a topologyKey, like zone or hostname. maxSkew is the allowed difference between the most and least loaded domain, and whenUnsatisfiable decides between refusing with DoNotSchedule or just preferring balance with ScheduleAnyway. Anti-affinity only says don't put these together: required anti-affinity caps replicas at the number of nodes, and preferred doesn't really balance. I usually spread by zone, hard, and by node, soft, plus a PDB, so a zone failure or upgrade removes only a fraction of replicas.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why unbalanced after scale-down?</strong> ReplicaSets choose which pods to delete without considering spread; use the descheduler to rebalance.</li>
+  <li><strong>What does matchLabelKeys solve?</strong> Counting only the current revision during rolling updates.</li>
+  <li><strong>Are constraints evaluated at runtime?</strong> No, only at scheduling time.</li>
+</ul>
+</article>
+</body>
+</html>

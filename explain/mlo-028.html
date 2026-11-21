@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-028 · How do you run hyperparameter tuning efficiently at scale?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-028" data-topic="MLOps">
+<h1>How do you run hyperparameter tuning efficiently at scale?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Prefer <strong>random search or Bayesian optimisation</strong> over grid search, add <strong>early stopping of poor trials</strong> (Hyperband, ASHA), run <strong>parallel trials</strong> with tools like <strong>Optuna, Ray Tune, Katib</strong> or managed tuning under <strong>budgets and resource limits</strong>, and <strong>track every trial</strong> in experiment tracking.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Grid search</strong> tries every combination; it scales exponentially with the number of hyperparameters and wastes trials on unimportant dimensions. <strong>Random search</strong> samples combinations and usually finds good regions faster, because only a few hyperparameters matter most. <strong>Bayesian optimisation</strong> (Gaussian processes, or <strong>TPE</strong> as in Optuna and Hyperopt) builds a model of which configurations perform well and proposes promising ones next.</p>
+<p>The biggest saving usually comes from <strong>early stopping</strong>. <strong>Successive halving, Hyperband</strong> and <strong>ASHA</strong> (asynchronous successive halving) start many trials with small budgets (few epochs or a data subset), keep the best fraction, and give them more budget. Pruners in Optuna and schedulers in Ray Tune do this. <strong>Population Based Training</strong> goes further, mutating hyperparameters of promising trials during training.</p>
+<p>At scale, trials run in parallel on a cluster: <strong>Ray Tune</strong>, <strong>Kubeflow Katib</strong>, Optuna with a shared database, or managed tuning in <strong>SageMaker, Azure ML (sweep jobs) and Vertex AI (Vizier)</strong>. Set limits on <strong>concurrent trials, total trials, total GPU hours</strong> and per-trial timeouts; use <strong>spot capacity</strong> because trials are naturally restartable. Note that too much parallelism weakens Bayesian methods, which learn from completed trials.</p>
+<p>Every trial is logged to <strong>experiment tracking</strong> with parameters and curves. And use <strong>domain knowledge</strong> to define a sensible search space (log scales for learning rates, realistic ranges) instead of searching blindly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the objective metric on a validation set and the search space.</li>
+  <li>Pick a sampler (TPE or random) and a pruner (ASHA/Hyperband).</li>
+  <li>Set budgets: max trials, concurrency, GPU hours.</li>
+  <li>Run trials in parallel, reporting intermediate metrics.</li>
+  <li>Prune poor trials early; log all to tracking.</li>
+  <li>Retrain the best configuration and evaluate once on the test set.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import optuna
+
+def objective(trial):
+    lr = trial.suggest_float(&quot;lr&quot;, 1e-5, 1e-2, log=True)
+    depth = trial.suggest_int(&quot;depth&quot;, 3, 10)
+    for epoch in range(20):
+        score = train_one_epoch(lr, depth, epoch)
+        trial.report(score, epoch)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+    return score
+
+study = optuna.create_study(direction=&quot;maximize&quot;,
+          sampler=optuna.samplers.TPESampler(),
+          pruner=optuna.pruners.HyperbandPruner(),
+          storage=&quot;postgresql://optuna@db/optuna&quot;, study_name=&quot;churn-v9&quot;, load_if_exists=True)
+study.optimize(objective, n_trials=200, timeout=4 * 3600)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Grid search over many dimensions.</li>
+  <li>No early stopping, so bad trials run to completion.</li>
+  <li>Selecting on the test set, overfitting the evaluation.</li>
+  <li>Unbounded parallelism and GPU spend.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I avoid grid search; random search or Bayesian optimisation with TPE in Optuna finds good configurations faster. The biggest saving is early stopping with Hyperband or ASHA, which kills poor trials after a few epochs. At scale I run trials in parallel with Ray Tune, Katib or managed tuning, with limits on concurrency, total trials and GPU hours, often on spot instances. Every trial goes to experiment tracking, the search space comes from domain knowledge, and the final choice is checked once on a held-out test set.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid overfitting the validation set?</strong> Cross-validation, a separate untouched test set and limiting search breadth.</li>
+  <li><strong>Why can high parallelism hurt Bayesian search?</strong> It proposes many trials before learning from results.</li>
+  <li><strong>What is Population Based Training?</strong> Evolving hyperparameters during training by copying and perturbing good trials.</li>
+</ul>
+</article>
+</body>
+</html>

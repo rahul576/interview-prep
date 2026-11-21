@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k8s-094 · New pods take several minutes to start because the container image is 6 GB. How do you speed this up?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="k8s-094" data-topic="Kubernetes">
+<h1>New pods take several minutes to start because the container image is 6 GB. How do you speed this up?</h1>
+<p class="ex-meta">Kubernetes · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Make the image <strong>smaller</strong> (multi-stage builds, slim or distroless bases, no bundled data or models), then make the remaining pull <strong>faster</strong>: <strong>pre-pulled or cached images</strong>, <strong>lazy loading/image streaming</strong>, and a <strong>registry close to the cluster</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A pod cannot start until the kubelet has pulled and unpacked every layer of its image. Six gigabytes means minutes of download and decompression on each new node, which hurts most exactly when you scale out under load or replace nodes.</p>
+<p>The biggest win is usually <strong>shrinking</strong>. <strong>Multi-stage builds</strong> compile in one stage and copy only the runtime artefacts into a <strong>slim or distroless</strong> base. Remove package caches, compilers and test data, and order layers so the large, stable parts (base, dependencies) come first and are shared and cached between versions. Very often the bulk is <strong>ML models or datasets</strong>; those belong in object storage or a shared volume, downloaded at startup or mounted, so code releases do not re-ship gigabytes.</p>
+<p>For what remains, <strong>pre-pull</strong>: bake images into the node image (AMI or custom image), or run a DaemonSet that pulls them on every node. <strong>Lazy loading</strong> lets the container start before the whole image has arrived, fetching files on demand: <strong>GKE Image streaming</strong>, <strong>SOCI</strong> on AWS, <strong>Azure Artifact Streaming</strong>, or eStargz-style snapshotters. Peer-to-peer caches such as Spegel help large clusters. Finally, use a <strong>registry in the same region</strong>, a pull-through cache, and avoid <code>imagePullPolicy: Always</code> with mutable tags.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: compare &quot;Pulling&quot; and &quot;Successfully pulled ... in Xs&quot; event times with app startup time.</li>
+  <li>Inspect layers with <code>docker history</code> or <code>dive</code> to see what is large.</li>
+  <li>Rebuild with multi-stage and a slim base; move models and data out.</li>
+  <li>Pre-pull or bake common images into nodes.</li>
+  <li>Enable image streaming or lazy loading where available.</li>
+  <li>Keep the registry regional and tags immutable.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile">FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+RUN mvn -q dependency:go-offline
+COPY src ./src
+RUN mvn -q package -DskipTests
+
+FROM gcr.io/distroless/java21-debian12
+COPY --from=build /src/target/app.jar /app/app.jar
+ENTRYPOINT [&quot;java&quot;,&quot;-jar&quot;,&quot;/app/app.jar&quot;]
+# models are downloaded from object storage at startup, not baked in</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Baking large models into every application image version.</li>
+  <li>Using <code>latest</code> tags with <code>imagePullPolicy: Always</code>, forcing pulls on every start.</li>
+  <li>Pulling across regions or from the public internet without a cache.</li>
+  <li>Optimising the app's startup when most of the time is actually the pull.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Pull time scales with image size, so first I shrink it: multi-stage builds, a slim or distroless base, no caches or build tools, and layers ordered so the big stable parts are cached. Usually the size comes from bundled data or models, which should live in object storage or a volume instead. For what is left, I pre-pull images with a DaemonSet or bake them into the node image, and enable lazy loading such as GKE image streaming, SOCI on AWS or Azure artifact streaming, so containers start before the full download. A registry in the same region helps a lot too.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you measure pull time versus app start time?</strong> Pod events show pull duration; compare with the time from container start to readiness.</li>
+  <li><strong>Does lazy loading have downsides?</strong> First file accesses can be slower, and it needs supported registries and snapshotters.</li>
+  <li><strong>Why distroless?</strong> Smaller image and attack surface, but harder debugging without a shell.</li>
+</ul>
+</article>
+</body>
+</html>

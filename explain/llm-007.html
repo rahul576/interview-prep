@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-007 · How do you autoscale LLM inference on Kubernetes, and why is CPU a poor scaling signal?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-007" data-topic="LLMOps &amp; RAG">
+<h1>How do you autoscale LLM inference on Kubernetes, and why is CPU a poor scaling signal?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Scale LLM inference on <strong>engine metrics</strong> such as <strong>queue depth, running requests, KV cache utilisation or TTFT</strong> via <strong>KEDA or custom-metric HPA</strong>, not CPU, because GPU-bound pods show <strong>flat CPU</strong>; and because <strong>GPU nodes and model loading take minutes</strong>, keep <strong>warm capacity</strong>, scale <strong>early</strong>, and use <strong>load-aware gateways</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An LLM server's work happens on the GPU. The CPU only handles HTTP, tokenisation and scheduling, so CPU usage stays low and barely moves as load doubles: a CPU-based HPA never fires, or fires for the wrong reasons. Even <strong>GPU utilisation</strong> is a weak signal: it shows 100 percent busy at moderate load while latency keeps climbing as batches grow and queues form.</p>
+<p>Better signals come from the <strong>serving engine</strong>. vLLM exports Prometheus metrics such as <code>vllm:num_requests_waiting</code>, <code>vllm:num_requests_running</code>, KV cache usage and TTFT histograms; TGI, SGLang and Triton expose similar ones. Scale out when <strong>waiting requests</strong> stay above zero, <strong>KV cache usage</strong> approaches 90 percent, or <strong>p95 TTFT</strong> approaches its SLO. Wire them into <strong>KEDA</strong> with a Prometheus scaler, or an <strong>HPA</strong> with custom metrics via Prometheus Adapter.</p>
+<p>The hard part is <strong>slow scale-up</strong>. A new GPU node can take several minutes to provision (if capacity is available at all), the container image is often many gigabytes, and loading 20 to 150 GB of weights plus engine warmup adds more. A reactive autoscaler therefore arrives after the spike. Countermeasures: <strong>warm replicas</strong> for normal peaks, <strong>lower thresholds</strong>, <strong>schedule-based</strong> pre-scaling, <strong>placeholder pods</strong> holding spare GPU nodes, and <strong>fast model loading</strong> from node-local caches. <strong>Priority classes</strong> and admission control keep interactive traffic ahead of batch jobs during spikes, and overflow can go to a hosted API.</p>
+<p>Routing matters too. Round-robin load balancing sends requests to busy replicas while others are free, and ignores which replica already has a matching prefix cached. <strong>Inference gateways</strong>, such as the Kubernetes <strong>Gateway API Inference Extension</strong>, llm-d's scheduler, or NVIDIA Dynamo's router, pick endpoints by queue length, KV utilisation and <strong>prefix-cache affinity</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Engine exports queue, running and KV metrics.</li>
+  <li>Prometheus scrapes them; KEDA evaluates thresholds.</li>
+  <li>KEDA raises replicas; pending pods trigger GPU node provisioning.</li>
+  <li>New pods load weights from cache and pass readiness only when serving.</li>
+  <li>Gateway routes by load and prefix affinity; scale-down uses long stabilisation windows.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: llm-chat }
+spec:
+  scaleTargetRef: { name: vllm-llama70b }
+  minReplicaCount: 2
+  maxReplicaCount: 12
+  cooldownPeriod: 900
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus:9090
+        query: sum(vllm:num_requests_waiting{deployment=&quot;vllm-llama70b&quot;})
+        threshold: &quot;5&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>CPU-based HPA for GPU workloads.</li>
+  <li>Scaling to zero for latency-sensitive chat.</li>
+  <li>Aggressive scale-down that removes warm GPUs minutes before the next peak.</li>
+  <li>Plain round-robin load balancing across replicas.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An LLM server spends its time on the GPU, so CPU barely changes with load, and even GPU utilisation saturates early while latency keeps getting worse. I scale on engine metrics instead: requests waiting, running requests, KV cache utilisation or TTFT nearing the SLO, exported by vLLM to Prometheus and used through KEDA or a custom-metrics HPA. Because a GPU node and model loading can take many minutes, I keep warm replicas, scale earlier at lower thresholds, cache weights on nodes and prioritise interactive traffic. And I use a load-aware inference gateway that routes by queue and prefix cache.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Spike while nodes start?</strong> Queue with priorities, shed batch traffic, degrade to a smaller model or overflow to an API.</li>
+  <li><strong>Why long scale-down windows?</strong> Re-acquiring GPUs is slow and capacity may vanish.</li>
+  <li><strong>What is prefix-aware routing?</strong> Sending requests with the same prefix to the replica that already caches it.</li>
+</ul>
+</article>
+</body>
+</html>

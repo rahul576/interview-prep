@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-004 · What is PagedAttention, and why did vLLM become popular for serving?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-004" data-topic="LLMOps &amp; RAG">
+<h1>What is PagedAttention, and why did vLLM become popular for serving?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>PagedAttention</strong> stores the KV cache in <strong>fixed-size blocks</strong> mapped by a <strong>block table</strong>, like OS virtual memory pages, eliminating <strong>fragmentation and over-reservation</strong> and enabling <strong>block sharing</strong> for common prefixes; combined with continuous batching and an <strong>OpenAI-compatible API</strong>, it made <strong>vLLM</strong> the default open serving engine.</p>
+
+<h2>Detailed explanation</h2>
+<p>Early serving systems allocated each request one <strong>contiguous</strong> KV region sized for the <strong>maximum</strong> possible length, for example 2,048 or 4,096 tokens, because they could not know in advance how long the output would be. Most answers are far shorter, so most of that memory was reserved but unused (<strong>internal fragmentation</strong>), and variable-sized regions left unusable gaps (<strong>external fragmentation</strong>).</p>
+<p><strong>PagedAttention</strong> borrows the idea of <strong>paging</strong>. The KV cache is divided into small <strong>blocks</strong>, each holding keys and values for a fixed number of tokens (16 by default in vLLM). A per-sequence <strong>block table</strong> maps logical token positions to physical blocks anywhere in GPU memory. Blocks are allocated <strong>on demand</strong> as the sequence grows, so waste is limited to the last partly filled block.</p>
+<p>Paging also enables <strong>sharing</strong>. Sequences with the same prefix, such as a shared system prompt, or several samples from one prompt in parallel sampling or beam search, point to the <strong>same physical blocks</strong>, with <strong>copy-on-write</strong> when one diverges. This underpins <strong>automatic prefix caching</strong>.</p>
+<p>The result: many more sequences fit in the same memory, so batches are larger and throughput rises substantially, often 2 to 4 times against earlier systems in the paper's benchmarks. <strong>vLLM</strong> became popular by pairing this with <strong>continuous batching</strong>, chunked prefill, prefix caching, many <strong>quantisation</strong> formats (FP8, AWQ, GPTQ), tensor and pipeline parallelism, speculative decoding, LoRA adapters, broad model and hardware support (NVIDIA, AMD, TPU and others), and an <strong>OpenAI-compatible server</strong> that lets teams swap it in behind existing clients.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>New request gets an empty block table.</li>
+  <li>Prefill fills as many blocks as the prompt needs.</li>
+  <li>Each decode step appends to the last block, allocating a new one when full.</li>
+  <li>Matching prefixes reuse existing blocks by reference count.</li>
+  <li>On completion, blocks return to the free pool or stay cached.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">vllm serve meta-llama/Llama-3.1-8B-Instruct --enable-prefix-caching --block-size 16
+curl localhost:8000/v1/chat/completions -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;model&quot;:&quot;meta-llama/Llama-3.1-8B-Instruct&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;Hi&quot;}]}'</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking PagedAttention makes the model compute faster; it improves memory efficiency and therefore batching.</li>
+  <li>Assuming vLLM is always fastest regardless of hardware or workload.</li>
+  <li>Setting gpu-memory-utilization too high and hitting out-of-memory with other processes.</li>
+  <li>Ignoring version upgrades, since the engine changes quickly.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Before PagedAttention, servers reserved one contiguous KV region per request sized for the maximum length, which wasted most of the memory through fragmentation and over-reservation. vLLM's PagedAttention splits the KV cache into small fixed-size blocks, like virtual memory pages, with a block table per sequence and allocation on demand, so almost nothing is wasted and blocks can be shared copy-on-write between sequences with the same prefix. More sequences fit on the GPU, so throughput rises a lot. vLLM became the default by combining that with continuous batching, prefix caching, quantisation, parallelism, broad model support and an OpenAI-compatible API.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When choose another engine?</strong> TensorRT-LLM for maximum NVIDIA performance, SGLang for heavy prefix reuse, llama.cpp for CPU or edge.</li>
+  <li><strong>What is block size trade-off?</strong> Smaller blocks waste less memory but add table overhead.</li>
+  <li><strong>Does paging help long contexts?</strong> Yes, memory is used only as tokens are generated.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-306 · What is the difference between @RequestParam, @PathVariable, @RequestBody and @RequestHeader?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-306" data-topic="Spring Framework">
+<h1>What is the difference between @RequestParam, @PathVariable, @RequestBody and @RequestHeader?</h1>
+<p class="ex-meta">Spring Framework · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>@PathVariable</strong> binds a <strong>URI path segment</strong> that identifies a resource, <strong>@RequestParam</strong> binds <strong>query string or form parameters</strong> (with <strong>required/defaultValue</strong>), <strong>@RequestBody</strong> <strong>deserialises the body</strong> (usually JSON via Jackson, with <strong>@Valid</strong>), and <strong>@RequestHeader</strong> reads <strong>HTTP headers</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>These annotations tell Spring MVC's argument resolvers where each method parameter comes from.</p>
+<p><strong>@PathVariable</strong> maps a placeholder in the URI template: in <code>/orders/{orderId}/items/{itemId}</code> both ids are path variables. They identify <strong>which resource</strong> you mean, are required by default, and are converted to the parameter type (<code>long</code>, <code>UUID</code>, enums), with a failed conversion producing 400. Regex constraints like <code>{id:\\d+}</code> are possible.</p>
+<p><strong>@RequestParam</strong> reads <code>?status=OPEN&amp;page=2</code> or form-encoded fields. It suits <strong>filtering, sorting, pagination and options</strong>: things that refine a collection rather than identify a resource. Use <code>required = false</code>, <code>Optional&lt;T&gt;</code> or <code>defaultValue = &quot;0&quot;</code>. Repeated parameters bind to a <code>List</code>, and <code>Map&lt;String,String&gt;</code> captures all. For pagination Spring Data's <code>Pageable</code> resolver handles <code>page</code>, <code>size</code>, <code>sort</code>.</p>
+<p><strong>@RequestBody</strong> takes the <strong>whole body</strong> and converts it with an <code>HttpMessageConverter</code> selected by the <code>Content-Type</code>, typically Jackson for <code>application/json</code>, into a DTO or record. Only one body per request. Combine with <strong>@Valid</strong> (or <code>@Validated</code> with groups) for Bean Validation; malformed JSON gives <code>HttpMessageNotReadableException</code> → 400.</p>
+<p><strong>@RequestHeader</strong> reads a header such as <code>Idempotency-Key</code>, <code>X-Correlation-Id</code>, <code>Accept-Language</code> or <code>If-Match</code> for optimistic locking. <code>@RequestHeader HttpHeaders</code> gives all of them. (Authorization headers are better left to Spring Security.)</p>
+<p>All of them support <code>name</code>, <code>required</code> and, except <code>@RequestBody</code>, <code>defaultValue</code>. Since Spring 6.1, constraint annotations directly on <code>@RequestParam</code> or <code>@PathVariable</code> (like <code>@Min(1)</code>) are validated by built-in method validation.</p>
+<p><strong>ResponseEntity</strong> is the response-side counterpart, letting you set status and headers, for example 201 with <code>Location</code> or 304 with an <code>ETag</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>HandlerMapping matches the URI template and extracts path variables.</li>
+  <li>Argument resolvers check each parameter's annotation.</li>
+  <li>Values are converted with the ConversionService or a message converter.</li>
+  <li>Validation runs; failures become 400 responses.</li>
+  <li>The method executes with typed arguments.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RestController
+@RequestMapping(&quot;/api/customers/{customerId}/orders&quot;)
+class CustomerOrderController {
+
+    @GetMapping
+    Page&lt;OrderDto&gt; list(@PathVariable UUID customerId,
+                        @RequestParam(defaultValue = &quot;OPEN&quot;) Status status,
+                        @RequestParam(required = false) LocalDate from,
+                        Pageable pageable) { ... }
+
+    @PostMapping
+    ResponseEntity&lt;OrderDto&gt; create(@PathVariable UUID customerId,
+                                    @Valid @RequestBody NewOrder body,
+                                    @RequestHeader(&quot;Idempotency-Key&quot;) String idempotencyKey) {
+        OrderDto created = service.create(customerId, body, idempotencyKey);
+        return ResponseEntity.created(URI.create(&quot;/api/customers/&quot; + customerId + &quot;/orders/&quot; + created.id()))
+                             .body(created);
+    }
+}</code></pre>
+<pre><code class="language-bash">curl &quot;http://localhost:8080/api/customers/3f6c.../orders?status=SHIPPED&amp;page=0&amp;size=20&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Annotation</th><th>Source</th><th>Typical use</th><th>Required default</th></tr></thead>
+<tbody>
+<tr><td>@PathVariable</td><td>URI path</td><td>Resource id</td><td>Yes</td></tr>
+<tr><td>@RequestParam</td><td>Query / form</td><td>Filters, paging</td><td>Yes (configurable)</td></tr>
+<tr><td>@RequestBody</td><td>Body</td><td>Create/update payload</td><td>Yes</td></tr>
+<tr><td>@RequestHeader</td><td>Headers</td><td>Idempotency key, correlation id</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting filters in the path or ids in the query inconsistently.</li>
+  <li>Sending sensitive data like passwords in query parameters, which end up in logs.</li>
+  <li>Two <code>@RequestBody</code> parameters in one method.</li>
+  <li>Forgetting <code>@Valid</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;@PathVariable binds a segment of the URI path, like the id in /orders/{id}, and identifies the resource. @RequestParam binds query string or form parameters, typically for filtering, sorting and pagination, and supports required and default values. @RequestBody deserialises the request body, usually JSON through Jackson, into a DTO, and I combine it with @Valid. @RequestHeader reads headers such as an idempotency key or correlation id. On the way back, ResponseEntity lets me control the status and headers, like 201 with a Location header.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you use ResponseEntity instead of returning the object?</strong> When the status or headers vary: 201, 204, 304, Location, ETag.</li>
+  <li><strong>How do you make a request parameter optional?</strong> <code>required = false</code>, <code>Optional&lt;T&gt;</code> or <code>defaultValue</code>.</li>
+  <li><strong>Why not GET with a body?</strong> Semantics are undefined and many proxies drop it; use query params or POST a search.</li>
+</ul>
+</article>
+</body>
+</html>

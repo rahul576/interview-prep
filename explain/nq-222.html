@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-222 · What are RestTemplate and WebClient, and when would you use each?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-222" data-topic="Microservices">
+<h1>What are RestTemplate and WebClient, and when would you use each?</h1>
+<p class="ex-meta">Microservices · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>RestTemplate</strong> is Spring's classic <strong>synchronous, blocking</strong> HTTP client, now in <strong>maintenance mode</strong>; <strong>WebClient</strong> is the <strong>non-blocking, reactive</strong> client from WebFlux; for new blocking code use <strong>RestClient</strong> (Spring 6.1+) or <strong>HTTP interfaces</strong>, and always configure <strong>timeouts and connection pools</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>RestTemplate</strong> has existed since Spring 3. Each call such as <code>getForObject</code> <strong>blocks the calling thread</strong> until the response arrives. In a servlet application with thread-per-request this is simple and perfectly adequate. However, its API is template-method style with many overloads, and it has been in <strong>maintenance mode</strong> for years: no new features, only fixes. The Spring team has announced its eventual deprecation, so it should not be used for new code.</p>
+<p><strong>WebClient</strong> arrived with <strong>Spring WebFlux</strong> (Spring 5). It is <strong>non-blocking</strong>: calls return <code>Mono</code> or <code>Flux</code>, and I/O is handled by an event loop (Reactor Netty by default), so a few threads can handle thousands of concurrent requests. It has a <strong>fluent API</strong>, supports streaming and backpressure, and makes <strong>parallel fan-out</strong> easy (<code>Mono.zip</code> of several calls). It is the natural choice in reactive applications. You can call <code>.block()</code> in a servlet app, but then you pay for the reactive dependency without its benefits, and you must never block inside a reactive pipeline.</p>
+<p><strong>RestClient</strong>, introduced in <strong>Spring Framework 6.1</strong> (Spring Boot 3.2), is the modern <strong>synchronous</strong> client: the fluent API of WebClient, built on blocking HTTP libraries (JDK <code>HttpClient</code>, Apache HttpClient, Jetty), without reactive types. With <strong>virtual threads</strong> (Java 21+, <code>spring.threads.virtual.enabled=true</code>), blocking calls become cheap, so RestClient covers most needs of servlet applications. <strong>HTTP interfaces</strong> (<code>@HttpExchange</code>) give declarative, Feign-like clients on top of RestClient or WebClient; <strong>OpenFeign</strong> remains common in Spring Cloud projects.</p>
+<p>Whichever client you use: set <strong>connect and read/response timeouts</strong> (defaults can be infinite or very long), configure <strong>connection pooling</strong>, build clients from Spring Boot's auto-configured <strong>builders</strong> so observability and tracing work, and wrap calls with resilience policies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Inject the auto-configured <code>RestClient.Builder</code> or <code>WebClient.Builder</code>.</li>
+  <li>Configure base URL, timeouts, default headers.</li>
+  <li>Build the request fluently; execute.</li>
+  <li>RestClient returns the body; WebClient returns <code>Mono</code>/<code>Flux</code> subscribed by the framework.</li>
+  <li>Errors map to exceptions or reactive error signals.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// RestClient: synchronous, modern
+@Bean
+RestClient catalogClient(RestClient.Builder b) {
+    var settings = ClientHttpRequestFactorySettings.defaults()
+            .withConnectTimeout(Duration.ofSeconds(1))
+            .withReadTimeout(Duration.ofSeconds(2));
+    return b.baseUrl(&quot;http://catalog&quot;)
+            .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings))
+            .build();
+}
+Product p = catalogClient.get().uri(&quot;/products/{id}&quot;, id).retrieve().body(Product.class);
+
+// WebClient: non-blocking fan-out
+Mono&lt;Product&gt; product = webClient.get().uri(&quot;/products/{id}&quot;, id).retrieve().bodyToMono(Product.class);
+Mono&lt;Stock&gt; stock = webClient.get().uri(&quot;/stock/{id}&quot;, id).retrieve().bodyToMono(Stock.class);
+Mono&lt;ProductPage&gt; page = Mono.zip(product, stock, ProductPage::new)
+        .timeout(Duration.ofSeconds(2));</code></pre>
+<p>(Exact timeout configuration classes differ between Spring Boot versions; check your version's docs.)</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Client</th><th>Model</th><th>Status</th><th>Use for</th></tr></thead>
+<tbody>
+<tr><td>RestTemplate</td><td>Blocking</td><td>Maintenance, deprecation planned</td><td>Existing code</td></tr>
+<tr><td>RestClient</td><td>Blocking, fluent</td><td>Recommended</td><td>New servlet/virtual-thread apps</td></tr>
+<tr><td>WebClient</td><td>Non-blocking, reactive</td><td>Active</td><td>WebFlux, high-concurrency fan-out</td></tr>
+<tr><td>HTTP interface / Feign</td><td>Declarative</td><td>Active</td><td>Typed API clients</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No timeouts, so a hanging downstream exhausts threads.</li>
+  <li>Calling <code>.block()</code> inside a reactive pipeline.</li>
+  <li>Creating clients with <code>new</code> instead of the builders, losing tracing and metrics.</li>
+  <li>Pulling in WebFlux just to call one API from a blocking app.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;RestTemplate is the classic synchronous client: each call blocks the thread until the response arrives. It works, but it is in maintenance mode. WebClient, from WebFlux, is non-blocking and reactive with a fluent API returning Mono or Flux, so it handles many concurrent calls on few threads and suits reactive apps or fan-out to several services. For new blocking code I use RestClient from Spring 6.1, often with HTTP interfaces, and with virtual threads blocking is cheap anyway. Whatever the client, I build it from the Spring Boot builder and always configure connect and read timeouts and connection pooling.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if you forget timeouts?</strong> A slow or hung dependency holds threads indefinitely and can bring your service down.</li>
+  <li><strong>Do virtual threads make WebClient unnecessary?</strong> For many servlet apps yes; reactive still helps for streaming and backpressure.</li>
+  <li><strong>What is an HTTP interface?</strong> A Java interface annotated with <code>@HttpExchange</code> that Spring turns into a client proxy.</li>
+</ul>
+</article>
+</body>
+</html>

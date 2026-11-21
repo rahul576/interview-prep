@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-036 · How do you run large-scale batch scoring efficiently?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-036" data-topic="MLOps">
+<h1>How do you run large-scale batch scoring efficiently?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Run batch scoring on a <strong>distributed engine</strong> (Spark with pandas UDFs, Ray Data, or managed batch endpoints), <strong>load the model once per worker</strong>, run <strong>vectorised or batched inference</strong>, <strong>partition</strong> input with <strong>checkpointing and idempotent outputs</strong>, use <strong>spot capacity off-peak</strong>, record <strong>model version and run ID</strong> on every row, and <strong>validate outputs</strong> before publishing.</p>
+
+<h2>Detailed explanation</h2>
+<p>Scoring tens of millions of records row by row, or by calling an online endpoint per record, is slow and expensive. Efficient batch scoring has a few rules.</p>
+<p><strong>Distributed processing.</strong> Spark with <strong>pandas UDFs</strong> (or <code>mapInPandas</code>) processes Arrow batches of rows; <strong>Ray Data</strong> streams batches to CPU or GPU actors; managed options include SageMaker Batch Transform, Azure ML batch endpoints, Vertex AI batch prediction and Databricks.</p>
+<p><strong>Load once per worker.</strong> Loading a 500 MB model for each record or each small task dominates runtime. Use iterator-style UDFs or long-lived actors so the model is loaded once per executor or actor and reused.</p>
+<p><strong>Vectorised inference.</strong> Score thousands of rows per call; on GPUs use batches sized to memory. This can be 10 to 100 times faster than per-row calls.</p>
+<p><strong>Partitioning and idempotency.</strong> Partition input by date or ID range so failed partitions are retried individually. Write outputs idempotently—<strong>overwrite a partition</strong>, or upsert by key—rather than append, so reruns don't duplicate. Checkpoint progress for long jobs.</p>
+<p><strong>Cost.</strong> Use <strong>spot or preemptible</strong> capacity (the partitioning makes retries cheap) and schedule off-peak.</p>
+<p><strong>Traceability and validation.</strong> Each output row records model name, <strong>version</strong>, <strong>run ID</strong> and scoring time. Before publishing, validate: row count matches input, null scores absent, score distribution close to the previous run. Then swap the published table or pointer atomically.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read input partitions from the lake or warehouse.</li>
+  <li>Broadcast the model artefact path; load once per worker.</li>
+  <li>Score in batches with vectorised operations.</li>
+  <li>Write each partition with overwrite, adding version and run ID.</li>
+  <li>Validate counts and distributions.</li>
+  <li>Publish by swapping a view or table pointer; alert on failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import pandas as pd, mlflow
+from typing import Iterator
+
+MODEL_URI = &quot;models:/churn@champion&quot;
+
+def score(batches: Iterator[pd.DataFrame]) -&gt; Iterator[pd.DataFrame]:
+    model = mlflow.pyfunc.load_model(MODEL_URI)          # once per worker
+    for df in batches:
+        df[&quot;score&quot;] = model.predict(df[FEATURES])
+        df[&quot;model_version&quot;] = &quot;churn:23&quot;
+        yield df[[&quot;customer_id&quot;, &quot;score&quot;, &quot;model_version&quot;]]
+
+(spark.table(&quot;features.customers_daily&quot;).where(&quot;ds = '2026-11-20'&quot;)
+      .mapInPandas(score, &quot;customer_id string, score double, model_version string&quot;)
+      .write.mode(&quot;overwrite&quot;).option(&quot;replaceWhere&quot;, &quot;ds = '2026-11-20'&quot;)
+      .saveAsTable(&quot;predictions.churn&quot;))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling an online endpoint per record for millions of rows.</li>
+  <li>Loading the model inside a per-row function.</li>
+  <li>Appending outputs so reruns create duplicates.</li>
+  <li>Publishing without validating counts and distributions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For millions of records I use Spark with pandas UDFs, Ray Data or a managed batch endpoint. The model is loaded once per worker, not per record, and inference runs on batches with vectorised or GPU operations. Input is partitioned so failures retry per partition, and outputs overwrite partitions so reruns are idempotent. Jobs run off-peak on spot capacity. Each row carries the model version and run ID for traceability, and I validate row counts and score distributions before publishing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you score a GPU-only model inside Spark?</strong> GPU executor pools with one model per GPU, or Ray Data actors on GPU nodes reading from the lake.</li>
+  <li><strong>How do consumers read results safely?</strong> Through a view or table swapped only after validation.</li>
+  <li><strong>How do you handle new entities between runs?</strong> Online fallback scoring or a default.</li>
+</ul>
+</article>
+</body>
+</html>

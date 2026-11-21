@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-167 · What is the difference between configuration management and immutable infrastructure?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-167" data-topic="Configuration Management">
+<h1>What is the difference between configuration management and immutable infrastructure?</h1>
+<p class="ex-meta">Configuration Management · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Configuration management</strong> (Ansible, Chef, Puppet, Salt) <strong>changes running servers in place</strong> (mutable infrastructure), which risks <strong>configuration drift</strong> and <strong>snowflake servers</strong>; <strong>immutable infrastructure</strong> never modifies a running server but <strong>replaces</strong> it with a new <strong>golden image</strong> (Packer AMI) or <strong>container image</strong>, giving <strong>consistency, easy rollback and simpler debugging</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>With <strong>mutable infrastructure</strong>, servers live for months or years. Config management tools converge them to a desired state, but in practice they accumulate differences: a hotfix applied by hand, a package upgraded on one host, a failed run on another. Over time each server becomes a <strong>snowflake</strong>: unique, hard to reproduce and scary to touch. Updates happen in place, so a failed upgrade can leave a server half-changed, and rollback means writing another change.</p>
+<p>With <strong>immutable infrastructure</strong>, a server or container is never changed after deployment. To change anything, you <strong>build a new artifact</strong>: a VM image with <strong>Packer</strong> (an AMI or Azure image) or a <strong>container image</strong>, test it, and <strong>replace</strong> the old instances via an auto scaling group instance refresh, a blue-green swap or a Kubernetes rolling update. Every instance from the same image is identical, environments match, and <strong>rollback means redeploying the previous image</strong>. Debugging is easier because what runs is exactly what was tested. It also fits security: SSH can be disabled, and any unexpected change is suspicious.</p>
+<p>It's not either/or. Config management remains useful <strong>to build images</strong> (Ansible as a Packer provisioner), for <strong>legacy or stateful servers</strong> that can't be replaced easily (databases, mainframe-adjacent systems), and for network devices. Immutable infrastructure requires good <strong>automation</strong>: image pipelines, fast provisioning, externalised state and configuration, and health-checked rollouts.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the server in code (Packer template, Ansible role or Dockerfile).</li>
+  <li>CI builds a versioned image, scans and tests it.</li>
+  <li>Deploy new instances from the image behind the load balancer.</li>
+  <li>Health checks pass → drain and terminate old instances.</li>
+  <li>Problem → redeploy the previous image version.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># Packer: bake a golden AMI, configured once at build time with Ansible
+source &quot;amazon-ebs&quot; &quot;web&quot; {
+  region        = &quot;eu-west-1&quot;
+  instance_type = &quot;t3.small&quot;
+  source_ami_filter {
+    filters     = { name = &quot;al2023-ami-*-x86_64&quot; }
+    owners      = [&quot;amazon&quot;]
+    most_recent = true
+  }
+  ssh_username = &quot;ec2-user&quot;
+  ami_name     = &quot;web-{{timestamp}}&quot;
+}
+build {
+  sources = [&quot;source.amazon-ebs.web&quot;]
+  provisioner &quot;ansible&quot; { playbook_file = &quot;web.yml&quot; }
+}</code></pre>
+<p>Terraform then updates the launch template to the new AMI and an instance refresh replaces servers gradually.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Mutable (config management)</th><th>Immutable</th></tr></thead>
+<tbody>
+<tr><td>Change method</td><td>Modify in place</td><td>Replace with new image</td></tr>
+<tr><td>Drift</td><td>Likely over time</td><td>Practically none</td></tr>
+<tr><td>Rollback</td><td>Another change</td><td>Redeploy previous image</td></tr>
+<tr><td>Needs</td><td>Agents/SSH access</td><td>Image pipeline, fast provisioning</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling infrastructure immutable while still SSHing in to patch.</li>
+  <li>Storing state on instances that are meant to be replaced.</li>
+  <li>Building images manually instead of in a pipeline.</li>
+  <li>Rebuilding images rarely, so they lag on security patches.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Configuration management tools like Ansible, Chef or Puppet change running servers in place. That's mutable infrastructure, and over time servers drift through manual fixes and partial runs until they become snowflakes that are hard to reproduce. With immutable infrastructure we never modify a running server: we bake a new golden image with Packer or a new container image, test it, and replace the old instances. That gives identical environments, easy rollback to the previous image and simpler debugging. Config management is still useful inside the image build, for example Ansible as a Packer provisioner, and for legacy or stateful servers we can't simply replace.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you patch an OS vulnerability?</strong> Rebuild the image from the patched base, test, and roll it out by replacing instances.</li>
+  <li><strong>What about stateful servers?</strong> Keep data on separate volumes or managed services so instances stay replaceable.</li>
+  <li><strong>Is Kubernetes immutable infrastructure?</strong> Pods and images are; nodes can be too with node image upgrades.</li>
+</ul>
+</article>
+</body>
+</html>

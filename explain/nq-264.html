@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-264 · Why is GROUP BY required for this aggregation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-264" data-topic="Databases &amp; SQL">
+<h1>Why is GROUP BY required for this aggregation?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Aggregates collapse rows</strong>: without <code>GROUP BY</code>, <code>SUM(o.amount)</code> returns one grand total for everyone, so <strong>GROUP BY</strong> is what splits the rows into one group per customer per year and makes SUM run separately for each.</p>
+
+<h2>Detailed explanation</h2>
+<p>An aggregate function like <code>SUM</code>, <code>COUNT</code> or <code>AVG</code> turns a set of rows into a single value. The question is always: <em>which</em> set? Without a <code>GROUP BY</code>, the set is the entire filtered result, so <code>SELECT SUM(o.amount) FROM orders</code> gives one number, the total revenue of all customers in all years.</p>
+<p>The report needs <strong>revenue per customer per year</strong>. <code>GROUP BY c.customer_id, EXTRACT(YEAR FROM o.order_date)</code> tells the database to partition the rows into buckets that share the same customer and year, run <code>SUM</code> within each bucket, and return one row per bucket.</p>
+<p>There is also a correctness rule. If you write <code>SELECT c.name, SUM(o.amount)</code> without grouping, standard SQL rejects it: there are thousands of names but only one sum, so which name should appear? Mixing aggregated and non-aggregated columns therefore <strong>requires</strong> GROUP BY. (Old MySQL versions without <code>ONLY_FULL_GROUP_BY</code> returned an arbitrary name, a silent bug.)</p>
+<p>GROUP BY also enables <strong>HAVING</strong>, which filters groups after aggregation, for example keeping only customers with more than 10,000 revenue in a year. <code>WHERE</code> cannot do that because it runs before the sums exist. If you want per-group totals <em>without</em> collapsing rows, use a <strong>window function</strong>: <code>SUM(amount) OVER (PARTITION BY customer_id)</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Rows are produced by FROM/JOIN and filtered by WHERE.</li>
+  <li>GROUP BY assigns each row to a group by its key values.</li>
+  <li>Aggregates are computed per group.</li>
+  <li>HAVING removes groups that fail a condition on aggregates.</li>
+  <li>SELECT outputs one row per remaining group.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- One number for everything
+SELECT SUM(amount) FROM orders;
+
+-- One row per customer per year, only big spenders
+SELECT customer_id,
+       EXTRACT(YEAR FROM order_date) AS yr,
+       SUM(amount) AS revenue
+FROM orders
+GROUP BY customer_id, EXTRACT(YEAR FROM order_date)
+HAVING SUM(amount) &gt; 10000;
+
+-- Keep every order row, add the customer total alongside
+SELECT order_id, customer_id, amount,
+       SUM(amount) OVER (PARTITION BY customer_id) AS customer_total
+FROM orders;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trying to filter on <code>SUM(...)</code> in WHERE instead of HAVING.</li>
+  <li>Selecting non-grouped columns next to aggregates.</li>
+  <li>Grouping by too many columns (like order_id), so each group is one row and nothing is aggregated.</li>
+  <li>Forgetting window functions when you need detail rows plus totals.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;SUM collapses rows into one value. Without GROUP BY it would sum the whole join and return a single total for all customers and all years. We need a total per customer per year, so GROUP BY splits the rows into groups with the same customer and year and computes the SUM for each, giving one row per group. And in standard SQL I can't select the customer name next to an aggregate without grouping, because the database wouldn't know which name to show.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep only customers with more than 10,000 revenue in a year?</strong> <code>HAVING SUM(o.amount) &gt; 10000</code>.</li>
+  <li><strong>What is the difference between WHERE and HAVING?</strong> WHERE filters rows before grouping; HAVING filters groups after.</li>
+  <li><strong>How do you get totals without losing detail rows?</strong> A window function with <code>PARTITION BY</code>.</li>
+</ul>
+</article>
+</body>
+</html>

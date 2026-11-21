@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-081 · What is dirty writing, and how can concurrent access cause inconsistent results?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-081" data-topic="Concurrency">
+<h1>What is dirty writing, and how can concurrent access cause inconsistent results?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>dirty write</strong> is when one thread or transaction <strong>overwrites data that another has written but not yet finished or committed</strong>, so updates are <strong>lost</strong> or the data ends up as an <strong>inconsistent mix</strong>; prevent it with <strong>locks, synchronisation, transaction isolation or optimistic locking</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The term comes from database theory: a <strong>dirty write</strong> (phenomenon P0 in the ANSI isolation discussion) happens when transaction T2 overwrites a value written by T1 before T1 commits or rolls back. If T1 then rolls back, should it restore its old value and wipe T2's change? The outcome becomes undefined. Every real database isolation level, even Read Uncommitted, prevents dirty writes with row write locks held until commit. The closely related, and much more common, problem is the <strong>lost update</strong>: two transactions both read a row, both compute a new value, and the second write silently overwrites the first.</p>
+<p>The same pattern appears <strong>in memory in Java</strong>. If two threads update several fields of a shared object without synchronisation, writes interleave. Thread A sets <code>balance = 900</code> and is about to set <code>lastUpdated</code>, while thread B sets <code>balance = 1100</code> and <code>lastUpdated</code>. The final object can show B's balance with A's timestamp, or a balance that ignores one of the operations entirely. Readers may also see a <strong>half-updated</strong> object. The cause is the same: concurrent read-modify-write without coordination.</p>
+<p><strong>Prevention in Java</strong>: guard the whole compound update with one lock (<code>synchronized</code> or <code>ReentrantLock</code>), replace the object atomically (an immutable value in an <code>AtomicReference</code> updated with <code>updateAndGet</code>), or confine the state to one thread.</p>
+<p><strong>Prevention in databases</strong>: rely on transactions and appropriate <strong>isolation</strong>; use <strong>pessimistic locking</strong> (<code>SELECT ... FOR UPDATE</code>); use atomic conditional updates (<code>UPDATE account SET balance = balance - 100 WHERE id = ? AND balance &gt;= 100</code>); or use <strong>optimistic locking</strong> with a version column, as JPA's <strong><code>@Version</code></strong> does: the update includes <code>WHERE version = ?</code>, and if no row matches, an <code>OptimisticLockException</code> is thrown and the application retries or reports a conflict.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Two actors read the same state.</li>
+  <li>Each computes a change based on what it read.</li>
+  <li>Both write, without coordination; the later write overwrites the earlier.</li>
+  <li>Result: lost update or a mix of both writes.</li>
+  <li>With a lock or version check, the second writer either waits or is rejected and retries.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Entity
+class Account {
+    @Id Long id;
+    BigDecimal balance;
+    @Version long version;          // optimistic locking
+}
+
+@Transactional
+void withdraw(long id, BigDecimal amount) {
+    Account a = repo.findById(id).orElseThrow();
+    a.setBalance(a.getBalance().subtract(amount));
+    // Hibernate issues: UPDATE account SET balance=?, version=version+1
+    //                   WHERE id=? AND version=?
+    // 0 rows updated -&gt; OptimisticLockException -&gt; retry or 409 Conflict
+}</code></pre>
+<pre><code class="language-sql">-- Atomic alternative without read-modify-write in the app
+UPDATE account SET balance = balance - 100 WHERE id = 42 AND balance &gt;= 100;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>@Transactional</code> alone prevents lost updates at Read Committed.</li>
+  <li>Updating related fields under different locks or no lock.</li>
+  <li>Catching <code>OptimisticLockException</code> and ignoring it.</li>
+  <li>Doing read-modify-write in application code when an atomic SQL update would do.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A dirty write is when one thread or transaction overwrites data another has written but not yet finished or committed, so one change silently wins, or the data ends up as a mix of both. In Java, two threads updating fields of the same account object without synchronisation can leave one thread's balance with the other's timestamp. In databases the common form is the lost update, where two transactions read, modify and write the same row. The cure is coordination: synchronized or locks around compound updates in memory, and in databases row locks, the right isolation level, atomic conditional updates or optimistic locking with a version column, like JPA's @Version.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does JPA optimistic locking detect a conflicting write?</strong> It adds <code>WHERE version = ?</code> to the update and increments the version; if zero rows are updated, someone else changed the row first.</li>
+  <li><strong>Optimistic or pessimistic locking?</strong> Optimistic for low contention and user think time; pessimistic for hot rows with frequent conflicts.</li>
+  <li><strong>What is a dirty read?</strong> Reading another transaction's uncommitted data, allowed only at Read Uncommitted.</li>
+</ul>
+</article>
+</body>
+</html>

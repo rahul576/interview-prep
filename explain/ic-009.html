@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-009 · How does Terraform decide the order in which resources are created?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-009" data-topic="Infrastructure as Code">
+<h1>How does Terraform decide the order in which resources are created?</h1>
+<p class="ex-meta">Infrastructure as Code · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Terraform builds a <strong>dependency graph</strong> from <strong>references</strong> between resources (implicit dependencies) plus any <strong>depends_on</strong>; it creates dependencies first, runs independent resources <strong>in parallel</strong> (10 by default), and <strong>destroys in reverse order</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform does not execute files top to bottom; file order is irrelevant. Instead it builds a <strong>directed acyclic graph</strong> of every resource, data source, module, variable and output. Whenever an expression references another object, for example <code>vpc_id = aws_vpc.main.id</code>, that creates an <strong>implicit dependency</strong>: the subnet cannot be created until the VPC exists and its ID is known. This is the normal and preferred way to express ordering, because the dependency is visible in the code and exact.</p>
+<p>Resources with no path between them are <strong>independent</strong> and Terraform works on them concurrently. The default concurrency is <strong>10</strong> operations, controlled with <code>-parallelism=n</code>; lowering it helps when an API rate-limits you.</p>
+<p>Sometimes a dependency is real but invisible to Terraform, for example an EC2 instance whose startup script needs an IAM role policy attached, but the instance only references the instance profile, not the policy attachment. For such cases <strong>depends_on</strong> adds an <strong>explicit dependency</strong>. Use it sparingly: it is coarse, and when used on a module or data source it can make Terraform defer reading data until apply, producing more &quot;known after apply&quot; values and noisier plans.</p>
+<p>On <strong>destroy</strong>, Terraform walks the graph in <strong>reverse</strong>: the subnet is deleted before the VPC. For replacements, the default order is destroy then create, unless <code>create_before_destroy</code> is set. If you create a cycle (A references B and B references A), Terraform reports a <strong>cycle error</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Parse all configuration files into objects.</li>
+  <li>Add edges for every reference and every <code>depends_on</code>.</li>
+  <li>Check for cycles.</li>
+  <li>Walk the graph, starting objects whose dependencies are complete, up to the parallelism limit.</li>
+  <li>For destroy, walk the reversed graph.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_vpc&quot; &quot;main&quot; { cidr_block = &quot;10.0.0.0/16&quot; }
+
+resource &quot;aws_subnet&quot; &quot;app&quot; {
+  vpc_id     = aws_vpc.main.id          # implicit dependency
+  cidr_block = &quot;10.0.1.0/24&quot;
+}
+
+resource &quot;aws_instance&quot; &quot;app&quot; {
+  subnet_id            = aws_subnet.app.id
+  iam_instance_profile = aws_iam_instance_profile.app.name
+  depends_on           = [aws_iam_role_policy_attachment.app_s3]  # hidden dependency
+}</code></pre>
+<pre><code class="language-bash">terraform graph | dot -Tsvg &gt; graph.svg
+terraform apply -parallelism=5</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming file or block order controls creation order.</li>
+  <li>Adding <code>depends_on</code> everywhere &quot;to be safe&quot;, slowing and bloating plans.</li>
+  <li>Hard-coding IDs instead of references, losing the implicit dependency.</li>
+  <li>Creating cycles between security groups that reference each other inline (use separate rule resources).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Terraform builds a dependency graph. Any time one resource references another's attribute, like a subnet using aws_vpc.main.id, that's an implicit dependency, so the VPC is created first. Resources with no dependency between them are created in parallel, ten at a time by default via -parallelism. When there's a real dependency Terraform can't see, such as an instance needing a policy attached before it boots, I add depends_on, but sparingly because it makes plans more conservative. On destroy it walks the graph in reverse, and terraform graph can visualise it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why use depends_on sparingly?</strong> It's coarse, hides intent and can defer data reads, causing more unknown values and replacements.</li>
+  <li><strong>How do you fix a cycle?</strong> Break it with separate resources, e.g. standalone security group rules.</li>
+  <li><strong>Does Terraform retry failed resources?</strong> No automatic graph retry; providers retry some API errors internally.</li>
+</ul>
+</article>
+</body>
+</html>

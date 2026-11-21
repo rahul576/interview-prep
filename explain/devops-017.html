@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-017 · How do you optimise a Dockerfile for image size, build speed and security?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-017" data-topic="Docker">
+<h1>How do you optimise a Dockerfile for image size, build speed and security?</h1>
+<p class="ex-meta">Docker · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Use <strong>multi-stage builds</strong>, a <strong>small base</strong> (slim, alpine, distroless), <strong>instruction order that maximises layer caching</strong>, a <strong>.dockerignore</strong>, <strong>combined RUN steps with cleanup</strong> and <strong>cache mounts</strong>, and for security <strong>run as non-root</strong>, <strong>pin versions or digests</strong>, keep <strong>secrets out of layers</strong> and <strong>scan</strong> in CI.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Size.</strong> A <strong>multi-stage build</strong> compiles in a full SDK image and copies only the artefact into a minimal runtime stage, so compilers, sources and caches never ship. A Java app can go from an 800 MB JDK-based image to under 200 MB with a JRE or distroless base; a Go binary can run on <code>scratch</code> or <code>distroless/static</code>. Choose bases wisely: <strong>slim</strong> Debian variants are compatible and small; <strong>alpine</strong> is tiny but uses musl libc, which can break some native libraries; <strong>distroless</strong> contains no shell or package manager. Because layers are additive, <strong>delete temporary files in the same RUN</strong> that created them; deleting in a later layer does not shrink the image.</p>
+<p><strong>Build speed.</strong> Docker caches each layer and reuses it until an instruction or its inputs change, then rebuilds everything after it. So order instructions from <strong>least to most frequently changing</strong>: copy the dependency manifest (<code>package.json</code>, <code>pom.xml</code>, <code>requirements.txt</code>), install dependencies, and only then copy source code. A <strong>.dockerignore</strong> keeps <code>.git</code>, <code>node_modules</code>, build output and <code>.env</code> files out of the build context, speeding uploads and avoiding needless cache invalidation. <strong>BuildKit cache mounts</strong> (<code>RUN --mount=type=cache</code>) keep package manager caches between builds.</p>
+<p><strong>Security.</strong> Add a non-root <code>USER</code>; <strong>pin</strong> base images to a version or <strong>digest</strong> for reproducibility (and let Renovate update them); never <code>COPY</code> secrets or pass them as build args, use <code>RUN --mount=type=secret</code>; install only needed packages (<code>--no-install-recommends</code>); and <strong>scan</strong> the result with Trivy or Grype, failing on critical fixable CVEs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Stage 1: SDK image, copy manifests, install deps (cached), copy source, build.</li>
+  <li>Stage 2: minimal runtime image, copy only the artefact.</li>
+  <li>Set non-root user, exec-form entrypoint.</li>
+  <li>CI: build with BuildKit and registry cache, scan, push by digest.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+RUN npm run build &amp;&amp; npm prune --omit=dev
+
+FROM gcr.io/distroless/nodejs22-debian12
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+USER nonroot
+EXPOSE 3000
+CMD [&quot;dist/server.js&quot;]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>COPY . .</code> before installing dependencies, busting the cache on every code change.</li>
+  <li><code>RUN apt-get update</code> in one layer and <code>install</code> in another (stale cache) or no cleanup.</li>
+  <li>Secrets in <code>ARG</code>/<code>ENV</code>, visible in image history.</li>
+  <li>Running as root and using <code>:latest</code> base images.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For size I use multi-stage builds, so the final image contains only the runtime and the artefact, on a slim or distroless base. For speed I order instructions from least to most frequently changing, copying the dependency manifest and installing dependencies before copying source, so the cache is reused, and a .dockerignore keeps the context small. I combine RUN commands and clean up in the same layer, and use BuildKit cache mounts. For security I run as a non-root user, pin base image versions or digests, use secret mounts instead of baking credentials, and scan with Trivy in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why doesn't deleting a file in a later layer reduce size?</strong> Earlier layers still contain it; the later layer only hides it.</li>
+  <li><strong>Alpine downsides?</strong> musl libc compatibility and DNS quirks; slim or distroless are often safer.</li>
+  <li><strong>How to debug distroless images?</strong> <code>kubectl debug</code> or <code>docker debug</code> with an ephemeral tools container.</li>
+</ul>
+</article>
+</body>
+</html>

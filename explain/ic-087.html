@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ic-087 · How do you design configuration for many environments without copy-paste?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="ic-087" data-topic="Configuration Management">
+<h1>How do you design configuration for many environments without copy-paste?</h1>
+<p class="ex-meta">Configuration Management · design · levels senior</p>
+
+<h2>In one line</h2>
+<p>Run <strong>the same code everywhere</strong> and <strong>layer configuration</strong>: defaults, then <strong>environment</strong>, then <strong>region/cluster</strong>, then (rarely) <strong>host</strong>, so each layer holds <strong>only differences</strong>; keep <strong>secrets separate</strong> and referenced, and <strong>validate and diff environments</strong> regularly.</p>
+
+<h2>Detailed explanation</h2>
+<p>Copy-pasted environment folders look simple at first, then diverge: a fix lands in prod but not staging, a new setting is forgotten in one region, and reviewers cannot tell what is intentionally different. The goal is <strong>one codebase, small override files</strong>.</p>
+<p><strong>Ansible.</strong> Precedence gives a natural hierarchy: <strong>role defaults</strong> (<code>defaults/main.yml</code>) hold sensible values; inventory <strong><code>group_vars/all</code></strong> sets organisation-wide values; <strong><code>group_vars/prod</code></strong> and <code>group_vars/staging</code> hold environment differences; groups like <code>eu_west</code> or <code>cluster_a</code> hold regional values; <strong><code>host_vars</code></strong> only for genuine one-offs. Inventories per environment (<code>inventories/prod</code>, <code>inventories/staging</code>) keep hosts separate while playbooks and roles are shared.</p>
+<p><strong>Terraform.</strong> One root module or a set of modules is reused; each environment has a small <code>prod.tfvars</code> or a thin live directory calling the same pinned module with different inputs. Locals can merge maps (<code>merge(local.defaults, var.overrides)</code>) for structured settings.</p>
+<p><strong>Kubernetes.</strong> The same idea appears as Kustomize base plus overlays, or one Helm chart with per-environment values files.</p>
+<p><strong>Small files are reviewable.</strong> If <code>group_vars/prod</code> is 20 lines, a reviewer immediately sees how production differs, and a new environment is a new small file rather than a copy of everything.</p>
+<p><strong>Secrets</strong> stay out of these files: they are references to a vault path or secret name, resolved at runtime.</p>
+<p><strong>Guarding divergence.</strong> Schema validation (JSON Schema, Terraform variable validation, <code>ansible.builtin.assert</code> on required variables) catches typos and missing values. A scheduled job <strong>renders the effective configuration</strong> per environment (<code>ansible-inventory --host</code>, <code>terraform console</code>, <code>helm template</code>) and diffs them, highlighting unexpected differences like a feature flag enabled in staging but forgotten in production.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Put defaults in role defaults or module variables.</li>
+  <li>Add only differing values per environment.</li>
+  <li>Add region or cluster layers where needed.</li>
+  <li>Reference secrets by path; never inline.</li>
+  <li>Validate on every PR; diff rendered configs on a schedule.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">inventories/
+  prod/
+    hosts.yml
+    group_vars/
+      all.yml          # env: prod, log_level: warn
+      eu_west.yml      # ntp_servers, s3_region
+  staging/
+    hosts.yml
+    group_vars/all.yml # env: staging, log_level: debug, replicas: 1
+roles/app/defaults/main.yml   # replicas: 3, feature_new_checkout: false</code></pre>
+<pre><code class="language-bash">diff &lt;(ansible-inventory -i inventories/staging --host app1 | jq -S .) \
+     &lt;(ansible-inventory -i inventories/prod --host app1 | jq -S .)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copying the full configuration per environment.</li>
+  <li>Putting values in <code>host_vars</code> that belong to groups.</li>
+  <li>Mixing secrets into ordinary variable files.</li>
+  <li>Relying on hidden precedence rules nobody understands; keep layers few and documented.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The same code runs everywhere and configuration is layered so each layer only holds what differs. Defaults live in role defaults or module variables, then environment overrides like group_vars/prod or prod.tfvars, then region or cluster values, and host_vars only for real exceptions. Each environment file stays short, so reviewers see immediately how production differs from staging, and a new environment is a small override file. Secrets are separate, referenced from a vault. Validation on every PR and periodic diffs of the rendered configuration catch accidental divergence, like a flag set in staging but forgotten in production.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you spot unintended differences between staging and prod?</strong> Render effective configuration per environment and diff it regularly.</li>
+  <li><strong>Where should a value used by all environments live?</strong> In defaults or <code>group_vars/all</code>, never duplicated per environment.</li>
+  <li><strong>How many layers are too many?</strong> More than four or five; precedence becomes hard to reason about.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-129 · What is LinkedBlockingQueue?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-129" data-topic="Collections">
+<h1>What is LinkedBlockingQueue?</h1>
+<p class="ex-meta">Collections · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>LinkedBlockingQueue</strong> is a <strong>FIFO BlockingQueue of linked nodes</strong>, <strong>optionally bounded</strong> (default <strong>Integer.MAX_VALUE</strong>), using <strong>two locks</strong> (<strong>putLock</strong> and <strong>takeLock</strong>) so producers and consumers can work <strong>at the same time</strong>; it is the queue behind <strong>Executors.newFixedThreadPool</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Internally the queue keeps <code>head</code> and <code>last</code> node references, a <code>capacity</code> and an <code>AtomicInteger count</code>. Enqueue links a new node after <code>last</code>; dequeue advances <code>head</code>. Ordering is strictly <strong>FIFO</strong>.</p>
+<p><strong>Capacity.</strong> <code>new LinkedBlockingQueue&lt;&gt;()</code> uses <code>Integer.MAX_VALUE</code>, which is unbounded in practice. If producers outpace consumers, the backlog grows silently until latency explodes or the JVM hits <strong>OutOfMemoryError</strong>. In production pass an explicit capacity, for example <code>new LinkedBlockingQueue&lt;&gt;(10_000)</code>, so <code>put</code> blocks or a timed <code>offer</code> fails and you get <strong>back-pressure</strong>.</p>
+<p><strong>Two-lock design.</strong> Unlike <code>ArrayBlockingQueue</code>, which uses one <code>ReentrantLock</code> for both ends, LinkedBlockingQueue has a <strong>putLock</strong> with a <code>notFull</code> condition and a <strong>takeLock</strong> with a <code>notEmpty</code> condition. Because producers touch only the tail and consumers only the head, a <code>put</code> and a <code>take</code> can proceed <strong>in parallel</strong>; the shared <code>AtomicInteger count</code> coordinates them. Under mixed producer-consumer load this usually gives higher throughput. The trade-off is <strong>allocating a node per element</strong>, which adds GC pressure, while ArrayBlockingQueue preallocates its array. Operations that touch both ends, such as <code>remove(Object)</code> or iteration, acquire both locks.</p>
+<p><strong>Thread pools.</strong> <code>Executors.newFixedThreadPool(n)</code> and <code>newSingleThreadExecutor()</code> build a <code>ThreadPoolExecutor</code> with an <strong>unbounded LinkedBlockingQueue</strong>. That means the pool never grows beyond its core size and <strong>never rejects</strong> tasks; under sustained overload, tasks pile up in memory. For services, construct a <code>ThreadPoolExecutor</code> yourself with a bounded queue and a rejection policy.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>put(e)</code>: lock putLock; while <code>count == capacity</code> await notFull.</li>
+  <li>Link node at tail; <code>count.getAndIncrement()</code>.</li>
+  <li>If room remains, signal another producer; unlock.</li>
+  <li>If the queue was empty before, signal notEmpty (taking takeLock briefly).</li>
+  <li><code>take()</code> mirrors this on the head with takeLock.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">BlockingQueue&lt;Runnable&gt; work = new LinkedBlockingQueue&lt;&gt;(2_000);   // bounded!
+ThreadPoolExecutor pool = new ThreadPoolExecutor(
+        8, 8, 0L, TimeUnit.MILLISECONDS, work,
+        new ThreadPoolExecutor.CallerRunsPolicy());
+
+// What newFixedThreadPool does (unbounded):
+// new ThreadPoolExecutor(n, n, 0L, MILLISECONDS, new LinkedBlockingQueue&lt;Runnable&gt;());</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>LinkedBlockingQueue</th><th>ArrayBlockingQueue</th></tr></thead>
+<tbody>
+<tr><td>Storage</td><td>linked nodes</td><td>fixed array</td></tr>
+<tr><td>Bound</td><td>optional (default MAX_VALUE)</td><td>required</td></tr>
+<tr><td>Locks</td><td>two (put/take)</td><td>one</td></tr>
+<tr><td>Allocation</td><td>per element</td><td>upfront</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using the no-arg constructor in production.</li>
+  <li>Trusting <code>newFixedThreadPool</code> under unpredictable load.</li>
+  <li>Assuming <code>remainingCapacity()</code> is meaningful for an unbounded queue.</li>
+  <li>Ignoring <code>InterruptedException</code> from <code>put</code>/<code>take</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;LinkedBlockingQueue is a BlockingQueue backed by linked nodes with FIFO ordering. It's optionally bounded: without a capacity it's effectively unbounded at Integer.MAX_VALUE, which can hide a backlog until you run out of memory, so in production I pass a capacity. Internally it uses two separate locks, one for put and one for take, so a producer and a consumer can work at the same time, which usually gives more throughput than ArrayBlockingQueue's single lock, at the cost of a node allocation per element. Executors.newFixedThreadPool uses an unbounded one for its tasks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What goes wrong with newFixedThreadPool?</strong> Its unbounded queue accepts everything, so overload becomes memory growth and huge latency instead of rejection.</li>
+  <li><strong>Why can it use two locks?</strong> Producers and consumers touch different ends; an atomic count links them.</li>
+  <li><strong>When choose ArrayBlockingQueue?</strong> Fixed bound, less GC, predictable memory.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-090 · You create private endpoints with Terraform, but applications cannot resolve the private IP addresses. What is missing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-090" data-topic="Terraform">
+<h1>You create private endpoints with Terraform, but applications cannot resolve the private IP addresses. What is missing?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A private endpoint only gives the service a private IP; clients also need a <strong>private DNS zone</strong> (for example <code>privatelink.blob.core.windows.net</code>) with the <strong>A record</strong>, a <strong>virtual network link</strong> to every VNet that resolves it, and <strong>forwarding</strong> from custom or on-premises DNS to Azure DNS.</p>
+
+<h2>Detailed explanation</h2>
+<p>Clients keep using the public name, such as <code>mystorage.blob.core.windows.net</code>. When private link is enabled, public DNS returns a <strong>CNAME</strong> to <code>mystorage.privatelink.blob.core.windows.net</code>. If the client's resolver has a private DNS zone for <code>privatelink.blob.core.windows.net</code> containing an A record pointing to the endpoint's private IP, the name resolves privately. Without that zone, the client gets the <strong>public IP</strong>, and if public access is disabled the connection fails.</p>
+<p>In Terraform, the cleanest way to manage the record is the <code>private_dns_zone_group</code> block on <code>azurerm_private_endpoint</code>. It registers the A record in the given zone and removes it when the endpoint is deleted, so you do not manage <code>azurerm_private_dns_a_record</code> by hand.</p>
+<p>The zone must also be <strong>linked</strong> to the virtual networks whose clients resolve through Azure-provided DNS, with <code>azurerm_private_dns_zone_virtual_network_link</code>. In hub-and-spoke designs, the zones usually live centrally in a connectivity subscription and are linked to the hub, with spokes using a DNS server or <strong>Azure DNS Private Resolver</strong> in the hub.</p>
+<p>If VNets use <strong>custom DNS servers</strong> (for example domain controllers), those servers must forward the <code>privatelink.*</code> zones, or simply everything, to <strong>168.63.129.16</strong>, the Azure-provided resolver, from inside a linked VNet. <strong>On-premises</strong> clients need conditional forwarders pointing to the Private Resolver's inbound endpoint. Many enterprises let <strong>Azure Policy</strong> create the DNS zone group automatically (DeployIfNotExists) so application teams cannot forget it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create (or reference) the private DNS zone for the service subresource.</li>
+  <li>Link the zone to the hub VNet and any VNet using Azure-provided DNS.</li>
+  <li>Create the private endpoint with a <code>private_dns_zone_group</code> referencing the zone.</li>
+  <li>Configure custom DNS servers to forward to 168.63.129.16, or use the Private Resolver.</li>
+  <li>Add on-premises conditional forwarders to the resolver's inbound endpoint.</li>
+  <li>Test with <code>nslookup</code> from a client and confirm the private IP.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_private_endpoint&quot; &quot;blob&quot; {
+  name                = &quot;pe-mystorage-blob&quot;
+  location            = var.location
+  resource_group_name = var.rg
+  subnet_id           = var.pe_subnet_id
+
+  private_service_connection {
+    name                           = &quot;blob&quot;
+    private_connection_resource_id = azurerm_storage_account.main.id
+    subresource_names              = [&quot;blob&quot;]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = &quot;default&quot;
+    private_dns_zone_ids = [var.blob_private_dns_zone_id]
+  }
+}</code></pre>
+<pre><code class="language-bash">nslookup mystorage.blob.core.windows.net
+# expect: canonical name mystorage.privatelink.blob.core.windows.net -&gt; 10.20.1.5</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating the endpoint but no DNS zone, or a zone with no VNet link.</li>
+  <li>Creating duplicate privatelink zones per spoke, so records end up in the wrong zone.</li>
+  <li>Custom DNS servers that forward to public resolvers instead of 168.63.129.16.</li>
+  <li>Using the wrong zone name for the subresource (blob vs dfs vs file).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The endpoint gives the service a private IP, but clients still resolve the public name, which needs to return that private IP. That requires a private DNS zone such as privatelink.blob.core.windows.net with an A record. In Terraform I use the private_dns_zone_group block on the endpoint, which registers and cleans up the record. The zone needs a virtual network link to the VNets that resolve it, usually the hub. If VNets use custom DNS, those servers forward to 168.63.129.16, and on-premises uses conditional forwarding to a DNS Private Resolver. Often Azure Policy creates the records centrally.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why centralise private DNS zones in the hub?</strong> One zone per service avoids split records and makes resolution consistent for all spokes and on-premises.</li>
+  <li><strong>What does 168.63.129.16 do?</strong> It is the Azure-provided virtual IP for DNS and other platform services, reachable only from inside Azure VNets.</li>
+  <li><strong>How do you debug it?</strong> <code>nslookup</code> from the client, check for the privatelink CNAME and the private IP.</li>
+</ul>
+</article>
+</body>
+</html>

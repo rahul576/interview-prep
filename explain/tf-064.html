@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-064 · How do you test Terraform modules with the native terraform test framework, including mocks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-064" data-topic="Terraform">
+<h1>How do you test Terraform modules with the native terraform test framework, including mocks?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Native tests live in <strong><code>.tftest.hcl</code></strong> files with <strong><code>run</code> blocks</strong> that use <strong><code>command = plan</code></strong> or <strong><code>apply</code></strong>, check results with <strong><code>assert</code></strong> blocks, avoid real infrastructure with <strong><code>mock_provider</code></strong> and <strong>override</strong> blocks (Terraform 1.7+), and verify validation rules with <strong><code>expect_failures</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Since <strong>Terraform 1.6</strong>, <code>terraform test</code> is built in, so module tests are written in HCL rather than Go (Terratest) or external tools. Test files sit in the module root or a <code>tests/</code> directory.</p>
+<p>Each file contains <strong><code>run</code> blocks</strong> executed in order. A run with <strong><code>command = plan</code></strong> evaluates the configuration and checks the planned values: fast, cheap, good for logic. A run with <strong><code>command = apply</code></strong> (the default) creates <strong>real resources</strong>, then Terraform <strong>destroys</strong> everything at the end of the file in reverse order. Each run has <strong><code>assert</code> blocks</strong> with a <code>condition</code> and an <code>error_message</code>, referencing outputs, resource attributes or locals, for example that a storage account has public access disabled. <strong>Variables</strong> can be set at file level or per run, and later runs can reference earlier ones, such as <code>run.setup.resource_group_name</code>. Helper modules can be loaded in a run to create prerequisites.</p>
+<p><strong>Terraform 1.7</strong> added <strong>mocking</strong>. A <strong><code>mock_provider</code></strong> block replaces a real provider: no credentials, no API calls, computed attributes get generated fake values, and you can set defaults with <code>mock_resource</code> and <code>mock_data</code>. <strong><code>override_resource</code></strong>, <strong><code>override_data</code></strong> and <strong><code>override_module</code></strong> fix values for specific addresses, useful when logic depends on data sources. With mocks, even <code>apply</code> runs are pure unit tests.</p>
+<p><strong><code>expect_failures</code></strong> asserts that something fails, typically a variable validation or precondition: the run passes only if the listed checkable objects report errors.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create <code>tests/name.tftest.hcl</code> in the module.</li>
+  <li>Optionally declare <code>mock_provider</code> blocks for unit tests.</li>
+  <li>Add <code>run</code> blocks with <code>command</code>, <code>variables</code> and <code>assert</code>.</li>
+  <li>Add negative tests with invalid input and <code>expect_failures</code>.</li>
+  <li>Run <code>terraform test</code> locally and in CI.</li>
+  <li>Use real-apply tests in a sandbox subscription for integration.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># tests/storage.tftest.hcl
+mock_provider &quot;azurerm&quot; {}
+
+variables {
+  name        = &quot;stordersdev01&quot;
+  environment = &quot;dev&quot;
+}
+
+run &quot;private_by_default&quot; {
+  command = plan
+  assert {
+    condition     = azurerm_storage_account.this.public_network_access_enabled == false
+    error_message = &quot;Storage must not be publicly accessible.&quot;
+  }
+}
+
+run &quot;rejects_bad_name&quot; {
+  command   = plan
+  variables { name = &quot;Invalid_Name!&quot; }
+  expect_failures = [var.name]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only writing apply tests, making CI slow and costly.</li>
+  <li>Only writing mocked tests, missing real provider and API behaviour.</li>
+  <li>Asserting on values that are unknown during plan.</li>
+  <li>Not testing validation rules with negative cases.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Since Terraform 1.6 I write tests in .tftest.hcl files. Each run block uses command plan for fast checks or apply to create real resources, which are destroyed at the end. Assert blocks check outputs or attributes, like public access being disabled. Variables can be set per file or per run, and runs can use outputs from earlier runs. Since 1.7, mock_provider and override blocks let me unit test logic without credentials or cost, and expect_failures checks that invalid inputs fail validation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>PR versus nightly tests?</strong> Mocked and plan tests on every PR; real apply tests nightly or before releases.</li>
+  <li><strong>Where do tests clean up?</strong> Terraform destroys created resources at the end of each test file.</li>
+  <li><strong>Terratest still useful?</strong> For complex end-to-end checks in Go, such as calling the deployed app.</li>
+</ul>
+</article>
+</body>
+</html>

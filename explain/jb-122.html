@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-122 · What are Metaspace and PermGen?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-122" data-topic="JVM &amp; Performance">
+<h1>What are Metaspace and PermGen?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Both store <strong>class metadata</strong>: <strong>PermGen</strong> was a <strong>fixed-size part of the heap</strong> until Java 7, configured with <code>MaxPermSize</code>; <strong>Metaspace</strong> (Java 8+) lives in <strong>native memory</strong> and <strong>grows dynamically</strong>, so it should be capped with <strong><code>MaxMetaspaceSize</code></strong>; both can still be exhausted by <strong>class loader leaks</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every loaded class needs metadata: its structure, field and method descriptions, method bytecode, the runtime constant pool, annotations and JIT-related data. The JVM must keep this as long as the class is loaded.</p>
+<p><strong>PermGen (Permanent Generation)</strong> held this data up to Java 7, as a special part of the GC-managed heap with a fixed maximum (<code>-XX:MaxPermSize</code>, often 64-256 MB). Applications that loaded many classes, used frameworks generating proxies, or were <strong>hot-redeployed</strong> repeatedly in Tomcat or JBoss regularly hit <strong><code>OutOfMemoryError: PermGen space</code></strong>. Sizing it was guesswork. Interned strings also lived there until Java 7 moved them to the heap.</p>
+<p><strong>Metaspace</strong> replaced PermGen in Java 8 (JEP 122). Class metadata now lives in <strong>native memory</strong>, allocated in chunks per class loader. Benefits: no fixed size to guess, and metadata for a class loader can be freed in bulk when that loader is collected. Related parts: <strong>Compressed Class Space</strong> (<code>-XX:CompressedClassSpaceSize</code>, default 1 GB of reserved address space) holds class structures when compressed class pointers are used. <code>-XX:MetaspaceSize</code> is not the initial size, but the <strong>high-water mark</strong> at which the first Metaspace-triggered GC happens; setting it higher avoids early full GCs at startup in big applications. Java 16 improved Metaspace's elastic memory return to the OS.</p>
+<p><strong>Default is unbounded.</strong> That is dangerous in <strong>containers</strong>: a leak keeps consuming native memory until the pod is OOM-killed with no Java error. Set <code>-XX:MaxMetaspaceSize</code> (for example 256-512 MB for a Spring Boot service, based on measured usage) so you get a clear <code>OutOfMemoryError: Metaspace</code> instead.</p>
+<p><strong>Leaks.</strong> Class metadata is freed only when its <strong>class loader</strong> becomes unreachable. Anything that holds a reference to one class, object or thread from that loader keeps the whole loader and all its classes alive: a <code>ThreadLocal</code> in a container thread, a JDBC driver registered in <code>DriverManager</code>, a static cache in a parent loader, an un-stopped thread. Libraries that generate classes per call (misused proxies, script engines, serialisation frameworks) also grow Metaspace.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A class loader loads a class; metadata is allocated in Metaspace chunks.</li>
+  <li>Usage grows; when it reaches <code>MetaspaceSize</code>, a GC tries to unload classes.</li>
+  <li>The high-water mark adjusts up or down.</li>
+  <li>When a class loader is collected, all its metadata is freed.</li>
+  <li>If usage reaches <code>MaxMetaspaceSize</code>, <code>OutOfMemoryError: Metaspace</code> is thrown.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:MetaspaceSize=128m -XX:MaxMetaspaceSize=384m -jar app.jar
+
+jcmd &lt;pid&gt; VM.metaspace                 # usage by loader type
+jcmd &lt;pid&gt; VM.classloader_stats         # classes and bytes per loader
+jstat -gc &lt;pid&gt; 1000                     # MC/MU columns: metaspace capacity/used
+java -Xlog:class+load,class+unload -jar app.jar   # are classes being unloaded?</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>PermGen (to Java 7)</th><th>Metaspace (Java 8+)</th></tr></thead>
+<tbody>
+<tr><td>Location</td><td>Java heap</td><td>Native memory</td></tr>
+<tr><td>Size</td><td>Fixed max (MaxPermSize)</td><td>Grows; cap with MaxMetaspaceSize</td></tr>
+<tr><td>Error</td><td>OOM: PermGen space</td><td>OOM: Metaspace</td></tr>
+<tr><td>Freed</td><td>Via GC of heap</td><td>When class loader is collected</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying Metaspace removed all class-related OOMs.</li>
+  <li>Thinking <code>MetaspaceSize</code> is the initial or maximum size.</li>
+  <li>Leaving Metaspace unbounded in containers.</li>
+  <li>Using <code>-XX:MaxPermSize</code> on Java 8+, where it is ignored with a warning.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both are where the JVM stores class metadata: class structures, method bytecode and the runtime constant pool. Up to Java 7 that was PermGen, a fixed-size area of the heap set with MaxPermSize, and apps that loaded many classes or were redeployed often hit OutOfMemoryError: PermGen space. Java 8 replaced it with Metaspace in native memory, which grows dynamically and frees metadata when its class loader is collected. That removed most tuning, but it's unbounded by default, so in containers I set MaxMetaspaceSize. Metaspace can still leak when class loaders stay reachable, for example after hot redeploys, through ThreadLocals or registered drivers, or with heavy runtime class generation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What keeps a classloader from being garbage collected?</strong> Any strong reference to one of its classes, instances or threads, for example from a ThreadLocal, static registry or running thread.</li>
+  <li><strong>What does <code>MetaspaceSize</code> do?</strong> Sets the initial threshold that triggers a GC for class unloading.</li>
+  <li><strong>Where did interned strings go?</strong> To the regular heap in Java 7.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-085 · What is the difference between Docker volumes plugins and storage options for multi-host setups?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-085" data-topic="Docker">
+<h1>What is the difference between Docker volumes plugins and storage options for multi-host setups?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>The default <strong>local volume driver</strong> keeps data on <strong>one host</strong>, so a container rescheduled elsewhere loses access to it; multi-host setups use <strong>volume plugins/drivers</strong> for <strong>NFS/SMB shares, cloud block storage</strong> or distributed storage, choosing between <strong>block storage</strong> (single attach, fast, good for databases) and <strong>shared file storage</strong> (many readers/writers, weaker semantics), and in Kubernetes this is standardised by <strong>CSI</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A named volume like <code>docker volume create pgdata</code> uses the <strong>local</strong> driver: the data sits in <code>/var/lib/docker/volumes/pgdata/_data</code> on that machine. That is perfect on a single host, but in Swarm or any multi-host setup, a container moved to another host gets an <strong>empty new volume</strong> there.</p>
+<p>Docker supports <strong>volume drivers (plugins)</strong> that put the data somewhere reachable from multiple hosts. The local driver itself can mount <strong>NFS or CIFS/SMB</strong> shares through <code>driver_opts</code>. Plugins and vendor drivers exist for <strong>cloud block storage</strong> (EBS, Azure Disk), and for distributed storage systems like Portworx, Ceph/RBD or GlusterFS. Many older Docker plugins are now unmaintained, which is one reason the ecosystem moved to Kubernetes.</p>
+<p>The important design choice is the <strong>storage semantics</strong>:</p>
+<ul>
+  <li><strong>Block storage</strong> (EBS, Azure Disk, iSCSI): a raw disk attached to <strong>one host at a time</strong> (ReadWriteOnce), formatted with a local filesystem. Low latency and correct fsync, good for databases, but failover means detaching and reattaching, often within one availability zone.</li>
+  <li><strong>Shared file storage</strong> (NFS, EFS, Azure Files, SMB): many hosts mount it simultaneously (ReadWriteMany). Great for shared uploads or content, but higher latency, different locking and caching behaviour, and risk for databases.</li>
+</ul>
+<p>In <strong>Kubernetes</strong>, the <strong>Container Storage Interface (CSI)</strong> replaced in-tree and Docker-style plugins. You define a <strong>StorageClass</strong>, request a <strong>PersistentVolumeClaim</strong>, and the CSI driver provisions and attaches a <strong>PersistentVolume</strong> wherever the pod is scheduled, with access modes, topology and snapshots.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide the access pattern: one writer (block) or many (file).</li>
+  <li>Choose a driver: local+NFS options, a cloud or vendor plugin, or CSI in Kubernetes.</li>
+  <li>Create the volume with the driver; it is mounted on whichever host runs the container.</li>
+  <li>On rescheduling, the storage is detached and reattached (block) or simply mounted again (file).</li>
+  <li>Handle backups and snapshots at the storage layer.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># Docker Compose / Swarm: NFS-backed volume reachable from every node
+volumes:
+  shared-uploads:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: &quot;addr=10.0.5.20,nfsvers=4.1,rw,hard&quot;
+      device: &quot;:/exports/uploads&quot;</code></pre>
+<pre><code class="language-yaml"># Kubernetes equivalent via CSI
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: pgdata }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3
+  resources: { requests: { storage: 100Gi } }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Local volume</th><th>Block (EBS/Disk)</th><th>Shared file (NFS/EFS)</th></tr></thead>
+<tbody>
+<tr><td>Hosts at once</td><td>One, fixed</td><td>One, movable</td><td>Many</td></tr>
+<tr><td>Performance</td><td>Best</td><td>High</td><td>Lower</td></tr>
+<tr><td>Good for</td><td>Single host</td><td>Databases</td><td>Shared content</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using local volumes in Swarm and losing data after rescheduling.</li>
+  <li>Putting databases on NFS without understanding locking and fsync.</li>
+  <li>Forgetting block volumes are zonal, so pods can't move to another zone.</li>
+  <li>Relying on abandoned third-party Docker volume plugins.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A normal named volume uses the local driver, so the data lives on one host, and if the container moves to another host it doesn't follow. For multi-host setups Docker has volume drivers or plugins that store data elsewhere: NFS or SMB shares, cloud block storage like EBS or Azure Disk, or distributed systems like Portworx or Ceph. Block storage attaches to one host at a time but performs well and suits databases; shared file storage can be mounted by many containers but has weaker locking and lower performance. In Kubernetes the same idea is standardised as CSI drivers with StorageClasses, PersistentVolumeClaims and PersistentVolumes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is NFS often poor for databases?</strong> Higher latency, client caching and locking semantics that can lead to corruption or poor performance.</li>
+  <li><strong>What does ReadWriteOnce mean?</strong> The volume can be mounted read-write by a single node at a time.</li>
+  <li><strong>How do you move zonal block storage?</strong> Snapshot and restore in the target zone, or use regional disks.</li>
+</ul>
+</article>
+</body>
+</html>

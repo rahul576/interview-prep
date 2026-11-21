@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-116 · How would you design a thread pool for processing 10,000 concurrent tasks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-116" data-topic="Concurrency">
+<h1>How would you design a thread pool for processing 10,000 concurrent tasks?</h1>
+<p class="ex-meta">Concurrency · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Do not create 10,000 platform threads: <strong>classify the work</strong> (CPU- vs I/O-bound), size the pool from <strong>cores</strong> or <strong>Little's law</strong>, use a <strong>bounded queue with a rejection policy</strong> for backpressure, consider <strong>virtual threads plus a semaphore</strong> for blocking I/O, and add <strong>timeouts, metrics and graceful shutdown</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;10,000 concurrent tasks&quot; is a load requirement, not a thread count. The right design depends on what the tasks do.</p>
+<p><strong>CPU-bound</strong> tasks (parsing, image resizing, calculations) cannot run faster than the number of cores. A pool of about <code>availableProcessors()</code> threads (perhaps +1) is optimal; more threads only add context switching. The 10,000 tasks wait in a queue and throughput is set by the CPU.</p>
+<p><strong>I/O-bound</strong> tasks spend most time waiting. Size with <strong>Little's law</strong>: concurrency = throughput x latency. If you need 2,000 tasks/s and each spends 100 ms, you need about 200 in flight. The rule of thumb threads = cores x (1 + wait/compute) gives the same idea. But the <strong>real cap is downstream</strong>: a database pool of 50 connections means more than 50 concurrent DB tasks just queue at Hikari. Size against the scarcest resource.</p>
+<p>Use a <strong><code>ThreadPoolExecutor</code></strong> with a <strong>bounded queue</strong> so overload produces backpressure instead of memory exhaustion, and an explicit <strong>rejection policy</strong>: <code>CallerRunsPolicy</code> slows producers naturally; <code>AbortPolicy</code> lets you return 429/503 or retry later. If the tasks come from a message broker, consumer prefetch limits are the backpressure.</p>
+<p>On <strong>Java 21+</strong>, blocking I/O tasks fit <strong>virtual threads</strong>: one per task, 10,000 is cheap. Concurrency control then moves from pool size to a <strong><code>Semaphore</code></strong> guarding each downstream. Keep a separate small platform pool for CPU-heavy steps.</p>
+<p>Operational hygiene: <strong>timeouts</strong> on every external call, <strong>named threads</strong>, <strong>metrics</strong> (active, queued, rejected, task duration), error handling for every task, separate pools per workload (bulkheads), and a <strong>graceful shutdown</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify tasks: CPU-bound, I/O-bound or mixed (split stages).</li>
+  <li>Compute target concurrency: cores, or throughput x latency, capped by downstream limits.</li>
+  <li>Create bounded executors per workload with named threads.</li>
+  <li>Choose rejection/backpressure behaviour.</li>
+  <li>For blocking I/O on Java 21+, use virtual threads and semaphores.</li>
+  <li>Add timeouts, metrics, alerts and shutdown handling; load test and tune.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">int cores = Runtime.getRuntime().availableProcessors();
+
+ThreadPoolExecutor cpuPool = new ThreadPoolExecutor(
+        cores, cores, 0, TimeUnit.SECONDS,
+        new ArrayBlockingQueue&lt;&gt;(2_000),
+        Thread.ofPlatform().name(&quot;cpu-&quot;, 0).factory(),
+        new ThreadPoolExecutor.CallerRunsPolicy());
+
+Semaphore dbPermits = new Semaphore(40);          // below Hikari max of 50
+try (var io = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (Task t : tasks) {                          // 10,000 tasks
+        io.submit(() -&gt; {
+            dbPermits.acquire();
+            try {
+                Data d = repo.load(t.id());          // blocking JDBC, with query timeout
+                return cpuPool.submit(() -&gt; transform(d)).get(5, TimeUnit.SECONDS);
+            } finally { dbPermits.release(); }
+        });
+    }
+}   // close() waits for all tasks</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One giant pool of thousands of platform threads.</li>
+  <li>Unbounded queues that hide overload until OutOfMemoryError.</li>
+  <li>Sizing threads above the connection pool, so threads just wait at the pool.</li>
+  <li>Pooling virtual threads instead of limiting the resource with semaphores.</li>
+  <li>No timeouts, so a slow dependency holds every thread.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I wouldn't create 10,000 platform threads. First I classify the work. For CPU-bound tasks the pool has about as many threads as cores and the rest wait in a queue. For I/O-bound tasks I size from Little's law, throughput times latency, but cap it by what downstream systems and the connection pool can take. I use a ThreadPoolExecutor with a bounded queue for backpressure and a rejection policy like CallerRunsPolicy. On Java 21 I'd run blocking I/O on virtual threads, one per task, and limit concurrency to each downstream with a semaphore. And I add timeouts, named threads, metrics on active and queued tasks, and graceful shutdown.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you limit concurrency to a downstream service when using virtual threads?</strong> A Semaphore per downstream (or a bounded connection pool or rate limiter), acquired around the call with a timeout.</li>
+  <li><strong>What if tasks must survive a restart?</strong> Put them on a durable queue (Kafka, SQS) instead of an in-memory executor queue.</li>
+  <li><strong>How do you pick the queue size?</strong> From the acceptable waiting time: queue length divided by throughput should stay below your latency budget.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-129 · Compare OPA Gatekeeper and Kyverno for Kubernetes policy enforcement.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-129" data-topic="DevSecOps">
+<h1>Compare OPA Gatekeeper and Kyverno for Kubernetes policy enforcement.</h1>
+<p class="ex-meta">DevSecOps · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Both are <strong>admission controllers</strong> that check requests against policies; <strong>OPA Gatekeeper</strong> uses <strong>Rego</strong> in ConstraintTemplates (powerful, reusable beyond Kubernetes), while <strong>Kyverno</strong> uses <strong>Kubernetes-native YAML</strong> (and CEL) and excels at <strong>mutate, generate, verifyImages and cleanup</strong>; roll either out in <strong>audit mode before enforce</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kubernetes RBAC controls <em>who</em> can create resources, but not <em>what</em> those resources may look like. Policy engines fill that gap: they register as <strong>validating and mutating admission webhooks</strong>, so the API server sends them each request and rejects or modifies it before it is stored. Typical policies: no privileged containers, no <code>latest</code> tags, required labels, resource limits, images only from approved registries.</p>
+<p><strong>OPA Gatekeeper</strong> builds on Open Policy Agent. A platform team writes a <strong>ConstraintTemplate</strong> containing <strong>Rego</strong> logic and parameters; users then create <strong>Constraints</strong> that apply it to specific kinds and namespaces. Rego is a general-purpose policy language, so the same skills and even policies can be reused for Terraform plans (Conftest), APIs and CI checks. Gatekeeper also has an <strong>audit</strong> controller that reports existing violations and supports <strong>mutation</strong> (Assign, AssignMetadata). The trade-off is Rego's learning curve.</p>
+<p><strong>Kyverno</strong> is built for Kubernetes only. Policies are YAML resources using familiar patterns, JMESPath and increasingly <strong>CEL</strong>, so they read like manifests. Beyond validation it can <strong>mutate</strong> (add default labels, set <code>imagePullPolicy</code>), <strong>generate</strong> resources (create a default-deny NetworkPolicy and quota in every new namespace), <strong>verify image signatures and attestations</strong> with cosign, and <strong>clean up</strong> resources. Kyverno CLI tests policies in CI.</p>
+<p>Kubernetes itself now offers <strong>ValidatingAdmissionPolicy</strong> with CEL (GA since 1.30), which covers simple validation without a webhook; both engines integrate with or complement it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Install the engine; it registers admission webhooks.</li>
+  <li>Write policies; test them in CI against sample manifests.</li>
+  <li>Deploy in <strong>audit</strong> (Gatekeeper <code>enforcementAction: dryrun</code>/<code>warn</code>, Kyverno <code>Audit</code>).</li>
+  <li>Review policy reports, fix workloads, add exceptions.</li>
+  <li>Switch to <strong>enforce</strong>; monitor webhook latency and failure policy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Audit   # switch to Enforce after review
+  rules:
+  - name: require-pinned-tag
+    match:
+      any:
+      - resources:
+          kinds: [&quot;Pod&quot;]
+    validate:
+      message: &quot;Images must use a pinned tag or digest, not :latest.&quot;
+      pattern:
+        spec:
+          containers:
+          - image: &quot;!*:latest&quot;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Gatekeeper</th><th>Kyverno</th></tr></thead>
+<tbody>
+<tr><td>Language</td><td>Rego</td><td>YAML, JMESPath, CEL</td></tr>
+<tr><td>Scope</td><td>Kubernetes + wider OPA ecosystem</td><td>Kubernetes only</td></tr>
+<tr><td>Mutation</td><td>Yes (Assign)</td><td>Yes</td></tr>
+<tr><td>Generate / cleanup</td><td>No</td><td>Yes</td></tr>
+<tr><td>Image verification</td><td>Via external data / other tools</td><td>Built in</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Enforcing on day one and blocking critical system pods.</li>
+  <li><code>failurePolicy: Fail</code> without HA, so an engine outage blocks all deployments.</li>
+  <li>Forgetting to exclude <code>kube-system</code> and the engine's own namespace.</li>
+  <li>Validating only Pods, so Deployments are accepted but their Pods silently fail.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both are admission controllers: the API server asks them to validate requests before storing them. Gatekeeper uses Rego in ConstraintTemplates; it's powerful and reusable outside Kubernetes but has a learning curve. Kyverno policies are Kubernetes-native YAML, easier for platform teams, and it can also mutate, generate resources like default network policies for new namespaces, and verify image signatures. I'd pick Kyverno for a Kubernetes-focused team and Gatekeeper where OPA is already used elsewhere. Either way I roll policies out in audit mode first, fix violations, then enforce.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which policies first?</strong> No privileged pods or host mounts, resource requests and limits, trusted registries, no <code>latest</code>, required labels.</li>
+  <li><strong>What about native policies?</strong> ValidatingAdmissionPolicy with CEL for simple checks without a webhook.</li>
+  <li><strong>How to handle exceptions?</strong> Kyverno PolicyExceptions or Gatekeeper excluded namespaces, documented and time-boxed.</li>
+</ul>
+</article>
+</body>
+</html>

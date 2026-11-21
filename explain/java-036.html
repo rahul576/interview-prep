@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-036 · How should microservices communicate: synchronous or asynchronous? What are the trade-offs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-036" data-topic="Microservices">
+<h1>How should microservices communicate: synchronous or asynchronous? What are the trade-offs?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>synchronous</strong> calls (REST, gRPC) when the caller needs an <strong>immediate answer</strong>, and <strong>asynchronous</strong> messaging (Kafka, RabbitMQ) for <strong>state changes others react to</strong>; sync is simpler but creates <strong>temporal coupling</strong>, async decouples but brings <strong>eventual consistency</strong> and duplicate handling.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Synchronous</strong> request-response is easy to reason about: call, wait, get a result or an error. It suits <strong>queries</strong> and user-facing flows that need an answer now, such as &quot;get price&quot; or &quot;validate card&quot;. The cost is <strong>temporal coupling</strong>: the caller depends on the callee's <strong>availability and latency</strong> at that moment. In a chain A → B → C, latencies add up and availability multiplies (three services at 99.9 percent give about 99.7 percent). A slow dependency holds threads in every caller and can cause <strong>cascading failures</strong>.</p>
+<p><strong>Asynchronous</strong> messaging sends events (<code>OrderPlaced</code>) or commands (<code>SendInvoice</code>) through a broker. The producer continues immediately; consumers process when they can. This <strong>decouples availability</strong>, <strong>absorbs load spikes</strong> in the queue, enables fan-out to many consumers and natural retries. The costs: <strong>eventual consistency</strong> (other services learn about changes later), harder <strong>debugging and tracing</strong>, <strong>ordering</strong> concerns, <strong>duplicates</strong> under at-least-once delivery, schema governance and the operational load of a broker.</p>
+<p>Most real systems mix both. I use synchronous calls for reads and for the few steps where the user must wait, and events for state changes that other services react to: inventory, notifications, analytics. For synchronous calls, resilience is mandatory: <strong>timeouts</strong>, limited <strong>retries with backoff and jitter</strong> for idempotent operations, a <strong>circuit breaker</strong> and <strong>bulkhead</strong> (Resilience4j). For messaging: <strong>idempotent consumers</strong>, <strong>dead-letter queues</strong>, the <strong>outbox pattern</strong> and tracing headers.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify whether the caller needs the result to continue.</li>
+  <li>If yes: REST/gRPC with timeout, retry, circuit breaker.</li>
+  <li>If no: publish an event or command through the outbox.</li>
+  <li>Consumers react asynchronously, idempotently.</li>
+  <li>Long operations return <code>202 Accepted</code> and a status resource or push notification.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Synchronous: checkout needs a price now
+@CircuitBreaker(name = &quot;pricing&quot;, fallbackMethod = &quot;cachedPrice&quot;)
+@Retry(name = &quot;pricing&quot;)
+public Price price(String sku) {
+    return restClient.get().uri(&quot;/prices/{sku}&quot;, sku).retrieve().body(Price.class);
+}
+
+// Asynchronous: others react to the order
+@Transactional
+public void placeOrder(Order o) {
+    orders.save(o);
+    outbox.save(OutboxEvent.of(&quot;OrderPlaced&quot;, o.getId(), o));
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Synchronous</th><th>Asynchronous</th></tr></thead>
+<tbody>
+<tr><td>Coupling</td><td>Temporal coupling</td><td>Decoupled in time</td></tr>
+<tr><td>Latency to result</td><td>Immediate</td><td>Later</td></tr>
+<tr><td>Failure impact</td><td>Propagates to caller</td><td>Buffered in broker</td></tr>
+<tr><td>Consistency</td><td>Easier, immediate</td><td>Eventual</td></tr>
+<tr><td>Debugging</td><td>Simpler</td><td>Needs tracing across events</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Long synchronous chains for a single user request.</li>
+  <li>No timeouts on HTTP clients.</li>
+  <li>Using async for queries that need an answer, then polling awkwardly.</li>
+  <li>Forgetting idempotency and DLQs on the async side.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Synchronous REST or gRPC is simple and right when the caller needs an immediate answer, but it creates temporal coupling: latency and outages of every downstream service hit the caller. Asynchronous messaging through Kafka or RabbitMQ decouples services and absorbs spikes, at the cost of eventual consistency, harder debugging and duplicates. I use sync calls for reads and user-facing steps, and events for state changes others react to. Sync calls always get timeouts, retries with backoff and circuit breakers with Resilience4j; async consumers are idempotent, with DLQs and the outbox pattern.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you trace a request across sync calls and events?</strong> W3C trace context in HTTP and message headers, via OpenTelemetry or Micrometer Tracing.</li>
+  <li><strong>Is a non-blocking WebClient call asynchronous communication?</strong> No, it is still request-response with temporal coupling, just without blocking a thread.</li>
+  <li><strong>How do you return results of async work to a user?</strong> 202 plus a status endpoint, WebSocket or SSE, or a notification.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dk-071 · How do you design a registry strategy for a company: retention, replication, pull-through caches and rate limits?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dk-071" data-topic="Docker">
+<h1>How do you design a registry strategy for a company: retention, replication, pull-through caches and rate limits?</h1>
+<p class="ex-meta">Docker · concept · levels senior</p>
+
+<h2>In one line</h2>
+<p>Use a <strong>private registry close to each cluster</strong> as the single source of images, <strong>pull-through caches</strong> for Docker Hub and other public registries (avoiding rate limits and outages), <strong>retention policies plus garbage collection</strong>, <strong>cross-region replication</strong>, and <strong>RBAC, scanning, immutable tags and signing</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A registry strategy answers four questions: where images come from, where they are stored, how long they are kept and who can do what with them.</p>
+<p><strong>Single source:</strong> all production workloads pull from a company registry such as Amazon ECR, Azure Container Registry, Google Artifact Registry, Artifactory or Harbor, never directly from the internet. <strong>Public images</strong> are consumed through a <strong>pull-through cache</strong> (proxy) such as ECR pull-through cache rules, Harbor proxy projects or Artifactory remote repositories. This avoids <strong>Docker Hub pull rate limits</strong> (which hit hard when many nodes share one NAT IP), speeds pulls, keeps you running during upstream outages and lets you scan third-party images. Many companies go further and <strong>promote</strong> vetted public images into a curated repository.</p>
+<p><strong>Retention:</strong> CI pushes an image per commit, so storage grows fast. Lifecycle rules delete untagged images and old snapshot builds after N days while keeping release tags and anything currently deployed. In self-hosted registries, deletion only removes references; <strong>garbage collection</strong> reclaims the blobs.</p>
+<p><strong>Replication:</strong> images are replicated to every region with clusters, for <strong>pull speed</strong> and <strong>disaster recovery</strong>, so a regional registry outage does not stop deployments elsewhere.</p>
+<p><strong>Security:</strong> repository-level <strong>RBAC</strong> (CI can push, clusters can only pull), <strong>scan on push</strong>, <strong>immutable tags</strong> for release repositories, <strong>cosign signatures</strong> and SBOMs, and admission policies allowing only this registry.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create repositories per team/service with naming conventions.</li>
+  <li>Configure pull-through cache rules for docker.io, ghcr.io, quay.io and point nodes and builds at them.</li>
+  <li>Apply lifecycle policies and schedule garbage collection.</li>
+  <li>Enable replication to all cluster regions.</li>
+  <li>Enforce scanning, immutability, signing and allowed-registry policies.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;rules&quot;: [
+    { &quot;rulePriority&quot;: 1, &quot;description&quot;: &quot;expire untagged&quot;,
+      &quot;selection&quot;: { &quot;tagStatus&quot;: &quot;untagged&quot;, &quot;countType&quot;: &quot;sinceImagePushed&quot;,
+                     &quot;countUnit&quot;: &quot;days&quot;, &quot;countNumber&quot;: 7 },
+      &quot;action&quot;: { &quot;type&quot;: &quot;expire&quot; } },
+    { &quot;rulePriority&quot;: 2, &quot;description&quot;: &quot;keep last 50 builds&quot;,
+      &quot;selection&quot;: { &quot;tagStatus&quot;: &quot;tagged&quot;, &quot;tagPrefixList&quot;: [&quot;build-&quot;],
+                     &quot;countType&quot;: &quot;imageCountMoreThan&quot;, &quot;countNumber&quot;: 50 },
+      &quot;action&quot;: { &quot;type&quot;: &quot;expire&quot; } }
+  ]
+}</code></pre>
+<p>This ECR lifecycle policy expires untagged images after a week and keeps only the 50 newest CI builds, while <code>v*</code> release tags are untouched.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Nodes pulling straight from Docker Hub and hitting rate limits during a scale-out.</li>
+  <li>Retention rules that delete an image still running in production.</li>
+  <li>Mutable release tags, so <code>1.4.2</code> can silently change.</li>
+  <li>One global registry in a single region as a hidden single point of failure.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd have a private registry, like ECR, ACR or Harbor, as the single source for production images, located close to the clusters. Public images go through a pull-through cache, which avoids Docker Hub rate limits, speeds up pulls, survives upstream outages and gives us a place to scan them. Lifecycle policies remove untagged and old CI builds while keeping releases, followed by garbage collection where needed. Images replicate to every region we run in for speed and DR. On top, CI gets push rights and clusters pull-only, every image is scanned on push, release tags are immutable and signed, and admission policies only allow our registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why immutable tags?</strong> A tag must always mean the same bits, so rollbacks, audits and security scans stay valid.</li>
+  <li><strong>How do you avoid deleting running images?</strong> Exclude release tags and cross-check with what clusters report as deployed.</li>
+  <li><strong>Tag vs digest in deployments?</strong> Digests are immutable by definition; many teams deploy tag plus digest.</li>
+</ul>
+</article>
+</body>
+</html>
