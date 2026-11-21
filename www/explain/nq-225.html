@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-225 · What is Eureka, and how does it support service discovery?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-225" data-topic="Microservices">
+<h1>What is Eureka, and how does it support service discovery?</h1>
+<p class="ex-meta">Microservices · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Eureka</strong> is Netflix's <strong>service registry</strong>, integrated through <strong>Spring Cloud Netflix</strong>: services <strong>register</strong> on startup and send <strong>heartbeats every 30 seconds</strong>, clients <strong>cache the registry</strong> and <strong>load-balance</strong> with <code>@LoadBalanced</code>/<code>lb://</code>, and its <strong>AP design</strong> with <strong>self-preservation</strong> favours availability over perfectly accurate data.</p>
+
+<h2>Detailed explanation</h2>
+<p>Eureka has two parts. The <strong>Eureka server</strong> is a Spring Boot application annotated with <code>@EnableEurekaServer</code>. For high availability you run several servers that <strong>replicate registrations peer to peer</strong>; there is no leader or consensus, which is deliberate.</p>
+<p>The <strong>Eureka client</strong>, included via <code>spring-cloud-starter-netflix-eureka-client</code>, makes each microservice <strong>register itself</strong> on startup with its <code>spring.application.name</code>, host, port, status and metadata (zone, version). It then <strong>renews its lease</strong> with a heartbeat every <strong>30 seconds</strong> by default. If the server receives no renewal for <strong>90 seconds</strong> (the lease expiration), an eviction task removes the instance. On graceful shutdown the client <strong>deregisters</strong> immediately.</p>
+<p>Clients also <strong>fetch the registry</strong> (delta updates every 30 seconds by default) and <strong>cache it locally</strong>. Calls go through <strong>Spring Cloud LoadBalancer</strong> (Ribbon was removed years ago): a <code>RestClient</code>, <code>RestTemplate</code> or <code>WebClient</code> builder marked <code>@LoadBalanced</code>, Spring Cloud Gateway <code>lb://order-service</code> routes, or OpenFeign clients resolve the service name to an instance, round robin by default. Because clients use their cache, calls continue working even if all Eureka servers are briefly down; the trade-off is that new or dead instances are noticed with a delay of up to a minute or two, so callers need retries and circuit breakers.</p>
+<p>Eureka is an <strong>AP</strong> system in CAP terms. Its <strong>self-preservation mode</strong> protects against network problems: if the server suddenly receives far fewer renewals than expected (below a threshold, 85 percent by default), it assumes the problem is the network, not that most services died, and <strong>stops evicting</strong> instances. It may serve some stale entries, which is better than wiping out the registry and making every service undiscoverable.</p>
+<p>On <strong>Kubernetes</strong>, Services and DNS usually replace Eureka; it remains useful on VMs and hybrid setups.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Eureka servers start and replicate with peers.</li>
+  <li>Service starts, registers name and address.</li>
+  <li>Heartbeat every 30 s; eviction after 90 s without renewal.</li>
+  <li>Clients fetch and cache the registry, refreshing every 30 s.</li>
+  <li>LoadBalancer picks an instance for <code>http://order-service</code>.</li>
+  <li>Renewals drop sharply → self-preservation stops evictions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@SpringBootApplication
+@EnableEurekaServer
+public class RegistryApplication { public static void main(String[] a) { SpringApplication.run(RegistryApplication.class, a); } }</code></pre>
+<pre><code class="language-yaml"># order-service application.yml
+spring:
+  application:
+    name: order-service
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka-1:8761/eureka/,http://eureka-2:8761/eureka/
+  instance:
+    prefer-ip-address: true</code></pre>
+<pre><code class="language-java">@Bean @LoadBalanced
+RestClient.Builder lbRestClientBuilder() { return RestClient.builder(); }
+
+// usage: builder.baseUrl(&quot;http://payment-service&quot;).build() -&gt; resolved via Eureka</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Eureka</th><th>Consul</th><th>Kubernetes Service</th></tr></thead>
+<tbody>
+<tr><td>CAP choice</td><td>AP</td><td>CP (Raft)</td><td>Platform-managed</td></tr>
+<tr><td>Health checking</td><td>Client heartbeats</td><td>Agent health checks</td><td>Readiness probes</td></tr>
+<tr><td>Extras</td><td>Self-preservation</td><td>KV store, service mesh</td><td>DNS, built in</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running a single Eureka server in production.</li>
+  <li>Expecting instant removal of dead instances (it can take minutes).</li>
+  <li>Disabling self-preservation in production to &quot;fix&quot; stale entries.</li>
+  <li>Adding Eureka to Kubernetes without need.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Eureka is a service registry from Netflix, integrated through Spring Cloud Netflix. You run a few Eureka servers, Spring Boot apps with <code>@EnableEurekaServer</code> that replicate with each other. Each microservice with the Eureka client registers on startup with its name, host and port and sends a heartbeat every thirty seconds; instances that stop renewing are evicted after about ninety seconds. Clients cache the registry, so a <code>@LoadBalanced</code> client can call <code>http://order-service</code> and Spring Cloud LoadBalancer picks an instance. Eureka favours availability: in self-preservation mode it stops evicting when renewals drop sharply, accepting stale entries rather than emptying the registry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is self-preservation and why does it exist?</strong> When renewals drop below a threshold, Eureka assumes a network issue and stops evicting, to avoid deregistering healthy services.</li>
+  <li><strong>What replaced Ribbon?</strong> Spring Cloud LoadBalancer.</li>
+  <li><strong>How do callers cope with stale entries?</strong> Retries to another instance and circuit breakers.</li>
+</ul>
+</article>
+</body>
+</html>

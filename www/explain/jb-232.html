@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-232 · What is the difference between eventual consistency and strong consistency?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-232" data-topic="Microservices">
+<h1>What is the difference between eventual consistency and strong consistency?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Strong consistency</strong> means every read sees the <strong>latest committed write</strong>, as if there were one copy; <strong>eventual consistency</strong> means replicas or services <strong>converge over time</strong> and reads may be <strong>stale</strong> meanwhile; <strong>CAP/PACELC</strong> explain the trade-off with <strong>availability and latency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>With <strong>strong consistency</strong> (in its strictest form, <strong>linearizability</strong>), once a write is acknowledged, every subsequent read anywhere returns it. A single relational database transaction gives you this; distributed systems achieve it with consensus (Raft in etcd, Spanner, CockroachDB) or synchronous replication with quorum reads, at the cost of latency and coordination.</p>
+<p>With <strong>eventual consistency</strong>, updates propagate <strong>asynchronously</strong>: to database replicas, caches, search indexes or other microservices via events. For a while different readers can see different values, but if writes stop, all copies converge. In microservices this is the default between services, because each owns its own database and they communicate through events.</p>
+<p>The <strong>CAP theorem</strong> says that during a <strong>network partition</strong>, a distributed system must choose between <strong>consistency</strong> (refuse or delay some requests) and <strong>availability</strong> (answer, possibly with stale data). <strong>PACELC</strong> adds the everyday case: <strong>Else</strong>, without a partition, you still trade <strong>latency</strong> for consistency, because confirming with remote replicas takes time. Many databases let you tune this per operation, for example Cassandra consistency levels or MongoDB read and write concerns. There are useful levels in between: <strong>read-your-writes</strong>, <strong>monotonic reads</strong>, <strong>causal consistency</strong>.</p>
+<p>Choosing per use case: <strong>money movements, inventory reservation, unique usernames, seat booking</strong> need strong guarantees on the critical step, typically one owning service with a local ACID transaction. <strong>Feeds, like counts, recommendations, search indexes, analytics, notification status</strong> are fine with eventual consistency. Living with eventual consistency requires <strong>idempotent consumers</strong>, ordering by key, versioning to reject stale updates, <strong>compensations</strong>, and honest UX: show &quot;Processing&quot;, update optimistically for the user who made the change, and avoid reading their own change from a lagging replica.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write commits to the primary or owning service.</li>
+  <li>Strong: replicas confirm (quorum/consensus) before ack, or reads go to the primary.</li>
+  <li>Eventual: ack immediately; replicate via log or events.</li>
+  <li>Consumers apply updates idempotently; staleness window is seconds.</li>
+  <li>UX and code handle the window (status, read-your-writes routing).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Strong: reserve stock in the owning service's ACID transaction
+@Transactional
+public void reserve(String sku, int qty) {
+    int updated = jdbc.update(
+        &quot;UPDATE stock SET available = available - ? WHERE sku = ? AND available &gt;= ?&quot;,
+        qty, sku, qty);
+    if (updated == 0) throw new OutOfStock(sku);
+}
+
+// Eventual: search index updated from events, may lag a few seconds
+@KafkaListener(topics = &quot;products.events&quot;, groupId = &quot;search-indexer&quot;)
+public void index(ProductUpdated e) { searchClient.upsert(e.id(), e.toDocument()); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Strong</th><th>Eventual</th></tr></thead>
+<tbody>
+<tr><td>Read after write</td><td>Always latest</td><td>May be stale</td></tr>
+<tr><td>Latency</td><td>Higher</td><td>Lower</td></tr>
+<tr><td>Availability under partition</td><td>Lower</td><td>Higher</td></tr>
+<tr><td>Typical use</td><td>Payments, stock, uniqueness</td><td>Feeds, search, analytics</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying &quot;eventually consistent&quot; without stating the expected delay or handling it.</li>
+  <li>Requiring strong consistency everywhere and killing availability.</li>
+  <li>Reading from replicas right after a write and showing users stale data.</li>
+  <li>Misquoting CAP as &quot;pick any two&quot; without partitions in mind.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;With strong consistency every read returns the latest committed write, as if there were one copy; a single database transaction gives that. With eventual consistency, updates propagate asynchronously to replicas or other services, so reads can be stale for a while, but all copies converge when writes stop. CAP says that during a partition you choose consistency or availability, and PACELC adds that even without one you trade latency for consistency. I keep strong consistency for things like payments and stock reservation inside one service, and accept eventual consistency for feeds, search and analytics, handling it with idempotent consumers, versioning and clear UI states.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you give read-your-writes in an eventually consistent system?</strong> Route the writer's reads to the primary for a short time, or return the updated state from the write itself.</li>
+  <li><strong>What is linearizability?</strong> The strongest single-object consistency: operations appear instantaneous in real-time order.</li>
+  <li><strong>How do you measure staleness?</strong> Consumer lag and replication lag metrics.</li>
+</ul>
+</article>
+</body>
+</html>

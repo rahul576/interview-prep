@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-228 · Why should microservices own their databases?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-228" data-topic="Microservices">
+<h1>Why should microservices own their databases?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Database per service</strong> keeps services <strong>loosely coupled and independently deployable</strong>: each owns its schema, others access data only through its <strong>API or events</strong>, enabling independent scaling and technology choice, at the cost of <strong>no cross-service joins or ACID transactions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A database schema is an interface. If the order, billing and reporting services all read and write the same tables, that schema becomes a <strong>shared, undocumented contract</strong>. Renaming a column or splitting a table requires coordinating releases across teams, which destroys the main benefit of microservices: <strong>independent deployment</strong>. A shared database also couples <strong>runtime behaviour</strong>: one service's heavy report or lock contention slows everyone, and a migration can take all services down together. Ownership becomes unclear, and business rules are bypassed when another service writes directly to &quot;your&quot; table.</p>
+<p>With <strong>database per service</strong>, each service owns its data, either a separate database server, a separate database or at least a private schema with access control. Other services interact only through its <strong>API</strong> or the <strong>events</strong> it publishes. Benefits:</p>
+<ul>
+  <li><strong>Encapsulation</strong>: the owner enforces invariants and can refactor its schema freely.</li>
+  <li><strong>Independent deployment</strong>: schema migrations ship with the service.</li>
+  <li><strong>Independent scaling and tuning</strong>: a read-heavy catalogue can use replicas or caching without affecting payments.</li>
+  <li><strong>Polyglot persistence</strong>: PostgreSQL for orders, a document store for product content, Redis for sessions, Elasticsearch/OpenSearch for search.</li>
+  <li><strong>Fault isolation</strong>: a database problem hurts one service.</li>
+</ul>
+<p>The costs are real. You lose <strong>joins</strong> across services, so cross-service queries use <strong>API composition</strong>, <strong>CQRS read models</strong> or a data warehouse. You lose <strong>ACID transactions</strong> across services, so multi-service workflows use <strong>sagas</strong>, the <strong>outbox pattern</strong> and <strong>eventual consistency</strong>. Data is duplicated in read copies, and operating many databases needs automation or managed services. A pragmatic first step when splitting a monolith is a shared server with <strong>separate schemas and credentials per service</strong>, enforcing ownership even before physical separation.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Assign each table or entity to exactly one service.</li>
+  <li>Give each service its own schema/database and credentials.</li>
+  <li>Expose data through APIs and events, never direct table access.</li>
+  <li>Use sagas for multi-service writes, read models for multi-service queries.</li>
+  <li>Migrations run in each service's pipeline.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># order-service: own database and credentials
+spring:
+  datasource:
+    url: jdbc:postgresql://orders-db:5432/orders
+    username: order_svc
+  flyway:
+    locations: classpath:db/migration      # migrations versioned with the service</code></pre>
+<pre><code class="language-sql">-- Shared server, enforced isolation
+CREATE SCHEMA billing AUTHORIZATION billing_svc;
+REVOKE ALL ON SCHEMA billing FROM order_svc;   -- order service cannot touch billing tables</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Shared database</th><th>Database per service</th></tr></thead>
+<tbody>
+<tr><td>Deployment</td><td>Coordinated</td><td>Independent</td></tr>
+<tr><td>Schema change</td><td>Cross-team</td><td>Local</td></tr>
+<tr><td>Joins/transactions</td><td>Easy</td><td>Composition, sagas</td></tr>
+<tr><td>Scaling/tech choice</td><td>One for all</td><td>Per service</td></tr>
+<tr><td>Failure blast radius</td><td>All services</td><td>One service</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>&quot;Temporary&quot; read access to another service's tables.</li>
+  <li>One database per service but services still sharing tables through views.</li>
+  <li>Splitting databases without a plan for cross-service queries.</li>
+  <li>Manually operating dozens of databases without automation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;If services share a database, they are coupled through the schema: one team cannot change a table without coordinating with every team reading it, and one service's heavy queries slow everyone. That kills independent deployment. With a database per service, each service owns its data and others use only its API or events, so the schema can evolve freely, the database scales independently and teams can pick the right technology. The price is no cross-service joins or ACID transactions, so I use sagas and the outbox for workflows, and API composition or read models for queries.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you build a report needing data from five services?</strong> Stream their events into a reporting read model or data warehouse rather than querying live.</li>
+  <li><strong>Is a separate schema on one server enough?</strong> It is a good start if credentials enforce isolation; separate servers add fault and scale isolation.</li>
+  <li><strong>How do you keep referential integrity?</strong> Through events, sagas and validating via the owner's API at write time.</li>
+</ul>
+</article>
+</body>
+</html>

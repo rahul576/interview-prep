@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-219 · How does microservices architecture support independent deployment and scalability?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-219" data-topic="Microservices">
+<h1>How does microservices architecture support independent deployment and scalability?</h1>
+<p class="ex-meta">Microservices · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Each service has its <strong>own pipeline and artifact</strong>, communicates through <strong>stable, backward-compatible APIs</strong>, is <strong>stateless</strong> with its <strong>own data store</strong>, and therefore can be <strong>deployed (rolling, blue-green, canary) and scaled horizontally</strong> on its own.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Independent deployment</strong> rests on three things.</p>
+<p>First, <strong>separate build and release units</strong>. Each service lives in its own repository or a clearly separated module of a monorepo, with its <strong>own CI/CD pipeline</strong> producing its <strong>own versioned container image</strong>. Deploying the order service does not require rebuilding or redeploying payments.</p>
+<p>Second, <strong>loose coupling through contracts</strong>. Services interact only via APIs and events, never shared databases or shared in-process libraries containing business logic. Changes to these contracts are <strong>backward compatible</strong> by default: add optional fields, never remove or rename; consumers are <strong>tolerant readers</strong>; breaking changes get a new version run side by side. <strong>Consumer-driven contract tests</strong> (Pact, Spring Cloud Contract) and schema-registry compatibility checks verify this in CI, so a provider knows it can deploy safely. Database changes follow <strong>expand-and-contract</strong> migrations so old and new versions can run against the same schema during rollout.</p>
+<p>Third, <strong>safe deployment strategies</strong> per service: <strong>rolling updates</strong> replace pods gradually; <strong>blue-green</strong> runs the new version alongside and switches traffic; <strong>canary</strong> sends a small percentage of traffic to the new version and watches metrics before proceeding (Argo Rollouts, Flagger, a service mesh). <strong>Feature flags</strong> decouple <strong>deploying</strong> code from <strong>releasing</strong> features.</p>
+<p><strong>Independent scalability</strong> comes from <strong>stateless</strong> services that keep state in their own databases, caches or brokers. Any instance can serve any request, so you scale <strong>horizontally</strong> by adding replicas. In Kubernetes, the <strong>HorizontalPodAutoscaler</strong> adjusts replicas per service from CPU, memory or custom metrics such as requests per second, and <strong>KEDA</strong> can scale consumers on Kafka lag. Each service's data store scales independently too: read replicas for the catalogue, partitioning for orders.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Developer merges to the order service repo.</li>
+  <li>Pipeline builds, tests (including contract tests) and pushes <code>orders:1.8.3</code>.</li>
+  <li>Canary: 5 percent of traffic to the new version; metrics checked.</li>
+  <li>Rollout completes; other services are untouched.</li>
+  <li>HPA scales order pods 3 → 12 under load, independent of other services.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: catalogue }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: catalogue }
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: catalogue }
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 25% }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>Rollback speed</th><th>Extra capacity</th><th>Risk exposure</th></tr></thead>
+<tbody>
+<tr><td>Rolling</td><td>Medium</td><td>Small</td><td>Gradual, all users eventually</td></tr>
+<tr><td>Blue-green</td><td>Instant switch</td><td>Double</td><td>All at switch</td></tr>
+<tr><td>Canary</td><td>Fast</td><td>Small</td><td>Small percentage first</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shared libraries with domain logic that force simultaneous upgrades.</li>
+  <li>Breaking API or schema changes without versioning.</li>
+  <li>Stateful services with in-memory sessions that cannot scale out.</li>
+  <li>Destructive database migrations in the same release as code changes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each service has its own repository or module and its own pipeline producing its own container image, so it can be released without redeploying others, as long as its contracts stay backward compatible. I protect that with versioning, tolerant readers and contract tests in CI, plus expand-and-contract database migrations. Because services are stateless and own their data, they scale horizontally and independently: ten replicas of catalogue, two of admin, with the Kubernetes HorizontalPodAutoscaler. Releases use rolling, blue-green or canary deployments per service, and feature flags separate deployment from release.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What breaks independent deployment in practice?</strong> Shared databases, breaking API changes, shared business libraries and synchronised release trains.</li>
+  <li><strong>What is expand-and-contract?</strong> Add the new schema alongside the old, migrate, then remove the old after all versions moved.</li>
+  <li><strong>How do you scale a Kafka consumer service?</strong> Add instances up to the partition count, for example with KEDA on consumer lag.</li>
+</ul>
+</article>
+</body>
+</html>

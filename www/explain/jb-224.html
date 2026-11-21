@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-224 · Explain retry, timeout, fallback, and bulkhead patterns.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-224" data-topic="Microservices">
+<h1>Explain retry, timeout, fallback, and bulkhead patterns.</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Timeout</strong> bounds how long you wait, <strong>retry</strong> repeats transient failures with <strong>backoff and jitter</strong> (idempotent calls only), <strong>fallback</strong> returns a <strong>degraded response</strong>, and <strong>bulkhead</strong> isolates <strong>resources per dependency</strong>; with a <strong>circuit breaker</strong>, they come from <strong>Resilience4j</strong> in Spring.</p>
+
+<h2>Detailed explanation</h2>
+<p>Remote calls fail in ways local calls do not: they hang, time out, return errors or become slow. These four patterns handle that.</p>
+<p><strong>Timeout.</strong> Never wait forever. Configure a <strong>connect timeout</strong> (establishing the connection, usually short, 1-2 s) and a <strong>read/response timeout</strong> (waiting for data) on every HTTP client, database pool and broker client. Set it from the dependency's normal latency (for example p99 × 2) and the caller's own time budget. Without timeouts, a slow dependency holds threads until the whole service stalls. Resilience4j's <strong>TimeLimiter</strong> adds timeouts around async calls.</p>
+<p><strong>Retry.</strong> Repeat a call that failed for a <strong>transient</strong> reason (connection reset, timeout, 503), with <strong>exponential backoff plus jitter</strong> and a small maximum (2-3 attempts). Only retry <strong>idempotent</strong> operations or use idempotency keys; otherwise you may create duplicate orders. Do not retry in every layer, or you amplify an outage.</p>
+<p><strong>Fallback.</strong> When a call fails, or the circuit is open, return something useful: cached data, a default (&quot;recommendations unavailable&quot;), a reduced feature, or a queued &quot;we will process this later&quot;. Fallbacks must be cheap and reliable themselves, and they must be acceptable to the business; for payments, an honest error may be the only correct fallback.</p>
+<p><strong>Bulkhead.</strong> Limit concurrent calls per dependency with a <strong>semaphore</strong> or a <strong>dedicated thread pool</strong>, so one slow dependency can only exhaust its own share and the rest of the service keeps running.</p>
+<p><strong>Ordering.</strong> In Resilience4j's Spring Boot integration, the default aspect order is Retry ( CircuitBreaker ( RateLimiter ( TimeLimiter ( Bulkhead ( call ) ) ) ) ): retry is outermost, so every attempt passes through, and is counted by, the circuit breaker, and retries stop quickly once it opens. Spring Framework 7 also ships simple <code>@Retryable</code> and <code>@ConcurrencyLimit</code> annotations in the core for basic needs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Bulkhead grants a permit or rejects.</li>
+  <li>Call runs with a timeout.</li>
+  <li>Failure is recorded by the circuit breaker.</li>
+  <li>Retry waits with backoff and tries again if allowed.</li>
+  <li>After final failure or open circuit, fallback runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Retry(name = &quot;catalog&quot;)
+@CircuitBreaker(name = &quot;catalog&quot;, fallbackMethod = &quot;cachedProduct&quot;)
+@Bulkhead(name = &quot;catalog&quot;)
+public Product product(String id) {
+    return catalogClient.get(id);          // HTTP client has 1s connect / 2s read timeout
+}
+
+private Product cachedProduct(String id, Throwable t) {
+    return productCache.getOrDefault(id, Product.unavailable(id));
+}</code></pre>
+<pre><code class="language-yaml">resilience4j:
+  retry.instances.catalog: { maxAttempts: 3, waitDuration: 200ms, enableExponentialBackoff: true, enableRandomizedWait: true }
+  bulkhead.instances.catalog: { maxConcurrentCalls: 25 }
+  circuitbreaker.instances.catalog: { failureRateThreshold: 50, slidingWindowSize: 20 }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Pattern</th><th>Protects against</th><th>Key setting</th></tr></thead>
+<tbody>
+<tr><td>Timeout</td><td>Hanging calls</td><td>Connect/read timeout</td></tr>
+<tr><td>Retry</td><td>Transient errors</td><td>Attempts, backoff, jitter</td></tr>
+<tr><td>Fallback</td><td>Feature failure</td><td>Degraded response</td></tr>
+<tr><td>Bulkhead</td><td>Resource exhaustion</td><td>Max concurrent calls</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Default infinite or very long timeouts.</li>
+  <li>Retrying non-idempotent operations or 4xx errors.</li>
+  <li>Fallbacks that call another remote service.</li>
+  <li>Retrying outside a circuit breaker so retries hammer an open dependency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;These are resilience patterns for remote calls. A timeout bounds how long I wait, so a slow service cannot hold my threads; every call gets connect and read timeouts. A retry repeats transient failures with exponential backoff and jitter, a small maximum, and only for idempotent operations. A fallback returns a degraded response such as cached data or a default when the call fails. A bulkhead limits concurrent calls per dependency with a semaphore or thread pool, so one failing dependency cannot exhaust everything. In Spring I use Resilience4j for all of them together with the circuit breaker, with retry as the outermost layer.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Retry inside or outside the circuit breaker?</strong> Outside: each attempt is recorded by the breaker, and once it opens retries fail fast.</li>
+  <li><strong>How do you choose a timeout value?</strong> From the dependency's observed p99 latency and the caller's remaining budget.</li>
+  <li><strong>When is no fallback the right answer?</strong> When a wrong or stale answer is worse than an error, such as balances or payments.</li>
+</ul>
+</article>
+</body>
+</html>

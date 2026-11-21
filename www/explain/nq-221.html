@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-221 · What is the difference between synchronous and asynchronous communication?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-221" data-topic="Microservices">
+<h1>What is the difference between synchronous and asynchronous communication?</h1>
+<p class="ex-meta">Microservices · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Synchronous</strong>: the caller <strong>sends a request and waits</strong> (REST, gRPC), simple but <strong>temporally coupled</strong>; <strong>asynchronous</strong>: the caller <strong>publishes a message and continues</strong> (queues, events), resilient and decoupled but <strong>eventually consistent</strong> and in need of <strong>idempotency, retries and DLQs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Synchronous communication</strong> is like a phone call. Service A calls B and blocks (logically) until B answers or a timeout expires. It is easy to write and debug, and the caller gets an immediate result to show the user. But it creates <strong>temporal coupling</strong>: if B is slow, A is slow; if B is down, A's request fails. In chains (A → B → C → D), latencies add up and availability multiplies down, and a slow service can exhaust callers' threads and trigger <strong>cascading failures</strong>. Hence timeouts, circuit breakers and bulkheads are mandatory.</p>
+<p><strong>Asynchronous communication</strong> is like sending a letter or a text. A publishes a message or event to a <strong>broker</strong> (Kafka, RabbitMQ, SQS) and continues immediately. Consumers process it when they are ready. Benefits: A keeps working while consumers are down, the broker <strong>absorbs load spikes</strong>, failed processing can be <strong>retried</strong>, and many consumers can react to the same event. Costs: <strong>eventual consistency</strong> (the effect happens later), <strong>idempotent consumers</strong> because messages can be delivered more than once, <strong>retries and dead-letter queues</strong> for failures, <strong>ordering</strong> concerns, and <strong>tracing across events</strong> to debug a flow.</p>
+<p>A useful rule: use <strong>synchronous</strong> for <strong>queries a user is waiting on</strong> (show my orders, check availability, authenticate), and <strong>asynchronous</strong> for <strong>workflows, integration and notifications</strong> (fulfil the order, send the confirmation email, update the search index, feed analytics).</p>
+<p>When an operation must be asynchronous but a user wants the result, use the <strong>asynchronous request-reply</strong> pattern: accept with <code>202 Accepted</code> and a status URL, then let the client poll, or push the result via <strong>WebSocket</strong>, <strong>Server-Sent Events</strong> or a notification.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Sync: request → callee processes → response within timeout → caller continues.</li>
+  <li>Async: publish → broker persists → caller returns.</li>
+  <li>Consumer receives → processes idempotently → acknowledges.</li>
+  <li>Failure → retry with backoff → DLQ after N attempts.</li>
+  <li>Result → event, status endpoint or push to client.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Async request-reply over HTTP
+@PostMapping(&quot;/reports&quot;)
+ResponseEntity&lt;Void&gt; requestReport(@RequestBody ReportRequest req) {
+    UUID jobId = UUID.randomUUID();
+    jobs.save(new ReportJob(jobId, &quot;PENDING&quot;));
+    kafkaTemplate.send(&quot;report.requests&quot;, jobId.toString(), req.withJobId(jobId));
+    return ResponseEntity.accepted().location(URI.create(&quot;/reports/&quot; + jobId)).build();
+}
+
+@GetMapping(&quot;/reports/{id}&quot;)
+ReportJob status(@PathVariable UUID id) { return jobs.findById(id).orElseThrow(); } // PENDING / DONE</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Synchronous</th><th>Asynchronous</th></tr></thead>
+<tbody>
+<tr><td>Analogy</td><td>Phone call</td><td>Letter / text</td></tr>
+<tr><td>Response</td><td>Immediate</td><td>Later</td></tr>
+<tr><td>Callee down</td><td>Caller fails</td><td>Message waits</td></tr>
+<tr><td>Consistency</td><td>Immediate</td><td>Eventual</td></tr>
+<tr><td>Extra needs</td><td>Timeouts, breakers</td><td>Idempotency, DLQ, tracing</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming async means no error handling.</li>
+  <li>Synchronous fan-out to many services for one request.</li>
+  <li>Not giving users feedback for async operations.</li>
+  <li>Treating non-blocking HTTP clients as asynchronous messaging.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In synchronous communication the caller sends a request and waits for the answer, as with REST or gRPC. It is simple and gives an immediate result, but it creates temporal coupling: if the callee is slow or down, so is the caller, and long chains add latency and risk cascading failures. In asynchronous communication the caller publishes a message to a broker and continues; consumers process it when they can. That decouples services, absorbs spikes and keeps working when a consumer is down, but we accept eventual consistency and need idempotent consumers, retries, dead-letter queues and tracing. I use sync for queries a user waits on and async for workflows and notifications.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you return a result for an async operation?</strong> 202 with a status resource, or push via WebSocket, SSE or notification.</li>
+  <li><strong>What is temporal coupling?</strong> Both services must be available at the same time for the interaction to succeed.</li>
+  <li><strong>How do you debug an async flow?</strong> Propagate trace context in message headers and use distributed tracing.</li>
+</ul>
+</article>
+</body>
+</html>
