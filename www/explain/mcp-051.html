@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-051 · Summarise the MCP authorization specification for remote servers.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-051" data-topic="MCP Servers">
+<h1>Summarise the MCP authorization specification for remote servers.</h1>
+<p class="ex-meta">MCP Servers · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>For HTTP transports, MCP authorization is <strong>OAuth 2.1</strong>: the MCP server is a <strong>resource server</strong>, it answers unauthenticated calls with <strong>401 and WWW-Authenticate</strong> pointing to <strong>Protected Resource Metadata (RFC 9728)</strong>, the client discovers the <strong>authorization server</strong>, uses <strong>authorization code with PKCE</strong> and the <strong>resource parameter (RFC 8707)</strong>, sends the token in the <strong>Authorization header</strong>, and the server <strong>validates audience, scopes and expiry</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The authorization specification applies to remote servers (Streamable HTTP); stdio servers get credentials from their environment instead. Its key design choice is separation of roles. The MCP server is an OAuth <strong>resource server</strong> that only validates tokens. A separate <strong>authorization server</strong>, usually the company's identity provider such as Entra ID, Okta or Auth0, authenticates users and issues tokens. Early drafts had the MCP server act as its own authorization server; that was dropped because it forced every server to implement identity.</p>
+<p><strong>Discovery</strong> is automatic. A client calling without a valid token gets <strong>HTTP 401</strong> with a <code>WWW-Authenticate</code> header containing a <code>resource_metadata</code> URL. That <strong>Protected Resource Metadata</strong> document (RFC 9728) lists the authorization servers and supported scopes. The client then fetches the authorization server's metadata (RFC 8414 or OpenID Connect discovery) to find its endpoints.</p>
+<p>The client identifies itself (via a Client ID Metadata Document, pre-registration, or dynamic registration) and runs the <strong>authorization code flow with PKCE</strong>, which is mandatory. It includes the <strong><code>resource</code> parameter</strong> (RFC 8707) with the MCP server's canonical URI, so the issued token's <strong>audience</strong> is that specific server.</p>
+<p>Every request carries <code>Authorization: Bearer &lt;token&gt;</code>, never a query string. The server validates <strong>signature, issuer, audience, scopes and expiry</strong> on every request, returns 401 for invalid tokens and 403 with <code>insufficient_scope</code> when more scopes are needed.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends an MCP request without a token.</li>
+  <li>Server: <code>401</code> + <code>WWW-Authenticate: Bearer resource_metadata=&quot;https://mcp.example.com/.well-known/oauth-protected-resource&quot;</code>.</li>
+  <li>Client reads the metadata, finds the authorization server and its endpoints.</li>
+  <li>Client runs authorization code + PKCE with <code>resource=https://mcp.example.com/mcp</code>; user signs in and consents.</li>
+  <li>Client retries with the bearer token; refreshes it when it expires.</li>
+  <li>Server validates the token on every request.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-http">HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata=&quot;https://mcp.example.com/.well-known/oauth-protected-resource&quot;, scope=&quot;tickets:read&quot;
+
+GET /.well-known/oauth-protected-resource
+{
+  &quot;resource&quot;: &quot;https://mcp.example.com/mcp&quot;,
+  &quot;authorization_servers&quot;: [&quot;https://login.example.com&quot;],
+  &quot;scopes_supported&quot;: [&quot;tickets:read&quot;, &quot;tickets:write&quot;]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Accepting any valid token from the identity provider without checking the audience.</li>
+  <li>Putting tokens in URLs, where they end up in logs and proxies.</li>
+  <li>Skipping PKCE because &quot;it's a confidential client&quot;.</li>
+  <li>Implementing your own login inside the MCP server instead of delegating to the IdP.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For HTTP transports, MCP authorization is based on OAuth 2.1. The MCP server is a resource server, and a separate authorization server, usually the company IdP, issues tokens. When a client calls without a valid token, the server returns 401 with a WWW-Authenticate header pointing to its Protected Resource Metadata, RFC 9728, which tells the client which authorization servers and scopes to use. The client runs the authorization code flow with PKCE and includes the RFC 8707 resource parameter so the token is bound to that server as its audience. Tokens go in the Authorization header, never in query strings, and the server validates signature, issuer, audience, scopes and expiry on every request.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is audience binding important?</strong> It stops a token issued for one server being replayed against another.</li>
+  <li><strong>What does stdio use?</strong> Credentials from the environment; the OAuth spec does not apply.</li>
+  <li><strong>What happens on insufficient scope?</strong> 403 with <code>insufficient_scope</code>, triggering step-up authorization.</li>
+</ul>
+</article>
+</body>
+</html>

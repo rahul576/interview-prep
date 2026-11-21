@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-004 · What does an MCP tool definition contain?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-004" data-topic="MCP Servers">
+<h1>What does an MCP tool definition contain?</h1>
+<p class="ex-meta">MCP Servers · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>An MCP tool definition (returned by <code>tools/list</code>) has a unique <strong><code>name</code></strong>, optional <strong><code>title</code></strong>, a <strong><code>description</code></strong> the model reads to decide when to use it, an <strong><code>inputSchema</code></strong> (JSON Schema), an optional <strong><code>outputSchema</code></strong> for structured results, and optional <strong><code>annotations</code></strong> such as <code>readOnlyHint</code> and <code>destructiveHint</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The tool definition is the <strong>contract</strong> between the server, the host and the model, and the model sees nothing else when deciding whether to use the tool.</p>
+<ul>
+  <li><strong><code>name</code></strong>: a unique identifier used in <code>tools/call</code>, e.g. <code>search_orders</code>. Keep it short, specific and stable; hosts may reference it in allowlists.</li>
+  <li><strong><code>title</code></strong>: an optional human-readable display name for UIs, e.g. &quot;Search orders&quot;.</li>
+  <li><strong><code>description</code></strong>: the most important field for model behaviour. It should say what the tool does, <strong>when to use it</strong> (and when not), what it returns and important constraints, such as &quot;dates are in UTC&quot; or &quot;returns at most 50 results&quot;.</li>
+  <li><strong><code>inputSchema</code></strong>: a <strong>JSON Schema</strong> object describing arguments: types, <code>required</code> fields, <code>enum</code>s for fixed choices, formats, ranges and <strong>per-property descriptions</strong>. Hosts and servers validate arguments against it, and the model uses it to fill parameters.</li>
+  <li><strong><code>outputSchema</code></strong> (since the 2025-06-18 revision): declares the shape of <code>structuredContent</code> in results, so clients can validate and programmatically use outputs.</li>
+  <li><strong><code>annotations</code></strong>: behavioural hints: <strong><code>readOnlyHint</code></strong>, <strong><code>destructiveHint</code></strong>, <strong><code>idempotentHint</code></strong>, <strong><code>openWorldHint</code></strong>, plus an annotation <code>title</code>. Hosts may use them for approval UX, but they are untrusted unless the server is trusted.</li>
+  <li>Newer revisions also allow <strong>icons</strong> and a <code>_meta</code> field for extra metadata.</li>
+</ul>
+<p>A vague description (&quot;handles orders&quot;) leads to the model calling the wrong tool, calling it with guessed arguments, or not calling it at all.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends <code>tools/list</code> (paginated with cursors if needed).</li>
+  <li>Server returns tool definitions.</li>
+  <li>Host converts them into the model provider's tool format and includes them in the request.</li>
+  <li>Model emits a call with arguments matching <code>inputSchema</code>.</li>
+  <li>Server validates arguments, executes and returns content (and <code>structuredContent</code> if <code>outputSchema</code> exists).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;search_orders&quot;,
+  &quot;title&quot;: &quot;Search orders&quot;,
+  &quot;description&quot;: &quot;Find a customer's orders by email and optional status. Use before get_order_details. Returns at most 20 orders, newest first.&quot;,
+  &quot;inputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+      &quot;email&quot;:  { &quot;type&quot;: &quot;string&quot;, &quot;format&quot;: &quot;email&quot;, &quot;description&quot;: &quot;Customer email&quot; },
+      &quot;status&quot;: { &quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;open&quot;, &quot;shipped&quot;, &quot;cancelled&quot;] },
+      &quot;limit&quot;:  { &quot;type&quot;: &quot;integer&quot;, &quot;minimum&quot;: 1, &quot;maximum&quot;: 20, &quot;default&quot;: 10 }
+    },
+    &quot;required&quot;: [&quot;email&quot;]
+  },
+  &quot;outputSchema&quot;: {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: { &quot;orders&quot;: { &quot;type&quot;: &quot;array&quot;, &quot;items&quot;: { &quot;type&quot;: &quot;object&quot; } }, &quot;total&quot;: { &quot;type&quot;: &quot;integer&quot; } },
+    &quot;required&quot;: [&quot;orders&quot;, &quot;total&quot;]
+  },
+  &quot;annotations&quot;: { &quot;readOnlyHint&quot;: true, &quot;openWorldHint&quot;: false }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One-word descriptions that do not say when to use the tool.</li>
+  <li>Loose schemas (<code>&quot;type&quot;: &quot;object&quot;</code> with no properties) so the model guesses.</li>
+  <li>Free-text parameters where an <code>enum</code> would remove ambiguity.</li>
+  <li>Renaming tools casually, breaking host allowlists and workflows.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A tool definition from tools/list has a unique name used in tools/call, an optional human-readable title, and a description, which is critical because the model reads it to decide when and how to use the tool. The inputSchema is JSON Schema for the arguments: types, required fields, enums, per-field descriptions, which hosts use to validate and the model uses to fill parameters. Optionally there's an outputSchema for structured results, and annotations like readOnlyHint, destructiveHint, idempotentHint and openWorldHint, which hosts can use as hints for approval decisions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a vague description cause misuse?</strong> The model has nothing else to judge purpose, scope or constraints, so it guesses.</li>
+  <li><strong>Who validates arguments?</strong> The server must; hosts may also validate before sending.</li>
+  <li><strong>Are annotations enforced?</strong> No, they are hints and must be treated as untrusted from untrusted servers.</li>
+</ul>
+</article>
+</body>
+</html>

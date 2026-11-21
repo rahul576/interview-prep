@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-001 · Why does MCP use JSON-RPC 2.0, and what message types does it use?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-001" data-topic="MCP Servers">
+<h1>Why does MCP use JSON-RPC 2.0, and what message types does it use?</h1>
+<p class="ex-meta">MCP Servers · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>MCP uses <strong>JSON-RPC 2.0</strong> because it is a small, language-neutral, <strong>transport-independent</strong> message format; it has three message types: <strong>requests</strong> (with an <code>id</code>, expecting a response), <strong>responses</strong> (same <code>id</code>, with <code>result</code> or <code>error</code>) and <strong>notifications</strong> (no <code>id</code>, no response).</p>
+
+<h2>Detailed explanation</h2>
+<p>MCP needed a way for hosts and servers written in any language to call each other over very different transports: a local subprocess's stdin/stdout, or HTTP to a remote service. <strong>JSON-RPC 2.0</strong> fits well. It is tiny (the whole spec is a few pages), human-readable, already supported by libraries in every language, and it says nothing about transport, so exactly the same messages flow over <strong>stdio</strong> or <strong>Streamable HTTP</strong>. It also supports bidirectional messaging, which earlier MCP revisions relied on for server-to-client requests such as sampling and elicitation. The Language Server Protocol used the same choice, so the pattern was proven.</p>
+<p><strong>Requests</strong> contain <code>jsonrpc: &quot;2.0&quot;</code>, a <code>method</code> such as <code>tools/list</code>, <code>tools/call</code> or <code>resources/read</code>, optional <code>params</code>, and an <code>id</code> (string or number) that must be unique per sender for in-flight requests. Each request gets <strong>exactly one response</strong>.</p>
+<p><strong>Responses</strong> echo the <code>id</code> and contain <strong>either</strong> a <code>result</code> <strong>or</strong> an <code>error</code> object with an integer <code>code</code>, a <code>message</code> and optional <code>data</code>, never both.</p>
+<p><strong>Notifications</strong> have a <code>method</code> and <code>params</code> but <strong>no <code>id</code></strong>, and the receiver must not reply. MCP uses them for progress updates, cancellation (<code>notifications/cancelled</code>), list changes (<code>notifications/tools/list_changed</code>) and, in handshake-based revisions, <code>notifications/initialized</code>.</p>
+<p>JSON-RPC defines <strong>standard error codes</strong> that MCP reuses for protocol-level failures: <strong>-32700</strong> parse error, <strong>-32600</strong> invalid request, <strong>-32601</strong> method not found, <strong>-32602</strong> invalid params and <strong>-32603</strong> internal error. Note that MCP removed support for JSON-RPC <strong>batching</strong> in the 2025-06-18 revision.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Sender builds a request with a fresh <code>id</code> and sends it over the transport.</li>
+  <li>Receiver dispatches by <code>method</code> and validates <code>params</code>.</li>
+  <li>Receiver returns a response with the same <code>id</code>, containing <code>result</code> or <code>error</code>.</li>
+  <li>Either side may send notifications at any time; no reply is expected.</li>
+  <li>The sender matches responses to requests by <code>id</code>, allowing concurrent requests.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:7,&quot;method&quot;:&quot;tools/call&quot;,
+ &quot;params&quot;:{&quot;name&quot;:&quot;get_weather&quot;,&quot;arguments&quot;:{&quot;city&quot;:&quot;Pune&quot;}}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:7,
+ &quot;result&quot;:{&quot;content&quot;:[{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;31°C, clear&quot;}],&quot;isError&quot;:false}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:8,
+ &quot;error&quot;:{&quot;code&quot;:-32602,&quot;message&quot;:&quot;Unknown tool: get_wether&quot;}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;notifications/progress&quot;,
+ &quot;params&quot;:{&quot;progressToken&quot;:&quot;abc&quot;,&quot;progress&quot;:40,&quot;total&quot;:100}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Replying to a notification, or sending a request without an <code>id</code>.</li>
+  <li>Returning both <code>result</code> and <code>error</code> in one response.</li>
+  <li>Reporting a failed business operation (e.g. &quot;order not found&quot;) as a JSON-RPC error instead of a tool result with <code>isError: true</code>.</li>
+  <li>Reusing <code>id</code> values for concurrent requests.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;MCP uses JSON-RPC 2.0 because it's a small, well-known format that's independent of transport, so the same messages work over stdio pipes or HTTP and there are libraries in every language. There are three message types. Requests have a method, params and an id, and expect exactly one response. Responses echo the id and carry either a result or an error with a code and message. Notifications have no id and get no reply; MCP uses them for progress, cancellation and list-changed events. Protocol failures use the standard codes like -32601 method not found and -32602 invalid params.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why not report all tool failures as JSON-RPC errors?</strong> Execution errors returned as results with <code>isError</code> are shown to the model so it can self-correct; protocol errors usually are not.</li>
+  <li><strong>Why not gRPC?</strong> It needs code generation, binary framing and HTTP/2, which complicates simple local subprocess servers.</li>
+  <li><strong>Can requests be concurrent?</strong> Yes; ids let responses arrive in any order.</li>
+</ul>
+</article>
+</body>
+</html>

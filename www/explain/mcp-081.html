@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-081 · Your remote MCP server works with one replica but fails intermittently behind a load balancer with several replicas. Diagnose it.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-081" data-topic="MCP Servers">
+<h1>Your remote MCP server works with one replica but fails intermittently behind a load balancer with several replicas. Diagnose it.</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Intermittent failures that vanish with one replica mean <strong>state is held in memory on one instance</strong>: an <strong><code>Mcp-Session-Id</code></strong> (or SSE stream, handle, task ID) created on replica A is sent to replica B, which <strong>does not know it</strong>; short term use <strong>sticky sessions</strong>, properly fix it with <strong>external state</strong> and the <strong>stateless protocol revision</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The symptom pattern is the diagnosis. Works with one replica, fails sometimes with several, and failure rate grows with replica count: requests are landing on instances that lack state they depend on.</p>
+<p>With <strong>handshake-based protocol revisions</strong> (such as 2025-06-18 and 2025-11-25 Streamable HTTP), the client sends <code>initialize</code>, and the server may return an <strong><code>Mcp-Session-Id</code></strong> header. Many SDK defaults keep the session object, negotiated capabilities, subscriptions and <strong>open SSE streams in process memory</strong>. The client then sends every later request with that session ID. The load balancer, knowing nothing about MCP sessions, round-robins request two to replica B. Replica B has never heard of the session and returns an error such as <strong>404 / session not found</strong>, or a resumed SSE stream breaks. With three replicas, roughly two out of three follow-up requests miss.</p>
+<p>The same bug appears with <strong>handles</strong>, pagination cursors, <strong>task IDs</strong> for long-running operations, or caches of downstream OAuth tokens stored in local memory.</p>
+<p><strong>Short-term fix:</strong> <strong>sticky sessions</strong> at the load balancer keyed on the <code>Mcp-Session-Id</code> header (or a cookie). This reduces failures but breaks on scale-in, restarts and deployments, when a replica disappears with its sessions.</p>
+<p><strong>Real fix:</strong> move all state to an <strong>external store</strong> such as Redis or a database, so any replica can load it, and adopt the <strong>stateless 2026-07-28 revision</strong>, where requests carry what they need and no session is required. Then plain load balancing works.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Reproduce: run 3 replicas locally behind a round-robin proxy; run an integration test that initialises and calls several tools.</li>
+  <li>Check logs for session-not-found or unknown task errors correlated with replica IDs.</li>
+  <li>Confirm by enabling sticky routing; failures should drop.</li>
+  <li>Refactor: session, task and handle stores backed by Redis.</li>
+  <li>Upgrade SDK and transport to the stateless revision; remove stickiness.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">POST /mcp  initialize              -&gt; replica A   (Mcp-Session-Id: 7f3e...)
+POST /mcp  tools/call search       -&gt; replica B   404 Session not found
+POST /mcp  tools/call search       -&gt; replica A   200 OK</code></pre>
+<pre><code class="language-python"># before: sessions = {}            # per-process memory
+# after:
+sessions = RedisSessionStore(url=REDIS_URL, ttl_seconds=3600)
+tasks = RedisTaskStore(url=REDIS_URL)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding retries, which hides the problem and multiplies load.</li>
+  <li>Sticky sessions as the permanent solution.</li>
+  <li>Testing only with one replica in staging.</li>
+  <li>Forgetting that in-memory task IDs are lost on every deployment.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Failures that disappear with one replica almost always mean in-memory state. With handshake-based revisions, the server assigns an Mcp-Session-Id at initialization and keeps session data, capabilities, subscriptions or open SSE streams, in that replica's memory. When the load balancer sends the next request with that ID to a different replica, the session is unknown, so it fails with session not found or the stream breaks. Handles or task IDs in local memory cause the same thing. Short term, sticky sessions on the session header reduce it, though they fail on scaling and restarts. The real fix is external state in something like Redis, and moving to the stateless 2026-07-28 revision.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Test before production?</strong> Integration tests against multiple replicas behind a round-robin proxy, plus chaos tests killing replicas.</li>
+  <li><strong>Why do sticky sessions fail?</strong> A removed replica takes its sessions with it.</li>
+  <li><strong>What state is legitimate?</strong> Durable tasks, idempotency keys and tokens, all stored externally.</li>
+</ul>
+</article>
+</body>
+</html>

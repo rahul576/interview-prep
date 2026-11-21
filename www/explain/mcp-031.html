@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-031 · How should an MCP tool handle large results, such as 50,000 log lines or rows?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-031" data-topic="MCP Servers">
+<h1>How should an MCP tool handle large results, such as 50,000 log lines or rows?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Never dump huge results into the model context: give tools <strong>filter parameters</strong>, <strong>paginate</strong> with <code>limit</code> and <code>cursor</code> (reporting the <strong>total</strong>), <strong>summarise or aggregate server-side</strong>, and when the full data is needed, <strong>store it as a resource and return a resource link</strong> with a short summary.</p>
+
+<h2>Detailed explanation</h2>
+<p>Returning 50,000 log lines or rows to the model is harmful in every way. It <strong>wastes tokens and money</strong>, can <strong>exceed the context window</strong> or host limits, <strong>pushes useful context out</strong>, slows responses, and the model reasons worse over a wall of data than over a focused answer. Large raw output can also carry <strong>prompt-injection</strong> payloads and sensitive data into the context.</p>
+<p>Good tools return <strong>small, useful outputs by default</strong>:</p>
+<p><strong>Filtering parameters</strong> let the model narrow the search: time range, severity, service, status, customer, a search term. Encourage their use in the description (&quot;always provide a time range&quot;).</p>
+<p><strong>Pagination</strong>: <code>limit</code> (with a sensible default and hard maximum) and an opaque <code>cursor</code>; the result includes <strong>how many items exist in total</strong> and a <code>next_cursor</code>, so the model knows whether to refine or page.</p>
+<p><strong>Server-side summarisation and aggregation</strong>: rather than raw rows, return counts by type, top N, percentiles or time buckets, plus a <strong>few representative examples</strong>. &quot;2,412 errors: 1,800 timeouts (mostly payment-gateway), 612 HTTP 5xx; 3 sample lines below&quot; is far more useful than the lines themselves.</p>
+<p><strong>Resource links for full data</strong>: when the user genuinely needs everything, an export or a full log, the tool writes the result to storage, exposes it as a <strong>resource</strong> (e.g. <code>exports://query/8f2c.csv</code>) and returns a <strong>resource link</strong> plus summary. The host or user can fetch or download it separately without it entering the model's context.</p>
+<p>Finally, <strong>tell the model about truncation</strong> explicitly (&quot;showing 50 of 2,412; refine with <code>severity</code> or use <code>next_cursor</code>&quot;), otherwise it may assume it saw everything.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Validate filters; enforce a time range or limit.</li>
+  <li>Query with the limit pushed down to the data source.</li>
+  <li>Aggregate and pick representative samples.</li>
+  <li>If full data is requested, write it to storage and register a resource.</li>
+  <li>Return summary, samples, total, truncation note, <code>next_cursor</code> and/or resource link.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool()
+def search_logs(service: str, start: datetime, end: datetime,
+                level: Literal[&quot;error&quot;, &quot;warn&quot;, &quot;info&quot;] = &quot;error&quot;,
+                query: str | None = None, limit: int = 50, cursor: str | None = None) -&gt; dict:
+    &quot;&quot;&quot;Search logs for one service in a time range (max 24 h). Returns counts and up to `limit` lines.&quot;&quot;&quot;
+    limit = min(limit, 200)
+    res = logs.search(service, start, end, level, query, limit, cursor)
+    out = {&quot;total&quot;: res.total,
+           &quot;by_message&quot;: res.top_messages(10),
+           &quot;lines&quot;: [l.short() for l in res.lines],
+           &quot;next_cursor&quot;: res.next_cursor,
+           &quot;note&quot;: f&quot;Showing {len(res.lines)} of {res.total}. Narrow with `query` or page with next_cursor.&quot;}
+    if res.total &gt; 5000:
+        uri = exports.save(res.stream_all(), fmt=&quot;ndjson&quot;)
+        out[&quot;full_export&quot;] = uri          # also returned as a resource_link block
+    return out</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>No default limit, so one call returns megabytes.</li>
+  <li>Silent truncation that makes the model think it saw everything.</li>
+  <li>Returning raw JSON with every field instead of short lines.</li>
+  <li>Paging through 50,000 rows into context instead of aggregating.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I never dump huge results into the context: it wastes tokens, pushes out useful context, slows everything and the model handles a focused answer better. Tools take filters like time range, severity and a search term so the model can narrow down, and paginate with limit and cursor, reporting the total. Where possible they aggregate server-side, counts by error type plus a few examples, instead of raw rows. When the full data is really needed, the tool stores it as a resource and returns a resource link with a summary, so the user can fetch it separately. And results always say clearly when they're truncated.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you tell the model results were truncated?</strong> An explicit note with shown versus total, and how to refine or page.</li>
+  <li><strong>What sizes are reasonable?</strong> A few thousand tokens per result at most; measure in evals.</li>
+  <li><strong>Can the model analyse the full data?</strong> Via code execution in a sandbox that reads the resource, returning only conclusions.</li>
+</ul>
+</article>
+</body>
+</html>

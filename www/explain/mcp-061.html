@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-061 · What is the confused deputy problem in MCP, and how do you prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-061" data-topic="MCP Servers">
+<h1>What is the confused deputy problem in MCP, and how do you prevent it?</h1>
+<p class="ex-meta">MCP Servers · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>confused deputy</strong> is a privileged component tricked into using <strong>its own authority</strong> for someone who should not have it; in MCP it appears with <strong>shared service accounts</strong> and with <strong>proxy servers using a static client ID</strong>; prevent it with <strong>per-user authorization and consent</strong>, <strong>checking caller identity against the token subject</strong>, and <strong>short-lived, narrowly scoped tokens</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The term comes from classic security: a compiler with write access to a billing file was tricked by a user into overwriting it. The compiler was the deputy, it had the authority, and it was confused about whose behalf it acted on.</p>
+<p>In MCP the most common form is a server that calls downstream systems with its <strong>own broad credentials</strong>, such as a service account that can read every repository or every customer record. If the server does not check what the <strong>calling user</strong> is allowed to see, then any user, or a prompt-injected agent acting for that user, can reach data they were never entitled to. The server's authority substitutes for the user's.</p>
+<p>The MCP specification also describes an <strong>OAuth proxy variant</strong>. Some MCP servers act as proxies to a third-party API and use a <strong>single static client ID</strong> registered with that third party's authorization server. Because the third party remembers consent for that client ID, an attacker can craft an authorization request (for example via a malicious dynamically registered client and a crafted redirect URI) that reuses a victim's existing consent and obtain an authorization code without the victim knowingly approving. The specification therefore requires such proxies to obtain <strong>explicit user consent per client</strong> before forwarding to the third party.</p>
+<p>Prevention: <strong>authorize per user</strong>, acting on behalf of the authenticated user with their own permissions (delegated tokens) rather than a shared identity; <strong>obtain consent per client</strong>; validate that the <strong>token subject</strong> matches the user the server thinks it is serving; validate redirect URIs exactly; and use <strong>short-lived, narrowly scoped tokens</strong> so mistakes have limited reach.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Request arrives with a token for user U.</li>
+  <li>Server extracts U from the validated token, never from tool arguments.</li>
+  <li>Server obtains a downstream token for U (on-behalf-of) or applies U's entitlements before using a service credential.</li>
+  <li>Downstream query is scoped to U's data.</li>
+  <li>For third-party OAuth proxying, the server shows its own consent screen per client before redirecting.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def get_customer(args, ctx):
+    user = ctx.token.subject                 # from validated token
+    cid = args[&quot;customer_id&quot;]
+    if not entitlements.can_view(user, cid): # per-user check
+        return tool_error(&quot;You are not assigned to this customer.&quot;)
+    return crm.get(cid, token=ctx.downstream_token)  # delegated, on behalf of user</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>One service account with access to everything, no per-user filtering.</li>
+  <li>Taking user or tenant IDs from tool arguments the model fills in.</li>
+  <li>Proxy servers skipping their own consent step because the upstream IdP &quot;already consented&quot;.</li>
+  <li>Loose redirect URI matching.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A confused deputy is a privileged component tricked into using its authority on behalf of someone who shouldn't have it. In MCP it shows up when a server uses its own broad credentials, like a shared service account that can see all repos or customers, to serve any user, so a user or a prompt-injected agent reaches data they were never allowed to see. The spec also describes a variant with MCP proxy servers that use a static client ID with a third-party authorization server, where an attacker can get authorization codes without proper consent. I prevent it by authorizing per user with delegated permissions, requiring consent per client, checking the caller matches the token subject, and using short-lived, narrowly scoped tokens.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Support assistant seeing only current customer?</strong> Bind the session to the customer from a trusted source and filter every query by it.</li>
+  <li><strong>Why not trust IDs in arguments?</strong> The model, or an injection, can change them.</li>
+  <li><strong>Where does row-level security help?</strong> It enforces the per-user filter in the database even if code forgets.</li>
+</ul>
+</article>
+</body>
+</html>

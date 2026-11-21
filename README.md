@@ -1,5 +1,12 @@
 # InterviewPro — V1.10
 
+## What's new in V1.20 – every question has a detailed answer
+
+- All 2,098 questions now have a pre-written "Read in detail" answer: `www/explain/<id>.html`, about 10 MB in total. Each answer has a one-line summary, a detailed explanation, how it works, an example (code or config where useful), common mistakes, a sample interview answer and follow-ups.
+- Answers are cached for offline use when the app installs.
+- Where the old model answers were outdated, the new answers use current facts (2026).
+- The backlog list is empty, so from now on every new question must ship with its answer file (see `CLAUDE.md`).
+
 ## What's new in V1.19 – instant, offline "Read in detail"
 
 - "Read in detail" opens instantly and works offline. It no longer waits for an AI engine.

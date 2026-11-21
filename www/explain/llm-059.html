@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-059 · What are LoRA and QLoRA, and when would you fully fine-tune a model instead?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-059" data-topic="LLMOps &amp; RAG">
+<h1>What are LoRA and QLoRA, and when would you fully fine-tune a model instead?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>LoRA</strong> freezes the base model and trains small <strong>low-rank adapter matrices</strong>, using far less GPU memory and storage; <strong>QLoRA</strong> trains those adapters on a <strong>4-bit quantised base model</strong> so large models fit on one GPU; adapters can be <strong>swapped or merged</strong>. Choose <strong>full fine-tuning</strong> only for large domain or language shifts with <strong>ample data and compute</strong>, accepting a higher risk of <strong>catastrophic forgetting</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Full fine-tuning updates every weight. For a 7B model that means storing gradients and optimiser states for billions of parameters (with Adam, several times the model size in memory) and producing a full copy of the model per task.</p>
+<p><strong>LoRA (Low-Rank Adaptation)</strong> observes that the weight change needed for a task has low intrinsic rank. For a weight matrix W, it learns ΔW = B·A, where A and B are thin matrices of rank r (for example 8-64). Only A and B are trained, typically well under 1% of parameters, applied to attention projections and often MLP layers. Benefits: much lower memory, faster training, adapters of megabytes to a few hundred megabytes, and the ability to <strong>serve many adapters on one base model</strong> (vLLM and others support multi-LoRA serving) or <strong>merge</strong> an adapter into the base weights for zero inference overhead.</p>
+<p><strong>QLoRA</strong> loads the frozen base model in <strong>4-bit NF4 quantisation</strong> (with double quantisation and paged optimisers) while training the LoRA adapters in 16-bit precision. This lets you fine-tune much larger models on a single GPU (the original paper fine-tuned a 65B model on one 48 GB GPU) with quality close to 16-bit LoRA.</p>
+<p><strong>What PEFT is good at:</strong> output style and format, tone, following a schema, narrow tasks (classification, extraction), domain terminology. It is weaker at injecting large amounts of new knowledge; RAG is usually better for facts.</p>
+<p><strong>Full fine-tuning</strong> is justified for big shifts: a new language, a very different domain (legal, medical corpora at scale), or when evaluations show LoRA plateaus. It needs more data, compute and care (learning rates, mixing in general data) and risks <strong>catastrophic forgetting</strong> of general abilities.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose base model and target modules.</li>
+  <li>Set rank, alpha and dropout; optionally quantise base (QLoRA).</li>
+  <li>Train adapters on curated chat-formatted data.</li>
+  <li>Evaluate on task and general capability sets.</li>
+  <li>Serve adapter dynamically or merge into base.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+import torch
+
+bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type=&quot;nf4&quot;,
+                         bnb_4bit_compute_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained(&quot;meta-llama/Llama-3.1-8B-Instruct&quot;,
+                                             quantization_config=bnb)
+lora = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05,
+                  target_modules=[&quot;q_proj&quot;, &quot;k_proj&quot;, &quot;v_proj&quot;, &quot;o_proj&quot;], task_type=&quot;CAUSAL_LM&quot;)
+model = get_peft_model(model, lora)
+model.print_trainable_parameters()   # a fraction of a percent of all parameters</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Fine-tuning to add facts that RAG would handle better.</li>
+  <li>Too few or inconsistent examples.</li>
+  <li>No general-capability evaluation after training.</li>
+  <li>Forgetting the chat template during training.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;LoRA freezes the base weights and trains small low-rank matrices added to selected layers, usually under one percent of parameters, so it needs far less memory and produces small adapters that can be swapped per task or merged for serving. QLoRA goes further by loading the frozen base in 4-bit precision while training adapters in 16-bit, so fairly large models fit on a single GPU with little quality loss. That's enough for style, formats and narrow tasks. I'd only do full fine-tuning for big shifts like a new language or domain with lots of data and compute, watching for catastrophic forgetting, and only once evals show LoRA isn't enough.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detecting lost capabilities?</strong> Run general benchmarks and your broader eval set before and after.</li>
+  <li><strong>Choosing rank?</strong> Start around 8-16; increase if underfitting; validate.</li>
+  <li><strong>Multi-tenant adapters?</strong> Serve one base with per-tenant LoRA adapters loaded on demand.</li>
+</ul>
+</article>
+</body>
+</html>

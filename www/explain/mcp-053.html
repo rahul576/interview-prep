@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-053 · Why is token passthrough forbidden in MCP, and what should a server do instead?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-053" data-topic="MCP Servers">
+<h1>Why is token passthrough forbidden in MCP, and what should a server do instead?</h1>
+<p class="ex-meta">MCP Servers · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Token passthrough</strong>, forwarding a client's token to downstream APIs or accepting tokens not issued for the server, is <strong>forbidden</strong> because it bypasses the server's controls, breaks audit and enables <strong>confused deputy</strong> attacks; the server must <strong>only accept tokens whose audience is itself</strong> and get a <strong>separate downstream token</strong> via <strong>token exchange / on-behalf-of</strong> or its own credentials.</p>
+
+<h2>Detailed explanation</h2>
+<p>Passthrough looks attractive: the client already has a GitHub or Microsoft Graph token, so why not just send it to the MCP server and let the server forward it? The MCP specification prohibits this, for several reasons.</p>
+<p>First, <strong>audience</strong>. A token is a statement that a specific resource may be accessed. If the MCP server accepts a token issued for Graph, or accepts any token without checking its audience, then any token stolen or obtained for another purpose can be replayed at the MCP server, and vice versa. The server must validate that the token was issued <strong>for it</strong>.</p>
+<p>Second, <strong>bypassed controls</strong>. The MCP server is supposed to apply its own policies: rate limits, input validation, tool-level authorization and auditing. If it merely relays the client's downstream token, the downstream API sees the client directly and the server's controls become optional.</p>
+<p>Third, <strong>accountability</strong>. Downstream logs show the user's token used by an unknown party; nobody can tell that an MCP server and an AI agent were involved, which complicates incident investigation.</p>
+<p>Fourth, <strong>confused deputy</strong>: a token meant for one context is used in another with privileges the user never intended.</p>
+<p>The correct pattern is two tokens. The client authenticates to the MCP server with a token whose audience is the MCP server. The server then obtains a <strong>separate token</strong> for each downstream API, either via <strong>OAuth 2.0 Token Exchange</strong> (RFC 8693) or the Entra ID <strong>on-behalf-of</strong> flow, which preserves the user's identity, or via its own service credentials combined with explicit authorization checks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client gets token A with <code>aud = https://mcp.example.com</code>.</li>
+  <li>Server validates token A: signature, issuer, audience, scopes, expiry.</li>
+  <li>Server exchanges token A at the IdP for token B with <code>aud = graph</code> and only the scopes it needs.</li>
+  <li>Server calls the downstream API with token B; logs record both the user and the MCP server.</li>
+  <li>Token B is cached per user and never returned to the client or model.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-http">POST /oauth2/v2.0/token
+grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
+&amp;client_id=mcp-server-app
+&amp;client_secret=...
+&amp;assertion=&lt;token A&gt;
+&amp;scope=https://graph.microsoft.com/Mail.Read
+&amp;requested_token_use=on_behalf_of</code></pre>
+<p>The returned token B represents the user, delegated through the MCP server's app identity.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Checking only the signature and issuer, not the audience.</li>
+  <li>Asking users to paste downstream API tokens into the MCP client config.</li>
+  <li>Returning downstream tokens in tool results or error messages.</li>
+  <li>Using one shared service account for every user, which creates a different confused deputy problem.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Token passthrough is when an MCP server accepts a token issued for another service, like GitHub or Graph, and just forwards it, or accepts tokens without checking they were meant for it. The spec forbids it: the server must only accept tokens whose audience is itself. Passthrough bypasses the server's own controls like rate limiting, validation and auditing, it breaks accountability because downstream logs can't see the MCP server was involved, and it enables confused deputy attacks. Instead the server validates its own token and obtains a separate token for downstream calls, through OAuth token exchange or the on-behalf-of flow so the user's identity is preserved, or uses its own credentials with explicit authorization checks.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does on-behalf-of keep identity?</strong> The new token still names the user but is issued to the server's app with limited scopes.</li>
+  <li><strong>What if the downstream API has no OAuth?</strong> Use a server-held credential in a vault plus per-user authorization in the server.</li>
+  <li><strong>Where are downstream tokens stored?</strong> Server-side, encrypted, keyed by user, never exposed to the model.</li>
+</ul>
+</article>
+</body>
+</html>

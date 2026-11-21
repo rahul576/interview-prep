@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-074 · A hospital wants an assistant that reads patient summaries through MCP. How do you design access?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-074" data-topic="MCP Servers">
+<h1>A hospital wants an assistant that reads patient summaries through MCP. How do you design access?</h1>
+<p class="ex-meta">MCP Servers · design · levels lead</p>
+
+<h2>In one line</h2>
+<p>The clinician signs in with <strong>hospital identity and MFA</strong>, the MCP server <strong>acts on behalf of that clinician</strong> so the <strong>EHR's existing access rules</strong> decide which patients they can see, tools are <strong>read-only and return the minimum necessary data</strong>, <strong>every access is audited</strong> (HIPAA-style), data stays in <strong>approved environments</strong> with <strong>no external servers in the session</strong>, and <strong>break-the-glass</strong> access is justified and reviewed.</p>
+
+<h2>Detailed explanation</h2>
+<p>Clinical data is among the most sensitive data there is, and hospitals already have mature access rules: clinicians see patients they have a <strong>care relationship</strong> with, role-based access distinguishes nurses, physicians and administrators, and every access is logged. The assistant must <strong>inherit</strong> those rules, not invent new ones. The model must never be the component deciding who may see what.</p>
+<p><strong>Identity and delegation.</strong> The clinician authenticates to the assistant with the hospital IdP and MFA. The MCP server receives a token for that clinician and calls the <strong>EHR API</strong> (for example a FHIR API) <strong>on their behalf</strong>, using delegated authorization such as SMART on FHIR scopes. The EHR enforces care-relationship and role checks. If the clinician could not open the chart in the EHR, the assistant cannot either.</p>
+<p><strong>Minimum necessary.</strong> Tools are <strong>read-only</strong> and task-shaped: <code>get_patient_summary</code> returns active problems, current medications, allergies and recent results, not the entire record with psychotherapy notes and billing. Sensitive categories (mental health, HIV status, substance use, genetic data) follow stricter rules.</p>
+<p><strong>Audit.</strong> Every access is logged with clinician, patient, purpose, tool and time, reviewed by privacy monitoring for unusual patterns, as HIPAA and similar regulations require.</p>
+<p><strong>Environment.</strong> The model and host run in an <strong>approved environment</strong> under appropriate agreements (for example a BAA in the US), with data residency respected. <strong>No external or unvetted servers</strong> in the same session, so patient data cannot be copied out.</p>
+<p><strong>Break-the-glass.</strong> Emergency access to a patient without a care relationship, if offered, requires an explicit <strong>justification</strong>, is time-limited and triggers <strong>review</strong>, exactly as in the EHR.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Clinician signs in with SSO + MFA; host gets a token for the clinical MCP server.</li>
+  <li>Server exchanges it for a delegated EHR token with read scopes.</li>
+  <li>Clinician asks about a patient; server calls the EHR as that clinician.</li>
+  <li>EHR returns data only if access rules allow; server trims to the minimum needed.</li>
+  <li>Server writes an audit event; result goes to the model in the approved environment.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Tool: get_patient_summary(patient_id)
+Scopes: user/Condition.read user/MedicationRequest.read user/AllergyIntolerance.read user/Observation.read
+Returns: active conditions, current meds, allergies, last 5 lab results (with dates)
+Excludes: behavioural health notes, full history, billing
+Audit: {clinician, patient, tool, purpose:&quot;treatment&quot;, ts}
+Denied example: &quot;You do not have an active care relationship with this patient.
+                 Use the EHR break-the-glass workflow if this is an emergency.&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A service account that can read all patients, with access checks in the prompt.</li>
+  <li>Returning full records &quot;for better answers&quot;.</li>
+  <li>Allowing web search or external tools in clinical sessions.</li>
+  <li>Logging full clinical content in application logs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The server has to enforce the same rules as the clinical systems. The clinician signs in with the hospital IdP and MFA, and the MCP server acts on behalf of that clinician, so they only see patients they have a care relationship with, enforced by the EHR API, not by the model. Tools are read-only and return the minimum necessary data, like active conditions and medications, rather than the full record. Every access is audited with user, patient, purpose and timestamp, as HIPAA requires, and monitored for unusual access. The model and data stay in approved environments with the right agreements, with no external servers in the same session. Break-the-glass access requires justification and triggers review.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Patient the clinician is not treating?</strong> The EHR denies it; the tool returns a clear message pointing to break-the-glass.</li>
+  <li><strong>Write access later?</strong> Draft notes for clinician sign-off only, never autonomous writes.</li>
+  <li><strong>Model hallucination risk?</strong> Show sources with dates and keep the clinician responsible for decisions.</li>
+</ul>
+</article>
+</body>
+</html>

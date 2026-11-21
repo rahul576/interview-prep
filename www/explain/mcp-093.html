@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-093 · Design a document retrieval system for an organisation using MCP.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-093" data-topic="MCP Servers">
+<h1>Design a document retrieval system for an organisation using MCP.</h1>
+<p class="ex-meta">MCP Servers · design · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Put a normal <strong>retrieval stack</strong> (connectors, chunking, embeddings, <strong>hybrid search index</strong> with ACL metadata) behind an MCP server that exposes a <strong>search tool returning compact, cited snippets</strong>, full documents as <strong>resources by URI</strong>, and <strong>per-user permission trimming</strong> on every query.</p>
+
+<h2>Detailed explanation</h2>
+<p>MCP does not replace search infrastructure; it is the interface the AI uses to reach it. The hard work sits behind the server. <strong>Connectors</strong> pull documents from SharePoint, Confluence, Google Drive and file shares, split them into <strong>chunks</strong>, create <strong>embeddings</strong>, and store them in a <strong>hybrid index</strong> (vector similarity plus keyword/BM25) together with metadata: source, owner, department, last-updated date and the <strong>access control list</strong> copied from the source system. Hybrid search matters because embeddings are good at meaning while keywords catch product codes, ticket numbers and exact names.</p>
+<p>The MCP surface should be small and model-friendly. A <code>search_documents</code> tool takes a query, optional filters (source, date range, department) and a limit, and returns a <strong>compact page of results</strong>: title, short snippet, updated date, a citation and a resource URI, plus a cursor for <strong>pagination</strong>. Returning whole documents from search would flood the context window. When the model or the user needs the full text, it reads the document as a <strong>resource</strong> by URI, so content is fetched only on demand.</p>
+<p>Security and freshness are what separate a demo from a production system. Every query is <strong>permission-trimmed</strong> using the user identity from the OAuth access token, so people only find what they could open in the source system. <strong>Incremental sync</strong> (webhooks or change feeds, plus periodic full reconciliation) keeps the index current and makes sure <strong>deletions and permission changes propagate</strong> quickly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Connectors ingest and sync documents, chunk them, embed them and store chunks with metadata and ACLs.</li>
+  <li>The client calls <code>search_documents</code> with the user's OAuth token.</li>
+  <li>The server resolves the user and groups, runs hybrid search with an ACL filter, and optionally re-ranks.</li>
+  <li>It returns a small page of snippets with titles, dates, citations and URIs, plus a next cursor.</li>
+  <li>The model reads selected documents via <code>resources/read</code> and answers with citations.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;search_documents&quot;,
+  &quot;arguments&quot;: { &quot;query&quot;: &quot;parental leave policy India&quot;, &quot;source&quot;: &quot;sharepoint&quot;, &quot;limit&quot;: 5 },
+  &quot;result&quot;: {
+    &quot;items&quot;: [
+      { &quot;title&quot;: &quot;HR Leave Policy 2026&quot;, &quot;snippet&quot;: &quot;Employees in India are entitled to...&quot;,
+        &quot;updated&quot;: &quot;2026-09-14&quot;, &quot;uri&quot;: &quot;docs://sharepoint/hr/leave-policy-2026&quot; }
+    ],
+    &quot;nextCursor&quot;: &quot;eyJvZmZzZXQiOjV9&quot;
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Indexing with a service account and forgetting to filter by the user's permissions.</li>
+  <li>Returning full documents from search and blowing the context budget.</li>
+  <li>Not propagating deletions, so removed or confidential files remain findable.</li>
+  <li>Pure vector search that misses exact identifiers.</li>
+  <li>No dates in results, so the model cites outdated versions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Behind the MCP server I'd build a standard retrieval pipeline: connectors that sync SharePoint, Confluence and Drive, chunk and embed documents, and store them in a hybrid index with metadata and ACLs. The server exposes a search tool that returns a small, paginated list of snippets with titles, dates, citations and URIs, and exposes full documents as resources so they're read only when needed. Every query is trimmed to the user's permissions using the identity from their OAuth token, and incremental sync keeps the index fresh, including deletions. Then I'd measure retrieval quality with a labelled test set before rolling it out.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you evaluate retrieval quality?</strong> Build a labelled query set and track recall@k, MRR or nDCG, plus answer faithfulness and citation accuracy.</li>
+  <li><strong>Why hybrid search?</strong> Vectors capture meaning; keywords catch exact codes and names; combining them improves recall.</li>
+  <li><strong>How fast must permission changes apply?</strong> Ideally near real time; check ACLs at query time or re-check against the source for sensitive content.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-034 · How do you keep a RAG index in sync with changing source documents?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-034" data-topic="LLMOps &amp; RAG">
+<h1>How do you keep a RAG index in sync with changing source documents?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Keep a RAG index fresh with <strong>incremental indexing</strong> driven by <strong>change detection</strong> (change feeds, webhooks, timestamps or content hashes), <strong>stable chunk IDs</strong> derived from the document ID so a document's chunks can be replaced together, explicit <strong>deletion handling</strong>, version and date <strong>metadata</strong>, <strong>freshness monitoring</strong> and <strong>periodic full rebuilds</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Re-embedding the whole corpus on every change is slow and expensive, and nightly full rebuilds leave the assistant a day out of date. Incremental indexing processes only what changed.</p>
+<p><strong>Change detection</strong> comes in three flavours, best first: <strong>push</strong> (webhooks, event streams), <strong>pull deltas</strong> (Microsoft Graph delta queries for SharePoint/OneDrive, Confluence's &quot;modified since&quot; search, database CDC) and <strong>scan and compare</strong> (list documents, compare modification time and a content hash with what the index stored). Hashing also avoids re-embedding documents whose timestamp changed but content did not.</p>
+<p><strong>Stable IDs</strong> make replacement simple: chunk IDs like <code>docId#0003</code> mean &quot;delete all chunks with <code>doc_id = X</code>, then insert the new ones&quot;, so a shorter new version does not leave orphan chunks behind.</p>
+<p><strong>Deletions</strong> are the most forgotten part. If withdrawn policies stay in the index, the assistant keeps quoting them confidently. Delta APIs report deletions; for scan-based sources you compare the full ID list periodically (a tombstone sweep). Permission changes are a related kind of update and must be synced too.</p>
+<p><strong>Metadata</strong> such as version, effective date, status (draft, current, superseded) and last-modified lets retrieval filter or boost current content and lets answers show dates.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Connector fetches changes (delta token, webhook or scan).</li>
+  <li>For each changed document: compute hash; skip if unchanged.</li>
+  <li>Parse, chunk and embed; upsert chunks with <code>doc_id</code>, version and dates.</li>
+  <li>Delete old chunks of that document not in the new set.</li>
+  <li>Process deletions and permission changes.</li>
+  <li>Record source-change and index time; alert on lag; rebuild fully on a schedule or after embedding/chunking changes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">for change in source.delta(since=state.token):
+    if change.deleted:
+        index.delete(filter={&quot;doc_id&quot;: change.id})
+        continue
+    doc = source.fetch(change.id)
+    h = sha256(doc.content)
+    if h == store.hash(change.id):
+        continue
+    chunks = chunk(parse(doc))
+    index.delete(filter={&quot;doc_id&quot;: doc.id})
+    index.upsert([{&quot;id&quot;: f&quot;{doc.id}#{i:04d}&quot;, &quot;vector&quot;: embed(c), &quot;doc_id&quot;: doc.id,
+                   &quot;version&quot;: doc.version, &quot;modified&quot;: doc.modified} for i, c in enumerate(chunks)])
+    store.save_hash(doc.id, h)
+state.token = source.latest_token()</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Ignoring deletions, so retired documents live on forever.</li>
+  <li>Random chunk IDs, which make replacing a document's chunks unreliable.</li>
+  <li>Not monitoring sync failures; a broken connector silently freezes the index.</li>
+  <li>Changing the embedding model or chunker without a full rebuild.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd index incrementally. Where the source has a change feed or delta API, like SharePoint delta queries, I use it; otherwise I compare timestamps and content hashes on a schedule. Chunk IDs derive from the document ID, so I can delete and replace all chunks of a changed document atomically. Deletions and permission changes are processed explicitly, because stale or withdrawn content is the most damaging failure. Each chunk carries version and date metadata so retrieval can prefer current versions. I monitor index lag per source and run a periodic full rebuild to correct drift.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Document changing every few minutes?</strong> Debounce updates, index at most every N minutes, or fetch it live via a tool.</li>
+  <li><strong>How do you detect drift?</strong> Compare source and index document counts and hashes periodically.</li>
+  <li><strong>Blue-green index?</strong> Build a new index for full rebuilds and switch an alias when validated.</li>
+</ul>
+</article>
+</body>
+</html>

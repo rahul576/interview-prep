@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-035 · How do you test an MCP server properly?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-035" data-topic="MCP Servers">
+<h1>How do you test an MCP server properly?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Test an MCP server at several levels: <strong>unit tests</strong> for tool logic, <strong>protocol tests</strong> with an <strong>in-memory SDK client</strong>, <strong>contract tests</strong> on tool names, descriptions and schemas, <strong>manual Inspector checks</strong>, <strong>model-in-the-loop evaluations</strong> on realistic tasks, and <strong>security tests</strong> for authorisation, injection and rate limits.</p>
+
+<h2>Detailed explanation</h2>
+<p>An MCP server has three audiences: code that calls it, the protocol, and a <strong>model</strong> that must understand it. Each needs its own tests.</p>
+<p><strong>Unit tests.</strong> Tool logic is plain code. Test it <strong>independently of MCP</strong> with mocked downstream APIs: correct results, validation, edge cases, error messages.</p>
+<p><strong>Protocol-level tests.</strong> Use the SDK's <strong>client</strong> connected to the server <strong>in memory</strong> (linked transports) or over stdio. Call <code>tools/list</code>, <code>tools/call</code>, <code>resources/read</code>, <code>prompts/get</code> and assert: tools are registered; schemas reject invalid inputs; execution failures come back as <strong><code>isError</code> results</strong> with helpful text rather than protocol errors; <strong>structured output matches the declared <code>outputSchema</code></strong>; pagination and notifications behave.</p>
+<p><strong>Contract / snapshot tests.</strong> Snapshot the tool list (names, descriptions, schemas, annotations). Any change fails the test until reviewed, because renames break host allowlists and <strong>description changes silently alter model behaviour</strong>.</p>
+<p><strong>Manual exploration</strong> with the <strong>Inspector</strong> for quick checks and debugging.</p>
+<p><strong>Evaluations with a real model.</strong> The true consumer is an LLM, so build a set of <strong>realistic tasks</strong> (&quot;Which of Asha's orders are delayed?&quot;) with expected outcomes, run an agent with the server connected, and measure <strong>tool selection accuracy</strong>, <strong>argument correctness</strong>, number of calls, task success and token usage. Run them in CI on changes to descriptions or schemas and compare against a baseline, ideally across the models your hosts use.</p>
+<p><strong>Security tests.</strong> Authorisation (user A cannot access B's data or handles), unauthenticated requests rejected, Origin validation, <strong>injection-style inputs</strong> (SQL, path traversal, shell metacharacters, prompt-injection strings in returned data), oversized inputs and <strong>rate limiting</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Unit tests run on every commit.</li>
+  <li>In-memory protocol tests in the same suite.</li>
+  <li>Contract snapshots reviewed on change.</li>
+  <li>Evaluation suite runs on PRs touching tools, nightly otherwise.</li>
+  <li>Security tests in CI plus periodic penetration testing for remote servers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import pytest
+from mcp.shared.memory import create_connected_server_and_client_session as connect
+from server import mcp
+
+@pytest.mark.anyio
+async def test_get_order_errors_are_tool_errors():
+    async with connect(mcp._mcp_server) as client:
+        tools = await client.list_tools()
+        assert &quot;get_order&quot; in [t.name for t in tools.tools]
+        res = await client.call_tool(&quot;get_order&quot;, {&quot;order_no&quot;: &quot;ORD-404&quot;})
+        assert res.isError
+        assert &quot;search_orders&quot; in res.content[0].text      # actionable hint
+
+def test_tool_contract(snapshot):
+    assert snapshot == [t.model_dump() for t in mcp.list_tools_sync()]</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only manual Inspector testing.</li>
+  <li>Never testing with a model, so descriptions are unvalidated.</li>
+  <li>No snapshot of the tool contract, allowing accidental renames.</li>
+  <li>Ignoring authorisation tests because &quot;the host handles security&quot;.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I test at several levels. Tool logic gets ordinary unit tests with mocked APIs, independent of MCP. Protocol tests use the SDK client connected in memory to check tools are registered, schemas validate inputs, failures come back as isError results and structured output matches the schema. Contract tests snapshot names, descriptions and schemas, because even description changes alter model behaviour. The Inspector is for manual exploration. Since the real consumer is a model, I run evaluations: realistic tasks executed by an agent, measuring tool choice, arguments and task completion. And security tests cover authorisation, injection-style inputs and rate limits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Detect a description change that hurt tool choice?</strong> Compare eval tool-selection accuracy against the baseline in CI.</li>
+  <li><strong>How many eval tasks?</strong> Start with 20 to 50 realistic ones, growing from production failures.</li>
+  <li><strong>Which models to evaluate with?</strong> The ones your target hosts actually use.</li>
+</ul>
+</article>
+</body>
+</html>

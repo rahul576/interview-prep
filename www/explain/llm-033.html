@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-033 · How do you implement reliable citations in a RAG answer?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-033" data-topic="LLMOps &amp; RAG">
+<h1>How do you implement reliable citations in a RAG answer?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Reliable citations come from giving every retrieved chunk a <strong>stable identifier</strong>, making the model cite those IDs per claim, then <strong>validating</strong> in code that each cited ID was actually retrieved, <strong>mapping</strong> it back to a document link and passage, and optionally running a <strong>groundedness check</strong> that the cited text really supports the claim.</p>
+
+<h2>Detailed explanation</h2>
+<p>A citation is only useful if a user can click it and find the sentence that backs the claim. Free-form references such as &quot;according to the HR policy&quot; are unverifiable, and models will happily invent document names. The fix is to make citation a <strong>closed vocabulary</strong>: the prompt contains chunks labelled <code>[1]</code>, <code>[2]</code> or <code>doc-17#p3</code>, with title, source and date, and the instructions demand a citation after each factual sentence in a fixed format, plus an explicit &quot;no source supports this&quot; behaviour.</p>
+<p>After generation the application, not the model, does the important work. It <strong>parses</strong> citations, <strong>rejects IDs that were not in the retrieved set</strong> (this catches hallucinated references), and resolves each ID to a URL, page number and the exact passage, which the UI shows on hover or in a side panel.</p>
+<p>Several providers now offer <strong>native citation features</strong>. For example, Anthropic's Citations feature returns cited spans (character ranges for text documents, page ranges for PDFs) tied to the documents you passed in, and Azure AI Search and Vertex AI grounding return source references. These are more reliable than parsing free text because the span is guaranteed to exist in the source.</p>
+<p>The final layer is <strong>attribution quality</strong>: the right source can be cited for a wrong statement. A <strong>groundedness or entailment check</strong>, with an LLM judge or NLI model, compares each claim with its cited passage and flags or removes unsupported sentences.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Retrieve and rerank chunks; assign each a short ID and keep a map ID to document, page and offsets.</li>
+  <li>Build the prompt with labelled chunks and a strict citation format.</li>
+  <li>Generate the answer, or use the provider's native citation mode.</li>
+  <li>Parse citations; drop or flag any ID not in the retrieved set.</li>
+  <li>Run a groundedness check per claim against the cited text.</li>
+  <li>Render answer with clickable sources and highlighted passages.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">chunks = retrieve(query)
+ids = {f&quot;S{i}&quot;: c for i, c in enumerate(chunks, 1)}
+context = &quot;\n&quot;.join(f&quot;[{k}] ({c.title}, {c.date}) {c.text}&quot; for k, c in ids.items())
+answer = llm(SYSTEM + &quot;Cite as [S1] after each claim. If unsupported, say so.\n&quot; + context, query)
+
+for cid in re.findall(r&quot;\[(S\d+)\]&quot;, answer):
+    if cid not in ids:
+        flag(&quot;invented citation&quot;, cid)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Letting the model write document titles or URLs itself instead of IDs.</li>
+  <li>Citing whole documents rather than passages, so users cannot verify quickly.</li>
+  <li>Never checking that the cited text supports the claim.</li>
+  <li>Losing page numbers and section paths during ingestion.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I give every retrieved chunk a short ID in the prompt, with title and date, and instruct the model to cite those IDs after each claim and to say when nothing supports an answer. In code I parse the citations, reject any ID that wasn't retrieved, and map the rest to a link and the exact passage for the UI. Where the provider offers native citations with character or page spans, I prefer those. For higher assurance I run a groundedness check that each claim is actually entailed by its cited passage, and I track citation accuracy in my evaluation set.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Correct source, wrong claim?</strong> Groundedness check per sentence; remove or rewrite the claim and log it as an eval case.</li>
+  <li><strong>How do you measure citation quality?</strong> Citation precision and recall against labelled passages, plus judge-based support scores.</li>
+  <li><strong>What if no chunk is relevant?</strong> Answer &quot;I don't know&quot; with no citation rather than citing a weak match.</li>
+</ul>
+</article>
+</body>
+</html>

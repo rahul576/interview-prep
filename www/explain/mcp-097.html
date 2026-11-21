@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-097 · How do you handle authentication for MCP servers that call third-party SaaS APIs on behalf of users?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-097" data-topic="MCP Servers">
+<h1>How do you handle authentication for MCP servers that call third-party SaaS APIs on behalf of users?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The server plays <strong>two OAuth roles</strong>: a <strong>resource server</strong> that validates tokens issued for itself, and an <strong>OAuth client</strong> to the SaaS API, where each user <strong>consents separately</strong>; it stores <strong>per-user third-party tokens</strong> encrypted, refreshes them, and <strong>never passes the MCP token through</strong> to the SaaS API.</p>
+
+<h2>Detailed explanation</h2>
+<p>Towards MCP clients, the server is an <strong>OAuth 2.1 resource server</strong>. Clients get an access token from the authorization server associated with the MCP server, and the server validates the token's signature, expiry and <strong>audience</strong>, which must be the MCP server itself. That token proves who the user is to the MCP server; it means nothing to Salesforce or Jira.</p>
+<p>Towards the SaaS provider, the server is a <strong>separate OAuth client</strong>, registered with that provider. The first time a user calls a tool that needs, say, Jira, and no Jira token exists for them, the server returns a message asking the user to authorise, typically via a <strong>URL-mode elicitation</strong> or a link. The user signs in at the SaaS provider and grants the requested scopes; the provider redirects to the server's callback with a code, which the server exchanges for an <strong>access token and refresh token</strong>.</p>
+<p>Those tokens are stored <strong>per user</strong>, encrypted at rest (for example with a KMS-managed key), keyed by the stable user identity from the MCP token. Every downstream call uses that user's own SaaS token, so the SaaS permissions and audit trail apply naturally. The server refreshes tokens before expiry and handles failures: if refresh fails or the user has revoked access, it deletes the stored token and asks the user to reconnect. <strong>Token passthrough</strong>, forwarding the MCP token to a downstream API, is explicitly forbidden by the MCP specification because it breaks audience validation and creates confused-deputy risks.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client calls a tool with an MCP access token; server validates it and resolves the user ID.</li>
+  <li>Server looks up the stored SaaS token for that user.</li>
+  <li>If none exists, it returns an authorisation link or URL elicitation with state bound to the user.</li>
+  <li>User consents at the SaaS provider; callback exchanges the code for tokens (with PKCE).</li>
+  <li>Tokens are encrypted and stored; the tool call is retried and uses the user's SaaS token.</li>
+  <li>On 401 or refresh failure, tokens are removed and the user is asked to reconnect.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">async def jira_call(mcp_user_id: str, path: str):
+    tok = await token_store.get(mcp_user_id, provider=&quot;jira&quot;)   # decrypted
+    if tok is None:
+        raise NeedsAuthorization(auth_url=build_jira_auth_url(state=sign(mcp_user_id)))
+    if tok.expires_soon():
+        tok = await refresh(tok)          # store rotated refresh token
+    resp = await http.get(JIRA + path, headers={&quot;Authorization&quot;: f&quot;Bearer {tok.access}&quot;})
+    if resp.status == 401:
+        await token_store.delete(mcp_user_id, &quot;jira&quot;)
+        raise NeedsAuthorization(auth_url=build_jira_auth_url(state=sign(mcp_user_id)))
+    return resp.json()</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forwarding the MCP client's token to the SaaS API.</li>
+  <li>Using one shared admin service account, which bypasses per-user permissions.</li>
+  <li>Storing refresh tokens in plain text or logs.</li>
+  <li>Not binding the OAuth <code>state</code> to the user, enabling account-mixing attacks.</li>
+  <li>Ignoring refresh token rotation and revocation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The server has two OAuth roles. To MCP clients it's a resource server: it validates tokens issued for it, including the audience. To the SaaS API it's an OAuth client: when a user first needs Jira, the server sends them a consent link, often through URL elicitation, and exchanges the code for tokens. I store those tokens per user, encrypted, linked to the user ID from the MCP token, and refresh them as needed. Every downstream call uses that user's own token so SaaS permissions apply, and the MCP token is never passed through, which the spec forbids.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if the user revokes access in the SaaS app?</strong> The next call gets 401 or refresh fails; delete the token and prompt reconnection.</li>
+  <li><strong>Why not a service account?</strong> It ignores per-user permissions and audit; use it only for genuinely system-level tasks.</li>
+  <li><strong>Where do you store tokens?</strong> An encrypted store or secrets vault, keyed by user, with access restricted to the server.</li>
+</ul>
+</article>
+</body>
+</html>

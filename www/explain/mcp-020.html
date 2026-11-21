@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-020 · How does MCP handle long-running operations, progress and cancellation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-020" data-topic="MCP Servers">
+<h1>How does MCP handle long-running operations, progress and cancellation?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>MCP handles long operations with <strong>progress notifications</strong> tied to a <strong>progress token</strong>, <strong>cancellation notifications</strong> referencing the request id, and <strong>Tasks</strong>, durable handles the client <strong>polls</strong> for status and results (experimental in <strong>2025-11-25</strong>, an <strong>official extension</strong> in <strong>2026-07-28</strong>), backed by sensible <strong>client timeouts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Progress.</strong> A client that wants updates includes a <strong><code>progressToken</code></strong> in the request's <code>_meta</code>. The server then sends <strong><code>notifications/progress</code></strong> messages carrying the token, a <code>progress</code> value, an optional <code>total</code> and an optional human-readable <code>message</code> (&quot;Indexed 4,000 of 10,000 files&quot;). Progress values must increase. Hosts display them, and receiving progress can <strong>reset the client's timeout</strong>, though clients should still enforce a maximum overall timeout.</p>
+<p><strong>Cancellation.</strong> Either side can cancel an in-flight request with <strong><code>notifications/cancelled</code></strong>, giving the <code>requestId</code> and an optional <code>reason</code>. The receiver <strong>should stop the work</strong> if possible, free resources and <strong>not send a response</strong>. Cancellation can race with completion, so both sides must tolerate a response arriving after a cancel, or a cancel for an unknown request.</p>
+<p><strong>Tasks.</strong> Progress and cancellation still assume the original request stays open. For work taking many minutes, such as a data export, a large migration or a test-suite run, connections drop, laptops sleep, and load balancers time out. The <strong>Tasks</strong> feature, introduced as <strong>experimental in 2025-11-25</strong>, lets a request be <strong>task-augmented</strong>: the server immediately returns a <strong>durable task handle</strong> (id, status, poll interval), the work continues server-side, and the client later polls for <strong>status</strong> and fetches the <strong>result</strong> with task methods (get, result, list and cancel), even from a new connection. Tasks have statuses like working, input required, completed, failed and cancelled, plus a time-to-live after which results are discarded. Per this question's reference material, <strong>2026-07-28 moved Tasks out of the core into an official extension</strong>, negotiated through capabilities.</p>
+<p><strong>Timeouts</strong> remain essential: clients set per-request timeouts, and long work should become a task rather than a long-held request.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends request with <code>_meta.progressToken</code> (or as a task).</li>
+  <li>Server emits progress notifications while working.</li>
+  <li>User aborts → client sends <code>notifications/cancelled</code>; server stops.</li>
+  <li>For long jobs, server returns a task handle; client polls task status at the suggested interval.</li>
+  <li>On completion, client fetches the result; on expiry, the result is gone.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:9,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{
+  &quot;name&quot;:&quot;export_report&quot;,&quot;arguments&quot;:{&quot;month&quot;:&quot;2026-10&quot;},
+  &quot;_meta&quot;:{&quot;progressToken&quot;:&quot;exp-9&quot;}}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;notifications/progress&quot;,
+ &quot;params&quot;:{&quot;progressToken&quot;:&quot;exp-9&quot;,&quot;progress&quot;:35,&quot;total&quot;:100,&quot;message&quot;:&quot;Aggregating orders&quot;}}
+
+{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;notifications/cancelled&quot;,
+ &quot;params&quot;:{&quot;requestId&quot;:9,&quot;reason&quot;:&quot;User cancelled&quot;}}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Holding a 20-minute request open over HTTP instead of using a task.</li>
+  <li>Ignoring cancellation, so cancelled work keeps consuming resources.</li>
+  <li>Sending progress values that go backwards.</li>
+  <li>No absolute timeout on the client, so a hung server blocks forever.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For operations that take a while, the client includes a progress token and the server sends progress notifications with that token, current progress, total and a message, which the host can display and which can reset timeouts. Either side can cancel an in-flight request with a cancellation notification; the receiver should stop and not respond. For really long work, like a twenty-minute export, Tasks let the server return a durable handle immediately; the client polls for status and fetches the result later, surviving connection drops. Tasks were experimental in 2025-11-25 and became an official extension in 2026-07-28. Clients still enforce timeouts.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why a task handle over a long stream?</strong> Survives disconnects, restarts and load balancer timeouts, and allows polling from anywhere.</li>
+  <li><strong>Who can cancel a task?</strong> The requestor, via the task cancel method, subject to authorisation.</li>
+  <li><strong>How long are results kept?</strong> For the task's time-to-live, then discarded.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-037 · How should MCP tool error messages be written so an agent can recover?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-037" data-topic="MCP Servers">
+<h1>How should MCP tool error messages be written so an agent can recover?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Return tool failures as results with <strong><code>isError: true</code></strong>, never crashes; explain <strong>what went wrong in plain language</strong>, <strong>how to fix it or which tool to use next</strong>, whether it is <strong>retryable or permanent</strong>, and include the needed identifiers but <strong>no stack traces, internals or secrets</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Agents recover from errors surprisingly well, <strong>if the error tells them what to do</strong>. Tool errors are part of the model's context, so they are effectively instructions for the next step.</p>
+<p><strong>Use <code>isError</code>, not exceptions.</strong> Unhandled exceptions may become JSON-RPC protocol errors that never reach the model, or crash a stdio server. Catch failures and return a result with <code>isError: true</code> and a text explanation.</p>
+<p><strong>Plain language plus a fix.</strong> Compare &quot;ValidationError at line 42&quot; with:</p>
+<ul>
+  <li>&quot;start_date must be YYYY-MM-DD; you sent '20/11/2026'.&quot;</li>
+  <li>&quot;No customer found for asha@example.com. Use search_customers with part of the name.&quot;</li>
+  <li>&quot;This project has 1,200 open issues; add a status or assignee filter.&quot;</li>
+</ul>
+<p>The second set gives the model a clear <strong>next action</strong>: fix an argument, call another tool, or narrow the query.</p>
+<p><strong>Retryable versus permanent.</strong> Distinguish transient problems (&quot;Upstream billing API is temporarily unavailable; retry in about 30 seconds&quot;) from permanent ones (&quot;Permission denied: your role cannot view salary data&quot;). For permanent errors, say explicitly that retrying will not help and that the agent should <strong>tell the user</strong>, ideally with what they can do (request access from a named team). Some servers include a structured <code>retryable</code> flag and <code>retry_after_seconds</code> in structured content.</p>
+<p><strong>Include what the model needs, exclude what it doesn't.</strong> Include relevant identifiers and values (order number, valid enum values). Exclude <strong>stack traces, internal hostnames, SQL, file paths, tokens or secrets</strong>: they waste tokens, rarely help, and <strong>leak internals</strong> that could be exfiltrated via prompt injection. Log full details server-side with a <strong>correlation id</strong> and include only that id in the message.</p>
+<p>Well-written errors make agents dramatically more reliable without changing the model.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Catch exceptions at the tool boundary.</li>
+  <li>Map them to categories: invalid input, not found, conflict, permission, rate limit, upstream outage.</li>
+  <li>Write a message: what, why, how to fix, retryable or not.</li>
+  <li>Log details with a correlation id.</li>
+  <li>Return <code>isError: true</code> with the message (and optional structured fields).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def tool_error(msg: str, retryable: bool = False, retry_after: int | None = None, ref: str = &quot;&quot;):
+    return CallToolResult(isError=True,
+        content=[TextContent(type=&quot;text&quot;, text=f&quot;{msg} (ref {ref})&quot;)],
+        structuredContent={&quot;retryable&quot;: retryable, &quot;retry_after_seconds&quot;: retry_after})
+
+try:
+    invoice = billing.get(invoice_no)
+except NotFound:
+    return tool_error(f&quot;Invoice {invoice_no} not found. Invoice numbers look like INV-2026-00123; &quot;
+                      &quot;use search_invoices with the customer email.&quot;)
+except Forbidden:
+    return tool_error(&quot;Permission denied: your role cannot view invoices for this region. &quot;
+                      &quot;Do not retry; tell the user to request access from Finance Ops.&quot;)
+except UpstreamUnavailable:
+    ref = log_exception()
+    return tool_error(&quot;Billing system temporarily unavailable.&quot;, retryable=True, retry_after=30, ref=ref)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Raw stack traces or SQL in error text.</li>
+  <li>Generic &quot;Something went wrong&quot;.</li>
+  <li>Not distinguishing retryable from permanent, causing retry loops.</li>
+  <li>Throwing exceptions that become protocol errors invisible to the model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Execution errors should come back as a result with isError set, never as a crash, so the model sees them. The message explains in plain language what went wrong and how to fix it: the date must be YYYY-MM-DD, no customer for that email so use search_customers, or too many results so add a status filter. It distinguishes retryable errors, like a temporary outage with a suggested wait, from permanent ones like permission denied, where the agent should stop and tell the user. It includes the identifiers the model needs but no stack traces, hostnames, SQL or secrets. Good errors make agents much more reliable without changing the model.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Permission denied so the agent explains correctly?</strong> State the missing permission, say not to retry, and tell the user how to get access.</li>
+  <li><strong>Should errors be structured?</strong> Text for the model, plus structured fields like retryable for client code.</li>
+  <li><strong>How do you find bad errors?</strong> Review agent transcripts where tasks failed after an error.</li>
+</ul>
+</article>
+</body>
+</html>

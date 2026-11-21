@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-094 · How do you keep the cost and token usage of MCP-heavy agents under control?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-094" data-topic="MCP Servers">
+<h1>How do you keep the cost and token usage of MCP-heavy agents under control?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Tokens in MCP-heavy agents come from <strong>tool definitions on every turn</strong>, <strong>tool results that accumulate in context</strong>, and <strong>the number of steps</strong>; control them by <strong>loading tools on demand</strong>, returning <strong>compact results</strong>, setting <strong>step and token budgets</strong>, using <strong>prompt caching</strong>, and <strong>measuring tokens per tool and task</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every model call sends the full conversation: system prompt, all tool definitions and every earlier message, including tool results. A host connected to ten servers with a hundred tools may send tens of thousands of tokens of definitions before the user has typed anything. A single tool that returns a 20,000-token JSON blob does not cost 20,000 tokens once; it costs that on <strong>every later step</strong> because it stays in the context, and it also degrades the model's focus.</p>
+<p>So start by <strong>measuring</strong>: tokens per task, per step, per tool definition and per tool result. Usually one of three things dominates. <strong>Definitions</strong> are cut by enabling only the servers relevant to a task, filtering tools per agent role, writing concise descriptions and using <strong>tool search</strong> or deferred loading so the model sees only a small index until it needs a tool. <strong>Results</strong> are cut at the source: filtered fields, summaries instead of raw dumps, <strong>pagination</strong>, and <strong>resource links</strong> to large content rather than inline payloads. Hosts can also <strong>trim or summarise old tool results</strong> (context editing or compaction).</p>
+<p><strong>Steps</strong> are reduced by better tool design (one <code>get_order_summary</code> instead of five calls), and capped by <strong>step limits and per-run token budgets</strong>, so a confused agent stops instead of looping. Finally, <strong>prompt caching</strong> of stable prefixes such as instructions and tool definitions cuts both cost and latency, as long as the prefix stays byte-identical between calls.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Instrument the host to log input/output tokens per step and attribute them to definitions and to each tool's results.</li>
+  <li>Scope servers and tools per task or agent; defer rarely used tools behind tool search.</li>
+  <li>Redesign heavy tools to return filtered, paginated, compact output or resource links.</li>
+  <li>Trim or summarise stale tool results in long sessions.</li>
+  <li>Enable prompt caching; keep tool order and instructions stable.</li>
+  <li>Enforce max steps and token budgets; alert on outliers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">agent: incident-triage
+servers: [observability, tickets]      # not all 12 company servers
+tool_loading: on_demand                # tool search for the rest
+limits:
+  max_steps: 15
+  max_tokens_per_run: 150000
+context:
+  trim_tool_results_older_than_steps: 5
+tool_defaults:
+  max_result_tokens: 2000              # larger output returned as a resource link</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Connecting every server to every agent &quot;just in case&quot;.</li>
+  <li>Tools returning raw API responses with hundreds of unused fields.</li>
+  <li>Optimising prompts without measuring where tokens actually go.</li>
+  <li>Breaking the prompt cache by reordering tools or injecting timestamps into the prefix.</li>
+  <li>No step limit, so retries loop until the budget is gone.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I look at three sources of tokens: tool definitions sent every turn, tool results that stay in the context, and the number of steps. First I measure tokens per task and per tool to find what dominates. Then I scope servers per task and load tools on demand, make tools return compact, paginated output or resource links, and trim old results. I cap runs with step limits and token budgets, and use prompt caching for stable prefixes like instructions and tool definitions. That usually cuts cost substantially without hurting quality.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does result size cost on every later step?</strong> The whole context is resent on each model call, so a big result is paid for repeatedly until it is trimmed.</li>
+  <li><strong>Does fewer tools hurt capability?</strong> Not if loading is on demand; fewer visible tools often improves tool selection.</li>
+  <li><strong>How do you set a budget?</strong> From measured p95 token usage per task type plus headroom, with alerts when exceeded.</li>
+</ul>
+</article>
+</body>
+</html>

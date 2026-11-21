@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-084 · Tool calls through your MCP integration fail intermittently. What do you check first?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-084" data-topic="MCP Servers">
+<h1>Tool calls through your MCP integration fail intermittently. What do you check first?</h1>
+<p class="ex-meta">MCP Servers · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>First <strong>classify the failures</strong> using correlated logs and traces, <strong>protocol vs transport vs tool execution errors</strong>, then check the usual suspects: <strong>mismatched timeouts</strong>, <strong>expired tokens or refresh failures</strong>, <strong>downstream rate limits and outages</strong>, <strong>load-balancing and in-memory state</strong> problems, and <strong>server resource exhaustion</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Intermittent&quot; usually means several causes mixed together, so the first job is to separate them. Correlate each failing call across host, gateway, server and downstream logs with a <strong>trace ID</strong>, and classify:</p>
+<ul>
+  <li><strong>Protocol errors</strong>: JSON-RPC errors such as invalid params, method not found, or &quot;session not found&quot;.</li>
+  <li><strong>Transport errors</strong>: connection resets, TLS failures, timeouts, 502/503/504 from proxies.</li>
+  <li><strong>Tool execution errors</strong>: a successful response with <code>isError: true</code>, carrying the downstream system's error.</li>
+</ul>
+<p>Then work through the usual suspects:</p>
+<p><strong>Timeouts.</strong> The host, client SDK, gateway, server and downstream API each have their own timeout. A downstream call that occasionally takes 35 seconds will fail whenever it exceeds the <strong>shortest</strong> one in the chain, often a gateway idle timeout of 30 seconds. Fix by aligning timeouts (each hop shorter than its caller), making slow operations async with tasks or progress, and optimising the downstream.</p>
+<p><strong>Authentication.</strong> Access tokens <strong>expire mid-conversation</strong>; if refresh fails or races, you get sporadic 401s. Check token lifetimes, refresh logic and clock skew.</p>
+<p><strong>Downstream limits and outages.</strong> 429s from rate-limited APIs during bursts, or partial 5xx outages. Look at server logs for downstream status codes; add backoff with jitter, caching and per-client limits.</p>
+<p><strong>Scaling and state.</strong> With several replicas, in-memory sessions, handles or tasks fail when requests hit another instance; failure rate correlates with replica count.</p>
+<p><strong>Server resources.</strong> Connection pool exhaustion, thread starvation, memory pressure or cold starts on serverless.</p>
+<p>Fixing the <strong>dominant class</strong> usually removes most failures. Finally, make failures <strong>actionable</strong>: tool errors that tell the agent whether to retry, wait or ask the user.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Pull failing calls for a time window with trace IDs.</li>
+  <li>Bucket by error class and by tool, client, replica and downstream.</li>
+  <li>Look for correlations: time of day, call duration near a timeout value, replica, token age.</li>
+  <li>Fix the biggest bucket first; verify with metrics.</li>
+  <li>Add alerts and dashboards per error class.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Bucket                          Count   Pattern
+Transport timeout (504 gw)       412    durations cluster at 30.0s -&gt; gateway idle timeout
+Tool error: downstream 429       131    bursts at :00 each hour (cron agents)
+Protocol: session not found       57    only on replicas 2 and 3
+HTTP 401                          24    tokens older than 60 min -&gt; refresh race</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding blanket retries before understanding the cause.</li>
+  <li>Looking only at server logs, not gateway and client logs.</li>
+  <li>Treating <code>isError</code> results as transport failures, or vice versa.</li>
+  <li>Timeouts longer downstream than upstream.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start by classifying the failures from logs and traces correlated per call: protocol errors like session not found or invalid params, transport errors like resets and timeouts, or tool execution errors returned with isError from the downstream system. Then the usual suspects. Timeouts: client, gateway, server and downstream all differ, and slow calls exceed the shortest. Authentication: tokens expiring mid-conversation or refresh failing cause sporadic 401s. Downstream rate limits or partial outages, visible as 429 or 5xx. Scaling: with several replicas, in-memory sessions or handles fail on another instance. And server resource limits like connection pool exhaustion. Fixing the dominant class usually resolves most of it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Make failures helpful to agents?</strong> Clear errors stating whether to retry, after how long, or to ask the user.</li>
+  <li><strong>Why align timeouts?</strong> Otherwise the caller gives up while work continues, causing retries and duplicates.</li>
+  <li><strong>What dashboard?</strong> Error rate per class, per tool and per downstream, with latency histograms.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-039 · Users report that the RAG assistant often retrieves irrelevant chunks. How do you debug and fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-039" data-topic="LLMOps &amp; RAG">
+<h1>Users report that the RAG assistant often retrieves irrelevant chunks. How do you debug and fix it?</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Debug with <strong>evidence</strong>: collect failing queries, <strong>inspect retrieved chunks</strong> versus the expected document, then fix the actual cause, which is usually <strong>parsing or chunking</strong>, an <strong>embedding model mismatch</strong>, missing <strong>hybrid search or reranking</strong>, missing <strong>metadata filters</strong> or <strong>query rewriting</strong>, and lock it in with a <strong>retrieval test set measuring recall</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>&quot;Retrieval is bad&quot; is a symptom with many causes, and guessing (switching vector databases, tweaking top-k) wastes weeks. Start by building a list of failing queries from feedback, logs and support tickets, and for each one note which document <strong>should</strong> have been found. Then look at what was retrieved and at the chunk of the expected document.</p>
+<p>Typical findings:</p>
+<ul>
+  <li><strong>Parsing:</strong> scrambled text from multi-column PDFs, repeated headers and footers dominating chunks, tables broken apart.</li>
+  <li><strong>Chunking:</strong> chunks too small to carry meaning (&quot;See section 4.2.&quot;), too large and mixing topics, or missing context such as the document title and heading.</li>
+  <li><strong>Embeddings:</strong> a general English model on domain jargon, product codes or other languages; query and document embedded inconsistently (some models expect query/document prefixes).</li>
+  <li><strong>Lexical misses:</strong> pure vector search ignores exact terms like <code>ERR-4021</code> or SKU numbers; <strong>hybrid search</strong> (BM25 plus vectors, fused with reciprocal rank fusion) fixes this.</li>
+  <li><strong>Noisy ranking:</strong> the right chunk is at position 15; a <strong>cross-encoder reranker</strong> over the top 50 lifts it.</li>
+  <li><strong>Missing filters:</strong> the answer depends on region, product or version, so add <strong>metadata filters</strong> or let a query-understanding step extract them.</li>
+  <li><strong>Conversational follow-ups:</strong> &quot;and for Germany?&quot; must be <strong>rewritten into a standalone query</strong> using chat history.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Gather 50-200 failing and typical queries with expected documents.</li>
+  <li>Measure baseline recall@k and MRR.</li>
+  <li>Classify failures by cause.</li>
+  <li>Change one thing at a time; re-measure.</li>
+  <li>Add the set to CI so regressions are caught.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def recall_at_k(testset, k=5):
+    hits = 0
+    for q in testset:                     # {&quot;query&quot;: ..., &quot;expected_doc&quot;: ...}
+        docs = [c.doc_id for c in search(q[&quot;query&quot;], top_k=k)]
+        hits += q[&quot;expected_doc&quot;] in docs
+    return hits / len(testset)
+
+print(&quot;vector only&quot;, recall_at_k(ts))    # e.g. 0.62
+print(&quot;hybrid+rerank&quot;, recall_at_k(ts))  # e.g. 0.84</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tuning the prompt when the context is already wrong.</li>
+  <li>Changing several components at once, so you cannot tell what helped.</li>
+  <li>No ground-truth set, only anecdotes.</li>
+  <li>Never reading the actual chunks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start from evidence: collect failing queries, note which document should have come back, and inspect what was retrieved. The causes are usually visible quickly: broken parsing, bad chunk boundaries, an embedding model that doesn't understand our jargon or language, pure vector search missing exact codes, noisy ranking, missing metadata filters, or follow-up questions that weren't rewritten. Then I fix with hybrid search, a reranker, better chunking, filters or query rewriting, one change at a time, measured against a retrieval test set using recall at k. That test set then runs in CI.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Preventing regressions as documents grow?</strong> Retrieval tests in CI and on each re-index; monitor score distributions.</li>
+  <li><strong>Choosing an embedding model?</strong> Benchmark candidates on your own query set, not only public leaderboards.</li>
+  <li><strong>Reranker cost?</strong> Limit candidates to about 20-50; use a small cross-encoder.</li>
+</ul>
+</article>
+</body>
+</html>

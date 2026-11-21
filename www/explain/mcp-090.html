@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-090 · Design an MCP server that lets an IT helpdesk assistant work with ServiceNow incidents.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-090" data-topic="MCP Servers">
+<h1>Design an MCP server that lets an IT helpdesk assistant work with ServiceNow incidents.</h1>
+<p class="ex-meta">MCP Servers · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Model the tools on <strong>helpdesk tasks</strong> (search, get, comment, work note, create, assign, resolve, KB search), call ServiceNow <strong>on behalf of the signed-in agent</strong> so <strong>roles and ACLs apply</strong>, <strong>auto-approve reads and confirm writes</strong>, make <strong><code>create_incident</code> idempotent</strong>, treat <strong>ticket text as untrusted</strong>, and return <strong>compact results</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Tool design.</strong> Tools follow what helpdesk staff actually do, not the ServiceNow Table API:</p>
+<ul>
+  <li><code>search_incidents(caller, status, assignment_group, priority, opened_after)</code> returning number, short description, state, priority and age.</li>
+  <li><code>get_incident(number)</code> returning a <strong>compact summary</strong> with the last few work notes and comments, not the full record with dozens of fields.</li>
+  <li><code>add_comment</code> (customer-visible) and <code>add_work_note</code> (internal), kept separate so the model cannot confuse audiences.</li>
+  <li><code>create_incident(caller, category, short_description, description, impact, urgency, idempotency_key)</code>.</li>
+  <li><code>assign_incident</code> and <code>resolve_incident(number, resolution_code, resolution_notes)</code>.</li>
+  <li><code>search_knowledge(query)</code>, with articles also exposed as <strong>resources</strong>.</li>
+</ul>
+<p><strong>Identity.</strong> Staff authenticate with OAuth via the corporate IdP; the server calls ServiceNow <strong>on their behalf</strong> with a delegated token, so <strong>ServiceNow roles and ACLs</strong> decide what each person can see and change. No shared admin integration user.</p>
+<p><strong>Approvals.</strong> Reads are auto-approved. Writes require confirmation showing the <strong>exact change</strong>: the comment text, the new priority, the resolution code. Resolving or lowering priority deserves particular care.</p>
+<p><strong>Reliability.</strong> <code>create_incident</code> uses an <strong>idempotency key</strong> (stored with a correlation field) so retries on flaky networks do not create duplicates.</p>
+<p><strong>Untrusted content.</strong> Ticket descriptions and comments are written by <strong>end users</strong>, and anyone can email the service desk, so they may contain <strong>prompt injection</strong>. The server returns them clearly delimited as user-supplied text, and the assistant has <strong>no external communication tools</strong> without approval. Comments to customers go through confirmation.</p>
+<p><strong>Personal data.</strong> Tickets often include names, phone numbers or screenshots; return only needed fields and redact in logs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Agent asks: &quot;What's open for the Pune office VPN issue?&quot;</li>
+  <li><code>search_incidents</code> runs as that agent; ServiceNow ACLs filter results.</li>
+  <li>Model summarises; suggests a KB article via <code>search_knowledge</code>.</li>
+  <li>Agent asks to add a work note and resolve; host shows both changes for confirmation.</li>
+  <li>Server executes, logs the action with user and incident number.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;number&quot;: &quot;INC0012345&quot;,
+  &quot;state&quot;: &quot;In Progress&quot;,
+  &quot;priority&quot;: &quot;2 - High&quot;,
+  &quot;assignment_group&quot;: &quot;Network&quot;,
+  &quot;short_description&quot;: &quot;VPN drops every 10 minutes - Pune office&quot;,
+  &quot;caller&quot;: &quot;A. Sharma&quot;,
+  &quot;opened&quot;: &quot;2026-11-20T08:12:00Z&quot;,
+  &quot;recent_activity&quot;: [
+    { &quot;type&quot;: &quot;work_note&quot;, &quot;by&quot;: &quot;R. Iyer&quot;, &quot;at&quot;: &quot;2026-11-20T09:01Z&quot;, &quot;text&quot;: &quot;Firewall logs show IKE rekey failures.&quot; },
+    { &quot;type&quot;: &quot;comment&quot;, &quot;by&quot;: &quot;caller&quot;, &quot;at&quot;: &quot;2026-11-20T10:30Z&quot;,
+      &quot;text&quot;: &quot;[user-supplied] Still happening on 3 laptops.&quot; }
+  ]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A single generic <code>run_query</code> tool against the Table API.</li>
+  <li>One integration user with admin rights for everyone.</li>
+  <li>Returning every field of the incident record.</li>
+  <li>Letting the assistant post customer-visible comments without confirmation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The tools follow helpdesk tasks: search_incidents with filters like caller, status, assignment group and time range; get_incident returning a compact summary with recent work notes; separate add_comment and add_work_note; create_incident; and assign or resolve with a resolution code, plus a knowledge base search tool and resources. Staff authenticate with OAuth and the server calls ServiceNow on their behalf, so roles and ACLs apply. Reads are auto-approved; writes, especially resolving or changing priority, need confirmation showing the exact change. create_incident takes an idempotency key. Ticket text is written by end users, so it's untrusted and may contain injection; it's clearly marked, and the assistant can't communicate externally without approval.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Incidents with personal data?</strong> Minimal fields, redaction in logs, respect ServiceNow data policies.</li>
+  <li><strong>Why separate comment and work note?</strong> Different audiences; mixing them can leak internal notes to customers.</li>
+  <li><strong>Bulk operations?</strong> Avoid or require explicit approval with a preview list.</li>
+</ul>
+</article>
+</body>
+</html>

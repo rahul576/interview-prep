@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-026 · How do you build a basic MCP server in Python?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-026" data-topic="MCP Servers">
+<h1>How do you build a basic MCP server in Python?</h1>
+<p class="ex-meta">MCP Servers · concept · levels entry, mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use the <strong>official Python SDK</strong> (<code>mcp</code> package) with its <strong>FastMCP</strong>-style API: create a server, register <strong>tools, resources and prompts with decorators</strong>, let <strong>type hints and docstrings</strong> generate schemas and descriptions, then <strong>run over stdio or Streamable HTTP</strong> and test with the <strong>Inspector</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The official <strong>Python SDK</strong> includes a high-level API, <code>FastMCP</code>, that hides protocol details. You create <code>mcp = FastMCP(&quot;name&quot;)</code> and register capabilities with decorators:</p>
+<ul>
+  <li><strong><code>@mcp.tool()</code></strong> turns a function into a tool. The function name becomes the tool name, the <strong>docstring becomes the description</strong>, and the <strong>type hints become the input JSON Schema</strong>. <code>Literal</code> types produce enums, defaults make parameters optional, and <strong>Pydantic models</strong> or <code>Annotated[..., Field(description=...)]</code> give richer schemas and per-field descriptions. Returning a typed object (Pydantic model, TypedDict, dataclass) can generate an <strong>output schema and structured content</strong> automatically.</li>
+  <li><strong><code>@mcp.resource(&quot;config://app&quot;)</code></strong> exposes a resource; a URI with placeholders like <code>&quot;users://{user_id}/profile&quot;</code> creates a <strong>resource template</strong>.</li>
+  <li><strong><code>@mcp.prompt()</code></strong> defines a prompt template with arguments.</li>
+</ul>
+<p>Tools can accept a <strong><code>Context</code></strong> parameter to report progress, log, read resources or elicit input. Because type hints and docstrings directly drive what the model sees, writing them well is the most effective way to improve tool use.</p>
+<p><strong>Running</strong>: <code>mcp.run()</code> defaults to <strong>stdio</strong> for local hosts; <code>mcp.run(transport=&quot;streamable-http&quot;)</code> serves HTTP, or you can mount the app into an existing ASGI application (Starlette/FastAPI) with authentication middleware. Projects are commonly managed with <strong>uv</strong>, and hosts launch them with <code>uv run</code>.</p>
+<p><strong>Logging</strong>: in stdio servers, never <code>print()</code> to stdout; use the <code>logging</code> module writing to <strong>stderr</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>uv init</code> and <code>uv add &quot;mcp[cli]&quot;</code>.</li>
+  <li>Write functions with type hints and docstrings; decorate them.</li>
+  <li>Run <code>uv run mcp dev server.py</code> to test in the Inspector.</li>
+  <li>Choose transport: stdio for local, Streamable HTTP for remote.</li>
+  <li>Add the server to a host config (Claude Desktop, VS Code, Claude Code).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">import logging, sys
+from typing import Literal
+from pydantic import BaseModel
+from mcp.server.fastmcp import FastMCP
+
+logging.basicConfig(stream=sys.stderr, level=logging.INFO)   # never stdout on stdio
+mcp = FastMCP(&quot;orders&quot;)
+
+class OrderSummary(BaseModel):
+    order_no: str
+    status: str
+    total_inr: float
+
+@mcp.tool()
+def get_order(order_no: str) -&gt; OrderSummary:
+    &quot;&quot;&quot;Get status and total for one order by its order number (e.g. ORD-1042).&quot;&quot;&quot;
+    o = db.find_order(order_no)
+    if o is None:
+        raise ValueError(f&quot;No order {order_no}. Check the number or use search_orders.&quot;)
+    return OrderSummary(order_no=o.no, status=o.status, total_inr=o.total)
+
+@mcp.resource(&quot;orders://policies/returns&quot;)
+def returns_policy() -&gt; str:
+    &quot;&quot;&quot;Current returns policy text.&quot;&quot;&quot;
+    return open(&quot;policies/returns.md&quot;).read()
+
+@mcp.prompt()
+def delayed_order_reply(order_no: str) -&gt; str:
+    return f&quot;Draft a polite reply to a customer whose order {order_no} is delayed.&quot;
+
+if __name__ == &quot;__main__&quot;:
+    mcp.run()          # stdio; use transport=&quot;streamable-http&quot; for remote</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>print()</code> statements corrupting the stdio stream.</li>
+  <li>Missing type hints, producing untyped <code>object</code> schemas.</li>
+  <li>Empty or vague docstrings.</li>
+  <li>Relative file paths that break when the host launches from another directory.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use the official Python SDK with its FastMCP-style API. I create a server object, then decorate functions: @mcp.tool for tools, @mcp.resource with a URI for resources or templates, @mcp.prompt for prompts. The SDK builds input schemas from type hints, including Pydantic models, and uses docstrings as descriptions, so good hints and docstrings directly improve how models use the tools; typed return values give structured output. Then I run it over stdio for local use or Streamable HTTP for remote, usually with uv, test it in the Inspector via mcp dev, and add it to a host like Claude Desktop or VS Code. Logs go to stderr.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where does logging go in stdio servers?</strong> stderr, or MCP log notifications; stdout is reserved for protocol messages.</li>
+  <li><strong>How do you add auth for HTTP?</strong> Mount in an ASGI app with token-validation middleware, or use the SDK's auth helpers.</li>
+  <li><strong>Async tools?</strong> Supported; use <code>async def</code> for I/O-bound work.</li>
+</ul>
+</article>
+</body>
+</html>

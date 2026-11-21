@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-052 · How does authentication differ between stdio and HTTP MCP servers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-052" data-topic="MCP Servers">
+<h1>How does authentication differ between stdio and HTTP MCP servers?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>stdio</strong> server is a local subprocess running with the <strong>user's OS permissions</strong>, getting downstream credentials from <strong>environment variables or local credential stores</strong>; an <strong>HTTP</strong> server is a network service that follows the <strong>OAuth-based authorization spec</strong> and <strong>authenticates every request</strong> with bearer tokens.</p>
+
+<h2>Detailed explanation</h2>
+<p>The transport decides the trust model. With <strong>stdio</strong>, the host launches the server as a child process and talks over standard input and output. There is no network endpoint, so nothing to authenticate at the MCP level: the only party that can talk to the server is the process that started it. The MCP authorization specification explicitly does not apply. The server acts with whatever the <strong>OS user</strong> can do: read files, run commands, use network access.</p>
+<p>Downstream credentials for a stdio server typically come from <strong>environment variables</strong> in the host config (for example <code>GITHUB_PERSONAL_ACCESS_TOKEN</code>) or from <strong>existing local logins</strong> like the Azure CLI, AWS profiles or kubeconfig. That is convenient, but it often means a powerful personal token sits in a JSON file that may get copied into a repo or shared in a chat. Good practice is <strong>least-privilege tokens</strong> (fine-grained, repo-limited, read-only where possible), secrets referenced from the OS keychain or a secret manager rather than pasted, and separate tokens per server.</p>
+<p><strong>HTTP</strong> servers are reachable over a network, so they must authenticate every request. They follow the OAuth 2.1-based spec: bearer tokens issued by an authorization server, validated for audience and scopes. Because the server knows who each user is, it can enforce <strong>per-user permissions</strong>, revoke access centrally and produce audit logs. For enterprises this is far easier to govern than hundreds of laptops each holding personal tokens.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>stdio: host reads config, spawns <code>server</code> with env vars, pipes JSON-RPC over stdin/stdout.</li>
+  <li>stdio server uses the env token or local CLI login to call downstream APIs.</li>
+  <li>HTTP: client connects to a URL; server responds 401 if no token.</li>
+  <li>Client completes the OAuth flow; each request carries a bearer token.</li>
+  <li>HTTP server validates the token and maps it to the user's downstream permissions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;github-local&quot;: {
+      &quot;command&quot;: &quot;github-mcp-server&quot;,
+      &quot;args&quot;: [&quot;stdio&quot;, &quot;--read-only&quot;],
+      &quot;env&quot;: { &quot;GITHUB_PERSONAL_ACCESS_TOKEN&quot;: &quot;${env:GH_FINEGRAINED_RO}&quot; }
+    },
+    &quot;github-remote&quot;: {
+      &quot;type&quot;: &quot;http&quot;,
+      &quot;url&quot;: &quot;https://api.githubcopilot.com/mcp/&quot;
+    }
+  }
+}</code></pre>
+<p>The local entry runs with a fine-grained read-only token referenced from the environment; the remote entry triggers an OAuth sign-in instead.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>stdio</th><th>HTTP</th></tr></thead>
+<tbody>
+<tr><td>Who can call it</td><td>Only the parent process</td><td>Anyone on the network</td></tr>
+<tr><td>MCP auth spec</td><td>Not applicable</td><td>OAuth 2.1</td></tr>
+<tr><td>Downstream creds</td><td>Env vars, local logins</td><td>Per-user tokens held server-side</td></tr>
+<tr><td>Central revocation</td><td>Hard</td><td>Easy</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming a local server is &quot;safe&quot; because it has no network endpoint; it has all your OS permissions.</li>
+  <li>Committing config files with tokens in the <code>env</code> block.</li>
+  <li>Running a local server bound to an HTTP port on <code>0.0.0.0</code> without authentication.</li>
+  <li>Using one classic all-scope token for every server.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A stdio server runs locally as a subprocess of the host, so it acts with the OS permissions of whoever launched it. There's no network endpoint, and the MCP authorization spec doesn't apply. Its downstream credentials usually come from environment variables in the host config or local logins like the cloud CLI. That's convenient but often means a powerful personal token, so I use fine-grained, least-privilege tokens and keep them out of shared config files. HTTP servers are network services, so they follow the OAuth-based spec: every request carries a bearer token the server validates, and the server can enforce per-user permissions and central revocation, which is why enterprises usually prefer remote servers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do enterprises prefer remote servers?</strong> Central control, per-user auth, revocation and audit instead of tokens on laptops.</li>
+  <li><strong>Local server on localhost HTTP?</strong> It still needs auth and Origin checks, or other local software and websites could reach it.</li>
+  <li><strong>Where should local secrets live?</strong> OS keychain or a secret manager, injected at launch.</li>
+</ul>
+</article>
+</body>
+</html>

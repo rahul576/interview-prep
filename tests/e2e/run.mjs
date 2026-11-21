@@ -744,10 +744,12 @@ try {
   const sess = await page.evaluate(() => window.__ip.report);
   assert.ok(Math.abs(t - sess.recording.chapters[1].start) < 1.5, 'chapter jumps to that question');
   await page.screenshot({ path: new URL('recording-chapters.png', OUT).pathname });
-  // detailed answer popup without AI: structured built-in answer
+  // detailed answer popup without AI: the pre-written answer file for that question
   await page.click('[data-explain] >> nth=0');
-  await page.waitForSelector('.ex-overlay .ex-md'); await page.waitForTimeout(300);
-  assert.match(await page.textContent('.ex-body'), /What a strong answer covers/);
+  await page.waitForSelector('.ex-overlay .ex-md h3'); await page.waitForTimeout(300);
+  const exText = await page.textContent('.ex-body');
+  assert.match(exText, /In one line/); assert.match(exText, /How to answer in the interview/);
+  assert.match(await page.textContent('#exFoot'), /works offline/);
   await page.screenshot({ path: new URL('explain-offline.png', OUT).pathname });
   await page.click('#exClose');
 

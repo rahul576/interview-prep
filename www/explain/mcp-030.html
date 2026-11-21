@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-030 · For a data warehouse MCP server, should you expose one run_sql tool or several specific tools?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-030" data-topic="MCP Servers">
+<h1>For a data warehouse MCP server, should you expose one run_sql tool or several specific tools?</h1>
+<p class="ex-meta">MCP Servers · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A generic <strong><code>run_sql</code></strong> tool is flexible but risky (expensive, wrong or exfiltrating queries); <strong>purpose-built tools</strong> like <code>get_metric</code> are safer and easier for models; the best design usually <strong>combines curated tools with a constrained SQL tool</strong>, backed by a <strong>read-only role, limits, schema discovery</strong> and <strong>per-user authorisation</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Generic <code>run_sql</code>.</strong> Strong models write decent SQL, so a single tool can answer almost any question. But the risks are large: a model can run a <strong>full-table scan costing real money</strong> or locking resources; it may <strong>join incorrectly</strong> and confidently present wrong numbers; and through <strong>prompt injection</strong> (a malicious string in a document or ticket the agent reads) it can become an <strong>exfiltration tool</strong>, querying sensitive tables and leaking results. It is also hard to reason about what data is reachable.</p>
+<p><strong>Purpose-built tools.</strong> <code>get_metric(metric, from, to, granularity, filters)</code>, <code>top_customers(by, period, limit)</code>, <code>compare_periods(metric, a, b)</code> encode <strong>business definitions</strong> (what counts as &quot;active user&quot; or &quot;revenue&quot;), return <strong>consistent, correct</strong> numbers and are much easier for the model to use. They are safer because the query shapes are fixed and parameterised.</p>
+<p><strong>Combined approach.</strong> Offer curated tools for the common 80% of questions, plus a <strong>constrained SQL tool</strong> for analysts who need flexibility:</p>
+<ul>
+  <li>runs with a <strong>read-only database role</strong> limited to <strong>allowlisted schemas or views</strong>;</li>
+  <li>enforces <strong>row limits</strong>, <strong>statement timeouts</strong> and <strong>cost guards</strong> (e.g. a dry-run estimate on BigQuery or Snowflake warehouse limits);</li>
+  <li>rejects anything but a single <code>SELECT</code>, parsed rather than regex-checked.</li>
+</ul>
+<p><strong>Schema discovery</strong> via <code>list_tables</code> and <code>describe_table</code> tools, or schema <strong>resources</strong>, with descriptions of columns and business meaning, cached, so the model writes correct queries without guessing.</p>
+<p><strong>Authorisation</strong> is the most important point: queries run with the <strong>calling user's identity</strong> (OAuth token exchange, impersonation or per-user credentials), not a shared service account, so <strong>row-level security</strong> and column masking still apply and audit logs show who asked.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define common metrics in a semantic layer; expose them as tools.</li>
+  <li>Provide schema discovery tools/resources with business descriptions.</li>
+  <li>Offer <code>query_sql</code> restricted to read-only, allowlisted views with limits.</li>
+  <li>Execute as the end user; RLS and masking apply.</li>
+  <li>Log every query with user, cost and rows returned.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool()
+def get_metric(metric: Literal[&quot;revenue&quot;, &quot;orders&quot;, &quot;active_users&quot;],
+               start: date, end: date, granularity: Literal[&quot;day&quot;, &quot;week&quot;, &quot;month&quot;] = &quot;day&quot;) -&gt; dict:
+    &quot;&quot;&quot;Return a business metric over time using official definitions.&quot;&quot;&quot;
+    return semantic_layer.query(metric, start, end, granularity, user=current_user())
+
+@mcp.tool()
+def query_sql(sql: str) -&gt; dict:
+    &quot;&quot;&quot;Run one read-only SELECT against analytics views. Max 1,000 rows, 30 s.&quot;&quot;&quot;
+    stmt = sqlglot.parse_one(sql)
+    if stmt.key != &quot;select&quot;:
+        raise ToolError(&quot;Only a single SELECT statement is allowed.&quot;)
+    with warehouse.connect(as_user=current_user(), role=&quot;ANALYST_RO&quot;) as c:
+        c.execute(&quot;SET statement_timeout = '30s'&quot;)
+        return c.fetch(sql, max_rows=1000)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A shared admin service account behind <code>run_sql</code>.</li>
+  <li>Regex-based &quot;read-only&quot; checks that miss <code>WITH ... DELETE</code> or multiple statements.</li>
+  <li>No row or cost limits.</li>
+  <li>Agents calling <code>list_tables</code> before every query because schema context is not cached.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A single run_sql tool is flexible, but risky: expensive or wrong queries, and with prompt injection it can become an exfiltration tool. Purpose-built tools like get_metric or top_customers encode business definitions, are safer and easier for the model. In practice I combine them: curated tools for common questions, plus a constrained SQL tool for analysts with a read-only role, allowlisted views, row limits, timeouts and cost guards. Schema discovery comes through describe_table tools or resources, cached. Most importantly, queries run as the calling user, not a shared service account, so row-level security still applies.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Stop list_tables before every query?</strong> Provide a schema resource or include a short schema summary in server instructions, with caching hints.</li>
+  <li><strong>How to catch wrong answers?</strong> Prefer semantic-layer metrics and evaluate against known results.</li>
+  <li><strong>Which warehouse features help?</strong> Row access policies, masking policies, query tags and resource monitors.</li>
+</ul>
+</article>
+</body>
+</html>

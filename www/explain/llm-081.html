@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-081 · Estimate how many GPUs you need to serve an internal assistant for 2,000 daily users on a self-hosted 70B model.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="llm-081" data-topic="LLMOps &amp; RAG">
+<h1>Estimate how many GPUs you need to serve an internal assistant for 2,000 daily users on a self-hosted 70B model.</h1>
+<p class="ex-meta">LLMOps &amp; RAG · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Work it out from <strong>assumptions</strong>: convert 2,000 daily users into <strong>peak concurrent requests</strong>, estimate <strong>input and output tokens per request</strong>, note a <strong>70B model needs about 140 GB in BF16</strong> (two 80 GB GPUs with tensor parallelism, or fewer with <strong>quantisation</strong>, plus <strong>KV cache</strong> room), <strong>benchmark one replica</strong> under latency SLOs, then divide <strong>peak load by replica capacity</strong> and add <strong>headroom and redundancy</strong>, validated with <strong>load tests</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Interviewers care about the <strong>method and stated assumptions</strong> more than the final number.</p>
+<p><strong>Users to load.</strong> 2,000 daily users; assume 30% active in the busiest hour (600 users), each sending about 10 requests that hour: <strong>6,000 requests per peak hour, about 1.7 requests/second</strong>. Bursts within the hour might be 2-3x, so plan for about 4-5 requests/second.</p>
+<p><strong>Tokens.</strong> Assume 3,000 input tokens (system prompt, RAG context, history) and 400 output tokens per request. At 1.7 req/s that is about <strong>5,000 input tokens/s</strong> (prefill) and <strong>700 output tokens/s</strong> (decode); at burst roughly 15,000 and 2,000.</p>
+<p><strong>Memory.</strong> 70B parameters x 2 bytes (BF16) is about <strong>140 GB</strong> of weights. Two 80 GB GPUs (H100/A100 80GB) with tensor parallelism give 160 GB total, leaving little for <strong>KV cache</strong>, which limits concurrency, so many deployments use 4 GPUs per replica in BF16, or <strong>FP8</strong> (about 70 GB, supported on Hopper-class GPUs) on 2 GPUs, or <strong>4-bit AWQ/GPTQ</strong> (about 35-40 GB) on a single 80 GB GPU, if evaluations show acceptable quality. KV cache per token for a Llama-70B-class model with grouped-query attention is roughly 0.3 MB in 16-bit, so 32 concurrent sequences of 4,000 tokens need around 40 GB.</p>
+<p><strong>Benchmark.</strong> Run vLLM on one replica with realistic prompts and a load generator, increasing concurrency until <strong>TTFT</strong> (for example p95 under 2 s) or <strong>inter-token latency</strong> (for example under 50 ms per token) SLOs break. Suppose an FP8 replica on 2 GPUs sustains about 2 requests/s within SLOs.</p>
+<p><strong>Count.</strong> Peak 1.7 req/s, burst about 4-5 req/s, divided by 2 req/s per replica: about 3 replicas for bursts, plus one for redundancy and maintenance: <strong>4 replicas, around 8 GPUs</strong> in this scenario. With 4-bit on single GPUs, perhaps 4-5 GPUs; in BF16 on 4-GPU replicas, more. Then <strong>load test</strong> with real traffic patterns and adjust.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Users -&gt; peak requests per second (with burst factor).</li>
+  <li>Requests -&gt; input/output tokens per second.</li>
+  <li>Model precision -&gt; GPU memory per replica including KV cache.</li>
+  <li>Benchmark replica throughput under SLOs.</li>
+  <li>Replicas = burst load / capacity, plus N+1 redundancy.</li>
+  <li>Validate with load tests; monitor and revise.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Peak hour: 2,000 x 30% x 10 = 6,000 req/h = 1.7 req/s (burst ~4.5 req/s)
+Tokens/s:  input 3,000 x 1.7 = 5,100 ; output 400 x 1.7 = 680
+Weights:   70B x 2 B = 140 GB (BF16) | ~70 GB (FP8) | ~38 GB (4-bit)
+Replica:   FP8 on 2 x 80 GB GPUs, benchmarked ~2 req/s at p95 TTFT &lt; 2 s
+Replicas:  ceil(4.5 / 2) = 3, +1 redundancy = 4 replicas = 8 GPUs</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Dividing daily requests by 86,400 instead of planning for peak.</li>
+  <li>Forgetting KV cache memory and only counting weights.</li>
+  <li>Assuming quantisation is free without evaluating quality.</li>
+  <li>No redundancy for failures or upgrades.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd state assumptions and work through it. 2,000 daily users, maybe 30 percent active in the peak hour with ten requests each, is 6,000 requests an hour, under two per second, with bursts maybe to four or five. With 3,000 input and 400 output tokens, that's around 5,000 prefill and 700 decode tokens per second at peak. A 70B model is about 140 GB in BF16, so it needs multiple 80 GB GPUs with tensor parallelism, or FP8 or 4-bit quantisation if quality holds, plus KV cache room. Then I'd benchmark one vLLM replica against TTFT and per-token SLOs, divide burst load by its capacity, add a redundant replica, and validate with load tests. Here that's maybe four replicas, around eight GPUs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Agent with five calls per request?</strong> Roughly 5x requests and growing context per call; recompute, consider smaller models for sub-steps.</li>
+  <li><strong>Longer contexts?</strong> Prefill and KV cache grow, reducing concurrency per replica.</li>
+  <li><strong>Cheaper option?</strong> Smaller model or MoE model for most traffic, 70B only for hard cases.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-044 · How do you add observability to an MCP server running in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-044" data-topic="MCP Servers">
+<h1>How do you add observability to an MCP server running in production?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Treat an MCP server like a production API with <strong>tool-level telemetry</strong>: <strong>structured logs per tool call</strong>, <strong>metrics for rate, errors and latency per tool</strong>, <strong>distributed tracing</strong> with context propagated through request metadata, careful <strong>redaction</strong>, and <strong>dashboards and alerts per tool and per client</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An MCP server is called by models, not humans, which changes what you need to observe. A slow or failing tool does not produce a support ticket; the agent just retries, picks a worse tool or gives up. So observability has to answer three questions: is the server healthy, are individual tools behaving, and are models using the tools as intended?</p>
+<p><strong>Structured logs</strong> are the base layer. Each tool call should log the authenticated user, the client application, the tool name, duration, outcome, and whether a failure was a <strong>protocol error</strong> (JSON-RPC error such as invalid params) or a <strong>tool execution error</strong> (a result with <code>isError: true</code>). Arguments should be logged selectively: they can contain personal data or secrets that the model copied from context, so redact or hash them by default.</p>
+<p><strong>Metrics</strong> give call rate, error rate and latency percentiles per tool, plus downstream dependency latency, exported through <strong>OpenTelemetry</strong> or <strong>Prometheus</strong>. <strong>Distributed tracing</strong> is where agent systems benefit most: W3C trace context can be carried in the request's <code>_meta</code> field or HTTP headers, so one trace spans the agent loop, the model call that chose the tool, the MCP request and the downstream API calls. That shows whether the slowness was the model, the server or the database.</p>
+<p>Usage data is also product feedback: tools that are never chosen, or chosen and then followed by immediate errors, usually have unclear names, descriptions or schemas.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Wrap every tool handler in middleware that starts a span and records start time, user, client and tool.</li>
+  <li>Extract incoming trace context from <code>_meta</code> or headers and make the span its child.</li>
+  <li>Record outcome, error class and duration; increment counters and histograms labelled by tool and client.</li>
+  <li>Log a structured event with redacted arguments and a result size, not the full result.</li>
+  <li>Build dashboards per tool and per client, and alert on error-rate spikes and p95 latency.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from opentelemetry import trace, metrics
+tracer = trace.get_tracer(&quot;orders-mcp&quot;)
+calls = metrics.get_meter(&quot;orders-mcp&quot;).create_histogram(&quot;mcp.tool.duration&quot;, unit=&quot;ms&quot;)
+
+def instrumented(tool_name, handler):
+    def wrapper(args, ctx):
+        with tracer.start_as_current_span(f&quot;tool {tool_name}&quot;, context=ctx.trace_context) as span:
+            span.set_attribute(&quot;mcp.tool&quot;, tool_name)
+            span.set_attribute(&quot;enduser.id&quot;, ctx.user_id)
+            start = time.monotonic()
+            result = handler(args, ctx)
+            outcome = &quot;tool_error&quot; if result.is_error else &quot;ok&quot;
+            calls.record((time.monotonic() - start) * 1000,
+                         {&quot;tool&quot;: tool_name, &quot;client&quot;: ctx.client_name, &quot;outcome&quot;: outcome})
+            log.info(&quot;tool_call&quot;, tool=tool_name, user=ctx.user_id,
+                     args=redact(args), outcome=outcome)
+            return result
+    return wrapper</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Logging full arguments and results, leaking customer data or tokens into log storage.</li>
+  <li>Only measuring HTTP status codes; tool errors come back as successful responses with <code>isError</code>.</li>
+  <li>No per-client labels, so you cannot tell which host or agent is causing a spike.</li>
+  <li>Metrics with unbounded label values such as raw arguments, which explode cardinality.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I instrument it like any production API, but at the level of tools. Every tool call gets a structured log with user, client, tool, duration and outcome, and I distinguish protocol errors from tool execution errors. Arguments are logged selectively with redaction because models copy sensitive data into them. Metrics cover call rate, error rate and latency per tool and per downstream dependency, through OpenTelemetry. Tracing is the most valuable part: I propagate trace context through request metadata so one trace covers the agent, the model call, the MCP request and the downstream calls. Dashboards and alerts are per tool and per client, and I also watch usage, because a tool the models never pick usually has a bad description.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which metric reveals a confusing tool description?</strong> Low selection rate, or high rate of invalid-argument errors right after selection.</li>
+  <li><strong>Where does trace context travel?</strong> In HTTP headers for remote servers or the <code>_meta</code> field of the request.</li>
+  <li><strong>How do you alert without noise?</strong> SLO-based alerts on error budget burn per critical tool.</li>
+</ul>
+</article>
+</body>
+</html>

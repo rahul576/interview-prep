@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-028 · How would you build an MCP server with Java and Spring AI?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-028" data-topic="MCP Servers">
+<h1>How would you build an MCP server with Java and Spring AI?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>Spring AI's MCP server starters</strong> (built on the <strong>official Java SDK</strong>), annotate bean methods with <strong><code>@Tool</code></strong> or the newer <strong><code>@McpTool</code></strong>, let Spring AI <strong>generate schemas</strong> from parameters and descriptions, choose a transport (<strong>stdio</strong>, <strong>Streamable HTTP on Spring MVC or WebFlux</strong>) and <strong>reuse Spring Security, services and observability</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>For a Java backend team, the big advantage is that an MCP server becomes <strong>just another Spring Boot application</strong>.</p>
+<p><strong>Starters.</strong> Spring AI provides Boot starters on top of the MCP Java SDK: a standard starter for <strong>stdio</strong>, and WebMVC or WebFlux starters for HTTP-based transports, including <strong>Streamable HTTP</strong> (and stateless variants). Auto-configuration creates the MCP server, registers transports and wires capabilities.</p>
+<p><strong>Tools.</strong> Annotate methods on Spring beans with <strong><code>@Tool(description = &quot;...&quot;)</code></strong> and parameters with <code>@ToolParam(description = &quot;...&quot;)</code>, then expose them via a <code>ToolCallbackProvider</code> (e.g. <code>MethodToolCallbackProvider</code>). Newer Spring AI versions add <strong>MCP-specific annotations</strong> such as <strong><code>@McpTool</code></strong>, <code>@McpResource</code>, <code>@McpPrompt</code> and <code>@McpComplete</code>, which are picked up automatically. Spring AI <strong>generates the JSON Schema</strong> from method parameter types (records and POJOs included), so the model sees accurate argument definitions.</p>
+<p><strong>Configuration</strong> properties (<code>spring.ai.mcp.server.*</code>) set server name, version, protocol/transport type and which capabilities to advertise.</p>
+<p><strong>Reuse.</strong> Tools call existing <strong>services, repositories and clients</strong>, with transactions and validation as usual. <strong>Spring Security</strong> protects the HTTP endpoint as an <strong>OAuth 2 resource server</strong>, validating JWTs for issuer, audience and scopes; method security (<code>@PreAuthorize</code>) and passing the authenticated principal into services keep data access scoped to the <strong>calling user</strong>. <strong>Micrometer and OpenTelemetry</strong> give metrics and traces per tool call. Packaging and deployment follow the normal pipeline: container image, Kubernetes, health probes, config and secrets management.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Add the Spring AI BOM and the MCP server starter for your transport.</li>
+  <li>Write <code>@Service</code> beans with annotated tool methods.</li>
+  <li>Register tools (provider bean or MCP annotations scanning).</li>
+  <li>Configure server properties and Spring Security resource server.</li>
+  <li>Test with the Inspector; deploy like any Boot app.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+public class OrderTools {
+  private final OrderService orders;
+  public OrderTools(OrderService orders) { this.orders = orders; }
+
+  @Tool(description = &quot;Get status and ETA of an order by order number, e.g. ORD-1042. Read-only.&quot;)
+  public OrderStatus getOrderStatus(@ToolParam(description = &quot;Order number&quot;) String orderNo) {
+    var user = SecurityContextHolder.getContext().getAuthentication();
+    return orders.statusFor(orderNo, user);   // enforces the caller's access
+  }
+}
+
+@Bean
+ToolCallbackProvider orderToolProvider(OrderTools tools) {
+  return MethodToolCallbackProvider.builder().toolObjects(tools).build();
+}</code></pre>
+<pre><code class="language-yaml">spring:
+  ai.mcp.server: { name: order-mcp, version: 1.0.0, protocol: STREAMABLE }
+  security.oauth2.resourceserver.jwt.issuer-uri: https://login.example.com/realms/corp</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Tools that call repositories with a technical account, ignoring the user's permissions.</li>
+  <li>Returning full JPA entities with lazy-loaded graphs as tool output.</li>
+  <li>Missing parameter descriptions, so schemas are bare.</li>
+  <li>Leaving the HTTP endpoint unauthenticated in non-production environments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Spring AI provides MCP server starters built on the official Java SDK. I pick the starter for the transport, stdio, or Streamable HTTP on Spring MVC or WebFlux, and annotate bean methods with @Tool or the newer @McpTool annotations, with descriptions for the method and parameters. Spring AI generates the JSON schema from the parameters and registers the tools. The real win is reuse: tools call existing services, Spring Security protects the endpoint as an OAuth 2 resource server, Micrometer and OpenTelemetry give metrics and traces, and it deploys like any Boot app to Kubernetes. Properties control name, version and capabilities.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Preventing over-exposure of data?</strong> Propagate the authenticated user into services and enforce row-level access there, returning DTOs with only needed fields.</li>
+  <li><strong>Stdio for a Java server?</strong> Fine for local tools, but startup time and logging to stdout need care.</li>
+  <li><strong>How to observe tool calls?</strong> Micrometer timers and traces per tool, with user and outcome tags.</li>
+</ul>
+</article>
+</body>
+</html>

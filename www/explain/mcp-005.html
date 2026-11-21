@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-005 · What makes a good MCP tool, beyond simply working?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-005" data-topic="MCP Servers">
+<h1>What makes a good MCP tool, beyond simply working?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A good MCP tool is <strong>designed around a user task</strong> rather than a raw endpoint, with a <strong>clear name and description</strong>, a <strong>strict minimal schema</strong>, <strong>concise output</strong> that respects the context window, <strong>actionable errors</strong>, and <strong>safe defaults</strong> (read-only first, explicit side effects).</p>
+
+<h2>Detailed explanation</h2>
+<p>A tool that &quot;works&quot; when called correctly is the minimum. The real consumer is a <strong>model</strong> choosing among many tools with limited context, so tool quality is about how reliably an agent can use it.</p>
+<p><strong>Task-oriented design.</strong> <code>find_customer_orders(email)</code> beats exposing <code>GET /customers?q=</code>, <code>GET /customers/{id}/accounts</code> and <code>GET /accounts/{id}/orders</code>, which forces the model to chain three calls and juggle internal ids. Combine steps server-side.</p>
+<p><strong>Clear name and description.</strong> Say what it does, when to use it, what it does <strong>not</strong> do, and how it relates to other tools (&quot;use <code>search_customers</code> first if you only have a name&quot;).</p>
+<p><strong>Strict, minimal input schema.</strong> Few parameters, <code>enum</code>s for fixed choices, formats (<code>date</code>, <code>email</code>), sensible defaults and bounds. Validate everything server-side; the model will sometimes send nonsense.</p>
+<p><strong>Concise, relevant output.</strong> Every token returned lands in the model context. Return the fields that matter, paginate, summarise large results, and include totals so the model knows if there is more. Provide <code>structuredContent</code> with an <code>outputSchema</code> when code will consume it.</p>
+<p><strong>Actionable errors.</strong> Return execution errors with <code>isError: true</code> and a message the model can act on: &quot;date must be YYYY-MM-DD&quot;, &quot;customer not found; try search_customers&quot;.</p>
+<p><strong>Safe by default.</strong> Prefer read-only tools; make side effects explicit, scoped and <strong>idempotent</strong> (idempotency keys), annotate them correctly, and use the <strong>caller's permissions</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List real user tasks and the questions agents must answer.</li>
+  <li>Design one tool per task, hiding internal ids and pagination.</li>
+  <li>Write description and schema; add enums and bounds.</li>
+  <li>Shape outputs to essential fields; add pagination and totals.</li>
+  <li>Write errors with recovery hints.</li>
+  <li>Evaluate with a model on realistic tasks and iterate.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">@mcp.tool()
+def find_customer_orders(email: str, status: Literal[&quot;open&quot;, &quot;shipped&quot;, &quot;all&quot;] = &quot;open&quot;,
+                         limit: int = 10) -&gt; dict:
+    &quot;&quot;&quot;Find a customer's recent orders by email. Use for order status questions.
+    Returns at most `limit` (1-25) orders, newest first, with total count.&quot;&quot;&quot;
+    customer = crm.by_email(email)
+    if not customer:
+        raise ToolError(f&quot;No customer with email {email}. Ask the user to confirm the email.&quot;)
+    orders = shop.orders(customer.id, status=status, limit=min(limit, 25))
+    return {&quot;total&quot;: orders.total,
+            &quot;orders&quot;: [{&quot;order_no&quot;: o.number, &quot;status&quot;: o.status, &quot;eta&quot;: o.eta} for o in orders]}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Auto-generating one tool per REST endpoint.</li>
+  <li>Returning full API payloads with dozens of irrelevant fields.</li>
+  <li>Errors like &quot;500 Internal Server Error&quot; or stack traces.</li>
+  <li>Write tools without idempotency or confirmation.</li>
+  <li>Never testing with an actual model.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Beyond working, a good tool is designed around a task the agent actually needs, like find_customer_orders, instead of mirroring endpoints and forcing the model to chain calls. Its name and description say what it does and when to use it. The input schema is strict and minimal, with enums and validation. Output is concise, because every token goes into the context, with pagination or summaries for large results. Errors are actionable so the model can recover. And it's safe by default: read-only where possible, side effects explicit, scoped and idempotent. Then I test it with a real model, not just unit tests.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you test model usage?</strong> Evaluation tasks run by an agent, checking tool choice, arguments and task success.</li>
+  <li><strong>How many tools per server?</strong> As few as cover the tasks, often under a dozen or two.</li>
+  <li><strong>Should tools return prose or JSON?</strong> Short readable text for the model, plus <code>structuredContent</code> for programmatic use.</li>
+</ul>
+</article>
+</body>
+</html>

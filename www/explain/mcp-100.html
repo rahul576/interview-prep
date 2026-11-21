@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-100 · How do you design MCP tools that ask the user for confirmation or extra input in the stateless protocol?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mcp-100" data-topic="MCP Servers">
+<h1>How do you design MCP tools that ask the user for confirmation or extra input in the stateless protocol?</h1>
+<p class="ex-meta">MCP Servers · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In the stateless revision, servers <strong>no longer send requests to clients mid-call</strong>; a tool that needs confirmation or extra data <strong>returns an input-required result</strong>, the client <strong>collects answers through its elicitation UI and retries</strong> the call with them (<strong>multi round-trip requests</strong>), so the tool must be <strong>idempotent, validate answers and avoid side effects before it has everything</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the handshake-based revisions, a server handling <code>tools/call</code> could send an <code>elicitation/create</code> request back to the client and wait on the open connection for the user's answer. That required a long-lived session and meant the same server instance had to hold the waiting call, which complicates horizontal scaling and load balancing.</p>
+<p>The stateless 2026-07-28 revision removes server-to-client requests. Instead, when a tool cannot proceed, it <strong>finishes the current request</strong> with a result saying input is required, describing what it needs: a <strong>form schema</strong> (for example target environment and a confirm flag) or a <strong>URL</strong> for sensitive flows such as OAuth or payments, which must not pass through the client. The client shows the form or link to the user, then <strong>sends the original tool call again</strong> with the answers attached. This pattern is called <strong>multi round-trip requests</strong>.</p>
+<p>Because the server may be a different instance on the retry and keeps no session, the design rules change. The tool must be <strong>safe to re-execute</strong> up to the point where it asked; it must do <strong>no side effects before it has all required input</strong>; it must <strong>re-validate</strong> the answers server-side (they come from the client and could be tampered with or stale); and, where state must carry over, it should return an opaque, signed or server-stored <strong>continuation token</strong> rather than relying on memory. Destructive actions should require explicit confirmation values, not just any retry.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client calls <code>deploy</code> with partial arguments.</li>
+  <li>Server validates; missing environment and confirmation, so it returns input-required with a schema.</li>
+  <li>Client renders the elicitation form; user picks &quot;staging&quot; and confirms.</li>
+  <li>Client retries the same tool call with the original arguments plus the answers.</li>
+  <li>Server re-validates permissions and answers, then executes once, using an idempotency key.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-json">// First response
+{ &quot;inputRequired&quot;: {
+    &quot;message&quot;: &quot;Confirm deployment target&quot;,
+    &quot;requestedSchema&quot;: { &quot;type&quot;: &quot;object&quot;,
+      &quot;properties&quot;: { &quot;environment&quot;: { &quot;enum&quot;: [&quot;staging&quot;, &quot;production&quot;] },
+                      &quot;confirm&quot;: { &quot;type&quot;: &quot;boolean&quot; } },
+      &quot;required&quot;: [&quot;environment&quot;, &quot;confirm&quot;] } } }
+
+// Retried call
+{ &quot;name&quot;: &quot;deploy&quot;, &quot;arguments&quot;: { &quot;service&quot;: &quot;billing&quot;, &quot;version&quot;: &quot;2.3.1&quot; },
+  &quot;inputResponses&quot;: { &quot;environment&quot;: &quot;staging&quot;, &quot;confirm&quot;: true } }</code></pre>
+<p>Field names are illustrative; follow the exact shape in the current specification and SDK.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Performing part of the action before asking, so the retry duplicates it.</li>
+  <li>Trusting the answers without re-checking permissions and values.</li>
+  <li>Keeping pending state in instance memory, which breaks behind a load balancer.</li>
+  <li>Collecting secrets through form elicitation instead of a URL flow.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In the stateless revision the server can't pause a tool call and send an elicitation request to the client. Instead the tool returns an input-required result describing what it needs, like a schema with environment and a confirm flag, or a URL for sensitive flows. The client collects the answers in its elicitation UI and retries the original call with them attached; that's multi round-trip requests. So I design tools to do nothing with side effects until they have all inputs, to be idempotent on retry, and to re-validate answers server-side, with any needed state in a signed token rather than memory.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does this simplify horizontal scaling?</strong> Any instance can handle the retry because no session or waiting call lives on one server.</li>
+  <li><strong>How do you prevent double execution?</strong> Idempotency keys and checking whether the operation already completed.</li>
+  <li><strong>When use URL mode instead of a form?</strong> For credentials, OAuth consent or payments, which must not pass through the client.</li>
+</ul>
+</article>
+</body>
+</html>
