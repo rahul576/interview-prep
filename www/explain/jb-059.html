@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-059 · How would you optimize a collection holding millions of objects?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-059" data-topic="JVM &amp; Performance">
+<h1>How would you optimize a collection holding millions of objects?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Measure the real footprint first</strong> (heap dump, <strong>JOL</strong>), then <strong>presize</strong> the collection, replace <strong>boxed</strong> values with <strong>primitive collections or arrays</strong>, make each element <strong>smaller</strong> (fewer fields, compact types, deduplicated strings), and question whether everything must be in memory at all: <strong>stream, page or offload</strong> to an external cache.</p>
+
+<h2>Detailed explanation</h2>
+<p>Millions of small objects are usually dominated by <strong>overhead</strong>, not data. Every object has a <strong>header</strong> (12 bytes on a typical 64-bit JVM with compressed class pointers; newer JDKs offer <strong>compact object headers</strong> that shrink it to 8 bytes) and is padded to 8-byte alignment. A <code>HashMap&lt;Integer, Integer&gt;</code> entry costs roughly a 32-byte <code>Node</code>, a 4-byte table slot, plus two 16-byte <code>Integer</code> objects: about 70 bytes to store 8 bytes of data. A <code>List&lt;Long&gt;</code> with 10 million elements uses well over 200 MB, while a <code>long[]</code> uses 80 MB.</p>
+<p><strong>1. Measure.</strong> Take a heap dump and use Eclipse MAT to see retained size per collection and per class, or use <strong>Java Object Layout (JOL)</strong> to print an object's exact layout. Knowing what dominates guides everything else.</p>
+<p><strong>2. Presize.</strong> <code>new ArrayList&lt;&gt;(expected)</code> or <code>HashMap.newHashMap(expected)</code> (Java 19+) avoids repeated growth, which copies arrays and briefly doubles memory.</p>
+<p><strong>3. Avoid boxing.</strong> Use <code>int[]</code>, <code>long[]</code> or primitive collections from <strong>fastutil</strong>, <strong>Eclipse Collections</strong> or HPPC (<code>Int2ObjectOpenHashMap</code>, <code>LongArrayList</code>). They store raw primitives and often use open addressing, avoiding per-entry node objects.</p>
+<p><strong>4. Shrink elements.</strong> Remove unused fields, use <code>int</code> instead of <code>long</code> or <code>Integer</code> where ranges allow, enums instead of strings, <code>LocalDate</code> packed into an <code>int</code> if extreme, and <strong>deduplicate</strong> repeated strings. Consider a <strong>structure of arrays</strong> (parallel arrays of fields) instead of an array of objects for very large numeric data sets.</p>
+<p><strong>5. Choose the right structure.</strong> <code>ArrayList</code> beats <code>LinkedList</code> in memory and cache locality; <code>EnumMap</code> and <code>BitSet</code> are very compact; sorted arrays with binary search can replace maps for read-only data.</p>
+<p><strong>6. Do not hold it all.</strong> Process in <strong>batches</strong>, stream rows from the database with a fetch size, page results, or put the data in <strong>Redis</strong> or an off-heap cache (Chronicle Map) when it does not need to live in the JVM heap. Large on-heap collections also make GC slower and heap dumps huge.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Heap dump or JOL to measure per-entry cost.</li>
+  <li>Presize to the expected count.</li>
+  <li>Replace boxed collections with primitive ones.</li>
+  <li>Slim down element classes and deduplicate values.</li>
+  <li>Re-measure; if still too large, stream, page or move off-heap.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Before: ~70+ bytes per entry
+Map&lt;Integer, Integer&gt; stockBySku = new HashMap&lt;&gt;();
+
+// After: primitives, open addressing, presized
+Int2IntOpenHashMap stock = new Int2IntOpenHashMap(5_000_000);
+stock.put(10_001, 42);
+
+// Before: List&lt;Long&gt; of 10M timestamps (~250 MB); after: long[] (80 MB)
+long[] timestamps = new long[10_000_000];
+
+// Measure layout with JOL
+System.out.println(ClassLayout.parseClass(Order.class).toPrintable());
+
+// Stream instead of loading everything (Spring Data JPA)
+try (Stream&lt;Order&gt; s = orderRepo.streamAllByStatus(Status.OPEN)) {
+    s.forEach(this::process);
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Optimising without measuring, then shrinking the wrong thing.</li>
+  <li><code>LinkedList</code> for large lists.</li>
+  <li>Growing collections from default capacity to millions of entries.</li>
+  <li>Keeping full entity graphs when only IDs are needed.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I measure: a heap dump in Eclipse MAT or Java Object Layout shows the real cost per entry, which is often several times the raw data because of headers, references and boxing. Then I presize the collection to avoid resizing and copying. If values are numbers I switch from boxed collections to primitive collections like fastutil or Eclipse Collections, or plain arrays. I shrink the element objects by dropping fields, using compact types and enums, and deduplicating repeated strings. Finally I question whether it must all be in memory at once: stream or page from the database, or move it into Redis or an off-heap store.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How much memory does a HashMap entry really cost?</strong> Around 32 bytes for the node plus a table slot, plus boxed key and value objects, often 60-80 bytes in total.</li>
+  <li><strong>What are compact object headers?</strong> A newer HotSpot option that reduces headers from 12 to 8 bytes, cutting memory for small objects.</li>
+  <li><strong>Why does <code>LinkedList</code> use more memory?</strong> Each element needs a node object with two extra references.</li>
+</ul>
+</article>
+</body>
+</html>

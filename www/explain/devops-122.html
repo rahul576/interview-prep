@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-122 · How does Prometheus work? Explain its data model and pull-based scraping.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-122" data-topic="Observability &amp; SRE">
+<h1>How does Prometheus work? Explain its data model and pull-based scraping.</h1>
+<p class="ex-meta">Observability &amp; SRE · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Prometheus</strong> <strong>pulls</strong> metrics by <strong>scraping HTTP <code>/metrics</code> endpoints</strong> of targets found via <strong>service discovery</strong>, stores them as <strong>time series identified by metric name and labels</strong>, supports <strong>counter, gauge, histogram and summary</strong> types, is queried with <strong>PromQL</strong>, and sends rule-based alerts to <strong>Alertmanager</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Pull model:</strong> Prometheus discovers targets through <strong>service discovery</strong> (Kubernetes pods, services and endpoints, EC2, Consul, file-based or static configs) and <strong>scrapes</strong> each target's <code>/metrics</code> endpoint every scrape interval (commonly 15-30 seconds). Benefits: Prometheus controls the load, an unreachable target is immediately visible (<code>up == 0</code>), and you can curl an endpoint to see exactly what it exposes. For short-lived batch jobs that can't be scraped, the <strong>Pushgateway</strong> exists, used sparingly. In Kubernetes the <strong>Prometheus Operator</strong> configures scraping with <code>ServiceMonitor</code> and <code>PodMonitor</code> resources.</p>
+<p><strong>Data model:</strong> every series is a <strong>metric name plus a set of key-value labels</strong>, with timestamped float samples: <code>http_requests_total{method=&quot;GET&quot;,status=&quot;200&quot;,service=&quot;api&quot;}</code>. Each unique label combination is a separate series, which is why <strong>cardinality</strong> matters: labels with unbounded values (user IDs, request IDs, full URLs) create millions of series and exhaust memory. Data is stored in the local <strong>TSDB</strong> in two-hour blocks, compacted over time, with configurable retention.</p>
+<p><strong>Metric types:</strong></p>
+<ul>
+  <li><strong>Counter:</strong> only increases (resets on restart), such as requests or errors; use <code>rate()</code> or <code>increase()</code>.</li>
+  <li><strong>Gauge:</strong> goes up and down, such as memory, queue length, temperature.</li>
+  <li><strong>Histogram:</strong> observations counted into configurable <strong>buckets</strong> (<code>_bucket</code>, <code>_sum</code>, <code>_count</code>); percentiles computed server-side with <code>histogram_quantile()</code> and <strong>aggregatable across instances</strong>. <strong>Native histograms</strong> offer higher resolution with less configuration.</li>
+  <li><strong>Summary:</strong> client-side quantiles, not aggregatable across instances.</li>
+</ul>
+<p><strong>PromQL:</strong> <code>rate(http_requests_total[5m])</code> for per-second rates, <code>sum by (service)</code> for aggregation, error ratios, and <code>histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))</code> for p99 latency.</p>
+<p><strong>Ecosystem:</strong> <strong>exporters</strong> translate systems into metrics (<strong>node exporter</strong> for Linux hosts, kube-state-metrics, blackbox exporter for probes, database exporters); applications use client libraries or OpenTelemetry. <strong>Recording rules</strong> precompute expensive queries; <strong>alerting rules</strong> evaluate PromQL and send firing alerts to <strong>Alertmanager</strong>, which <strong>deduplicates, groups, silences, inhibits and routes</strong> them to Slack, PagerDuty or email. Grafana provides dashboards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Service discovery finds targets.</li>
+  <li>Prometheus scrapes <code>/metrics</code> on each interval and adds target labels.</li>
+  <li>Samples are written to the TSDB.</li>
+  <li>Rules are evaluated periodically.</li>
+  <li>Firing alerts go to Alertmanager for routing.</li>
+  <li>Grafana and users query via PromQL.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text"># HELP http_requests_total Total HTTP requests.
+# TYPE http_requests_total counter
+http_requests_total{method=&quot;GET&quot;,status=&quot;200&quot;} 10231
+http_requests_total{method=&quot;POST&quot;,status=&quot;500&quot;} 17</code></pre>
+<pre><code class="language-promql">sum by (status) (rate(http_requests_total{job=&quot;api&quot;}[5m]))
+histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=&quot;api&quot;}[5m])))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting user IDs or URLs with IDs into labels.</li>
+  <li>Using <code>rate()</code> on gauges, or reading raw counter values as rates.</li>
+  <li>Averaging summaries' quantiles across instances.</li>
+  <li>Very short scrape intervals everywhere, inflating storage.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Prometheus pulls metrics: it discovers targets, for example through Kubernetes service discovery, and scrapes their metrics endpoint at an interval. Data is stored as time series identified by a metric name and labels, like http_requests_total with method and status. Metric types are counter, which only goes up, gauge, which goes up and down, and histogram and summary for distributions like latency, histograms being aggregatable. I query with PromQL, for example rate over a counter. Exporters like node exporter expose system metrics, and alert rules send alerts to Alertmanager, which deduplicates, groups and routes them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a user ID label a bad idea?</strong> Each value creates a new series, exploding cardinality, memory and query cost.</li>
+  <li><strong>Pull versus push?</strong> Pull gives control and easy health detection; push suits short-lived jobs and some network setups.</li>
+  <li><strong>Histogram or summary?</strong> Histograms, since they aggregate across instances.</li>
+</ul>
+</article>
+</body>
+</html>

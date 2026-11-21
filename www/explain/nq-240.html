@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-240 · How does Cassandra differ from a relational database?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-240" data-topic="Databases &amp; SQL">
+<h1>How does Cassandra differ from a relational database?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Cassandra</strong> is a <strong>distributed, masterless wide-column</strong> database: data is <strong>partitioned by a hash of the partition key</strong> and <strong>replicated across a peer-to-peer ring</strong>, modelled <strong>query-first</strong> with denormalised tables, offering <strong>tunable consistency</strong> and very high <strong>write throughput</strong> but <strong>no joins, foreign keys or full ACID transactions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Architecture</strong>: a relational database typically has one primary that accepts writes, with replicas for reads. Cassandra has <strong>no master</strong>: every node is equal, any node can coordinate a request, and data is spread around a <strong>token ring</strong> using consistent hashing of the <strong>partition key</strong>. Each partition is stored on several replicas (the <strong>replication factor</strong>), placed across racks and data centres. Adding nodes scales capacity roughly linearly, and losing nodes or even a data centre does not stop the cluster.</p>
+<p><strong>Data modelling</strong>: in SQL you normalise first and write any query later. In Cassandra you start from the <strong>queries</strong>. Each table has a <strong>primary key</strong> made of a <strong>partition key</strong> (decides which nodes hold the data; queries must provide it) and <strong>clustering columns</strong> (sort rows within a partition, enabling range queries such as &quot;latest 50 events for this device&quot;). If you need the same data by another key, you create <strong>another table</strong> and write to both, accepting duplication. There are no joins and no foreign keys, <code>WHERE</code> clauses are restricted to key columns (unless you use <code>ALLOW FILTERING</code> or secondary indexes, both to be used sparingly), and aggregations are limited.</p>
+<p><strong>Consistency</strong>: chosen per request (ONE, QUORUM, LOCAL_QUORUM, ALL). <strong>Lightweight transactions</strong> (<code>IF NOT EXISTS</code>, compare-and-set) use Paxos for single-partition conditional updates, but there are no multi-row ACID transactions in the relational sense.</p>
+<p><strong>Storage</strong>: writes go to a <strong>commit log</strong> and an in-memory <strong>memtable</strong>, which is flushed to immutable <strong>SSTables</strong> and later merged by <strong>compaction</strong>. Writes are sequential, which is why they are so fast.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends a CQL request to any node (the coordinator).</li>
+  <li>The coordinator hashes the partition key to find replicas.</li>
+  <li>It forwards the request and waits for as many replicas as the consistency level requires.</li>
+  <li>Each replica appends to its commit log and memtable.</li>
+  <li>Memtables flush to SSTables; compaction merges them.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE iot.readings_by_device (
+  device_id  text,
+  day        date,
+  ts         timestamp,
+  temp       double,
+  PRIMARY KEY ((device_id, day), ts)
+) WITH CLUSTERING ORDER BY (ts DESC);
+
+SELECT ts, temp FROM iot.readings_by_device
+WHERE device_id = 'sensor-17' AND day = '2026-11-21' LIMIT 50;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Relational</th><th>Cassandra</th></tr></thead>
+<tbody>
+<tr><td>Topology</td><td>Primary + replicas</td><td>Masterless ring</td></tr>
+<tr><td>Modelling</td><td>Normalise, query later</td><td>One table per query</td></tr>
+<tr><td>Joins/FKs</td><td>Yes</td><td>No</td></tr>
+<tr><td>Transactions</td><td>ACID</td><td>LWT per partition</td></tr>
+<tr><td>Writes</td><td>Limited by primary</td><td>Scale with nodes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Designing normalised tables and expecting joins.</li>
+  <li>Using <code>ALLOW FILTERING</code> in production queries.</li>
+  <li>Choosing partition keys that create huge or hot partitions.</li>
+  <li>Delete-heavy patterns that build up tombstones.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cassandra is a distributed wide-column database. Unlike a relational database with a primary server, it's masterless: every node is equal in a ring, data is partitioned by a hash of the partition key and replicated, so it scales linearly and survives node and data-centre failures. Modelling is query-first: I design a table per query, with a partition key that decides where data lives and clustering columns that sort it, duplicating data instead of joining. There are no joins, foreign keys or arbitrary WHERE clauses, and only lightweight transactions, but consistency is tunable per query and writes are very fast thanks to the log-structured storage.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What makes a good partition key?</strong> High cardinality, even load, included in every query, and bounded partition size.</li>
+  <li><strong>What are tombstones?</strong> Markers for deleted data; too many slow reads until compaction removes them.</li>
+  <li><strong>When is Cassandra a bad fit?</strong> Ad hoc queries, complex joins, or multi-row transactional workloads.</li>
+</ul>
+</article>
+</body>
+</html>

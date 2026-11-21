@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-015 · Explain volatile, synchronized and atomic classes. When is volatile not enough?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-015" data-topic="Concurrency">
+<h1>Explain volatile, synchronized and atomic classes. When is volatile not enough?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>volatile</strong> guarantees <strong>visibility and ordering</strong> (a happens-before edge) but <strong>not atomicity</strong>; <strong>synchronized</strong> gives <strong>mutual exclusion plus visibility</strong>; <strong>atomic classes</strong> use <strong>CAS</strong> for lock-free single-variable updates. volatile is not enough for <strong>compound actions</strong> like <code>count++</code> or check-then-act.</p>
+
+<h2>Detailed explanation</h2>
+<p>Under the <strong>Java Memory Model</strong>, threads may keep values in registers or caches and the compiler and CPU may reorder instructions. Without a <strong>happens-before</strong> relationship, one thread may never see another's write.</p>
+<p><strong>volatile</strong> fixes visibility for one field: a write to a volatile variable <strong>happens-before</strong> every subsequent read of it, and writes before the volatile write become visible to a thread that reads it (<strong>safe publication</strong>). It also prevents reordering across the access. It does <strong>not</strong> provide mutual exclusion. <code>count++</code> on a volatile int is still three steps, read, add, write, so two threads can read 5, both write 6 and lose an update. Check-then-act (<code>if (!started) { started = true; init(); }</code>) has the same race.</p>
+<p><strong>synchronized</strong> acquires the object's <strong>monitor lock</strong>. Only one thread executes the block at a time, and releasing the monitor happens-before the next acquisition, so you get <strong>atomicity and visibility</strong> for everything inside. It is reentrant and, when uncontended, cheap. It can block, and before Java 24 it could pin virtual threads.</p>
+<p><strong>Atomic classes</strong> (<code>AtomicInteger</code>, <code>AtomicLong</code>, <code>AtomicReference</code>, <code>AtomicBoolean</code>) wrap a volatile value and update it with <strong>compare-and-swap</strong>: read the current value, compute the new one, and CAS it in; if another thread changed it, retry. That makes <code>incrementAndGet</code>, <code>compareAndSet</code> and <code>updateAndGet</code> atomic without locks. Under heavy write contention CAS retries pile up, so <strong>LongAdder</strong> spreads increments across cells and sums on read. Atomics cover <strong>one variable</strong>; invariants spanning several variables still need a lock.</p>
+<p>Use <strong>volatile</strong> for simple flags and safely publishing immutable objects; <strong>atomics</strong> for counters and single-reference swaps; <strong>locks</strong> for multi-variable invariants.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>volatile write: flush with a release barrier; volatile read: acquire barrier.</li>
+  <li>synchronized: monitorenter, critical section, monitorexit (release).</li>
+  <li>CAS: hardware instruction (for example <code>lock cmpxchg</code> on x86) that writes only if the value is unchanged.</li>
+  <li>Retry loop on CAS failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Worker implements Runnable {
+    private volatile boolean running = true;          // volatile is enough
+    public void stop() { running = false; }
+    public void run() { while (running) doWork(); }
+}
+
+class Counter {
+    private volatile int broken;      // broken++ loses updates
+    private final AtomicInteger ok = new AtomicInteger();
+    private final LongAdder hot = new LongAdder();     // heavy contention
+    void inc() { broken++; ok.incrementAndGet(); hot.increment(); }
+}
+
+class Account {                       // two fields, one invariant -&gt; lock
+    private long balance, version;
+    synchronized void deposit(long amt) { balance += amt; version++; }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using volatile for counters.</li>
+  <li>Thinking synchronized only matters for writes; reads need it too for visibility.</li>
+  <li>Using several atomics for one multi-field invariant.</li>
+  <li>Double-checked locking without volatile.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;volatile guarantees visibility: a write to a volatile field happens-before subsequent reads, so threads don't see stale values, and it prevents certain reorderings. But it gives no mutual exclusion, so count++ on a volatile is not atomic and can lose updates. synchronized takes the monitor lock, giving both mutual exclusion and visibility. Atomic classes like AtomicInteger use compare-and-swap to update a single variable atomically without locks, and LongAdder is better under heavy contention. I use volatile for simple flags like a shutdown signal, atomics for counters, and locks when several variables must change together.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is double-checked locking broken without volatile?</strong> Reordering can publish the reference before the constructor finishes, so another thread sees a half-built object.</li>
+  <li><strong>What is the ABA problem?</strong> A CAS succeeds although the value changed and changed back; use <code>AtomicStampedReference</code>.</li>
+  <li><strong>Is volatile long/double write atomic?</strong> Yes; non-volatile 64-bit writes may tear on some JVMs.</li>
+</ul>
+</article>
+</body>
+</html>

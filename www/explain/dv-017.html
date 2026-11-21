@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-017 · How do firewalls work in Linux and in the cloud? Explain iptables, security groups and stateful filtering.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-017" data-topic="Networking">
+<h1>How do firewalls work in Linux and in the cloud? Explain iptables, security groups and stateful filtering.</h1>
+<p class="ex-meta">Networking · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Firewalls <strong>allow or deny traffic by IP, port and protocol</strong>; Linux uses <strong>netfilter</strong> via <strong>iptables or nftables</strong> (often managed by <strong>ufw or firewalld</strong>), <strong>stateful</strong> filtering tracks connections so <strong>return traffic is allowed automatically</strong>, and in AWS <strong>security groups are stateful allow-lists</strong> on interfaces while <strong>NACLs are stateless</strong> subnet rules; always <strong>default deny, least access</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Linux:</strong> the kernel's <strong>netfilter</strong> framework inspects packets at hooks (prerouting, input, forward, output, postrouting). <strong>iptables</strong> organises rules into tables (filter, nat, mangle) and chains (INPUT, OUTPUT, FORWARD); rules are evaluated top-down and the first match decides, then the chain <strong>policy</strong> applies. <strong>nftables</strong> (<code>nft</code>) is the modern replacement with a cleaner syntax and better performance, and current distributions use it under the hood (iptables-nft). Friendlier front-ends: <strong>ufw</strong> on Ubuntu, <strong>firewalld</strong> with zones on RHEL. Docker and Kubernetes (kube-proxy in iptables mode, CNIs) also write netfilter rules; <strong>eBPF</strong>-based CNIs like Cilium can bypass iptables.</p>
+<p><strong>Stateful filtering:</strong> <strong>conntrack</strong> tracks connections (NEW, ESTABLISHED, RELATED). A rule like &quot;accept ESTABLISHED,RELATED&quot; lets replies back in, so you only write rules for the direction that initiates the connection. <strong>Stateless</strong> filters evaluate each packet alone, so you must permit return traffic explicitly, usually to the <strong>ephemeral port range</strong>.</p>
+<p><strong>Cloud (AWS):</strong> <strong>security groups</strong> attach to ENIs (instances, load balancers, RDS), contain <strong>allow rules only</strong>, are <strong>stateful</strong>, and can reference <strong>other security groups</strong> as sources, which is cleaner than IPs. <strong>Network ACLs</strong> apply to <strong>subnets</strong>, are <strong>stateless</strong>, have numbered allow and deny rules evaluated in order, and need inbound and outbound rules including ephemeral ports. Azure has <strong>NSGs</strong> (stateful, with allow and deny and priorities) on subnets or NICs, plus Azure Firewall; GCP has VPC firewall rules and policies. Centralised <strong>cloud firewalls</strong> add FQDN filtering and inspection.</p>
+<p><strong>Good practice:</strong> default deny inbound, open only required ports to specific sources (SSH via a bastion or SSM instead of 0.0.0.0/0), restrict egress for sensitive workloads, manage rules as code (Terraform), and review them regularly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Packet arrives at an interface.</li>
+  <li>Cloud NACL (stateless) and security group (stateful) evaluate it.</li>
+  <li>On the host, netfilter checks conntrack state, then rules.</li>
+  <li>First matching rule accepts or drops; else default policy.</li>
+  <li>Replies to accepted connections pass automatically through stateful layers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># nftables: default-deny inbound, allow established, SSH from admin net, HTTPS from anywhere
+sudo nft add table inet filter
+sudo nft add chain inet filter input '{ type filter hook input priority 0; policy drop; }'
+sudo nft add rule inet filter input ct state established,related accept
+sudo nft add rule inet filter input iif lo accept
+sudo nft add rule inet filter input ip saddr 10.0.100.0/24 tcp dport 22 accept
+sudo nft add rule inet filter input tcp dport 443 accept
+# ufw equivalent
+sudo ufw default deny incoming &amp;&amp; sudo ufw allow from 10.0.100.0/24 to any port 22 &amp;&amp; sudo ufw allow 443/tcp</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Security group</th><th>Network ACL</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>Interface/instance</td><td>Subnet</td></tr>
+<tr><td>State</td><td>Stateful</td><td>Stateless</td></tr>
+<tr><td>Rules</td><td>Allow only</td><td>Allow and deny, ordered</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting ephemeral return ports in NACLs.</li>
+  <li>Opening SSH or databases to 0.0.0.0/0.</li>
+  <li>Flushing iptables rules and breaking Docker or Kubernetes networking.</li>
+  <li>Rules added by hand, never reviewed or codified.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A firewall applies rules that allow or deny traffic by source and destination IP, port and protocol. On Linux, netfilter does it, configured with iptables or the newer nftables, usually through ufw or firewalld. A stateful firewall tracks connections, so return traffic for an allowed connection is allowed automatically. In AWS, security groups are stateful, attached to interfaces, with allow rules only, while network ACLs are stateless subnet rules, so return traffic on ephemeral ports must be allowed explicitly. Good practice is default deny and opening only the minimum ports to specific sources.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does a request work from one subnet but not another in the same VPC?</strong> Different NACLs or route tables, or the security group allows only the first subnet's CIDR or SG.</li>
+  <li><strong>Security group referencing another SG?</strong> Allows traffic from any interface in that group, independent of IPs.</li>
+  <li><strong>iptables versus nftables?</strong> nftables is the successor with one framework for IPv4, IPv6 and more.</li>
+</ul>
+</article>
+</body>
+</html>

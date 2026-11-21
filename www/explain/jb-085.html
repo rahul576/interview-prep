@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-085 · Can finally ever fail to execute?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-085" data-topic="Exceptions">
+<h1>Can finally ever fail to execute?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Normally finally <strong>always runs</strong>, even after <code>return</code>, <code>break</code> or an exception; it does <strong>not</strong> run if the JVM stops (<strong>System.exit, Runtime.halt, crash, kill -9, OOM killer</strong>), if the try <strong>never completes</strong> (infinite loop, deadlock), or for <strong>daemon threads</strong> when the JVM exits.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Java Language Specification guarantees that when control leaves a try block, by any means, the finally block executes. That covers normal completion, <code>return</code>, <code>break</code>, <code>continue</code> and thrown exceptions, including <code>Error</code>s like <code>StackOverflowError</code> (although in severe cases like OOM, the finally itself may fail).</p>
+<p>Finally does not run when control never leaves the try block in the normal sense:</p>
+<ul>
+  <li><strong><code>System.exit(status)</code></strong> starts JVM shutdown: shutdown hooks run, but the calling thread never returns from <code>exit</code>, so its finally blocks don't execute. <strong><code>Runtime.halt()</code></strong> is more abrupt: no hooks either.</li>
+  <li><strong>JVM crash</strong>: a native crash (SIGSEGV in JNI code, a JVM bug), producing an <code>hs_err_pid</code> file.</li>
+  <li><strong>Process killed</strong>: <code>kill -9</code> (SIGKILL), the <strong>Linux/Kubernetes OOM killer</strong> when a container exceeds its memory limit, or the orchestrator forcing termination after the grace period. Note that a normal <code>kill</code> (SIGTERM) triggers shutdown hooks, but not finally blocks of running threads.</li>
+  <li><strong>The try never finishes</strong>: infinite loop, deadlock or a thread blocked forever.</li>
+  <li><strong>Daemon threads</strong>: when the last non-daemon thread ends, the JVM exits and daemon threads are abandoned mid-execution, finally or not.</li>
+  <li><strong>Hardware or power failure</strong>.</li>
+  <li>A thread killed with the deprecated <code>Thread.stop()</code> would actually run finally (it throws <code>ThreadDeath</code>), but <code>stop</code> now throws <code>UnsupportedOperationException</code> in recent JDKs.</li>
+</ul>
+<p>So finally is reliable for in-process cleanup (locks, buffers), but not for <strong>durable or cross-process guarantees</strong>. Use transactions, idempotent operations, write-ahead logs, outbox patterns, leases with expiry for distributed locks, and graceful shutdown handling (shutdown hooks, Spring's graceful shutdown).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Compiler duplicates finally code on every exit path of the try/catch.</li>
+  <li>Exceptions are routed via the exception table to the finally handler.</li>
+  <li>If the thread never reaches an exit path, or the process stops, that code never executes.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">try {
+    System.out.println(&quot;in try&quot;);
+    System.exit(0);
+} finally {
+    System.out.println(&quot;finally&quot;);     // never printed
+}
+
+static int value() {
+    try { return 1; }
+    finally { System.out.println(&quot;runs before return&quot;); }  // printed
+}
+
+Thread t = new Thread(() -&gt; {
+    try { Thread.sleep(10_000); }
+    catch (InterruptedException ignored) { }
+    finally { System.out.println(&quot;daemon finally&quot;); }       // not printed if JVM exits
+});
+t.setDaemon(true); t.start();          // main ends -&gt; JVM exits</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying finally &quot;always, 100% runs&quot; with no exceptions.</li>
+  <li>Relying on finally to release a distributed lock with no TTL.</li>
+  <li>Calling <code>System.exit</code> from library or request-handling code.</li>
+  <li>Assuming SIGTERM runs finally blocks of busy threads.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Normally finally runs even if the try block returns, breaks or throws. It can fail to run in a few cases: if code calls System.exit or Runtime.halt, the JVM shuts down without finishing that thread's finally; if the JVM crashes or the process is killed with kill -9 or by the Kubernetes OOM killer; if the try never completes because of an infinite loop or deadlock; and daemon threads are abandoned when the JVM exits. And obviously power loss. So I use finally for in-process cleanup, but for critical cross-process state I rely on transactions, idempotency and locks with expiry.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if both try and finally contain a return statement?</strong> Finally's return wins, discarding the try's value and any exception.</li>
+  <li><strong>Do shutdown hooks run on System.exit?</strong> Yes, but not on halt or kill -9.</li>
+  <li><strong>Do finally blocks run on SIGTERM?</strong> Not for running threads; shutdown hooks do.</li>
+</ul>
+</article>
+</body>
+</html>

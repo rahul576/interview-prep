@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-033 · How does the Compact Strings feature work in modern Java?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-033" data-topic="Core Java &amp; OOP">
+<h1>How does the Compact Strings feature work in modern Java?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Compact Strings</strong> (<strong>JEP 254, Java 9</strong>) changed String's backing storage from <code>char[]</code> to <strong><code>byte[]</code> plus a coder flag</strong>: <strong>LATIN1</strong> strings use <strong>one byte per character</strong>, others use <strong>UTF-16</strong> (two bytes), often nearly <strong>halving string memory</strong> with no API change.</p>
+
+<h2>Detailed explanation</h2>
+<p>Strings are typically the largest consumer of heap in Java applications: JSON keys, ids, log messages, HTTP headers, cache keys. Up to Java 8, <code>String</code> wrapped a <code>char[]</code>, and every <code>char</code> is 16 bits. Measurements across many applications showed that most strings contain only <strong>Latin-1</strong> characters (code points 0-255), so half of the bytes in those arrays were zeros.</p>
+<p>Java 9 introduced Compact Strings:</p>
+<ul>
+  <li>The <code>value</code> field became a <strong><code>byte[]</code></strong>.</li>
+  <li>A new <strong><code>coder</code></strong> field records the encoding: <code>LATIN1</code> (0) or <code>UTF16</code> (1).</li>
+  <li>When a string is created, the JDK checks whether every character fits in Latin-1. If yes, it stores one byte per char; if any char needs more, the whole string is stored as UTF-16.</li>
+  <li>All String methods branch on the coder, using specialised implementations (<code>StringLatin1</code>, <code>StringUTF16</code>), and many are <strong>intrinsified</strong> by the JIT with vectorised code.</li>
+</ul>
+<p>Effects: heap used by strings is often reduced by up to half, which means less GC work and better CPU cache utilisation. Concatenation (JEP 280) and <code>StringBuilder</code> are coder-aware too. Code that uses the String API sees no difference; <code>charAt</code> and <code>length</code> still work in UTF-16 code units.</p>
+<p>Trade-offs: mixed-coder operations, like concatenating a Latin-1 and a UTF-16 string, require inflation; workloads dominated by non-Latin text (for example Hindi, Chinese, emoji) gain nothing and have a small branching overhead. The feature can be disabled with <strong><code>-XX:-CompactStrings</code></strong>, which forces UTF-16 everywhere, but that is rarely beneficial.</p>
+<p>Related features: <strong>G1 string deduplication</strong> removes duplicate backing arrays, and the string pool deduplicates literals; Compact Strings reduces the size of each array.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A new String's characters are scanned during construction.</li>
+  <li>If all are less than or equal to 0xFF, they are compressed into a byte array with coder LATIN1.</li>
+  <li>Otherwise a UTF-16 byte array (two bytes per char) is stored with coder UTF16.</li>
+  <li>Methods dispatch on the coder.</li>
+  <li>Operations mixing coders inflate to UTF-16 as needed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Inspect string footprint in a heap histogram
+jcmd &lt;pid&gt; GC.class_histogram | grep -E &quot;java.lang.String|\[B&quot;
+
+# Detailed analysis: heap dump, then open in Eclipse MAT or VisualVM
+jcmd &lt;pid&gt; GC.heap_dump /tmp/app.hprof
+
+# Compare with compact strings disabled (for experiments only)
+java -XX:-CompactStrings -jar app.jar</code></pre>
+<pre><code class="language-java">String ascii = &quot;order-12345&quot;;        // LATIN1: 11 bytes of payload
+String hindi = &quot;ऑर्डर&quot;;               // UTF16: 2 bytes per char</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking Compact Strings changed <code>char</code> to 8 bits or broke Unicode.</li>
+  <li>Confusing it with string interning or deduplication.</li>
+  <li>Assuming it was a Java 8 feature (Java 6 had an unrelated, removed <code>UseCompressedStrings</code>).</li>
+  <li>Disabling it without measurement.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Before Java 9 a String stored characters in a char array, two bytes each. Most strings in real apps, like ids, JSON keys and English text, are Latin-1, so half of that memory was zeros. Compact Strings, JEP 254 in Java 9, changed the backing field to a byte array plus a coder flag: if every character fits Latin-1 it uses one byte per character, otherwise UTF-16 with two. That often cuts string heap nearly in half and improves cache behaviour and GC. It's completely transparent to application code, and can be switched off with -XX:-CompactStrings, though I've never needed to.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you measure how much heap your application uses for strings?</strong> Class histogram via jcmd, or a heap dump analysed in MAT/JFR.</li>
+  <li><strong>Does it affect charAt?</strong> No, semantics are unchanged.</li>
+  <li><strong>Who benefits least?</strong> Applications dominated by non-Latin-1 text.</li>
+</ul>
+</article>
+</body>
+</html>

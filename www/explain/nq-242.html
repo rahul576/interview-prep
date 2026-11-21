@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-242 · What is the gossip protocol in Cassandra?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-242" data-topic="Databases &amp; SQL">
+<h1>What is the gossip protocol in Cassandra?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Gossip</strong> is Cassandra's <strong>peer-to-peer protocol</strong> for sharing cluster state: every second each node exchanges versioned state with <strong>up to three other nodes</strong>, spreading membership, status, tokens, load and schema versions, which together with the <strong>phi accrual failure detector</strong> lets nodes know who is up without a master; <strong>seed nodes</strong> help new nodes join.</p>
+
+<h2>Detailed explanation</h2>
+<p>Because Cassandra has no central coordinator, every node must learn about every other node by itself. Gossip, inspired by how rumours or epidemics spread, does that efficiently.</p>
+<p>Each node keeps <strong>endpoint state</strong> for every node it knows: a <strong>heartbeat</strong> (generation number, which changes on restart, plus a version that increments every second) and <strong>application state</strong> such as status (NORMAL, LEAVING, JOINING), tokens, data centre and rack, schema version, load and release version. Each value is <strong>versioned</strong>, so when two nodes compare, the newer version wins.</p>
+<p>Once per second, the gossiper picks up to three peers: a random live node, possibly an unreachable node (to detect recovery), and possibly a seed. The exchange is a three-message handshake: <strong>SYN</strong> (digests of what I know), <strong>ACK</strong> (what you are missing and what I need), <strong>ACK2</strong> (the requested data). Information reaches the whole cluster in a logarithmic number of rounds.</p>
+<p>Failure detection is separate but fed by gossip. The <strong>phi accrual failure detector</strong> tracks heartbeat arrival intervals for each peer and computes a suspicion level phi, rather than using a fixed timeout; above <code>phi_convict_threshold</code> (default 8) the node is marked down locally.</p>
+<p><strong>Seed nodes</strong> are a configured list of addresses. A new node contacts them to get the initial cluster view, and nodes gossip with seeds a bit more often, which speeds convergence. After startup, seeds have no special role in reads or writes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A node starts and contacts seed nodes from <code>cassandra.yaml</code>.</li>
+  <li>It receives the cluster state and announces itself.</li>
+  <li>Every second it gossips with up to three peers using SYN/ACK/ACK2.</li>
+  <li>Newer versions replace older ones in each node's state map.</li>
+  <li>Heartbeat intervals feed the phi accrual detector, which marks peers up or down.</li>
+  <li>Status changes, such as JOINING or LEAVING, propagate the same way.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml"># cassandra.yaml
+seed_provider:
+  - class_name: org.apache.cassandra.locator.SimpleSeedProvider
+    parameters:
+      - seeds: &quot;10.0.1.10,10.0.2.10&quot;
+phi_convict_threshold: 8</code></pre>
+<pre><code class="language-bash">nodetool gossipinfo      # per-node state: generation, heartbeat, STATUS, SCHEMA
+nodetool describecluster # check schema versions agree</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Making all nodes seeds, which slows bootstrap and complicates gossip.</li>
+  <li>Thinking seeds are masters or must always be up for the cluster to work.</li>
+  <li>Lowering <code>phi_convict_threshold</code> on flaky networks, causing nodes to flap.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cassandra has no master tracking the cluster, so nodes use gossip to share state. Every second each node exchanges messages with up to three others, sending versioned information about itself and others: heartbeat, status, tokens, load, schema version, data centre and rack. Newer versions win, and information spreads to the whole cluster in a few rounds. Nodes feed gossip heartbeats into the phi accrual failure detector to decide who is down. Seed nodes are known addresses that new nodes use to join and start gossiping, but after startup they aren't special. It's scalable and has no single point of failure.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Are seeds special after startup?</strong> No; they only bootstrap the gossip view and get gossiped with slightly more often.</li>
+  <li><strong>What is the phi accrual failure detector?</strong> It computes a suspicion level from heartbeat intervals instead of using a fixed timeout.</li>
+  <li><strong>Does gossip carry data?</strong> No, only cluster metadata; data travels via the read/write paths and streaming.</li>
+</ul>
+</article>
+</body>
+</html>

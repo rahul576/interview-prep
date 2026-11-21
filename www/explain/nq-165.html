@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-165 · What is garbage collection, and why is it needed?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-165" data-topic="JVM &amp; Performance">
+<h1>What is garbage collection, and why is it needed?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p><strong>Garbage collection</strong> is the JVM <strong>automatically reclaiming memory of unreachable objects</strong>: starting from <strong>GC roots</strong> (stack variables, static fields, active threads) it <strong>marks</strong> reachable objects and reclaims the rest by <strong>sweeping, copying or compacting</strong>; it prevents <strong>dangling pointers, double frees and most leaks</strong>, at the cost of some <strong>CPU and pauses</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>The problem it solves.</strong> Programs allocate memory continuously. In languages with manual memory management (C, C++ without smart pointers), the programmer must call <code>free</code>. Freeing too early causes <strong>dangling pointers</strong> and crashes or security holes; freeing twice corrupts memory; forgetting to free leaks it. These bugs are hard to find and responsible for many security vulnerabilities. Java removes them: you cannot free memory yourself, and the JVM guarantees an object is reclaimed only when no code can reach it any more.</p>
+<p><strong>How reachability works.</strong> The collector starts from <strong>GC roots</strong>: local variables and parameters in all thread stacks, static fields of loaded classes, live threads, JNI references and JVM internals. It follows every reference, <strong>marking</strong> reachable objects. Anything unmarked is garbage, including unreachable cycles of objects that point to each other.</p>
+<p><strong>Reclaiming memory.</strong> Three basic techniques, combined differently by each collector:</p>
+<ul>
+  <li><strong>Mark-sweep</strong>: free unmarked objects in place; fast, but leaves fragmentation.</li>
+  <li><strong>Copying</strong>: move live objects to a fresh area; ideal for the young generation where few survive.</li>
+  <li><strong>Mark-compact</strong>: slide live objects together to eliminate fragmentation; used for old generations.</li>
+</ul>
+<p><strong>Generations and concurrency.</strong> Because most objects die young, collectors use generations to focus effort. Modern collectors (G1, ZGC, Shenandoah) do much of their work <strong>concurrently</strong> with the application, keeping <strong>stop-the-world pauses</strong> short: G1 targets around 200 ms or lower by configuration, ZGC usually stays under a millisecond.</p>
+<p><strong>Costs.</strong> GC uses CPU, adds pauses, and needs spare memory headroom to work efficiently. These are tuned through heap size, collector choice and, most effectively, by reducing allocation.</p>
+<p><strong>Logical leaks still exist.</strong> GC frees unreachable objects only. Objects that are unused but still referenced, for example in a static map, an unbounded cache, a listener list or a <code>ThreadLocal</code>, stay in memory forever, eventually causing <code>OutOfMemoryError</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocation pressure triggers a collection.</li>
+  <li>The collector identifies GC roots.</li>
+  <li>It marks every object reachable from the roots.</li>
+  <li>Unmarked objects are reclaimed by sweeping, copying or compaction.</li>
+  <li>The application continues with freed memory.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">void handle(Request r) {
+    Report rep = new Report(r);   // reachable via local variable
+    send(rep);
+}                                 // after return, rep unreachable -&gt; garbage
+
+// Logical leak: reachable forever through a static field
+static final Map&lt;String, Session&gt; SESSIONS = new HashMap&lt;&gt;();
+void login(User u) { SESSIONS.put(UUID.randomUUID().toString(), new Session(u)); } // never removed</code></pre>
+<pre><code class="language-bash">java -Xlog:gc -jar app.jar   # watch collections happen</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Manual (C/C++)</th><th>Garbage collected (Java)</th></tr></thead>
+<tbody>
+<tr><td>Freeing</td><td>Programmer calls free/delete</td><td>Automatic when unreachable</td></tr>
+<tr><td>Dangling pointers</td><td>Possible</td><td>Impossible</td></tr>
+<tr><td>Leaks</td><td>Forgotten frees</td><td>Unwanted references only</td></tr>
+<tr><td>Runtime cost</td><td>Predictable</td><td>CPU and pauses</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying Java cannot have memory leaks.</li>
+  <li>Believing setting references to <code>null</code> everywhere is necessary.</li>
+  <li>Thinking GC uses reference counting and cannot handle cycles.</li>
+  <li>Relying on <code>System.gc()</code> or <code>finalize()</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Garbage collection is the JVM automatically freeing memory used by objects that are no longer reachable. Starting from GC roots, such as local variables on thread stacks, static fields and active threads, the collector marks every object it can reach; anything not marked is garbage, and its memory is reclaimed by sweeping, copying or compacting. It's needed because programs allocate continuously, and manual freeing, as in C, causes dangling pointers, double frees and leaks. GC makes Java memory-safe and productive at the cost of CPU and pauses, which modern collectors keep short. You can still have logical leaks when unused objects stay referenced, for example in a static map.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can a Java application still leak memory?</strong> By keeping references to unused objects in static collections, caches without eviction, listeners or ThreadLocals.</li>
+  <li><strong>Can circular references prevent collection?</strong> No; tracing collectors reclaim unreachable cycles.</li>
+  <li><strong>What is a stop-the-world pause?</strong> A phase where all application threads are halted so the collector can work safely.</li>
+</ul>
+</article>
+</body>
+</html>

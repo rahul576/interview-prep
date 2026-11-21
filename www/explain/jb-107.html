@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-107 · What is the difference between FixedThreadPool, CachedThreadPool, and SingleThreadExecutor?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-107" data-topic="Concurrency">
+<h1>What is the difference between FixedThreadPool, CachedThreadPool, and SingleThreadExecutor?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>newFixedThreadPool(n)</code></strong> has <strong>n threads and an unbounded queue</strong>; <strong><code>newCachedThreadPool()</code></strong> creates <strong>threads on demand</strong> and reuses idle ones, with <strong>no thread limit</strong>; <strong><code>newSingleThreadExecutor()</code></strong> runs tasks <strong>one at a time in order</strong>. In production prefer a <strong>bounded <code>ThreadPoolExecutor</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>All three are convenience factories in <code>Executors</code> that configure a <code>ThreadPoolExecutor</code> differently.</p>
+<p><strong>Fixed thread pool</strong>: core size = max size = n, with an unbounded <code>LinkedBlockingQueue</code>. Exactly n threads run; everything else waits in the queue. It is predictable and suits CPU-bound work sized to the cores. The danger is the <strong>unbounded queue</strong>: under overload, tasks pile up, latency grows without limit, and eventually you hit <code>OutOfMemoryError</code>, while nothing pushes back on producers.</p>
+<p><strong>Cached thread pool</strong>: core size 0, max <code>Integer.MAX_VALUE</code>, a <code>SynchronousQueue</code> (no storage, direct hand-off) and a 60-second keep-alive. A task is handed to an idle thread if one exists, otherwise a <strong>new thread</strong> is created. Good for many short-lived, bursty tasks. The danger is <strong>thread explosion</strong>: if tasks are slow (say, a downstream API hangs), every new submission creates another thread, potentially thousands, exhausting memory and native thread limits.</p>
+<p><strong>Single thread executor</strong>: one worker and an unbounded queue, wrapped so it cannot be reconfigured. Tasks execute <strong>sequentially in submission order</strong>, which gives you ordering and confinement without locks, for example writing events to a file. If the worker dies from an exception, a new one replaces it. Same unbounded-queue risk.</p>
+<p>In production, build a <strong><code>ThreadPoolExecutor</code></strong> explicitly: core and max sizes, a <strong>bounded <code>ArrayBlockingQueue</code></strong>, a <code>ThreadFactory</code> with <strong>named threads</strong>, and an explicit <strong>rejection policy</strong>. Expose metrics. For blocking I/O on Java 21+, also consider virtual threads with a semaphore.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A task is submitted to <code>ThreadPoolExecutor</code>.</li>
+  <li>If fewer than core threads run, a new thread starts for it.</li>
+  <li>Otherwise the task is offered to the queue.</li>
+  <li>If the queue is full (or is a <code>SynchronousQueue</code> with no taker) and threads are below max, a new thread starts.</li>
+  <li>If at max and queue full, the <strong>rejection policy</strong> runs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService fixed  = Executors.newFixedThreadPool(8);   // 8 threads, unbounded queue
+ExecutorService cached = Executors.newCachedThreadPool();   // unbounded threads
+ExecutorService single = Executors.newSingleThreadExecutor(); // 1 thread, FIFO
+
+// Production-style bounded pool
+ThreadPoolExecutor pool = new ThreadPoolExecutor(
+        8, 16,                                   // core, max
+        30, TimeUnit.SECONDS,                    // idle keep-alive above core
+        new ArrayBlockingQueue&lt;&gt;(500),           // bounded queue = backpressure
+        Thread.ofPlatform().name(&quot;report-&quot;, 0).factory(),
+        new ThreadPoolExecutor.CallerRunsPolicy());</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Fixed</th><th>Cached</th><th>Single</th></tr></thead>
+<tbody>
+<tr><td>Threads</td><td>Exactly n</td><td>0 to unbounded</td><td>1</td></tr>
+<tr><td>Queue</td><td>Unbounded LinkedBlockingQueue</td><td>SynchronousQueue</td><td>Unbounded</td></tr>
+<tr><td>Ordering</td><td>No</td><td>No</td><td>FIFO</td></tr>
+<tr><td>Main risk</td><td>Queue OOM</td><td>Thread explosion</td><td>Queue OOM, slow</td></tr>
+<tr><td>Good for</td><td>CPU-bound, steady load</td><td>Short bursty tasks</td><td>Ordered processing</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a cached pool for slow I/O calls and creating thousands of threads.</li>
+  <li>Using a fixed pool under unbounded load with no backpressure.</li>
+  <li>Expecting max pool size to matter with an unbounded queue (it never grows beyond core).</li>
+  <li>Leaving threads unnamed, making thread dumps useless.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;newFixedThreadPool keeps exactly n threads and puts extra tasks in an unbounded queue, good for CPU-bound work, but under overload the queue can grow until OutOfMemoryError. newCachedThreadPool creates a thread on demand when no idle one is free and removes threads idle for 60 seconds; it suits short tasks, but threads are effectively unbounded, so a burst or slow downstream can create thousands. newSingleThreadExecutor has one thread, so tasks run sequentially in submission order. In production I build a ThreadPoolExecutor with a bounded queue, named threads and an explicit rejection policy, and monitor it.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which rejection policies does ThreadPoolExecutor offer?</strong> AbortPolicy (throw, the default), CallerRunsPolicy (caller runs the task, natural backpressure), DiscardPolicy and DiscardOldestPolicy.</li>
+  <li><strong>Why does max pool size not matter with an unbounded queue?</strong> New threads beyond core are created only when the queue rejects an offer, which never happens.</li>
+  <li><strong>How do you size a pool?</strong> About core count for CPU-bound work; for I/O, cores multiplied by (1 + wait/compute time), capped by downstream limits.</li>
+</ul>
+</article>
+</body>
+</html>

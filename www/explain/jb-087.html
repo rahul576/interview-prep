@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-087 · How do you create custom exceptions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-087" data-topic="Exceptions">
+<h1>How do you create custom exceptions?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Create a class that extends <strong>Exception</strong> (checked) or <strong>RuntimeException</strong> (unchecked), give it a <strong>meaningful name</strong>, constructors taking a <strong>message and cause</strong> (calling <code>super(message, cause)</code>), optional <strong>context fields</strong>, and <strong>map it centrally</strong> to responses.</p>
+
+<h2>Detailed explanation</h2>
+<p>Custom exceptions make failures <strong>self-describing</strong> and <strong>actionable</strong>. A caller can catch <code>InsufficientBalanceException</code> and show a specific message, and a global handler can map it to HTTP 422 with a stable error code. A generic <code>RuntimeException(&quot;error&quot;)</code> allows neither.</p>
+<p><strong>Checked or unchecked?</strong> Extend <code>Exception</code> when callers can and should recover and you want the compiler to force them to think about it (rare in modern application code, more common in libraries for I/O-like conditions). Extend <code>RuntimeException</code> for business rule violations and technical failures in services: it keeps signatures clean, works naturally with lambdas and streams, and Spring's <code>@Transactional</code> <strong>rolls back by default only on unchecked exceptions</strong> (and Errors), which matches most business failures.</p>
+<p><strong>Design guidelines:</strong></p>
+<ul>
+  <li>Name it after the problem, ending in <code>Exception</code>: <code>OrderNotFoundException</code>, <code>PaymentDeclinedException</code>.</li>
+  <li>Provide constructors for <code>(message)</code>, <code>(message, cause)</code> and maybe <code>(cause)</code>. Always pass the cause when wrapping so the stack trace chain survives.</li>
+  <li>Add <strong>context fields</strong> that handlers need: an error code enum, the order id, the retryable flag. Never include passwords, tokens or full card numbers.</li>
+  <li>Build a small <strong>hierarchy</strong>: a base <code>DomainException</code> with subclasses, so handlers can catch broadly or specifically.</li>
+  <li>Don't create one class per error message. Reuse JDK exceptions where they fit: <code>IllegalArgumentException</code>, <code>IllegalStateException</code>, <code>UnsupportedOperationException</code>.</li>
+  <li>For very frequent, expected exceptions, you can skip stack trace capture via the protected 4-argument constructor with <code>writableStackTrace=false</code>, but only when measured.</li>
+</ul>
+<p>In Spring, a <code>@RestControllerAdvice</code> maps each type to a status and a consistent body, for example RFC 9457 <strong>ProblemDetail</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the exception class with constructors and fields.</li>
+  <li>Throw it where the rule is violated or when wrapping a lower-level failure.</li>
+  <li>Let it propagate through service layers.</li>
+  <li>A central handler catches it, logs at the right level and maps it to a response or message outcome.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class InsufficientBalanceException extends RuntimeException {
+    private final String accountId;
+    private final BigDecimal shortfall;
+
+    public InsufficientBalanceException(String accountId, BigDecimal shortfall) {
+        super(&quot;Insufficient balance in account &quot; + accountId);
+        this.accountId = accountId;
+        this.shortfall = shortfall;
+    }
+    public String accountId() { return accountId; }
+    public BigDecimal shortfall() { return shortfall; }
+}
+
+@RestControllerAdvice
+class ErrorHandler {
+    @ExceptionHandler(InsufficientBalanceException.class)
+    ProblemDetail handle(InsufficientBalanceException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        pd.setProperty(&quot;code&quot;, &quot;INSUFFICIENT_BALANCE&quot;);
+        return pd;
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Wrapping without passing the cause.</li>
+  <li>Extending <code>Exception</code> everywhere, forcing <code>throws</code> clauses through every layer.</li>
+  <li>Putting sensitive data in messages that reach logs or clients.</li>
+  <li>Exploding into dozens of nearly identical classes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I create a class extending Exception for a checked exception or RuntimeException for unchecked; in Spring services most business exceptions are unchecked so they don't pollute every signature, and @Transactional rolls back on them by default. I give it a meaningful name like InsufficientBalanceException, constructors accepting a message and a cause that call super(message, cause), and context fields like an error code or account id, never sensitive data. Then a @RestControllerAdvice maps each custom exception to the right HTTP status and a consistent error body, such as ProblemDetail.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you choose a checked custom exception over an unchecked one?</strong> When the caller can realistically recover and must be forced to handle it, e.g. in a library API.</li>
+  <li><strong>Does @Transactional roll back on checked exceptions?</strong> Not by default; use <code>rollbackFor</code>.</li>
+  <li><strong>Should exceptions be serialisable?</strong> Throwable is Serializable; keep fields serialisable or transient.</li>
+</ul>
+</article>
+</body>
+</html>

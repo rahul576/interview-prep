@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-241 · How does Cassandra distribute data across nodes?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-241" data-topic="Databases &amp; SQL">
+<h1>How does Cassandra distribute data across nodes?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Cassandra uses <strong>consistent hashing</strong>: the <strong>partitioner</strong> (Murmur3 by default) hashes the <strong>partition key</strong> to a <strong>token</strong> on a ring, nodes own token ranges (via <strong>virtual nodes</strong>), the partition is stored on the owning node plus further replicas per the <strong>replication strategy</strong>, and any node can act as <strong>coordinator</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every row's partition key is hashed by the <strong>Murmur3Partitioner</strong> into a 64-bit token, from -2^63 to 2^63-1. The token space is treated as a <strong>ring</strong>. Each node owns one or more ranges of tokens; the first replica of a partition goes to the node owning its token range, and additional replicas are chosen by walking the ring.</p>
+<p><strong>Virtual nodes (vnodes)</strong>: instead of one large range per node, each node owns many small ranges (<code>num_tokens</code>, which defaults to 16 in Cassandra 4.0+ with a token allocation algorithm, previously 256). This spreads data more evenly, lets a new node take small slices from many existing nodes, and spreads the streaming work during bootstrap and rebuilds.</p>
+<p><strong>Replication</strong> is configured per keyspace:</p>
+<ul>
+  <li><strong>SimpleStrategy</strong>: next N nodes on the ring; only for single data centre tests.</li>
+  <li><strong>NetworkTopologyStrategy</strong>: set a replication factor per data centre (for example <code>{'dc1': 3, 'dc2': 3}</code>) and place replicas on <strong>different racks</strong> using the <strong>snitch</strong>'s topology information, so a rack or availability zone failure does not take all replicas.</li>
+</ul>
+<p><strong>Coordinator</strong>: the client driver (token-aware) usually sends a request straight to a replica, but any node can receive it, hash the key, find replicas and forward the request.</p>
+<p>A poor partition key causes <strong>hot partitions</strong> (one key gets most traffic, such as today's date) or <strong>wide partitions</strong> (unbounded rows per key). Cassandra cannot split a single partition across nodes, so bucketing (for example <code>(device_id, day)</code>) is the fix.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client sends a request with the partition key.</li>
+  <li>Murmur3 hashes the key to a token.</li>
+  <li>The token's range identifies the primary replica.</li>
+  <li>The replication strategy chooses the other replicas, rack- and DC-aware.</li>
+  <li>The coordinator contacts the replicas and applies the consistency level.</li>
+  <li>When nodes join or leave, only the affected token ranges are streamed.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE KEYSPACE shop WITH replication = {
+  'class': 'NetworkTopologyStrategy', 'eu-west': 3, 'ap-south': 3 };
+
+-- See where a key lives
+SELECT token(customer_id) FROM shop.orders_by_customer WHERE customer_id = 42;</code></pre>
+<pre><code class="language-bash">nodetool getendpoints shop orders_by_customer 42   # replicas for this key
+nodetool status                                    # ownership per node</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using SimpleStrategy in multi-DC production.</li>
+  <li>Partition keys with low cardinality or time-based hotspots.</li>
+  <li>Expecting range queries across partition keys (tokens are hashed, so order is lost).</li>
+  <li>Changing replication factor without running repair afterwards.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cassandra uses consistent hashing. The partitioner, Murmur3 by default, hashes each partition key into a token, and the token space is a ring divided among nodes. With virtual nodes each physical node owns many small ranges, which balances data and makes adding nodes smoother. A partition is stored on the node owning its token and replicated to further nodes according to the keyspace's replication factor; NetworkTopologyStrategy places replicas on different racks and data centres. Any node can coordinate a request and forward it to the replicas. A bad partition key, such as a date, creates hot or oversized partitions, so I bucket keys to spread load.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens when you add a node?</strong> It takes ownership of some token ranges and streams that data; run <code>nodetool cleanup</code> on others afterwards.</li>
+  <li><strong>What is a snitch?</strong> It tells Cassandra the rack and DC of each node for replica placement and routing.</li>
+  <li><strong>Why can't you range-scan by partition key?</strong> Keys are hashed, so adjacent keys are spread across the ring.</li>
+</ul>
+</article>
+</body>
+</html>

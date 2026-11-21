@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-332 · A deployment through the CI/CD pipeline failed. How do you find the cause?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-332" data-topic="Troubleshooting">
+<h1>A deployment through the CI/CD pipeline failed. How do you find the cause?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>Read the failing step's log from the <strong>first real error</strong>, <strong>classify</strong> the failure (build, test, scan or deploy), <strong>compare with the last successful run</strong> (code, dependencies, runner image, secrets), <strong>reproduce or re-run once</strong> to detect flakiness, and for deploy failures check <strong>permissions, quotas and target events</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Pipeline failures often produce long logs where the last lines are just consequences, like &quot;process exited with code 1&quot;. The useful information is the <strong>first error</strong>, so I search upward for <code>error</code>, <code>FAILED</code> or the first stack trace.</p>
+<p><strong>Classifying</strong> the failure narrows the search:</p>
+<ul>
+  <li><strong>Build</strong>: compilation errors, missing dependencies, a dependency registry being down, or a changed base image.</li>
+  <li><strong>Tests</strong>: a real regression or a <strong>flaky test</strong>.</li>
+  <li><strong>Security or quality gates</strong>: a new CVE found by the image scanner, coverage or lint thresholds.</li>
+  <li><strong>Deployment</strong>: authentication to the cloud, insufficient permissions, quota limits, the target rejecting the change, or a failed health check after rollout.</li>
+</ul>
+<p><strong>Compare with the last successful run.</strong> What changed: the commit diff, dependency versions (an <strong>unpinned</strong> version can change without any commit), the base image, the pipeline definition, the <strong>runner image</strong> or agent, and <strong>secrets or credentials</strong> — an expired token or service principal secret is a very common cause.</p>
+<p><strong>Reproduce.</strong> Run the same command locally or in the same container image. If a re-run passes without changes, the test is <strong>flaky</strong>: record it, quarantine it if needed, and fix it rather than relying on retries, which hide real problems.</p>
+<p><strong>Deploy failures</strong> need the target's view: Kubernetes events and <code>kubectl rollout status</code>, cloud activity logs for denied operations, or Terraform error output.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Open the failing step and find the first real error.</li>
+  <li>Classify the failure type.</li>
+  <li>Diff against the last green run: code, dependencies, images, pipeline, secrets.</li>
+  <li>Reproduce locally or re-run once to check for flakiness.</li>
+  <li>For deploys, inspect target events, permissions and quotas.</li>
+  <li>Fix, and add a guard (pinning, alerting on expiry) to prevent recurrence.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">Step: deploy
+ERROR: AADSTS7000222: The provided client secret keys for app '...' are expired.</code></pre>
+<pre><code class="language-bash">git diff last-green..HEAD -- package.json pipeline.yml
+docker run --rm -v &quot;$PWD&quot;:/src -w /src node:22 npm ci &amp;&amp; npm test   # reproduce build locally
+kubectl rollout status deploy/api -n prod
+kubectl get events -n prod --sort-by=.lastTimestamp | tail</code></pre>
+<p>Here the fix was moving the pipeline to OIDC federation so there is no secret to expire.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading only the last line of the log.</li>
+  <li>Re-running until green and ignoring flaky tests.</li>
+  <li>Not checking whether credentials or certificates expired.</li>
+  <li>Unpinned dependencies and runner images that change silently.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I open the failing step and read from the first real error, not the last line, since later errors are often consequences. Then I classify it: build error, failing tests, a security gate, or the deployment itself. I compare with the last successful run — code changes, dependency versions, base and runner images, pipeline definition and secrets — because an expired credential or an unpinned dependency is a common cause. I try to reproduce locally or re-run once to detect flaky tests, which need fixing rather than retries. For deploy failures I check permissions, quotas and the target, like Kubernetes events and rollout status.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you deal with flaky tests?</strong> Track them, quarantine with an owner and deadline, and fix the root cause such as timing or shared state.</li>
+  <li><strong>How do you make builds reproducible?</strong> Lock files, pinned image digests and versioned runner images.</li>
+  <li><strong>How do you avoid expired-secret failures?</strong> OIDC federation, or alerts before credential expiry.</li>
+</ul>
+</article>
+</body>
+</html>

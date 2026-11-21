@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-415 · How do you handle data that several microservices need, without sharing a database?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-415" data-topic="Microservices">
+<h1>How do you handle data that several microservices need, without sharing a database?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Each piece of data has <strong>one owning service</strong> as the <strong>source of truth</strong>; other services either <strong>query its API at runtime</strong> or keep a <strong>local read copy updated by events</strong>, accepting <strong>eventual consistency</strong>, and nobody reads another service's tables.</p>
+
+<h2>Detailed explanation</h2>
+<p>With a <strong>database per service</strong>, sharing tables is off-limits: it would couple schemas, deployments and performance, and bypass the owner's business rules. Yet services constantly need others' data: orders need customer names, shipping needs addresses, search needs product details.</p>
+<p>The first step is clear <strong>ownership</strong>. The customer service owns customer data; everyone else holds at most a copy. Then there are two main options.</p>
+<p><strong>Query the owner via its API at runtime</strong> (REST or gRPC). It is simple and always <strong>fresh</strong>, suitable when the data changes often or must be exact, such as current stock or credit limit. The costs are <strong>runtime coupling</strong> (if the customer service is down, the caller degrades), added latency and load on the owner, and N+1 call patterns. Mitigate with batch endpoints, caching with short TTLs, timeouts and circuit breakers.</p>
+<p><strong>Replicate via events</strong> (event-carried state transfer). The owner publishes <code>CustomerCreated</code>/<code>CustomerUpdated</code>, or a compacted topic with the latest state per key, and consumers keep a <strong>local read copy</strong> containing only the fields they need. Reads are fast and <strong>resilient</strong> to the owner being down, and queries can join locally. The cost is <strong>eventual consistency</strong> (a name change appears seconds later), storage duplication, the need for idempotent, ordered updates, and a <strong>backfill</strong> strategy for new consumers.</p>
+<p>Other techniques: copy a <strong>snapshot</strong> of data at the time of the business event (the order stores the shipping address as it was, which is often the correct business semantics anyway), API composition for queries, and CQRS read models or a data platform for reporting. The choice depends on how <strong>fresh</strong> the data must be, how often it is read, and how much coupling you can tolerate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the owner of each data entity.</li>
+  <li>Owner exposes an API and publishes change events with the entity id as key.</li>
+  <li>Consumer chooses runtime query or local copy per use case.</li>
+  <li>Local copy: idempotent upsert, keep last version per id.</li>
+  <li>New consumer backfills from a compacted topic or bulk export, then follows events.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Order service keeps a minimal local copy of customers
+@KafkaListener(topics = &quot;customers.state&quot;, groupId = &quot;orders-customer-cache&quot;)
+public void onCustomer(CustomerState evt) {
+    jdbc.update(&quot;&quot;&quot;
+        INSERT INTO customer_view(id, name, tier, version) VALUES (?,?,?,?)
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, tier = EXCLUDED.tier,
+            version = EXCLUDED.version
+        WHERE customer_view.version &lt; EXCLUDED.version&quot;&quot;&quot;,
+        evt.id(), evt.name(), evt.tier(), evt.version());
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Freshness</th><th>Coupling</th><th>Read performance</th></tr></thead>
+<tbody>
+<tr><td>Runtime API query</td><td>Live</td><td>High (availability)</td><td>Network call</td></tr>
+<tr><td>Event-fed local copy</td><td>Eventual</td><td>Low</td><td>Local, fast</td></tr>
+<tr><td>Snapshot in business record</td><td>Point in time</td><td>None</td><td>Local</td></tr>
+<tr><td>Shared database</td><td>Live</td><td>Very high</td><td>Fast but forbidden</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>&quot;Temporarily&quot; reading another service's database.</li>
+  <li>Copying whole entities with sensitive data everywhere.</li>
+  <li>No version checks, so out-of-order events overwrite newer data.</li>
+  <li>Forgetting how a new service gets historical data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every piece of data has one owning service, and no one else reads its tables, because a shared database couples schemas and releases. Other services either call the owner's API at runtime, which is simple and fresh but couples availability and adds latency, or they keep a local read copy of just the fields they need, updated from events like CustomerUpdated, which is fast and resilient but eventually consistent. Sometimes the right answer is to snapshot data into the business record, like the address on an order. I choose based on how fresh the data must be and how much coupling we can accept.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you backfill a new read copy?</strong> Consume a compacted state topic from the beginning, or bulk-load an export, then follow live events.</li>
+  <li><strong>How do you handle out-of-order updates?</strong> Key by entity id for partition ordering and apply only higher versions.</li>
+  <li><strong>What about reports across services?</strong> Stream events into a warehouse or a dedicated reporting read model.</li>
+</ul>
+</article>
+</body>
+</html>

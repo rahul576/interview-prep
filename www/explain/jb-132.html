@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-132 · What JVM parameters would you configure for a production application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-132" data-topic="JVM &amp; Performance">
+<h1>What JVM parameters would you configure for a production application?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>In production I set <strong>heap sizing</strong> (<code>-Xms</code>/<code>-Xmx</code>, or <strong><code>MaxRAMPercentage</code></strong> in containers), choose the <strong>collector and pause goal</strong>, enable <strong>unified GC logging</strong>, add <strong>heap dump on OOM</strong> plus <strong><code>ExitOnOutOfMemoryError</code></strong>, consider <strong>Metaspace and thread stack limits</strong>, a <strong>continuous JFR recording</strong>, and fix <strong>encoding and time zone</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Memory.</strong> On VMs, set <code>-Xms</code> equal to <code>-Xmx</code> to avoid resizing and get predictable behaviour. In <strong>containers</strong>, the JVM is container-aware (default since JDK 10/8u191) and by default uses only 25% of the limit for heap, which wastes memory. Use <code>-XX:MaxRAMPercentage=70</code> to 75 (and optionally <code>InitialRAMPercentage</code>), leaving the rest for Metaspace, thread stacks, code cache, direct buffers and GC structures. Heap equal to the container limit leads to <strong>OOMKilled</strong> pods.</p>
+<p><strong>Collector.</strong> Be explicit even if it is the default: <code>-XX:+UseG1GC</code> with <code>-XX:MaxGCPauseMillis=100</code> to 200 for typical services, or <code>-XX:+UseZGC</code> for strict latency or large heaps. Note that a JVM that sees fewer than 2 CPUs and under about 1.8 GB of memory selects <strong>Serial GC</strong> automatically, which surprises people in small pods.</p>
+<p><strong>GC logging.</strong> <code>-Xlog:gc*:file=/logs/gc.log:time,uptime,level,tags:filecount=5,filesize=20m</code> gives rotating logs with negligible overhead; essential for post-incident analysis.</p>
+<p><strong>OOM handling.</strong> <code>-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps</code> (a persistent volume with enough space) and <strong><code>-XX:+ExitOnOutOfMemoryError</code></strong>, so a broken instance exits and the orchestrator restarts it rather than limping on.</p>
+<p><strong>Other limits.</strong> <code>-XX:MaxMetaspaceSize</code> to make class loader leaks fail clearly; <code>-Xss</code> (for example 512k) if you have many platform threads; <code>-XX:MaxDirectMemorySize</code> for Netty-heavy services; <code>-XX:NativeMemoryTracking=summary</code> when investigating native usage.</p>
+<p><strong>Observability.</strong> A continuous <strong>JFR</strong> recording, <code>-XX:StartFlightRecording=maxage=12h,maxsize=500m,dumponexit=true,filename=/logs/</code>, lets you dump the last hours after an incident with roughly 1% overhead.</p>
+<p><strong>Environment.</strong> <code>-Duser.timezone=UTC</code> and <code>-Dfile.encoding=UTF-8</code> (UTF-8 is the default since JDK 18) avoid environment-dependent behaviour. <code>-XX:ActiveProcessorCount</code> can help when CPU limits mislead thread-pool sizing.</p>
+<p>Put flags in <code>JAVA_TOOL_OPTIONS</code> or the image entrypoint, keep them in version control, and change them only with measurements.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide memory budget: container limit, heap percentage, native headroom.</li>
+  <li>Choose the collector and pause target from latency goals.</li>
+  <li>Enable GC logs and JFR for evidence.</li>
+  <li>Configure OOM dump and exit behaviour.</li>
+  <li>Cap Metaspace, direct memory and stacks as needed.</li>
+  <li>Load-test and refine.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">JAVA_TOOL_OPTIONS=&quot;\
+ -XX:MaxRAMPercentage=72 -XX:InitialRAMPercentage=72 \
+ -XX:+UseG1GC -XX:MaxGCPauseMillis=150 \
+ -Xlog:gc*:file=/logs/gc.log:time,uptime:filecount=5,filesize=20m \
+ -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps -XX:+ExitOnOutOfMemoryError \
+ -XX:MaxMetaspaceSize=384m -Xss512k \
+ -XX:StartFlightRecording=maxage=12h,maxsize=500m,dumponexit=true,filename=/logs/ \
+ -Duser.timezone=UTC -Dfile.encoding=UTF-8&quot;</code></pre>
+<pre><code class="language-bash">jcmd &lt;pid&gt; VM.flags -all | grep -E 'MaxHeapSize|UseG1GC|MaxRAMPercentage'  # verify</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving the default 25% heap in containers, or using 100% of the limit.</li>
+  <li>Not knowing which GC the JVM actually selected.</li>
+  <li>No GC logs, so incidents cannot be analysed.</li>
+  <li>Copying dozens of obsolete flags (CMS, PermGen) from old guides.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;For memory I size the heap explicitly: Xms equal to Xmx on VMs, or in containers MaxRAMPercentage around 70 to 75 percent so the JVM respects the limit and leaves room for native memory. I choose the collector deliberately, G1 with a MaxGCPauseMillis goal, or ZGC for strict latency. I enable unified GC logging to rotating files. I add HeapDumpOnOutOfMemoryError with a path on a persistent volume plus ExitOnOutOfMemoryError, so the orchestrator restarts a broken instance. I may cap Metaspace and thread stack size, run a continuous JFR recording, and fix the encoding and time zone. Then I verify the effective flags with jcmd and load-test.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should a JVM in a container usually not use 100 percent of the memory limit as heap?</strong> Metaspace, thread stacks, code cache, direct buffers and GC structures need native memory too; exceeding the limit gets the pod killed.</li>
+  <li><strong>What happens on a 1-CPU, 1 GB pod by default?</strong> The JVM picks Serial GC; set G1 explicitly if needed.</li>
+  <li><strong>Why <code>ExitOnOutOfMemoryError</code>?</strong> After an OOM, application state may be corrupt; restarting is safer.</li>
+</ul>
+</article>
+</body>
+</html>

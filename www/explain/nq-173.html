@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-173 · How does the class-loading hierarchy work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-173" data-topic="JVM &amp; Performance">
+<h1>How does the class-loading hierarchy work?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Class loaders follow the <strong>parent delegation model</strong>: a loader first asks its <strong>parent</strong>, all the way up to Bootstrap, and only loads a class itself if no parent can, which protects core classes and avoids duplicates; some containers deliberately use <strong>child-first</strong> loading.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>ClassLoader.loadClass</code> implements a simple algorithm. First it checks whether this loader has <strong>already loaded</strong> the class (<code>findLoadedClass</code>). If not, it <strong>delegates</strong> to its parent; the parent repeats the process up to the Bootstrap loader. Only if the parent chain throws <code>ClassNotFoundException</code> does the loader call its own <code>findClass</code> to search its sources.</p>
+<p>This gives two guarantees. <strong>Security and consistency</strong>: <code>java.lang.String</code> always comes from Bootstrap, so a JAR on the classpath containing a fake <code>java.lang.String</code> cannot replace it (the module system also forbids defining classes in <code>java.*</code> packages). <strong>Uniqueness</strong>: a class is loaded once, by the highest loader that can see it, so all code shares the same <code>Class</code> object and casts work. Loaders also see &quot;upwards only&quot;: a class loaded by a parent cannot see classes only visible to a child, which is why frameworks use the <strong>thread context class loader</strong> to load application classes from library code.</p>
+<p>Some containers <strong>invert</strong> the model for application code. <strong>Tomcat's WebappClassLoader</strong> looks in the web app's <code>WEB-INF/classes</code> and <code>WEB-INF/lib</code> first (<strong>child-first</strong>) and only then delegates, while still delegating JDK classes and Servlet API classes to parents. This lets each web app ship its own version of Jackson or Guava. OSGi and JBoss Modules use explicit dependency graphs instead of a strict tree.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>loadClass(&quot;com.acme.Order&quot;)</code> called on a child loader.</li>
+  <li><code>findLoadedClass</code> returns the cached class if present.</li>
+  <li>Otherwise <code>parent.loadClass(...)</code>, recursively to Bootstrap.</li>
+  <li>If a parent finds it, that parent's class is returned.</li>
+  <li>If none does, the child's <code>findClass</code> searches its own JARs and calls <code>defineClass</code>.</li>
+  <li>If still not found, <code>ClassNotFoundException</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Simplified logic of ClassLoader.loadClass
+protected Class&lt;?&gt; loadClass(String name, boolean resolve) throws ClassNotFoundException {
+    synchronized (getClassLoadingLock(name)) {
+        Class&lt;?&gt; c = findLoadedClass(name);
+        if (c == null) {
+            try {
+                c = (parent != null) ? parent.loadClass(name, false)
+                                     : findBootstrapClassOrNull(name);
+            } catch (ClassNotFoundException ignored) { }
+            if (c == null) c = findClass(name);   // only now search locally
+        }
+        if (resolve) resolveClass(c);
+        return c;
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Parent-first (default)</th><th>Child-first (web apps)</th></tr></thead>
+<tbody>
+<tr><td>Lookup order</td><td>Parent, then self</td><td>Self, then parent</td></tr>
+<tr><td>Benefit</td><td>Consistency, safety</td><td>Per-app library versions</td></tr>
+<tr><td>Risk</td><td>Cannot override shared libs</td><td>Duplicate classes, <code>LinkageError</code>, <code>ClassCastException</code></td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying the child loads first by default.</li>
+  <li>Putting the same library both in the container's lib and the web app, causing <code>ClassCastException</code> or <code>LinkageError</code>.</li>
+  <li>Forgetting the context class loader when loading user classes from framework code.</li>
+  <li>Overriding <code>loadClass</code> and breaking delegation unintentionally.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Class loaders use parent delegation. When a loader is asked for a class, it checks its cache, then delegates to its parent, which delegates upward to Bootstrap. Only if no parent can find the class does the child search its own sources through <code>findClass</code>. That stops applications from replacing core classes like <code>String</code> and makes sure each class is loaded once by the highest loader that can see it. Containers like Tomcat use child-first loading for web-app libraries so each app can bring its own versions, but that can cause duplicate-class problems if a library appears at both levels.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What problems can child-first cause?</strong> The same class loaded twice, leading to <code>ClassCastException</code>, <code>LinkageError</code> or a mismatched interface.</li>
+  <li><strong>How does JDBC find drivers if DriverManager is in a parent loader?</strong> Through <code>ServiceLoader</code> and the thread context class loader.</li>
+  <li><strong>Can you replace java.lang.String with your own?</strong> No; delegation and module rules prevent it.</li>
+</ul>
+</article>
+</body>
+</html>

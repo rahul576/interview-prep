@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-035 · How can excessive string creation contribute to memory pressure in a backend application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-035" data-topic="JVM &amp; Performance">
+<h1>How can excessive string creation contribute to memory pressure in a backend application?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Excessive string creation raises the <strong>allocation rate</strong>, which means <strong>more frequent young GCs</strong>, extra CPU and <strong>latency spikes</strong>; duplicate <strong>long-lived</strong> strings also fill the <strong>old generation</strong>; fix it with <strong>parameterised logging</strong>, <code>StringBuilder</code> in loops, fewer needless <code>toString</code> calls, <strong>streaming JSON</strong>, <strong>enums or deduplication</strong>, and confirm with an <strong>allocation profiler</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Strings are immutable, so every concatenation, <code>substring</code>, <code>split</code>, <code>format</code>, <code>toUpperCase</code> or <code>toString</code> creates new objects: a <code>String</code> plus its backing <code>byte[]</code>. In a busy backend these add up quickly: a request handler that builds log messages, converts IDs, serialises a JSON response and parses headers can allocate hundreds of kilobytes per request. At 2,000 requests per second that is hundreds of megabytes per second.</p>
+<p><strong>Short-lived strings</strong> die young, which is cheap per object, but a high <strong>allocation rate</strong> fills Eden faster, so <strong>minor GCs run more often</strong>. Each is a stop-the-world pause (short with G1, but frequent), and GC threads compete with request threads for CPU. Under load, this shows up as higher p99 latency and CPU usage.</p>
+<p><strong>Long-lived duplicate strings</strong> are a different problem. Large caches, parsed configuration or in-memory lookup tables often contain the same values (country codes, status names, currency codes) millions of times. These survive into the <strong>old generation</strong>, inflate the heap and increase the risk of long mixed or full collections.</p>
+<p>Common sources:</p>
+<ul>
+  <li><code>log.debug(&quot;User &quot; + user + &quot; loaded &quot; + order)</code> builds the string <strong>even when debug is disabled</strong>.</li>
+  <li><code>toString()</code> on large objects for logs or exceptions.</li>
+  <li>String-based JSON building, or reading whole payloads into one <code>String</code> before parsing.</li>
+  <li><code>String.format</code> and regex <code>split</code> in hot loops.</li>
+  <li>Using <code>String</code> keys built by concatenation (<code>userId + &quot;:&quot; + date</code>) for maps and caches.</li>
+</ul>
+<p><strong>Fixes.</strong> Use <strong>parameterised logging</strong> (<code>log.debug(&quot;User {} loaded {}&quot;, id, orderId)</code>) or lambda suppliers so nothing is built when the level is off. Use <code>StringBuilder</code> for loops (single expressions are already optimised by <code>javac</code>). Stream JSON with Jackson directly to the output stream. Replace repeated values with <strong>enums</strong> or canonical constants, use <code>String.intern()</code> sparingly for bounded sets, or enable <strong>string deduplication</strong> (<code>-XX:+UseStringDeduplication</code>, available for G1 and, since JDK 18, other collectors), which shares backing arrays of equal long-lived strings. Since Java 9, <strong>compact strings</strong> already store Latin-1 text with one byte per character.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each string operation allocates a new <code>String</code> and <code>byte[]</code> in Eden.</li>
+  <li>High volume fills Eden quickly; minor GCs become frequent.</li>
+  <li>GC threads use CPU; pauses accumulate into latency.</li>
+  <li>Long-lived duplicates get promoted, bloating the old generation.</li>
+  <li>Profiling identifies allocation sites; code fixes reduce bytes per request.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Before: allocates even when DEBUG is off
+log.debug(&quot;Processing order &quot; + order.getId() + &quot; for &quot; + customer.toString());
+
+// After
+log.debug(&quot;Processing order {} for {}&quot;, order.getId(), customer.getId());
+
+// Before: concatenation in a loop creates a new String each iteration
+String csv = &quot;&quot;;
+for (Item i : items) csv += i.sku() + &quot;,&quot;;
+
+// After
+StringBuilder sb = new StringBuilder(items.size() * 12);
+for (Item i : items) sb.append(i.sku()).append(',');</code></pre>
+<pre><code class="language-bash">java -XX:+UseG1GC -XX:+UseStringDeduplication -Xlog:stringdedup*=debug -jar app.jar
+asprof -e alloc -d 30 -f alloc.html &lt;pid&gt;   # allocation flame graph</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming disabled log levels cost nothing with string concatenation.</li>
+  <li>Interning unbounded, user-supplied strings.</li>
+  <li>Optimising single-line <code>+</code> expressions that the compiler already handles.</li>
+  <li>Tuning GC flags instead of reducing allocation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Every request can create thousands of temporary strings: concatenation in log statements even when the level is off, JSON serialisation, toString calls, splitting and formatting. That raises the allocation rate, so young GCs run more often, costing CPU and adding latency spikes. Separately, duplicate long-lived strings, like status values in a big cache, survive into the old generation and increase heap use and full GC risk. I fix it with parameterised logging, StringBuilder in loops, avoiding needless toString, streaming JSON, enums or deduplication for repeated values, and I confirm the hot spots with an allocation profiler like JFR or async-profiler before and after.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you find which code path allocates the most strings?</strong> JFR allocation samples or async-profiler in <code>alloc</code> mode, read as a flame graph.</li>
+  <li><strong>What are compact strings?</strong> Since Java 9, strings with only Latin-1 characters use one byte per character.</li>
+  <li><strong>Is <code>intern()</code> a good idea?</strong> Only for small, bounded sets; string deduplication or enums are safer.</li>
+</ul>
+</article>
+</body>
+</html>

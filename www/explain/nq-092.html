@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-092 · What is the difference between ReentrantLock and synchronized?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-092" data-topic="Concurrency">
+<h1>What is the difference between ReentrantLock and synchronized?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Both give <strong>mutual exclusion, visibility and reentrancy</strong>; <strong><code>synchronized</code></strong> is a simple keyword whose lock is <strong>released automatically</strong>, while <strong><code>ReentrantLock</code></strong> adds <strong><code>tryLock</code>, timeouts, interruptible locking, fairness and multiple <code>Condition</code>s</strong> but must be <strong>unlocked in <code>finally</code></strong>. Before <strong>Java 24</strong>, ReentrantLock also avoided <strong>virtual-thread pinning</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Common ground.</strong> Both ensure only one thread holds the lock at a time, both create happens-before edges so writes inside are visible to the next holder, and both are <strong>reentrant</strong>: the holding thread can lock again and must release the same number of times.</p>
+<p><strong><code>synchronized</code></strong> is part of the language. It is concise, block-structured and <strong>impossible to forget to release</strong>: the lock is freed when the block exits normally or with an exception. The JVM optimises it heavily (lock coarsening, elision via escape analysis). Coordination uses <code>wait</code>/<code>notify</code> on one wait set per object. Its limits: a thread waiting to enter cannot be interrupted, cannot time out, and cannot try without blocking; there is no fairness option; and it cannot be acquired in one method and released in another.</p>
+<p><strong><code>ReentrantLock</code></strong> is a library class (<code>java.util.concurrent.locks</code>) providing:</p>
+<ul>
+  <li><strong><code>tryLock()</code></strong> (immediate) and <strong><code>tryLock(timeout, unit)</code></strong>, so a thread can give up, which helps avoid deadlocks;</li>
+  <li><strong><code>lockInterruptibly()</code></strong>, so a waiting thread responds to cancellation;</li>
+  <li><strong>fairness</strong>: <code>new ReentrantLock(true)</code> grants the lock to the longest waiter, at a throughput cost;</li>
+  <li><strong>multiple <code>Condition</code> objects</strong> (<code>newCondition()</code>), for example <code>notFull</code> and <code>notEmpty</code>;</li>
+  <li><strong>introspection</strong>: <code>isLocked</code>, <code>isHeldByCurrentThread</code>, <code>getQueueLength</code>;</li>
+  <li>non-block-structured locking (lock in one method, unlock in another, e.g. hand-over-hand).</li>
+</ul>
+<p>The cost is verbosity and risk: you must <code>unlock()</code> in a <code>finally</code> block.</p>
+<p><strong>Virtual threads.</strong> In Java 21-23, blocking inside <code>synchronized</code> <strong>pinned</strong> a virtual thread to its carrier, so <code>ReentrantLock</code> was recommended around blocking calls. <strong>JEP 491 in Java 24</strong> reworked monitors so <code>synchronized</code> no longer pins in typical cases. On current JDKs the choice is again mainly about features.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>lock.lock()</code> acquires or queues the thread (an AQS-based queue).</li>
+  <li>Reentry increments a hold count.</li>
+  <li>Work in a <code>try</code> block.</li>
+  <li><code>unlock()</code> in <code>finally</code> decrements the count; at zero, the next waiter is unparked.</li>
+  <li><code>tryLock(timeout)</code> returns <code>false</code> if the lock is not obtained in time.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private final ReentrantLock lock = new ReentrantLock();
+
+public boolean updateIfFree(Runnable update) throws InterruptedException {
+    if (!lock.tryLock(100, TimeUnit.MILLISECONDS)) {
+        return false;                               // give up instead of waiting forever
+    }
+    try {
+        update.run();
+        return true;
+    } finally {
+        lock.unlock();                              // mandatory
+    }
+}
+
+// Equivalent simple case with synchronized
+public synchronized void update(Runnable update) { update.run(); }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>synchronized</th><th>ReentrantLock</th></tr></thead>
+<tbody>
+<tr><td>Reentrant</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Automatic release</td><td>Yes</td><td>No, unlock in finally</td></tr>
+<tr><td>tryLock / timeout</td><td>No</td><td>Yes</td></tr>
+<tr><td>Interruptible wait</td><td>No</td><td>Yes</td></tr>
+<tr><td>Fairness</td><td>No</td><td>Optional</td></tr>
+<tr><td>Conditions</td><td>One wait set</td><td>Multiple</td></tr>
+<tr><td>Virtual thread pinning</td><td>Java 21-23 yes, fixed in 24</td><td>No</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>lock()</code> inside the <code>try</code> block, so <code>unlock()</code> runs even if locking failed.</li>
+  <li>Forgetting <code>unlock()</code> on some code path.</li>
+  <li>Choosing ReentrantLock by default when synchronized would be simpler.</li>
+  <li>Turning on fairness without measuring the throughput cost.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both give mutual exclusion and memory visibility, and both are reentrant. synchronized is a keyword: simple, the lock is released automatically even on exceptions, and the JVM optimises it well. ReentrantLock is a class with more control: tryLock without blocking or with a timeout, lockInterruptibly so a waiting thread can be cancelled, an optional fairness policy, several Condition objects and methods to inspect the lock. The cost is that I must unlock in finally myself. On Java 21 to 23 it also avoided pinning virtual threads, but Java 24 fixed that for synchronized, so now I choose mostly by features.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When does tryLock help avoid deadlocks?</strong> When a thread needs several locks: if it cannot get the second within a timeout, it releases the first and retries with backoff, breaking hold-and-wait.</li>
+  <li><strong>Which is faster?</strong> Similar in modern JVMs; synchronized is often as fast or faster for uncontended locks.</li>
+  <li><strong>What is AQS?</strong> AbstractQueuedSynchronizer, the framework behind ReentrantLock, Semaphore and CountDownLatch.</li>
+</ul>
+</article>
+</body>
+</html>

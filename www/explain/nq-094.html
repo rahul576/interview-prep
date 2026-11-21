@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-094 · When would you use explicit locks instead of synchronized blocks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-094" data-topic="Concurrency">
+<h1>When would you use explicit locks instead of synchronized blocks?</h1>
+<p class="ex-meta">Concurrency · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Stay with <strong><code>synchronized</code></strong> for simple critical sections; switch to <strong>explicit locks</strong> when you need <strong><code>tryLock</code>/timeouts</strong>, <strong>interruptible waiting</strong>, <strong>fairness</strong>, <strong>multiple <code>Condition</code>s</strong>, <strong>read-write separation</strong>, or <strong>locking across methods</strong>; on <strong>Java 21-23</strong> also to avoid <strong>virtual-thread pinning</strong> around blocking calls.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>synchronized</code> is the right default: it is short, block-structured, cannot be left locked by accident, and the JVM optimises it well. Explicit locks (<code>ReentrantLock</code>, <code>ReentrantReadWriteLock</code>, <code>StampedLock</code>) are a tool for specific needs:</p>
+<ul>
+  <li><strong>Bounded waiting / deadlock avoidance</strong>: <code>tryLock(timeout)</code> lets a thread give up instead of waiting forever. For a money transfer that must lock two accounts, a thread that cannot get the second lock in time releases the first and retries with random backoff, breaking the hold-and-wait condition.</li>
+  <li><strong>Cancellation</strong>: <code>lockInterruptibly()</code> lets a task waiting for a lock respond to <code>Future.cancel(true)</code> or shutdown. A thread blocked entering <code>synchronized</code> ignores interrupts.</li>
+  <li><strong>Fairness</strong>: <code>new ReentrantLock(true)</code> serves waiters in order, useful when starvation is observed, accepting lower throughput.</li>
+  <li><strong>Multiple conditions</strong>: one lock with separate <code>Condition</code>s such as <code>notFull</code> and <code>notEmpty</code> in a bounded buffer, so you signal only the threads that can proceed instead of <code>notifyAll</code>.</li>
+  <li><strong>Read-write separation</strong>: many readers, one writer, via <code>ReentrantReadWriteLock</code> or <code>StampedLock</code> optimistic reads.</li>
+  <li><strong>Non-block-structured locking</strong>: acquiring in one method and releasing in another, or hand-over-hand locking along a linked structure.</li>
+  <li><strong>Monitoring</strong>: <code>getQueueLength()</code>, <code>isLocked()</code> for diagnostics.</li>
+  <li><strong>Virtual threads</strong>: on Java 21-23, blocking (I/O, sleeps) inside <code>synchronized</code> pinned the virtual thread to its carrier; <code>ReentrantLock</code> did not. Since <strong>Java 24</strong> (JEP 491) this is largely fixed, so it no longer needs to drive the decision on current JDKs.</li>
+</ul>
+<p>Remember the cost: always <code>unlock()</code> in <code>finally</code>, and do not call <code>lock()</code> inside the <code>try</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the requirement synchronized cannot express (timeout, interrupt, fairness, conditions, read/write).</li>
+  <li>Replace the monitor with a <code>private final</code> lock object.</li>
+  <li>Use the <code>lock(); try { ... } finally { unlock(); }</code> idiom.</li>
+  <li>Use <code>tryLock</code> with timeout and backoff where deadlock is possible.</li>
+  <li>Test under contention and monitor lock waits (JFR).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">boolean transfer(Account from, Account to, BigDecimal amount) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+    while (System.nanoTime() &lt; deadline) {
+        if (from.lock.tryLock()) {
+            try {
+                if (to.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+                    try {
+                        from.debit(amount);
+                        to.credit(amount);
+                        return true;
+                    } finally { to.lock.unlock(); }
+                }
+            } finally { from.lock.unlock(); }          // release first lock if second failed
+        }
+        Thread.sleep(ThreadLocalRandom.current().nextLong(1, 10));   // random backoff
+    }
+    return false;                                     // caller reports &quot;try again&quot;
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Need</th><th>synchronized</th><th>Explicit lock</th></tr></thead>
+<tbody>
+<tr><td>Simple mutual exclusion</td><td>Best choice</td><td>Works, more verbose</td></tr>
+<tr><td>Timeout / tryLock</td><td>No</td><td>Yes</td></tr>
+<tr><td>Interruptible wait</td><td>No</td><td>Yes</td></tr>
+<tr><td>Several wait conditions</td><td>No</td><td>Yes</td></tr>
+<tr><td>Shared readers</td><td>No</td><td>ReadWriteLock, StampedLock</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using explicit locks everywhere &quot;for flexibility&quot; and forgetting <code>unlock()</code>.</li>
+  <li>tryLock retry loops without random backoff, causing livelock.</li>
+  <li>Fair locks by default, hurting throughput.</li>
+  <li>Still choosing locks for pinning reasons on Java 24+ without measuring.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I stay with synchronized for simple critical sections because it's shorter and can't forget to unlock. I switch to explicit locks when I need something it lacks: tryLock with a timeout so a thread can give up instead of waiting forever or deadlocking, for example when locking two accounts in a transfer; lockInterruptibly so a cancelled task stops waiting; a fair lock when I see starvation; several Conditions like notFull and notEmpty in a bounded buffer; read-write separation for read-heavy data; or locking and unlocking in different methods. On Java 21 to 23 ReentrantLock also avoided pinning virtual threads, though Java 24 largely fixed that.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can you show how tryLock can prevent a deadlock in a money transfer?</strong> Lock the first account, tryLock the second with a timeout; on failure release both and retry with random backoff (or simply order locks by account id).</li>
+  <li><strong>Why not just order the locks?</strong> Ordering is simpler and also works; tryLock helps when a global order is hard to define or you need a time limit.</li>
+  <li><strong>What is lock striping?</strong> Using several locks for different parts of the data, as ConcurrentHashMap does per bin, to reduce contention.</li>
+</ul>
+</article>
+</body>
+</html>

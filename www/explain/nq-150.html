@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-150 · What is the Strategy pattern, and how can it support different payment methods?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-150" data-topic="Design Patterns">
+<h1>What is the Strategy pattern, and how can it support different payment methods?</h1>
+<p class="ex-meta">Design Patterns · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Strategy</strong> puts a family of <strong>interchangeable algorithms</strong> behind a <strong>common interface</strong> so the context can choose one <strong>at runtime</strong>; for payments, <code>CardPayment</code>, <code>UpiPayment</code> and <code>PayPalPayment</code> implement <code>PaymentStrategy</code>, replacing an if/else chain and following <strong>open/closed</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A payment service without Strategy tends to look like <code>if (method == CARD) {...} else if (method == UPI) {...} else if ...</code>, with validation, gateway calls and error handling for every method mixed in one class. Each new method edits that class and risks breaking the others.</p>
+<p>With Strategy:</p>
+<ul>
+  <li><strong>Strategy interface:</strong> <code>PaymentStrategy</code> with <code>pay(Order)</code> and, often, <code>supports(PaymentMethod)</code> or <code>method()</code>.</li>
+  <li><strong>Concrete strategies:</strong> each class owns everything specific to its method: card tokenisation and 3-D Secure, UPI collect requests, PayPal redirects.</li>
+  <li><strong>Context:</strong> <code>PaymentService</code> selects the strategy based on the customer's choice and calls <code>pay</code>; it contains no method-specific logic.</li>
+</ul>
+<p><strong>Spring wiring:</strong> make each strategy a <code>@Component</code>. Spring can inject a <code>Map&lt;String, PaymentStrategy&gt;</code> keyed by <strong>bean name</strong>, or a <code>List&lt;PaymentStrategy&gt;</code> that you index into an <code>EnumMap</code> by <code>method()</code> at startup, which also lets you fail fast if two strategies claim the same method or one is missing.</p>
+<p><strong>Benefits:</strong> adding wallet payments means adding one class; each strategy is <strong>unit-testable in isolation</strong>; feature flags or A/B tests can swap strategies; and the context class stays small. For tiny algorithms, a strategy can just be a <strong>lambda</strong> (<code>Comparator</code> is the JDK's classic Strategy).</p>
+<p><strong>Strategy vs State:</strong> structurally similar, but in Strategy the <strong>client chooses</strong> the algorithm and strategies are usually independent; in State, the object's <strong>internal state</strong> chooses the behaviour and states trigger transitions to each other.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define <code>PaymentStrategy</code> with <code>method()</code> and <code>pay(Order)</code>.</li>
+  <li>Implement one class per payment method.</li>
+  <li>Register all strategies (Spring bean discovery).</li>
+  <li>Context builds a lookup map at startup.</li>
+  <li>On request, look up by method and call <code>pay</code>; unknown methods fail clearly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public enum PaymentMethod { CARD, UPI, PAYPAL }
+
+public interface PaymentStrategy {
+    PaymentMethod method();
+    PaymentResult pay(Order order);
+}
+
+@Component class CardPayment implements PaymentStrategy {
+    public PaymentMethod method() { return PaymentMethod.CARD; }
+    public PaymentResult pay(Order o) { /* tokenise, 3DS, charge */ return PaymentResult.ok(); }
+}
+@Component class UpiPayment implements PaymentStrategy {
+    public PaymentMethod method() { return PaymentMethod.UPI; }
+    public PaymentResult pay(Order o) { /* UPI collect request */ return PaymentResult.pending(); }
+}
+
+@Service
+public class PaymentService {
+    private final Map&lt;PaymentMethod, PaymentStrategy&gt; strategies = new EnumMap&lt;&gt;(PaymentMethod.class);
+    public PaymentService(List&lt;PaymentStrategy&gt; all) {
+        all.forEach(s -&gt; { if (strategies.put(s.method(), s) != null) throw new IllegalStateException(&quot;Duplicate &quot; + s.method()); });
+    }
+    public PaymentResult pay(Order o) {
+        var s = strategies.get(o.paymentMethod());
+        if (s == null) throw new UnsupportedPaymentMethodException(o.paymentMethod());
+        return s.pay(o);
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Moving the if/else into a factory instead of removing it.</li>
+  <li>Strategies sharing mutable state (singleton beans must be stateless).</li>
+  <li>Keying the map by bean name strings that silently break on renames.</li>
+  <li>Creating a strategy hierarchy for something that never varies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Strategy defines a family of algorithms, puts each behind a common interface and makes them interchangeable at runtime. For payments I'd have a PaymentStrategy interface with CardPayment, UpiPayment and PayPalPayment, each owning its validation and gateway calls. PaymentService, the context, picks the strategy from the customer's choice and calls pay, with no growing if/else. In Spring each strategy is a bean; I inject the list and build an EnumMap keyed by payment method, failing fast on duplicates. Adding wallet payments is one new class, and each strategy is easy to unit test.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does Strategy differ from State?</strong> The client picks a strategy; in State the object's current state determines behaviour and drives transitions.</li>
+  <li><strong>How would you test it?</strong> Unit test each strategy alone, and test the context with mock strategies.</li>
+  <li><strong>Can a lambda be a strategy?</strong> Yes, for single-method interfaces like <code>Comparator</code> or <code>Function</code>.</li>
+</ul>
+</article>
+</body>
+</html>

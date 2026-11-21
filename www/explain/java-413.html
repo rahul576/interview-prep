@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-413 · How do you implement retries correctly in distributed systems?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-413" data-topic="Microservices">
+<h1>How do you implement retries correctly in distributed systems?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Retry only <strong>transient</strong> errors, with <strong>exponential backoff and jitter</strong>, a <strong>small attempt limit</strong> and an <strong>overall deadline</strong>, in <strong>one layer</strong> under a <strong>retry budget</strong> and circuit breaker, and only for <strong>idempotent</strong> operations or with <strong>idempotency keys</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Retries turn short glitches into successes, but done badly they cause outages. Four rules matter.</p>
+<p><strong>Retry the right errors.</strong> Transient failures, connection resets, timeouts, <code>503 Service Unavailable</code>, <code>429 Too Many Requests</code> (honouring <code>Retry-After</code>), deadlocks, are worth retrying. Permanent ones, <code>400</code>, <code>401</code>, <code>404</code>, validation errors, will fail again and should not be retried.</p>
+<p><strong>Wait properly.</strong> Immediate retries hit a struggling service at the worst moment. Use <strong>exponential backoff</strong> (100 ms, 200 ms, 400 ms...) capped at a maximum, plus <strong>jitter</strong> (randomising each wait) so thousands of clients that failed together do not retry in lockstep and create synchronised waves.</p>
+<p><strong>Bound the cost.</strong> Limit attempts (typically 2-3) and respect an <strong>overall deadline</strong>: if the caller's budget is 2 s, there is no point starting a third attempt at 1.9 s. Propagate deadlines downstream where possible, for example gRPC deadlines.</p>
+<p><strong>Avoid amplification.</strong> If the gateway, service A and service B each retry three times, one failing request to C becomes up to 3 × 3 × 3 = 27 calls, a <strong>retry storm</strong> that keeps C down. Retry in <strong>one layer</strong>, usually closest to the failure or at the edge, use <strong>retry budgets</strong> (retries may only be, say, 10 percent of requests; Envoy and gRPC support this) and put a <strong>circuit breaker</strong> in front so retries stop when the dependency is clearly down.</p>
+<p><strong>Idempotency.</strong> A timeout does not mean the operation failed; it may have succeeded. Retrying <code>GET</code> or <code>PUT</code> is safe; retrying <code>POST /payments</code> can charge twice. Make operations idempotent or send an <strong>idempotency key</strong> that the server uses to deduplicate.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Call fails; classify the error.</li>
+  <li>Not retryable: fail immediately.</li>
+  <li>Retryable and attempts and deadline remain: wait backoff × jitter.</li>
+  <li>Check circuit breaker and retry budget.</li>
+  <li>Retry with the same idempotency key.</li>
+  <li>Give up: return an error or fallback; record metrics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resilience4j:
+  retry:
+    instances:
+      payments:
+        maxAttempts: 3
+        waitDuration: 200ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+        enableRandomizedWait: true
+        randomizedWaitFactor: 0.5
+        retryExceptions: [java.io.IOException, java.util.concurrent.TimeoutException]
+        ignoreExceptions: [com.acme.ValidationException]</code></pre>
+<pre><code class="language-java">@Retry(name = &quot;payments&quot;)
+@CircuitBreaker(name = &quot;payments&quot;)
+public Receipt charge(ChargeRequest req) {
+    return restClient.post().uri(&quot;/charges&quot;)
+        .header(&quot;Idempotency-Key&quot;, req.requestId())   // server dedupes
+        .body(req).retrieve().body(Receipt.class);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>Immediate retry</td><td>Hammers failing service</td></tr>
+<tr><td>Fixed delay</td><td>Synchronised retry waves</td></tr>
+<tr><td>Exponential backoff</td><td>Spreads load over time</td></tr>
+<tr><td>Backoff + jitter</td><td>Spreads load and clients</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying non-idempotent POSTs without keys.</li>
+  <li>Retries at every layer.</li>
+  <li>No deadline, so requests hang for a minute.</li>
+  <li>Retrying 4xx errors.</li>
+  <li>Not logging or measuring retries, hiding a degrading dependency.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I only retry transient errors like timeouts, connection resets or 503s, never validation errors. Each retry waits with exponential backoff plus jitter so clients do not retry in sync. I cap attempts at two or three and respect an overall deadline. To avoid retry storms I retry in one layer only, use retry budgets and put a circuit breaker in front, because three layers retrying three times turn one failure into 27 requests. And I only retry idempotent operations, or I send an idempotency key so the server can deduplicate a payment that actually succeeded.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do three layers of retries become 27 requests?</strong> Each layer multiplies attempts: 3 × 3 × 3.</li>
+  <li><strong>Why jitter?</strong> It desynchronises clients so their retries do not arrive as a single spike.</li>
+  <li><strong>How does an idempotency key work?</strong> The server stores the key with the result and returns the stored result for repeats.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-148 · What is the Proxy pattern?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-148" data-topic="Design Patterns">
+<h1>What is the Proxy pattern?</h1>
+<p class="ex-meta">Design Patterns · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>Proxy</strong> is a surrogate that implements the <strong>same interface</strong> as a real object and <strong>controls access</strong> to it (lazy loading, security, remote calls, caching, logging); Spring's <code>@Transactional</code>, <code>@Cacheable</code> and <code>@Async</code> all work through <strong>JDK dynamic or CGLIB proxies</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The client thinks it is talking to the real object, but it holds a proxy that can act <strong>before and after</strong> delegating, or decide not to delegate at all.</p>
+<p><strong>Common kinds:</strong></p>
+<ul>
+  <li><strong>Virtual proxy:</strong> delays creating or loading an expensive object until it is actually used. Hibernate returns proxies for lazy <code>@ManyToOne</code> associations and <code>getReference()</code>; the database is queried only when a property is accessed.</li>
+  <li><strong>Protection proxy:</strong> checks permissions before forwarding, like Spring Security's method security with <code>@PreAuthorize</code>.</li>
+  <li><strong>Remote proxy:</strong> a local object representing something in another process: RMI stubs, gRPC stubs, Spring Cloud OpenFeign clients.</li>
+  <li><strong>Caching / logging / metrics proxies:</strong> add cross-cutting behaviour, like <code>@Cacheable</code> or Micrometer <code>@Timed</code>.</li>
+</ul>
+<p><strong>How Spring does it:</strong> during startup, bean post-processors detect annotations or aspects and replace your bean with a proxy. If the bean implements an interface and proxying is interface-based, a <strong>JDK dynamic proxy</strong> (<code>java.lang.reflect.Proxy</code>) is created; otherwise <strong>CGLIB</strong> generates a subclass (Spring Boot defaults to CGLIB/class-based proxies). The proxy's interceptor chain starts a transaction, calls your method, then commits or rolls back.</p>
+<p>Consequences you must know:</p>
+<ul>
+  <li><strong>Self-invocation bypasses the proxy:</strong> calling <code>this.otherTransactionalMethod()</code> inside the same bean goes straight to the target, so no new transaction, cache or async behaviour.</li>
+  <li>CGLIB cannot proxy <strong>final</strong> classes or methods, and proxied methods should be public (Spring 6 also supports protected/package-visible for class-based proxies, but public is the safe rule).</li>
+  <li>Hibernate proxies outside an open session cause <strong><code>LazyInitializationException</code></strong>.</li>
+</ul>
+<p>Proxy versus Decorator: both wrap with the same interface; a proxy's intent is <strong>controlling access</strong> and often manages the subject's lifecycle, while a decorator <strong>adds features</strong> and is stacked by the client.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client holds a reference typed as the interface (or class).</li>
+  <li>The reference actually points to a proxy.</li>
+  <li>The proxy runs pre-logic (start tx, check auth, check cache).</li>
+  <li>It delegates to the real object (or not).</li>
+  <li>It runs post-logic (commit/rollback, store in cache, log).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Hand-written JDK dynamic proxy for timing
+@SuppressWarnings(&quot;unchecked&quot;)
+static &lt;T&gt; T timed(T target, Class&lt;T&gt; iface) {
+    return (T) Proxy.newProxyInstance(iface.getClassLoader(), new Class&lt;?&gt;[]{iface},
+        (proxy, method, args) -&gt; {
+            long t = System.nanoTime();
+            try { return method.invoke(target, args); }
+            finally { System.out.printf(&quot;%s took %d µs%n&quot;, method.getName(), (System.nanoTime() - t) / 1000); }
+        });
+}
+
+@Service
+class OrderService {
+    @Transactional public void place(Order o) { ... }
+    public void placeAll(List&lt;Order&gt; os) { os.forEach(this::place); } // self-invocation: no proxy, no tx per order
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Expecting annotations to work on self-invoked, private or final methods.</li>
+  <li>Comparing proxy classes with <code>getClass()</code> (Hibernate proxies are subclasses).</li>
+  <li>Accessing lazy proxies after the transaction closes.</li>
+  <li>Calling a decorator a proxy without explaining intent.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A proxy implements the same interface as the real object and controls access to it, adding behaviour before or after delegating. A virtual proxy delays loading, like Hibernate's lazy entity proxies; a protection proxy checks permissions; a remote proxy represents an object elsewhere, like a Feign client; and caching or logging proxies add cross-cutting concerns. Spring relies on this heavily: @Transactional, @Cacheable and @Async work because the container injects a JDK dynamic proxy or a CGLIB subclass instead of my bean. That's also why calling a @Transactional method from the same class doesn't start a transaction.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does self-invocation of @Transactional not work?</strong> The call uses <code>this</code>, the raw target, so it never passes through the proxy's interceptor.</li>
+  <li><strong>JDK proxy vs CGLIB?</strong> JDK proxies need interfaces; CGLIB subclasses the class and cannot handle final classes or methods.</li>
+  <li><strong>How do you fix self-invocation?</strong> Move the method to another bean, inject the bean into itself lazily, or use AspectJ weaving.</li>
+</ul>
+</article>
+</body>
+</html>

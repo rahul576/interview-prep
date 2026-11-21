@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-089 · How does CompletableFuture differ from Future and Callable?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-089" data-topic="Concurrency">
+<h1>How does CompletableFuture differ from Future and Callable?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>Callable</code></strong> is the <strong>task</strong>; <strong><code>Future</code></strong> is a <strong>handle</strong> to its result with only <strong>blocking <code>get()</code>, <code>isDone()</code> and <code>cancel()</code></strong>; <strong><code>CompletableFuture</code></strong> is a Future plus <strong><code>CompletionStage</code></strong>: <strong>callbacks, chaining, combining, built-in error handling and manual completion</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>These three are often confused because they appear together, but they play different roles.</p>
+<p><strong><code>Callable&lt;V&gt;</code></strong> is a functional interface describing work: <code>V call() throws Exception</code>. It does not run by itself; you give it to an executor.</p>
+<p><strong><code>Future&lt;V&gt;</code></strong> (Java 5) is what <code>ExecutorService.submit</code> returns: a handle to a result that may not exist yet. Its API is small: <code>get()</code> and <code>get(timeout)</code> block until done, <code>isDone()</code>, <code>isCancelled()</code> and <code>cancel(mayInterrupt)</code>. Java 19 added <code>resultNow()</code>, <code>exceptionNow()</code> and <code>state()</code> for inspecting completed futures without checked exceptions. What it <strong>cannot</strong> do is notify you: there is no way to say &quot;when this finishes, do that&quot;. To combine two Futures you must block on both; to transform the result you must block first; exceptions only appear, wrapped in <code>ExecutionException</code>, when you call <code>get()</code>. So Futures push you towards blocking threads.</p>
+<p><strong><code>CompletableFuture&lt;V&gt;</code></strong> (Java 8) implements <code>Future</code> <strong>and</strong> <code>CompletionStage</code>. You can still <code>get()</code> or <code>join()</code>, but the point is non-blocking composition: <code>thenApply</code>, <code>thenCompose</code>, <code>thenCombine</code>, <code>thenAccept</code>, <code>allOf</code>, <code>anyOf</code>; error handling with <code>exceptionally</code>, <code>handle</code>, <code>whenComplete</code>; timeouts with <code>orTimeout</code>. It can also be <strong>completed manually</strong> with <code>complete()</code> / <code>completeExceptionally()</code>, so it can wrap callback APIs (a message listener, an async HTTP client) without any thread waiting. It does not need a <code>Callable</code>: you usually start it with a <code>Supplier</code> via <code>supplyAsync</code>.</p>
+<p>One behavioural difference: <code>cancel(true)</code> on a <code>FutureTask</code> interrupts the running thread, whereas on a <code>CompletableFuture</code> it only marks it cancelled.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>Callable</code> defines work; <code>submit</code> wraps it in a <code>FutureTask</code> and returns it as a <code>Future</code>.</li>
+  <li>With <code>Future</code>, the caller blocks on <code>get()</code> to use the result.</li>
+  <li>With <code>CompletableFuture</code>, <code>supplyAsync</code> starts work and returns immediately.</li>
+  <li>Callbacks are registered and run when the stage completes.</li>
+  <li>Manual completion lets any code (a callback, another thread) supply the result.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Future: must block to use results
+Future&lt;Rate&gt; rateF = pool.submit(() -&gt; fx.rate(&quot;EUR&quot;));        // Callable
+Future&lt;Price&gt; priceF = pool.submit(() -&gt; catalog.price(sku));
+Money total = priceF.get().convert(rateF.get());                // two blocking calls
+
+// CompletableFuture: composed without blocking
+CompletableFuture&lt;Money&gt; totalCf =
+        CompletableFuture.supplyAsync(() -&gt; catalog.price(sku), pool)
+            .thenCombine(CompletableFuture.supplyAsync(() -&gt; fx.rate(&quot;EUR&quot;), pool),
+                         Price::convert)
+            .exceptionally(ex -&gt; Money.ZERO);
+
+// Manual completion bridging a callback API
+CompletableFuture&lt;Reply&gt; reply = new CompletableFuture&lt;&gt;();
+client.send(request, new Callback() {
+    public void onSuccess(Reply r) { reply.complete(r); }
+    public void onError(Throwable t) { reply.completeExceptionally(t); }
+});</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Callable</th><th>Future</th><th>CompletableFuture</th></tr></thead>
+<tbody>
+<tr><td>What it is</td><td>Task</td><td>Result handle</td><td>Composable result handle</td></tr>
+<tr><td>Get result</td><td>n/a</td><td>Blocking get</td><td>get/join or callbacks</td></tr>
+<tr><td>Chain / combine</td><td>No</td><td>No</td><td>Yes</td></tr>
+<tr><td>Error handling</td><td>Throws</td><td>ExecutionException on get</td><td>exceptionally, handle</td></tr>
+<tr><td>Manual completion</td><td>No</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling Callable and Future the same thing.</li>
+  <li>Blocking on <code>CompletableFuture.get()</code> immediately, losing its benefits.</li>
+  <li>Expecting <code>CompletableFuture.cancel(true)</code> to interrupt work.</li>
+  <li>Mixing blocking <code>get()</code> calls inside callback chains.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Callable is just a task that returns a value. Future is the handle I get when I submit it to an executor, and it's limited: I can check isDone, cancel, or block with get, but I can't attach a callback, chain another step, combine two futures or handle an exception without blocking. CompletableFuture implements both Future and CompletionStage: I can still block with get or join, but mostly I build non-blocking pipelines with thenApply, thenCompose, thenCombine and allOf, handle errors with exceptionally or handle, and I can complete it myself, which is great for bridging callback APIs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When might a plain Future still be enough?</strong> When you submit a task and simply wait for it at one point, for example in a batch job or with invokeAll.</li>
+  <li><strong>What is FutureTask?</strong> The standard Future implementation that is also a Runnable, wrapping a Callable.</li>
+  <li><strong>How do you convert a callback API to CompletableFuture?</strong> Create an empty CompletableFuture and call complete or completeExceptionally from the callbacks.</li>
+</ul>
+</article>
+</body>
+</html>

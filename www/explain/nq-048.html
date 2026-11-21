@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-048 · How can shared mutable state cause problems in parallel streams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-048" data-topic="Java 8+ Features">
+<h1>How can shared mutable state cause problems in parallel streams?</h1>
+<p class="ex-meta">Java 8+ Features · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In a parallel stream several threads run your lambdas <strong>at the same time</strong>, so writing to a <strong>shared variable or non-thread-safe collection</strong> causes <strong>race conditions</strong>: lost updates, wrong counts, missing or null elements and even exceptions; the fix is to <strong>not share state</strong> and let <code>collect</code>, <code>reduce</code> or <code>sum</code> build the result.</p>
+
+<h2>Detailed explanation</h2>
+<p>Sequential code like <code>orders.forEach(o -&gt; result.add(o.id()))</code> works because one thread does everything. Add <code>.parallel()</code> and the same lambda runs on several common-pool workers concurrently, all touching the same <code>ArrayList</code>.</p>
+<p><code>ArrayList.add</code> is not atomic: it reads <code>size</code>, possibly grows the internal array, writes the element and increments <code>size</code>. Two threads can read the same <code>size</code> and overwrite each other's slot (a <strong>lost update</strong>), leave <code>null</code> gaps, or one thread can write into the old array while another is copying it during a resize, which throws <strong><code>ArrayIndexOutOfBoundsException</code></strong>. A <code>HashMap</code> modified concurrently can lose entries or corrupt its bins. A counter like <code>int[] count = {0}; ... count[0]++</code> is a read-modify-write and loses increments too.</p>
+<p>The nastiest property is that these bugs are <strong>non-deterministic</strong>. With small test data the stream may not even split, so tests pass; under production volume, on more cores, results quietly differ from run to run. Nothing crashes; totals are just wrong.</p>
+<p>Wrapping with <code>Collections.synchronizedList</code> or using <code>AtomicInteger</code> makes the code correct but <strong>serialises</strong> the threads on a lock or a contended variable, often making the parallel stream slower than a sequential one. It also does not fix ordering: elements arrive in nondeterministic order.</p>
+<p>The idiomatic fix is to use <strong>mutable reduction</strong>. Collectors such as <code>toList()</code>, <code>groupingBy</code>, <code>toMap</code> and <code>summingLong</code>, and operations like <code>reduce</code>, <code>sum</code> and <code>count</code>, give <strong>each thread its own container</strong> and merge them with a combiner at the end. No synchronisation is needed and encounter order is preserved where required.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The source is split into chunks for different worker threads.</li>
+  <li>Each thread runs your lambda on its chunk.</li>
+  <li>If the lambda writes to one shared object, the threads' writes interleave without coordination.</li>
+  <li>Interleaved read-modify-write steps overwrite each other.</li>
+  <li>With <code>collect</code>, each thread fills a private container, and containers are merged safely.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Broken: races on a shared ArrayList and counter
+List&lt;String&gt; ids = new ArrayList&lt;&gt;();
+int[] paid = {0};
+orders.parallelStream().forEach(o -&gt; {
+    ids.add(o.id());                    // lost elements, nulls or AIOOBE
+    if (o.isPaid()) paid[0]++;          // lost increments
+});
+
+// Correct: let the stream build the results
+List&lt;String&gt; ids2 = orders.parallelStream().map(Order::id).toList();
+long paid2 = orders.parallelStream().filter(Order::isPaid).count();
+
+Map&lt;String, Long&gt; byStatus = orders.parallelStream()
+    .collect(Collectors.groupingBy(Order::status, Collectors.counting()));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming code is safe because tests with small lists pass.</li>
+  <li>&quot;Fixing&quot; races with <code>synchronized</code> blocks that remove all parallelism.</li>
+  <li>Modifying the source collection inside the pipeline (interference).</li>
+  <li>Using a lambda that captures and mutates a field of the enclosing class.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In a parallel stream multiple threads run the lambdas at once. If they write to the same external variable or collection, like adding to an ArrayList declared outside or incrementing a counter, the updates race. Some are lost, the list can contain nulls or fewer elements, or it throws ArrayIndexOutOfBoundsException during an internal resize, and results change from run to run. It often passes tests and fails under load. Synchronising fixes correctness but kills the speed-up. The right fix is not to share state: use collect, toList, groupingBy, reduce or sum, which give every thread its own container and merge them safely.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is using Collections.synchronizedList a good fix?</strong> It is correct but serialises all threads and loses order, so it usually defeats the purpose; use a collector.</li>
+  <li><strong>Why do lambdas require effectively final variables?</strong> To prevent unsafe mutation of captured locals; arrays and objects bypass this, which is why the bug still happens.</li>
+  <li><strong>Is <code>ConcurrentHashMap</code> acceptable?</strong> It is thread-safe, and <code>groupingByConcurrent</code> uses it, but order is lost and contention remains on hot keys.</li>
+</ul>
+</article>
+</body>
+</html>

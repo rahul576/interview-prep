@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-124 · What is OpenTelemetry, and how would you roll it out?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-124" data-topic="Observability &amp; SRE">
+<h1>What is OpenTelemetry, and how would you roll it out?</h1>
+<p class="ex-meta">Observability &amp; SRE · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>OpenTelemetry (OTel)</strong> is the <strong>vendor-neutral CNCF standard</strong> (APIs, SDKs, OTLP protocol and <strong>Collector</strong>) for <strong>traces, metrics and logs</strong>; roll it out with <strong>auto-instrumentation first</strong>, <strong>W3C traceparent context propagation</strong>, a <strong>Collector layer</strong> for processing and export, sensible <strong>sampling</strong>, and <strong>semantic conventions</strong> for consistent attributes.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Components:</strong></p>
+<ul>
+  <li><strong>API and SDKs</strong> for most languages (Java, .NET, Python, Go, JavaScript and more) to create spans, metrics and logs.</li>
+  <li><strong>Auto-instrumentation:</strong> agents and libraries that instrument common frameworks without code changes, such as the Java agent, .NET and Python auto-instrumentation, Node.js packages, and eBPF-based instrumentation for some languages. In Kubernetes, the <strong>OpenTelemetry Operator</strong> can inject auto-instrumentation via an annotation.</li>
+  <li><strong>OTLP:</strong> the standard wire protocol (gRPC 4317, HTTP 4318).</li>
+  <li><strong>Collector:</strong> a pipeline of <strong>receivers</strong> (OTLP, Prometheus, Jaeger, filelog), <strong>processors</strong> (batch, memory limiter, <code>k8sattributes</code> to add pod and namespace metadata, attribute filtering and redaction, tail sampling) and <strong>exporters</strong> (OTLP to Tempo, Jaeger, Prometheus remote write, Loki, Datadog, Azure Monitor, Elastic).</li>
+  <li><strong>Semantic conventions:</strong> standard attribute names like <code>service.name</code>, <code>http.request.method</code>, <code>k8s.pod.name</code>.</li>
+</ul>
+<p><strong>Context propagation:</strong> the <strong>W3C Trace Context</strong> <code>traceparent</code> header (trace ID, span ID, flags) is passed on every HTTP or gRPC call and through message headers, so spans across services join into one trace. Logs include trace and span IDs for correlation.</p>
+<p><strong>Why it matters:</strong> instrumentation is written once against a standard; the <strong>backend is chosen in Collector configuration</strong>, so switching or dual-shipping vendors doesn't require code changes.</p>
+<p><strong>Sampling:</strong> <strong>head-based</strong> sampling decides at the start of a trace (for example 10 percent), cheap but blind to outcome. <strong>Tail-based</strong> sampling in the Collector decides after the trace completes, keeping <strong>all errors and slow traces</strong> plus a percentage of normal ones; it needs all spans of a trace to reach the same Collector instance (a load-balancing exporter routing by trace ID).</p>
+<p><strong>Rollout plan:</strong> define naming and resource attributes; deploy Collectors (DaemonSet agents per node plus a gateway deployment); enable auto-instrumentation for a pilot service set; add manual spans for key business operations; configure sampling and redaction of sensitive data; build dashboards and train teams; then expand service by service. Signal maturity varies: traces and metrics are stable, logs are stable in the protocol with SDK support maturing by language.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Service instrumented by auto-agent or SDK creates spans and metrics.</li>
+  <li>Incoming <code>traceparent</code> continues the trace; outgoing calls propagate it.</li>
+  <li>Telemetry goes via OTLP to a node-local Collector.</li>
+  <li>Collector enriches, filters and batches; gateway applies tail sampling.</li>
+  <li>Exporters send to chosen backends.</li>
+  <li>Dashboards correlate traces, metrics and logs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">receivers:
+  otlp: { protocols: { grpc: {}, http: {} } }
+processors:
+  memory_limiter: { check_interval: 1s, limit_percentage: 80 }
+  k8sattributes: {}
+  tail_sampling:
+    policies:
+      - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+      - { name: slow, type: latency, latency: { threshold_ms: 1000 } }
+      - { name: base, type: probabilistic, probabilistic: { sampling_percentage: 10 } }
+  batch: {}
+exporters:
+  otlp/tempo: { endpoint: tempo.observability:4317, tls: { insecure: true } }
+service:
+  pipelines:
+    traces: { receivers: [otlp], processors: [memory_limiter, k8sattributes, tail_sampling, batch], exporters: [otlp/tempo] }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sending directly from apps to a vendor, losing the Collector's flexibility.</li>
+  <li>Tail sampling across multiple Collectors without trace-ID-aware routing.</li>
+  <li>Broken propagation through queues or proxies, producing fragmented traces.</li>
+  <li>No <code>service.name</code> or inconsistent attributes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;OpenTelemetry is a vendor-neutral CNCF standard for traces, metrics and logs: APIs, SDKs, the OTLP protocol and the Collector. Services are instrumented with SDKs or auto-instrumentation agents, and context is propagated with the W3C traceparent header so traces connect across services. Telemetry goes to the Collector, which adds Kubernetes metadata, filters and samples, then exports to Tempo, Jaeger, Prometheus or a vendor, so we can switch backends without code changes. I'd roll out auto-instrumentation first on a pilot, use the Operator in Kubernetes, then tail-based sampling in a gateway Collector.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why tail-based over head-based sampling?</strong> It keeps all errors and slow traces while dropping routine ones, at the cost of buffering complete traces.</li>
+  <li><strong>Agent versus gateway Collector?</strong> Agents run per node for local collection and enrichment; gateways centralise sampling, routing and export.</li>
+  <li><strong>How do you correlate logs with traces?</strong> Inject trace and span IDs into structured logs.</li>
+</ul>
+</article>
+</body>
+</html>

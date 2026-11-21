@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-142 · How does double-checked locking work in Singleton implementation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-142" data-topic="Design Patterns">
+<h1>How does double-checked locking work in Singleton implementation?</h1>
+<p class="ex-meta">Design Patterns · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Double-checked locking</strong> checks the instance <strong>without a lock</strong> first, then enters a <strong>synchronized block</strong> and <strong>checks again</strong> before creating it, so only the first creation pays for locking; the field <strong>must be volatile</strong> to prevent publishing a half-built object.</p>
+
+<h2>Detailed explanation</h2>
+<p>The goal is lazy initialisation that is thread-safe but cheap after the first call. A fully <code>synchronized getInstance()</code> is correct, yet every call acquires the monitor even though the instance only needs creating once.</p>
+<p>Double-checked locking (DCL) splits the work:</p>
+<ol>
+  <li><strong>First check (no lock):</strong> if <code>instance</code> is non-null, return it immediately. After initialisation this is the path every call takes, costing only a volatile read.</li>
+  <li><strong>Lock:</strong> if it is null, enter <code>synchronized (Singleton.class)</code>.</li>
+  <li><strong>Second check (inside the lock):</strong> while this thread waited for the lock, another thread may already have created the instance. Checking again prevents creating a second one.</li>
+  <li><strong>Create and assign</strong> if still null; leave the block, releasing the lock.</li>
+</ol>
+<p>Why <strong>volatile</strong>? <code>instance = new Singleton()</code> involves allocating memory, running the constructor and writing the reference. Without <code>volatile</code>, the JIT or CPU may let other threads observe the reference <strong>before</strong> the constructor's writes are visible. A thread taking the fast path could then use a partially initialised object. Since Java 5 (JSR-133 memory model), a volatile write happens-before every later read of that field, fixing the problem. Before Java 5, DCL was broken even with volatile.</p>
+<p>A common refinement reads the volatile field into a <strong>local variable</strong> once, reducing volatile reads. In practice, the <strong>holder idiom</strong> or an <strong>enum</strong> gives the same laziness with simpler, less error-prone code, so DCL is mostly an interview topic and useful for lazily initialised <strong>instance</strong> fields where holders do not apply.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read <code>instance</code>; if non-null, return.</li>
+  <li>Acquire the class lock.</li>
+  <li>Read again; if non-null, release and return.</li>
+  <li>Construct, assign to the volatile field, release the lock.</li>
+  <li>Later callers see the fully constructed object through the volatile read.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public final class Singleton {
+    private static volatile Singleton instance;
+    private Singleton() {}
+
+    public static Singleton getInstance() {
+        Singleton local = instance;           // one volatile read on fast path
+        if (local == null) {                  // 1st check, no lock
+            synchronized (Singleton.class) {
+                local = instance;
+                if (local == null) {          // 2nd check, with lock
+                    instance = local = new Singleton();
+                }
+            }
+        }
+        return local;
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Omitting <code>volatile</code>.</li>
+  <li>Omitting the second check, allowing two instances.</li>
+  <li>Synchronising on a different, non-shared object.</li>
+  <li>Using DCL where the holder idiom is simpler.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;getInstance first checks if the instance is null without locking; if it already exists it returns straight away, so the common path is cheap. Only if it's null does the thread synchronise on the class, and inside it checks again, because another thread may have created it while this one was waiting. If still null it creates and assigns it. The field has to be volatile, otherwise another thread could see a non-null reference to a partially constructed object. In practice I'd usually prefer the holder idiom or an enum, which are simpler.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is the second null check needed?</strong> Two threads can pass the first check; the second, inside the lock, ensures only one creates the object.</li>
+  <li><strong>Why is volatile needed?</strong> It prevents reordering and guarantees visibility of the fully constructed object.</li>
+  <li><strong>Why not just synchronise the whole method?</strong> Correct but every call pays for the lock.</li>
+</ul>
+</article>
+</body>
+</html>

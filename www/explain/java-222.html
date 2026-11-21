@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-222 · How does the ForkJoinPool work, and what is work stealing?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-222" data-topic="Concurrency">
+<h1>How does the ForkJoinPool work, and what is work stealing?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>ForkJoinPool</strong> runs <strong>divide-and-conquer</strong> tasks (<strong>RecursiveTask/RecursiveAction</strong>) that <strong>fork</strong> subtasks and <strong>join</strong> results; each worker has its <strong>own deque</strong>, and idle workers <strong>steal</strong> tasks from the <strong>opposite end</strong> of other workers' deques. The <strong>common pool</strong> backs <strong>parallel streams</strong> and <strong>CompletableFuture async</strong> methods, so <strong>blocking tasks</strong> there starve the JVM.</p>
+
+<h2>Detailed explanation</h2>
+<p>Fork/Join targets recursive, CPU-bound problems: split a big task into halves until pieces are small enough, compute them directly, and combine the results, like parallel merge sort or summing a huge array.</p>
+<p>A <code>RecursiveTask&lt;V&gt;</code> (returns a value) or <code>RecursiveAction</code> (no value) implements <code>compute()</code>. Inside, it checks a <strong>threshold</strong>; if the work is small, it computes sequentially; otherwise it creates subtasks, calls <code>fork()</code> on one (pushing it to the current worker's deque), computes the other directly, and calls <code>join()</code> to get the forked result. A worker waiting in <code>join</code> runs other pending tasks meanwhile.</p>
+<p><strong>Work stealing.</strong> Each worker thread owns a <strong>double-ended queue</strong>. It pushes and pops its own tasks at one end (LIFO, good cache locality, and the newest tasks are the smallest). When a worker runs out of work, it becomes a <strong>thief</strong> and takes tasks from the <strong>other end</strong> of a random victim's deque (FIFO), which are usually the <strong>largest</strong> pending pieces, so a single steal brings lots of work. Owners and thieves mostly touch different ends, so contention is low and all cores stay busy without a central queue.</p>
+<p><strong>Common pool.</strong> <code>ForkJoinPool.commonPool()</code> is a JVM-wide static pool with parallelism of <strong>available processors minus one</strong> by default. It is used by <strong>parallel streams</strong> and by <code>CompletableFuture.*Async</code> methods without an executor. Because it is shared and small, <strong>blocking I/O</strong> or long locks in it starve every other user: one slow HTTP call in <code>supplyAsync</code> can stall parallel streams elsewhere. Use a dedicated executor (or virtual threads) for blocking work, or wrap unavoidable blocking in <code>ForkJoinPool.managedBlock</code> (<code>ManagedBlocker</code>) so the pool can compensate with extra threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Submit root task to the pool.</li>
+  <li><code>compute()</code> splits until below threshold.</li>
+  <li><code>fork()</code> pushes a subtask on the worker's deque.</li>
+  <li>Idle workers steal from the far end of other deques.</li>
+  <li><code>join()</code> waits (helping with other tasks) and combines results.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class SumTask extends RecursiveTask&lt;Long&gt; {
+    private static final int THRESHOLD = 10_000;
+    private final long[] a; private final int lo, hi;
+    SumTask(long[] a, int lo, int hi) { this.a = a; this.lo = lo; this.hi = hi; }
+
+    @Override protected Long compute() {
+        if (hi - lo &lt;= THRESHOLD) {
+            long s = 0; for (int i = lo; i &lt; hi; i++) s += a[i]; return s;
+        }
+        int mid = (lo + hi) &gt;&gt;&gt; 1;
+        SumTask left = new SumTask(a, lo, mid);
+        left.fork();                                   // run asynchronously
+        long right = new SumTask(a, mid, hi).compute(); // compute in this thread
+        return right + left.join();
+    }
+}
+long total = ForkJoinPool.commonPool().invoke(new SumTask(data, 0, data.length));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Blocking I/O in the common pool via parallel streams or <code>supplyAsync</code>.</li>
+  <li>Thresholds too small, so task overhead dominates.</li>
+  <li>Calling <code>join()</code> before <code>fork()</code>ing the other half, losing parallelism.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ForkJoinPool is designed for divide and conquer: a RecursiveTask splits work into subtasks with fork and combines results with join. Each worker thread has its own deque; it works LIFO on its own end, and idle workers steal from the other end of other workers' deques, which keeps all cores busy with little contention. The common pool is shared by parallel streams and CompletableFuture async methods by default, sized to cores minus one, so blocking tasks in it can starve the whole application. For blocking work I use a separate executor or a ManagedBlocker.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a parallel stream in a web request hurt throughput?</strong> Every request competes for the same small common pool and the request threads already provide parallelism.</li>
+  <li><strong>RecursiveTask vs RecursiveAction?</strong> One returns a result, the other doesn't.</li>
+  <li><strong>Can you run a parallel stream in a custom pool?</strong> Submitting it from a custom ForkJoinPool works in practice but is an implementation detail.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-139 · What is the transactional outbox pattern, and why is dual-write a problem?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-139" data-topic="Microservices">
+<h1>What is the transactional outbox pattern, and why is dual-write a problem?</h1>
+<p class="ex-meta">Microservices · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>dual write</strong> (save to the database, then publish to the broker) can leave the two <strong>inconsistent</strong> when one step fails; the <strong>transactional outbox</strong> writes the event to an <strong>outbox table in the same local transaction</strong>, and a <strong>relay</strong> (polling or <strong>CDC with Debezium</strong>) publishes it <strong>at least once</strong> to idempotent consumers.</p>
+
+<h2>Detailed explanation</h2>
+<p>Consider <code>orderRepository.save(order); kafkaTemplate.send(&quot;orders&quot;, event);</code>. If the database commit succeeds and the publish fails, or the process crashes in between, the order exists but no one hears about it. If you publish first and the commit then fails, consumers react to an order that does not exist. Wrapping both in <code>@Transactional</code> does not help, because the database and Kafka are separate resources, and XA two-phase commit is not a practical option with Kafka. This is the <strong>dual-write problem</strong>.</p>
+<p>The <strong>transactional outbox</strong> turns two writes into one. In the <strong>same local ACID transaction</strong> as the business change, the service inserts a row into an <code>outbox</code> table with the event id, aggregate type and id, event type, payload and timestamp. Either both commit or neither does. A separate <strong>message relay</strong> then publishes outbox rows to the broker:</p>
+<ul>
+  <li><strong>Polling publisher</strong>: a scheduled job reads unpublished rows in order, publishes them, and marks them sent or deletes them. Simple, but adds latency and DB load; use <code>SELECT ... FOR UPDATE SKIP LOCKED</code> if several instances poll.</li>
+  <li><strong>Change data capture (CDC)</strong>: <strong>Debezium</strong> reads the database's transaction log (Postgres WAL, MySQL binlog) and streams inserts into the outbox to Kafka. Its outbox event router routes by aggregate type and uses the aggregate id as the key. Low latency, no polling load.</li>
+</ul>
+<p>The relay may crash after publishing but before marking the row, so delivery is <strong>at least once</strong>: consumers must be <strong>idempotent</strong>, deduplicating on the event id. Ordering per aggregate is preserved by publishing with the <strong>aggregate id as key</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Begin transaction.</li>
+  <li>Update business tables.</li>
+  <li>Insert event into <code>outbox</code>.</li>
+  <li>Commit: both or neither.</li>
+  <li>Relay reads new outbox rows (poll or WAL).</li>
+  <li>Publish to Kafka keyed by aggregate id; mark or delete the row.</li>
+  <li>Consumers dedupe by event id.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE TABLE outbox (
+  id            UUID PRIMARY KEY,
+  aggregatetype VARCHAR(64)  NOT NULL,
+  aggregateid   VARCHAR(64)  NOT NULL,
+  type          VARCHAR(128) NOT NULL,
+  payload       JSONB        NOT NULL,
+  created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+);</code></pre>
+<pre><code class="language-java">@Transactional
+public void cancel(UUID orderId) {
+    Order o = orders.findById(orderId).orElseThrow();
+    o.cancel();
+    outbox.save(new OutboxRow(UUID.randomUUID(), &quot;Order&quot;, orderId.toString(),
+                              &quot;OrderCancelled&quot;, toJson(new OrderCancelled(orderId))));
+}</code></pre>
+<pre><code class="language-properties"># Debezium connector excerpt
+transforms=outbox
+transforms.outbox.type=io.debezium.transforms.outbox.EventRouter
+table.include.list=public.outbox</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Believing <code>@Transactional</code> covers the Kafka send.</li>
+  <li>Forgetting idempotent consumers, assuming the outbox gives exactly-once.</li>
+  <li>Letting the outbox table grow forever.</li>
+  <li>Using random keys, losing per-aggregate ordering.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A dual write is when a service writes to its database and separately publishes to Kafka. If one succeeds and the other fails, or the service crashes in between, the database and the event stream disagree, and a normal transaction cannot span both. The outbox pattern fixes it by inserting the event into an outbox table in the same local transaction as the business change. A relay then publishes those rows, either by polling or with CDC using Debezium reading the write-ahead log. The relay can publish twice, so delivery is at least once and consumers deduplicate on the event id.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you keep outbox events ordered per aggregate?</strong> Publish with the aggregate id as key and relay in commit order (CDC does this naturally).</li>
+  <li><strong>Polling vs CDC?</strong> Polling is simpler; CDC has lower latency and load but needs Debezium and Kafka Connect.</li>
+  <li><strong>What is the inbox pattern?</strong> The consumer-side counterpart: store received message ids to deduplicate.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-157 · How would you handle millions of database records efficiently in a Java backend application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-157" data-topic="Databases &amp; SQL">
+<h1>How would you handle millions of database records efficiently in a Java backend application?</h1>
+<p class="ex-meta">Databases &amp; SQL · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Never load everything into memory</strong>: read with <strong>keyset pagination or streaming cursors</strong>, select only needed columns through <strong>projections and indexes</strong>, write with <strong>JDBC batching and chunked commits</strong>, avoid <strong>ORM overhead</strong> for bulk work, and run large jobs <strong>in the background</strong> with tools such as <strong>Spring Batch</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Millions of rows break naive code in predictable ways: <code>findAll()</code> causes <code>OutOfMemoryError</code>; Hibernate's persistence context grows until GC thrashes; <code>OFFSET 900000</code> reads and discards 900,000 rows; one huge transaction holds locks, bloats undo/WAL and causes replication lag; and row-by-row inserts take hours because of round trips.</p>
+<p><strong>Reading</strong>:</p>
+<ul>
+  <li><strong>Keyset (seek) pagination</strong>: <code>WHERE id &gt; :lastId ORDER BY id LIMIT 1000</code>. Each page uses the index and costs the same, unlike offset pagination.</li>
+  <li><strong>Streaming</strong> with a server-side cursor and fetch size: <code>JdbcTemplate</code> with <code>setFetchSize</code>, JPA <code>Stream&lt;T&gt;</code> with a fetch-size hint. In PostgreSQL the fetch size only works with auto-commit off; in MySQL you need <code>useCursorFetch=true</code> or streaming mode.</li>
+  <li><strong>Projections</strong>: select DTOs with only required columns, not full entities with lazy associations.</li>
+  <li>Make sure filters and sort keys are <strong>indexed</strong>.</li>
+</ul>
+<p><strong>Writing</strong>:</p>
+<ul>
+  <li><strong>JDBC batching</strong> (<code>hibernate.jdbc.batch_size</code> of 500 to 1000, <code>order_inserts</code>), and avoid <code>IDENTITY</code> ID generation in Hibernate because it disables insert batching; use sequences.</li>
+  <li><strong>Commit per chunk</strong> so transactions stay short and failures restart from the last chunk.</li>
+  <li>With JPA, <code>flush()</code> and <code>clear()</code> the EntityManager every chunk, or use <code>StatelessSession</code> or plain <code>JdbcTemplate.batchUpdate</code>.</li>
+  <li>For massive loads use database-native tools: PostgreSQL <code>COPY</code>, MySQL <code>LOAD DATA</code>, or <code>INSERT ... SELECT</code> set-based SQL inside the database.</li>
+</ul>
+<p><strong>Architecture</strong>: run heavy work asynchronously, outside HTTP requests, using <strong>Spring Batch</strong> (chunk-oriented, restartable, partitioned steps), queues or schedulers; partition big tables; and monitor progress and DB load.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Choose set-based SQL if the work can be done in the database.</li>
+  <li>Otherwise read in chunks by keyset or stream with a fetch size.</li>
+  <li>Process each chunk in memory with bounded size.</li>
+  <li>Write chunk results in a batch and commit.</li>
+  <li>Record progress (last processed key) for restartability.</li>
+  <li>Parallelise by key ranges or partitions, watching DB capacity.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Keyset-paginated processing with batched writes
+long lastId = 0;
+List&lt;OrderRow&gt; page;
+do {
+    page = jdbc.query(
+        &quot;SELECT id, customer_id, total FROM orders WHERE id &gt; ? ORDER BY id LIMIT 1000&quot;,
+        (rs, i) -&gt; new OrderRow(rs.getLong(1), rs.getLong(2), rs.getBigDecimal(3)), lastId);
+    if (page.isEmpty()) break;
+    tx.executeWithoutResult(s -&gt; jdbc.batchUpdate(
+        &quot;INSERT INTO order_summary(order_id, customer_id, total) VALUES (?, ?, ?)&quot;,
+        page, 1000, (ps, r) -&gt; { ps.setLong(1, r.id()); ps.setLong(2, r.customerId()); ps.setBigDecimal(3, r.total()); }));
+    lastId = page.get(page.size() - 1).id();
+} while (true);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>repository.findAll()</code> on a huge table.</li>
+  <li>Offset pagination for deep pages or batch jobs.</li>
+  <li>One transaction for the whole job.</li>
+  <li>Hibernate <code>IDENTITY</code> keys silently disabling batch inserts.</li>
+  <li>Massive parallelism that overwhelms the database.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My first rule is never to load millions of rows into memory. If the work can be expressed in SQL, I let the database do it set-based. Otherwise I read in chunks with keyset pagination on an indexed column, or stream with a cursor and a fetch size, selecting only needed columns through projections. For writes I use JDBC batching with batches of several hundred to a thousand and commit per chunk to keep transactions short. With JPA I flush and clear the persistence context per chunk, or use JdbcTemplate or a StatelessSession instead. Large jobs run in the background, usually with Spring Batch, so they are restartable, can be partitioned, and are monitored.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does offset pagination slow down on later pages?</strong> The database must read and discard all skipped rows.</li>
+  <li><strong>Why does Hibernate IDENTITY disable batching?</strong> It must execute each insert immediately to get the generated id.</li>
+  <li><strong>How does Spring Batch help?</strong> Chunk processing, transactions per chunk, restart from failure, skip/retry and partitioning.</li>
+</ul>
+</article>
+</body>
+</html>

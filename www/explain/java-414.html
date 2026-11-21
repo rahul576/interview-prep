@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-414 · What is the Backend-for-Frontend (BFF) pattern, and when do you use API composition?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-414" data-topic="Microservices">
+<h1>What is the Backend-for-Frontend (BFF) pattern, and when do you use API composition?</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>Backend-for-Frontend (BFF)</strong> is a <strong>dedicated thin backend per client type</strong> that tailors and aggregates data for that UI, and <strong>API composition</strong> is the technique of <strong>calling several services and joining results in memory</strong> to answer one query; both risk <strong>duplicated logic</strong> and an <strong>extra hop</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A general-purpose API rarely suits every client. A mobile app on a slow network wants one compact call per screen; a web dashboard wants richer data; a partner API wants stability. Forcing all of them through one API leads to over-fetching, chatty clients and an API that changes for everyone whenever one UI changes.</p>
+<p>The <strong>BFF pattern</strong> (popularised by SoundCloud and Sam Newman) gives each frontend its own backend, usually owned by the <strong>frontend team</strong>. The BFF calls downstream services, <strong>aggregates</strong> and <strong>reshapes</strong> data into exactly what the screen needs, and can apply client-specific concerns such as pagination styles or versioning for old app releases. It is also a good place for <strong>security in single-page apps</strong>: the BFF performs the OAuth2 login as a confidential client, keeps access and refresh tokens server-side, and gives the browser only an HTTP-only, SameSite session cookie (the &quot;token handler&quot; approach recommended by current OAuth browser guidance), so tokens are not exposed to JavaScript.</p>
+<p><strong>API composition</strong> is how a BFF, gateway or composer service implements queries that span services in a database-per-service architecture: call the order service, customer service and shipping service (ideally <strong>in parallel</strong>), then <strong>join</strong> the results in memory. It is simple and always fresh, but latency equals the slowest call, availability depends on all of them, and large joins in memory are inefficient. For heavy or frequent cross-service queries, a <strong>CQRS read model</strong> built from events is better.</p>
+<p>The risks: logic <strong>duplicated</strong> across BFFs, business rules creeping in, and an extra network hop. Keep BFFs <strong>thin</strong>: composition and presentation only, with domain rules in the services. Shared concerns go to the gateway.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Mobile app calls <code>GET /mobile/home</code>.</li>
+  <li>BFF validates the session, picks the user's token.</li>
+  <li>BFF calls profile, orders and recommendations in parallel with timeouts.</li>
+  <li>Missing optional parts degrade to defaults.</li>
+  <li>BFF maps results to a compact DTO and returns one response.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@GetMapping(&quot;/mobile/home&quot;)
+public Mono&lt;HomeScreen&gt; home(@AuthenticationPrincipal Jwt jwt) {
+    String userId = jwt.getSubject();
+    Mono&lt;Profile&gt; profile = profileClient.get(userId);
+    Mono&lt;List&lt;OrderSummary&gt;&gt; orders = orderClient.recent(userId, 3);
+    Mono&lt;List&lt;Product&gt;&gt; recs = recClient.forUser(userId)
+            .timeout(Duration.ofMillis(300))
+            .onErrorReturn(List.of());                 // optional part degrades
+    return Mono.zip(profile, orders, recs)
+               .map(t -&gt; new HomeScreen(t.getT1().firstName(), t.getT2(), t.getT3()));
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Strength</th><th>Weakness</th></tr></thead>
+<tbody>
+<tr><td>One general API</td><td>One codebase</td><td>Fits no client well</td></tr>
+<tr><td>BFF per client</td><td>Tailored, team-owned</td><td>Duplication, more services</td></tr>
+<tr><td>GraphQL</td><td>Clients choose fields</td><td>Query cost control, caching harder</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting business rules in the BFF.</li>
+  <li>Calling services sequentially instead of in parallel.</li>
+  <li>One BFF per screen, creating service sprawl.</li>
+  <li>No timeouts or fallbacks for optional data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The BFF pattern gives each client type, like web and mobile, its own thin backend, usually owned by the frontend team, which aggregates and reshapes data so the client gets exactly what a screen needs in one call. For browser apps it is also where I handle OAuth, keeping tokens server-side and giving the browser only a secure cookie. API composition is the technique of calling several services, ideally in parallel, and joining results in memory to answer a query when data is spread across services. Risks are duplicated logic and an extra hop, so BFFs stay thin, and for heavy cross-service queries I build a CQRS read model instead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you prefer GraphQL over several BFFs?</strong> Many clients with varied data needs and a team able to manage schema and query-cost controls.</li>
+  <li><strong>API composition vs CQRS read model?</strong> Composition is fresh but slow and fragile at scale; read models are fast but eventually consistent.</li>
+  <li><strong>How is a BFF different from an API gateway?</strong> The gateway handles generic edge concerns; a BFF contains client-specific composition.</li>
+</ul>
+</article>
+</body>
+</html>

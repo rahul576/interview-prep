@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-115 · How do you size and configure a ThreadPoolExecutor? What happens when the queue is full?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-115" data-topic="Concurrency">
+<h1>How do you size and configure a ThreadPoolExecutor? What happens when the queue is full?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>ThreadPoolExecutor</strong> runs tasks on <strong>core threads</strong>, <strong>queues</strong> further tasks, creates threads up to <strong>max pool size only when the queue is full</strong>, and then applies a <strong>rejection policy</strong>; use a <strong>bounded queue</strong>, size CPU-bound pools near <strong>core count</strong> and I/O-bound pools by <strong>wait/compute ratio</strong> (or use virtual threads).</p>
+
+<h2>Detailed explanation</h2>
+<p>The key parameters are <code>corePoolSize</code>, <code>maximumPoolSize</code>, <code>keepAliveTime</code>, the <code>workQueue</code>, a <code>ThreadFactory</code> and a <code>RejectedExecutionHandler</code>. The submission algorithm is often misunderstood:</p>
+<ol>
+  <li>If fewer than <strong>core</strong> threads are running, start a new thread for the task.</li>
+  <li>Otherwise try to <strong>enqueue</strong> the task.</li>
+  <li>If the queue is <strong>full</strong>, start a new thread, up to <strong>max</strong>.</li>
+  <li>If max threads are busy and the queue is full, <strong>reject</strong>.</li>
+</ol>
+<p>So with an <strong>unbounded queue</strong> step 2 always succeeds and the pool <strong>never grows beyond core</strong>; max is meaningless. With a <code>SynchronousQueue</code> (no capacity), tasks go directly to new threads up to max. Threads above core die after <code>keepAliveTime</code> idle; <code>allowCoreThreadTimeOut(true)</code> applies that to core threads too.</p>
+<p><strong>Always bound the queue</strong> so overload becomes visible instead of a silent memory leak and huge latency. <strong>Rejection policies</strong>:</p>
+<ul>
+  <li><strong>AbortPolicy</strong> (default): throws <code>RejectedExecutionException</code>; the caller can return 503 or retry.</li>
+  <li><strong>CallerRunsPolicy</strong>: the submitting thread runs the task itself, which slows the producer: natural <strong>back-pressure</strong>.</li>
+  <li><strong>DiscardPolicy / DiscardOldestPolicy</strong>: silently drop the new or oldest task; only for loss-tolerant work like metrics.</li>
+  <li>Custom handlers: log, record a metric, push to a fallback.</li>
+</ul>
+<p><strong>Sizing.</strong> For <strong>CPU-bound</strong> tasks, about <code>Ncores</code> (or +1) threads; more just adds context switching. For <strong>I/O-bound</strong> tasks, Brian Goetz's formula: <code>threads ≈ Ncores × (1 + wait time / compute time)</code>, e.g. 8 cores, 90 ms waiting per 10 ms computing → ~80 threads. Validate with load tests and also respect downstream limits such as DB pool size. On Java 21+, blocking I/O work is often better on <strong>virtual threads</strong> with a Semaphore. Name your threads and expose metrics (active count, queue size, rejections).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Task arrives → core thread if under core size.</li>
+  <li>Else enqueue.</li>
+  <li>Queue full → extra thread up to max.</li>
+  <li>All full → rejection handler.</li>
+  <li>Idle extra threads time out.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">int cores = Runtime.getRuntime().availableProcessors();
+ThreadPoolExecutor ioPool = new ThreadPoolExecutor(
+        cores * 4,                          // core
+        cores * 8,                          // max, used only when queue full
+        60, TimeUnit.SECONDS,
+        new ArrayBlockingQueue&lt;&gt;(1_000),    // bounded
+        Thread.ofPlatform().name(&quot;io-&quot;, 0).factory(),
+        new ThreadPoolExecutor.CallerRunsPolicy());
+
+meter.gauge(&quot;pool.queue&quot;, ioPool, p -&gt; p.getQueue().size());</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Unbounded queue plus a large max, expecting the pool to scale.</li>
+  <li>Using <code>Executors.newFixedThreadPool</code> / <code>newCachedThreadPool</code> in services.</li>
+  <li>CallerRunsPolicy on an event-loop or request thread that must not block.</li>
+  <li>Sizing far beyond downstream connection limits.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A ThreadPoolExecutor keeps core threads alive, queues tasks when they're busy, and only creates threads up to the maximum when the queue is full. I always use a bounded queue so memory can't grow without limit. When both the queue and max threads are exhausted, the rejection policy applies: AbortPolicy throws, CallerRunsPolicy runs the task on the caller thread, which gives natural back-pressure, and the discard policies drop work. For CPU-bound tasks I size around the number of cores; for I/O-bound tasks larger, based on wait time versus compute time, or I use virtual threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a pool with an unbounded queue never exceed core size?</strong> New threads beyond core are created only when the queue rejects an offer, which never happens.</li>
+  <li><strong>How do you monitor a pool?</strong> Active count, queue size, completed tasks and rejections exported as metrics.</li>
+  <li><strong>How do you shut it down?</strong> <code>shutdown</code>, <code>awaitTermination</code>, then <code>shutdownNow</code>.</li>
+</ul>
+</article>
+</body>
+</html>

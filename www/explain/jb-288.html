@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-288 · What are the common causes of slow Java applications?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-288" data-topic="JVM &amp; Performance">
+<h1>What are the common causes of slow Java applications?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Most slow Java applications are slowed by <strong>I/O, not Java</strong>: <strong>slow or excessive database queries</strong> (missing indexes, <strong>N+1</strong>), <strong>remote calls</strong> made sequentially or <strong>without timeouts</strong>, then <strong>GC pressure and leaks</strong>, <strong>lock contention and exhausted pools</strong>, and finally <strong>inefficient code</strong> (algorithms, serialisation, logging) and <strong>cold JIT</strong> after startup.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Database.</strong> The most common culprit. Queries without suitable <strong>indexes</strong> do full scans; ORMs generate <strong>N+1 selects</strong> when lazy associations are accessed in a loop; endpoints fetch whole entities or thousands of rows when they need a few fields; missing pagination; long transactions holding locks. The fix starts with query logs, <code>EXPLAIN</code> plans and Hibernate statistics.</p>
+<p><strong>Remote calls.</strong> Calling three downstream services one after another adds their latencies; calling them without <strong>timeouts</strong> means one slow dependency ties up threads until the pool is exhausted and everything queues. Use timeouts, parallel calls (<code>CompletableFuture</code>, virtual threads), caching and circuit breakers.</p>
+<p><strong>Memory and GC.</strong> High allocation rates cause frequent young GCs; leaks or an undersized heap cause frequent full GCs with long pauses. Containers with the default 25% heap or a heap close to the limit are common sources.</p>
+<p><strong>Concurrency.</strong> <code>synchronized</code> methods on hot paths, a single shared lock, or contended data structures serialise threads. <strong>Pools</strong> that are too small (HikariCP connections, HTTP client connections, Tomcat threads) make requests wait. With <strong>virtual threads</strong>, pinning in older JDKs could also limit throughput when blocking inside <code>synchronized</code> (much improved in JDK 24).</p>
+<p><strong>Inefficient code.</strong> Wrong data structures (<code>List.contains</code> in a loop, giving O(n²)), heavy JSON or XML serialisation of large graphs, excessive or synchronous logging, regexes compiled per call, exceptions used for control flow, and creating expensive objects (<code>ObjectMapper</code>) per request.</p>
+<p><strong>Startup and warm-up.</strong> Right after deployment, code is interpreted and the JIT is compiling, so latency is high for the first minutes.</p>
+<p><strong>Environment.</strong> CPU throttling from container limits, noisy neighbours, DNS or TLS handshakes without connection reuse.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure: latency percentiles per endpoint, APM traces, metrics.</li>
+  <li>Use distributed tracing to see where time goes (DB, HTTP, code).</li>
+  <li>Check database: slow query log, plans, query counts per request.</li>
+  <li>Check pools, GC logs, thread dumps for contention.</li>
+  <li>Profile CPU and allocations for code-level hotspots.</li>
+  <li>Fix the biggest contributor first and re-measure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// N+1: one query for orders, then one per order for its customer
+List&lt;Order&gt; orders = orderRepo.findByStatus(OPEN);
+orders.forEach(o -&gt; dto(o, o.getCustomer().getName()));   // lazy load each time
+
+// Fix: fetch join or entity graph
+@Query(&quot;select o from Order o join fetch o.customer where o.status = :s&quot;)
+List&lt;Order&gt; findWithCustomer(@Param(&quot;s&quot;) Status s);</code></pre>
+<pre><code class="language-yaml"># Timeouts and pool sizing (Spring Boot)
+spring.datasource.hikari.maximum-pool-size: 20
+spring.datasource.hikari.connection-timeout: 2000</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Guessing instead of tracing where time is spent.</li>
+  <li>Blaming GC or Java when the database is the bottleneck.</li>
+  <li>Raising thread pool sizes when the downstream resource is saturated.</li>
+  <li>Testing with tiny data sets that hide N+1 and missing indexes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In my experience most slowness comes from I/O rather than Java itself. The most common cause is the database: slow queries, missing indexes, N+1 selects from the ORM and fetching too much data. Next are remote calls made sequentially or without timeouts, so one slow dependency exhausts threads. Then memory: high allocation rates cause GC pressure, and leaks lead to frequent full GCs. Then concurrency: lock contention, synchronized hot paths and connection or thread pools that are too small. Finally inefficient code, like wrong data structures, heavy serialisation, excessive logging or regexes compiled in loops, plus cold JIT right after startup. I always start with tracing and metrics to find which one it is.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you tell whether a slowdown is caused by GC or by the database?</strong> Correlate latency with GC pause metrics and logs versus DB query times in traces; thread dumps show threads waiting on sockets for DB issues.</li>
+  <li><strong>How do you detect N+1?</strong> Hibernate statistics, SQL logging per request, or APM traces with many identical queries.</li>
+  <li><strong>How do you size a connection pool?</strong> From measured concurrency and DB capacity, usually small; more connections can make the database slower.</li>
+</ul>
+</article>
+</body>
+</html>

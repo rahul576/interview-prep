@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-168 · What is ZGC, and which garbage collectors are designed for low-latency applications?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-168" data-topic="JVM &amp; Performance">
+<h1>What is ZGC, and which garbage collectors are designed for low-latency applications?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>ZGC</strong> is the JVM's scalable, <strong>concurrent compacting</strong> garbage collector that keeps pauses typically <strong>below a millisecond regardless of heap size</strong>; together with <strong>Shenandoah</strong> it is the low-latency choice, trading some throughput and CPU for predictable latency.</p>
+
+<h2>Detailed explanation</h2>
+<p>Classic collectors such as Parallel GC stop all application threads to mark and compact the heap, so pause time grows with heap size. <strong>G1</strong>, the default collector, splits the heap into regions and aims for a pause target (<code>-XX:MaxGCPauseMillis</code>, 200 ms by default), but it still evacuates objects during stop-the-world pauses, so large or busy heaps can see tens of milliseconds.</p>
+<p><strong>ZGC</strong> moves almost all work, including <strong>marking, relocation (compaction) and reference fixing</strong>, into phases that run <strong>concurrently</strong> with the application. It does this with <strong>coloured pointers</strong> (metadata bits stored in 64-bit object references) and <strong>load barriers</strong>: whenever the application loads a reference, a small barrier checks the colour and, if the object has moved, heals the reference on the fly. The remaining pauses only scan thread stacks and roots, so they stay in the sub-millisecond range from a few gigabytes up to multi-terabyte heaps. ZGC became production-ready in <strong>JDK 15</strong>; <strong>Generational ZGC</strong> arrived in <strong>JDK 21</strong> (enabled with <code>-XX:+ZGenerational</code>), became the default ZGC mode in JDK 23, and the non-generational mode was removed in JDK 24, so on current LTS releases (JDK 25) <code>-XX:+UseZGC</code> alone gives you generational ZGC.</p>
+<p><strong>Shenandoah</strong>, developed by Red Hat and shipped in OpenJDK builds, reaches similar goals with <strong>concurrent evacuation</strong> using load-reference barriers and forwarding pointers; recent JDKs also add a generational mode. The price for both is <strong>lower peak throughput</strong>, extra CPU used by concurrent GC threads, and the need for <strong>heap headroom</strong>: if allocation outpaces concurrent collection you get allocation stalls.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>A short pause marks roots (thread stacks, globals).</li>
+  <li>Concurrent marking walks the object graph while the application runs.</li>
+  <li>A short pause finishes marking.</li>
+  <li>ZGC selects regions with mostly garbage (the relocation set).</li>
+  <li>Objects are relocated concurrently; load barriers redirect any stale reference the application touches.</li>
+  <li>In generational mode, the young generation is collected frequently and cheaply, the old generation rarely.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># JDK 21: generational must be switched on explicitly
+java -XX:+UseZGC -XX:+ZGenerational -Xmx16g -Xlog:gc:file=gc.log -jar pricing.jar
+
+# JDK 23+: generational is the only/default mode
+java -XX:+UseZGC -Xmx16g -XX:SoftMaxHeapSize=12g -jar pricing.jar
+
+# Shenandoah
+java -XX:+UseShenandoahGC -Xmx16g -jar pricing.jar</code></pre>
+<p>A trading API with a 64 GB in-memory order book saw G1 pauses of 80-150 ms at p99.9; after switching to ZGC pauses dropped below 1 ms, at the cost of roughly 10 percent more CPU.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Collector</th><th>Pauses</th><th>Throughput</th><th>Typical fit</th></tr></thead>
+<tbody>
+<tr><td>Parallel</td><td>Long, scale with heap</td><td>Highest</td><td>Batch jobs</td></tr>
+<tr><td>G1</td><td>Tunable, ~10-200 ms</td><td>Good</td><td>General default</td></tr>
+<tr><td>ZGC</td><td>Sub-millisecond</td><td>Slightly lower</td><td>Large heaps, strict latency</td></tr>
+<tr><td>Shenandoah</td><td>Few ms or less</td><td>Slightly lower</td><td>Low latency, Red Hat stacks</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Switching to ZGC without measuring: if p99 latency is dominated by I/O or locks, GC is not the problem.</li>
+  <li>Running ZGC with no heap headroom, causing allocation stalls.</li>
+  <li>Still passing <code>-XX:+ZGenerational</code> on JDK 24+ where it is obsolete.</li>
+  <li>Expecting lower CPU usage; concurrent collectors usually use more.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ZGC is a concurrent, compacting, region-based collector. Using coloured pointers and load barriers, it marks and relocates objects while the application keeps running, so pauses stay below a millisecond whether the heap is 4 GB or 4 TB. Since JDK 21 it is generational, and from JDK 23 that is the default, so <code>-XX:+UseZGC</code> is enough. Shenandoah is the other low-latency option. Both cost some throughput, CPU and memory headroom, so I would choose them for latency-sensitive services with large heaps, after confirming with GC logs that G1 pauses really hurt our tail latency.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What would you check before moving from G1 to ZGC?</strong> GC logs for pause times versus p99 latency, allocation rate, CPU headroom and heap occupancy.</li>
+  <li><strong>What is an allocation stall?</strong> The application allocates faster than ZGC frees memory, so threads wait; add heap or reduce allocation.</li>
+  <li><strong>Does ZGC need tuning?</strong> Mainly <code>-Xmx</code> and optionally <code>SoftMaxHeapSize</code>; it is designed to be largely self-tuning.</li>
+</ul>
+</article>
+</body>
+</html>

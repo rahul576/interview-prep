@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-290 · What is profiling, and which Java profiling tools have you used?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-290" data-topic="JVM &amp; Performance">
+<h1>What is profiling, and which Java profiling tools have you used?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Profiling</strong> measures where an application actually spends <strong>CPU, memory allocations, lock waits and I/O time</strong>; <strong>sampling profilers</strong> (JFR, async-profiler) are low-overhead and production-safe, <strong>instrumentation profilers</strong> are precise but slow; I use <strong>JFR with JDK Mission Control</strong>, <strong>async-profiler</strong>, <strong>VisualVM</strong>, commercial tools like <strong>YourKit or JProfiler</strong>, <strong>Eclipse MAT</strong> for heap dumps, and <strong>continuous profiling</strong> for regressions.</p>
+
+<h2>Detailed explanation</h2>
+<p>Performance intuition is often wrong; profiling replaces guessing with data. The main dimensions are <strong>CPU</strong> (which methods run), <strong>allocation</strong> (which code creates garbage), <strong>heap</strong> (what is retained), <strong>locks</strong> (where threads wait for monitors), and <strong>wall-clock</strong> time (including I/O and sleeping, key for latency).</p>
+<p><strong>Sampling vs instrumentation.</strong> A <strong>sampling profiler</strong> periodically captures stack traces of threads; hot methods appear in more samples. Overhead is low (around 1-2%), so it can run in production, but very short methods may be missed. An <strong>instrumentation profiler</strong> injects code at method entry and exit, giving exact call counts and timings, but adds significant overhead and can distort the JIT's behaviour, so it suits development and targeted analysis.</p>
+<p><strong>Tools I use.</strong></p>
+<ul>
+  <li><strong>Java Flight Recorder (JFR)</strong>: built into the JDK, records CPU samples, allocation samples, GC, locks, I/O, exceptions and custom events. Start with <code>-XX:StartFlightRecording</code> or <code>jcmd JFR.start</code>; analyse in <strong>JDK Mission Control</strong> or with the <code>jfr</code> CLI. JFR event streaming (Java 14+) allows live consumption.</li>
+  <li><strong>async-profiler</strong>: CPU, allocation, lock and wall-clock modes; produces flame graphs and JFR files; includes native and kernel frames, no safepoint bias.</li>
+  <li><strong>VisualVM</strong>: quick local monitoring, thread views, sampling; good for development.</li>
+  <li><strong>YourKit, JProfiler</strong>: commercial, polished UIs with both sampling and instrumentation, database and HTTP call views.</li>
+  <li><strong>Eclipse MAT</strong>: heap dump analysis with dominator trees and leak suspects.</li>
+  <li><strong>JMH</strong>: microbenchmarks with profilers like <code>-prof gc</code>.</li>
+  <li><strong>Continuous profiling</strong>: Grafana Pyroscope, Datadog, Elastic and other APM vendors profile all instances all the time, so you can compare before and after a deployment.</li>
+</ul>
+<p><strong>Process.</strong> Define the question (why is p99 high?), reproduce under realistic load, profile, change one thing, re-measure.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the symptom and metric to improve.</li>
+  <li>Choose the profiling mode: CPU, allocation, lock or wall-clock.</li>
+  <li>Record with a low-overhead sampler under realistic load.</li>
+  <li>Analyse flame graphs or JMC views for the biggest contributors.</li>
+  <li>Fix, benchmark, and confirm with production metrics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># JFR: start at launch with continuous recording
+java -XX:StartFlightRecording=maxage=6h,settings=profile,filename=/logs/app.jfr -jar app.jar
+jcmd &lt;pid&gt; JFR.dump name=1 filename=/tmp/now.jfr      # dump on demand
+jfr print --events jdk.ExecutionSample /tmp/now.jfr | head
+
+# async-profiler modes
+asprof -e cpu   -d 30 -f cpu.html   &lt;pid&gt;
+asprof -e alloc -d 30 -f alloc.html &lt;pid&gt;
+asprof -e lock  -d 30 -f lock.html  &lt;pid&gt;
+asprof -e wall  -t -d 30 -f wall.html &lt;pid&gt;</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Tool</th><th>Type</th><th>Overhead</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>JFR + JMC</td><td>Sampling + events</td><td>Very low</td><td>Production, broad picture</td></tr>
+<tr><td>async-profiler</td><td>Sampling</td><td>Low</td><td>Flame graphs, CPU/alloc/lock/wall</td></tr>
+<tr><td>VisualVM</td><td>Sampling/instrumentation</td><td>Low-medium</td><td>Local quick checks</td></tr>
+<tr><td>YourKit/JProfiler</td><td>Both</td><td>Varies</td><td>Deep dev analysis</td></tr>
+<tr><td>Eclipse MAT</td><td>Heap dump</td><td>Offline</td><td>Memory leaks</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Profiling a cold JVM or toy data set.</li>
+  <li>Using instrumenting profilers to judge production latency.</li>
+  <li>Looking only at CPU when the problem is waiting (use wall-clock or lock profiles).</li>
+  <li>Not reproducing before and after on the same workload.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Profiling is measuring where an application actually spends its resources, CPU time, allocations, locks and I/O waits, instead of guessing. Sampling profilers take stack snapshots periodically with low overhead, so they're usable in production; instrumentation profilers record every call precisely but slow the application down. I've used Java Flight Recorder with JDK Mission Control for CPU, allocations, GC and lock contention; async-profiler for flame graphs of CPU, allocation and wall-clock time; VisualVM for quick local checks; and YourKit and JProfiler. For memory I analyse heap dumps in Eclipse MAT, and continuous profiling with Pyroscope or an APM vendor helps catch regressions after deployments.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you profile an application running inside a Kubernetes pod?</strong> Use JFR via <code>jcmd</code> in the container or an ephemeral debug container, or attach async-profiler, then copy the file out; or use a continuous profiling agent.</li>
+  <li><strong>What is a flame graph?</strong> A visualisation of sampled stacks where width shows how much time each frame accounts for.</li>
+  <li><strong>CPU vs wall-clock profiling?</strong> CPU counts only running time; wall-clock includes waiting, which explains latency.</li>
+</ul>
+</article>
+</body>
+</html>

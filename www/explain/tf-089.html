@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-089 · Terraform creates a Key Vault and then fails to create secrets in it with a 403 Forbidden error. Why, and how do you fix it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-089" data-topic="Terraform">
+<h1>Terraform creates a Key Vault and then fails to create secrets in it with a 403 Forbidden error. Why, and how do you fix it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Creating the vault uses the <strong>control plane</strong>, but writing secrets uses the <strong>data plane</strong>, which needs separate permissions such as <strong>Key Vault Secrets Officer</strong>; add the <strong>role assignment with a dependency</strong>, allow for <strong>propagation delay</strong>, and make sure the <strong>vault firewall</strong> lets the runner in.</p>
+
+<h2>Detailed explanation</h2>
+<p>Azure separates <strong>management (control plane)</strong> operations, handled by Azure Resource Manager, from <strong>data plane</strong> operations handled by the service itself. A pipeline identity with <strong>Contributor</strong> on the resource group can create, update and delete the Key Vault resource, but Contributor has no data actions, so it <strong>cannot read or write secrets, keys or certificates</strong>. The request reaches the vault and is rejected with <strong>403 Forbidden</strong>.</p>
+<p>With the <strong>Azure RBAC permission model</strong> (now the default and recommended model for new vaults), the fix is to give the deployer identity a data-plane role on the vault, such as <strong>Key Vault Secrets Officer</strong> for managing secrets, and give applications narrower roles like <strong>Key Vault Secrets User</strong>. With the legacy <strong>access policy</strong> model, you would add an access policy for the deployer instead.</p>
+<p>The second subtlety is <strong>propagation</strong>. A new role assignment can take a minute or more to become effective, so even with the right dependency, the first apply may fail. A <code>time_sleep</code> resource after the assignment, or simply re-running the apply, deals with it.</p>
+<p>The third common cause is the <strong>network</strong>. If the vault has <code>public_network_access_enabled = false</code>, or a firewall with default action deny, a cloud-hosted runner on the internet is blocked, also with a 403. The runner must be inside a VNet with a private endpoint and private DNS, or its IP must be explicitly allowed. This is one reason teams use <strong>self-hosted runners</strong> for private resources.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform creates the vault with <code>enable_rbac_authorization = true</code> (newer azurerm uses <code>rbac_authorization_enabled</code>).</li>
+  <li>It creates an <code>azurerm_role_assignment</code> giving the pipeline identity Key Vault Secrets Officer at vault scope.</li>
+  <li>A <code>time_sleep</code> waits for RBAC propagation.</li>
+  <li>Secret resources depend on the sleep.</li>
+  <li>The runner reaches the vault through a private endpoint or an allowed network rule.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;azurerm_client_config&quot; &quot;current&quot; {}
+
+resource &quot;azurerm_role_assignment&quot; &quot;deployer_secrets&quot; {
+  scope                = azurerm_key_vault.main.id
+  role_definition_name = &quot;Key Vault Secrets Officer&quot;
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+resource &quot;time_sleep&quot; &quot;rbac&quot; {
+  depends_on      = [azurerm_role_assignment.deployer_secrets]
+  create_duration = &quot;60s&quot;
+}
+
+resource &quot;azurerm_key_vault_secret&quot; &quot;db&quot; {
+  name         = &quot;db-connection&quot;
+  value        = var.db_connection
+  key_vault_id = azurerm_key_vault.main.id
+  depends_on   = [time_sleep.rbac]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming Owner or Contributor on the subscription includes secret access.</li>
+  <li>Forgetting the explicit dependency, so secrets are created in parallel with the role assignment.</li>
+  <li>Debugging permissions when the real cause is the vault firewall.</li>
+  <li>Giving the deployer Key Vault Administrator when Secrets Officer is enough.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Creating the vault is a control-plane operation where the pipeline identity has Contributor, but writing secrets is a data-plane operation, and Contributor has no data actions. With the RBAC model I add a role assignment giving the pipeline identity Key Vault Secrets Officer on the vault and make the secrets depend on it. Because role assignments take time to propagate, I add a short time_sleep or retry. The other common cause is the network: if the vault only allows private endpoints, the runner must be inside the network or explicitly allowed, which is why I use self-hosted runners for private vaults.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is RBAC preferred over access policies?</strong> It uses standard Azure RBAC, supports scopes, PIM and auditing, and separates who manages permissions.</li>
+  <li><strong>How do you tell a permission 403 from a network 403?</strong> The error body says <code>ForbiddenByRbac</code> or <code>ForbiddenByFirewall</code>/client address not authorised.</li>
+  <li><strong>Should secret values be in Terraform at all?</strong> Only generated ones; values in state need a protected backend, or let apps write their own.</li>
+</ul>
+</article>
+</body>
+</html>

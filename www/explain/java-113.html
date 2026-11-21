@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-113 · How does ReentrantLock differ from synchronized?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-113" data-topic="Concurrency">
+<h1>How does ReentrantLock differ from synchronized?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Both <strong>synchronized</strong> and <strong>ReentrantLock</strong> give <strong>reentrant mutual exclusion</strong> with the same <strong>visibility guarantees</strong>, but ReentrantLock adds <strong>tryLock (with timeout)</strong>, <strong>lockInterruptibly</strong>, optional <strong>fairness</strong> and multiple <strong>Condition</strong> objects, at the cost of <strong>unlocking manually in finally</strong>; for read-heavy data use <strong>ReentrantReadWriteLock</strong> or <strong>StampedLock</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>synchronized</code> is built into the language. The JVM acquires the object's monitor on entry and <strong>releases it automatically</strong> on exit, even when an exception is thrown. It is <strong>reentrant</strong> (a thread can re-enter a monitor it already holds), and it is well optimised: uncontended locking is cheap. Its limits: a waiting thread cannot time out or be interrupted, there is only one wait set per monitor (<code>wait</code>/<code>notify</code>), and there's no fairness control.</p>
+<p><code>ReentrantLock</code> (in <code>java.util.concurrent.locks</code>) offers the same semantics plus control:</p>
+<ul>
+  <li><strong>tryLock()</strong> returns immediately if the lock is busy, and <strong>tryLock(timeout)</strong> waits for a bounded time, useful to avoid deadlocks and to fail fast.</li>
+  <li><strong>lockInterruptibly()</strong> lets a waiting thread respond to interruption, so cancellation works.</li>
+  <li><strong>Fairness</strong>: <code>new ReentrantLock(true)</code> grants the lock roughly in arrival order, reducing starvation at the cost of throughput.</li>
+  <li><strong>Multiple Conditions</strong>: <code>lock.newCondition()</code> creates separate wait sets, such as <code>notFull</code> and <code>notEmpty</code> in a bounded buffer, so you signal only the threads that care.</li>
+  <li>Introspection: <code>isLocked</code>, <code>getQueueLength</code>, <code>isHeldByCurrentThread</code>.</li>
+</ul>
+<p>The price is discipline: you <strong>must</strong> call <code>unlock()</code> in a <code>finally</code> block, or an exception leaves the lock held forever. Historically ReentrantLock also mattered for <strong>virtual threads on Java 21-23</strong>, because blocking inside <code>synchronized</code> pinned the carrier; Java 24 fixed that.</p>
+<p>For data that is read far more often than written, <strong>ReentrantReadWriteLock</strong> allows many concurrent readers or one writer. <strong>StampedLock</strong> (Java 8) adds <strong>optimistic reads</strong>: read without locking, then <code>validate(stamp)</code> and fall back to a read lock if a write happened. It's faster for read-mostly data but is <strong>not reentrant</strong> and has no Conditions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>lock()</code> tries a CAS on an AQS state; on failure the thread enqueues and parks.</li>
+  <li>Reentry increments a hold count.</li>
+  <li><code>unlock()</code> decrements; at zero it releases and unparks the next waiter.</li>
+  <li><code>await()</code> on a Condition releases the lock and waits; <code>signal()</code> moves a waiter back to the lock queue.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private final ReentrantLock lock = new ReentrantLock();
+private final Condition notEmpty = lock.newCondition();
+
+boolean tryTransfer(Duration wait) throws InterruptedException {
+    if (!lock.tryLock(wait.toMillis(), TimeUnit.MILLISECONDS)) return false;
+    try {
+        while (queue.isEmpty()) notEmpty.await();
+        process(queue.poll());
+        return true;
+    } finally {
+        lock.unlock();                     // always in finally
+    }
+}
+
+// Optimistic read with StampedLock
+long stamp = sl.tryOptimisticRead();
+double cx = x, cy = y;
+if (!sl.validate(stamp)) { stamp = sl.readLock(); try { cx = x; cy = y; } finally { sl.unlockRead(stamp); } }</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>synchronized</th><th>ReentrantLock</th></tr></thead>
+<tbody>
+<tr><td>Release</td><td>automatic</td><td>manual in finally</td></tr>
+<tr><td>Timeout / tryLock</td><td>no</td><td>yes</td></tr>
+<tr><td>Interruptible wait</td><td>no</td><td>yes</td></tr>
+<tr><td>Fairness</td><td>no</td><td>optional</td></tr>
+<tr><td>Conditions</td><td>one wait set</td><td>many</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>unlock()</code> in finally.</li>
+  <li>Calling <code>lock()</code> inside the try block (unlock without lock on failure).</li>
+  <li>Using fair locks by default and losing throughput.</li>
+  <li>Re-entering a StampedLock, which deadlocks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both give reentrant mutual exclusion and the same memory visibility guarantees. synchronized is simpler and the lock is released automatically. ReentrantLock adds tryLock with a timeout, lockInterruptibly so a waiting thread can be interrupted, an optional fair mode, and multiple Condition objects instead of one wait-notify set. The cost is that I must unlock in a finally block. I default to synchronized for simple critical sections, and choose ReentrantLock when I need timeouts, interruptibility or conditions. For read-heavy data, ReentrantReadWriteLock or StampedLock allow concurrent readers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When does a StampedLock optimistic read help?</strong> Very read-heavy data with short reads, like coordinates or config, where writes are rare.</li>
+  <li><strong>Is synchronized slower?</strong> Not meaningfully when uncontended; modern JVMs optimise it well.</li>
+  <li><strong>What is AQS?</strong> AbstractQueuedSynchronizer, the framework behind ReentrantLock, Semaphore and CountDownLatch.</li>
+</ul>
+</article>
+</body>
+</html>

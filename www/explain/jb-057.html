@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-057 · Why is HashMap not thread-safe? Explain a real-world problem caused by concurrent modifications.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-057" data-topic="Collections">
+<h1>Why is HashMap not thread-safe? Explain a real-world problem caused by concurrent modifications.</h1>
+<p class="ex-meta">Collections · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>HashMap has <strong>no synchronisation</strong>, so concurrent <code>put</code>s cause <strong>lost updates</strong>, wrong <strong>size</strong> and corrupted state during <strong>resize</strong>; in <strong>Java 7</strong> a concurrent resize could even form a <strong>cycle</strong> and spin a later <code>get</code> at <strong>100% CPU</strong>. A classic case is a HashMap cache in a <strong>singleton Spring bean</strong>; fix it with <strong>ConcurrentHashMap</strong> or <strong>immutable maps swapped atomically</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>HashMap's <code>put</code> is a sequence of plain reads and writes: compute the index, read the bucket head, walk the chain, link a new node, increment <code>size</code>, maybe resize. None of these steps are atomic and there are no memory barriers. If two threads <code>put</code> into the same empty bucket at the same moment, both see null and both write the head; one node is silently <strong>overwritten</strong>, a <strong>lost update</strong>. <code>size++</code> can also lose increments, so <code>size()</code> lies.</p>
+<p><strong>Resizing</strong> is the most dangerous moment. One thread allocates a new table and moves nodes while another writes to the old table or reads a half-built new one; entries can <strong>disappear</strong> or be duplicated. In <strong>Java 7 and earlier</strong>, resize transferred each chain by head insertion, which reversed its order. Two threads resizing concurrently could link node A → B and B → A, creating a <strong>circular list</strong>. Any later <code>get</code> on that bucket looped forever, and servers went to <strong>100% CPU</strong> with threads stuck in <code>HashMap.get</code> in the thread dump. Java 8 preserves order during resize, so the infinite loop is gone, but data loss remains.</p>
+<p>There is also a <strong>visibility</strong> problem: without happens-before, readers may never see other threads' entries.</p>
+<p>A real-world example: a Spring <code>@Service</code> (a singleton) holds <code>private Map&lt;String, Rate&gt; cache = new HashMap&lt;&gt;()</code> and lazily fills it per request. Under load, rates go missing, are recomputed repeatedly, or on an old JVM requests hang and CPU pegs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A and B compute the same bucket index.</li>
+  <li>Both read head = null.</li>
+  <li>A writes node X; B writes node Y over it; X is lost.</li>
+  <li>Size threshold crossed; both start resizing.</li>
+  <li>Interleaved transfers corrupt links (cycle in Java 7, lost entries in Java 8+).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class RateService {
+    // BUG: shared mutable HashMap in a singleton
+    // private final Map&lt;String, Rate&gt; cache = new HashMap&lt;&gt;();
+
+    private final ConcurrentMap&lt;String, Rate&gt; cache = new ConcurrentHashMap&lt;&gt;();
+
+    Rate rate(String ccy) {
+        return cache.computeIfAbsent(ccy, this::loadRate); // atomic per key
+    }
+}
+
+// Read-mostly config: build a new immutable map, publish via volatile
+private volatile Map&lt;String, String&gt; config = Map.of();
+void reload() { config = Map.copyOf(loadFromDb()); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming &quot;only reads after startup&quot; when lazy filling still writes.</li>
+  <li>Fixing with <code>synchronizedMap</code> and then iterating without the lock.</li>
+  <li>Using <code>containsKey</code> then <code>put</code> on a ConcurrentHashMap.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;HashMap has no synchronisation, so two threads putting at once can both read the same bucket and one entry overwrites the other, size goes wrong, and a resize while another thread writes can lose entries or expose a half-built table. In Java 7 a concurrent resize could even link a bucket into a cycle, so a later get looped forever at 100 percent CPU. A classic real case is a HashMap used as a lazy cache in a singleton Spring bean: under load lookups hang or recompute. I fix it with ConcurrentHashMap and computeIfAbsent, or with immutable maps that are rebuilt and swapped atomically through a volatile reference.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is synchronizedMap often worse?</strong> One global lock serialises all access, and compound operations and iteration still need manual locking.</li>
+  <li><strong>How would you spot it in production?</strong> Thread dumps with many threads RUNNABLE in <code>HashMap.get</code>/<code>put</code>, or inconsistent cache metrics.</li>
+  <li><strong>Is a HashMap safe if only read after construction?</strong> Yes, if safely published (final field or volatile) and never modified.</li>
+</ul>
+</article>
+</body>
+</html>

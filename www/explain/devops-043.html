@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-043 · How would you design a disaster recovery strategy for a critical service that must survive a full region outage?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-043" data-topic="Reliability &amp; DR">
+<h1>How would you design a disaster recovery strategy for a critical service that must survive a full region outage?</h1>
+<p class="ex-meta">Reliability &amp; DR · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Start from business-agreed <strong>RPO and RTO</strong>, choose a strategy (<strong>backup-restore, pilot light, warm standby, active-active</strong>) that meets them at acceptable cost, implement <strong>cross-region data replication</strong>, <strong>automated traffic failover</strong> via DNS or global load balancing, <strong>infrastructure as code</strong> for the second region, and prove it with <strong>regular DR drills</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>RPO (recovery point objective)</strong> is how much data you can afford to lose (minutes of transactions); <strong>RTO (recovery time objective)</strong> is how long you can be down. They come from the business impact of the service and drive cost by orders of magnitude, so agree them first and per service, not one number for everything.</p>
+<p><strong>Strategies (from cheapest to most resilient):</strong></p>
+<ul>
+  <li><strong>Backup and restore:</strong> backups copied to another region; rebuild everything on disaster. RPO hours, RTO hours to a day.</li>
+  <li><strong>Pilot light:</strong> data continuously replicated; minimal core infrastructure in the DR region, app tier off or tiny. RTO tens of minutes to hours.</li>
+  <li><strong>Warm standby:</strong> a scaled-down but fully working copy running in the second region, ready to scale up. RTO minutes.</li>
+  <li><strong>Active-active (multi-site):</strong> both regions serve production traffic; failure means routing everything to the survivor. Near-zero RTO, RPO depends on replication, highest cost and complexity.</li>
+</ul>
+<p><strong>Data</strong> is the hard part. Options: <strong>Aurora Global Database</strong> (storage-level replication, typically sub-second lag, managed failover), <strong>DynamoDB global tables</strong> (multi-active, last-writer-wins), <strong>Cosmos DB</strong> multi-region, cross-region read replicas, <strong>S3 Cross-Region Replication</strong> (with Replication Time Control for SLA), and <strong>backup copies</strong> in another region and ideally another account (protects against ransomware and account compromise). Asynchronous replication means RPO is non-zero; active-active needs <strong>conflict handling</strong>, idempotency and careful design for global uniqueness.</p>
+<p><strong>Traffic failover:</strong> <strong>Route 53</strong> health checks with failover or latency routing, <strong>Azure Front Door</strong>, Cloudflare or AWS Global Accelerator. Keep DNS TTLs low and test that clients honour them.</p>
+<p><strong>Everything else:</strong> the DR region is built from the <strong>same Terraform/IaC and pipelines</strong>; secrets, certificates, container images, quotas and IAM must exist there too. Watch hidden <strong>regional dependencies</strong>: single-region SaaS, a control plane, an auth provider, or a CI system in the failed region.</p>
+<p><strong>Prove it:</strong> runbooks, automated failover where safe, <strong>regular DR drills and game days</strong> (including failing back), measuring actual RPO and RTO.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify services and agree RPO/RTO with the business.</li>
+  <li>Choose a strategy per tier.</li>
+  <li>Replicate data cross-region; copy backups to an isolated account.</li>
+  <li>Deploy the DR stack from IaC; keep artefacts and secrets replicated.</li>
+  <li>Configure health-checked failover routing.</li>
+  <li>Drill quarterly; fix gaps found.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_route53_record&quot; &quot;api_primary&quot; {
+  zone_id = var.zone_id
+  name    = &quot;api.example.com&quot;
+  type    = &quot;A&quot;
+  set_identifier  = &quot;primary-eu-west-1&quot;
+  failover_routing_policy { type = &quot;PRIMARY&quot; }
+  health_check_id = aws_route53_health_check.api_euw1.id
+  alias { name = module.alb_euw1.dns_name, zone_id = module.alb_euw1.zone_id, evaluate_target_health = true }
+}
+resource &quot;aws_rds_global_cluster&quot; &quot;orders&quot; {
+  global_cluster_identifier = &quot;orders-global&quot;
+  engine = &quot;aurora-postgresql&quot;
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Strategy</th><th>RTO</th><th>RPO</th><th>Cost</th></tr></thead>
+<tbody>
+<tr><td>Backup and restore</td><td>Hours</td><td>Hours</td><td>Low</td></tr>
+<tr><td>Pilot light</td><td>Tens of minutes to hours</td><td>Minutes</td><td>Low-medium</td></tr>
+<tr><td>Warm standby</td><td>Minutes</td><td>Seconds-minutes</td><td>Medium-high</td></tr>
+<tr><td>Active-active</td><td>Near zero</td><td>Near zero</td><td>Highest</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Never testing failover, or never testing failback.</li>
+  <li>Backups in the same account and region as production.</li>
+  <li>Forgetting non-obvious dependencies (identity, CI, DNS, secrets).</li>
+  <li>Choosing active-active without solving data conflicts.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with the business: agree RPO and RTO, because they drive cost. Then I pick a strategy: backup and restore is cheapest with hours of RTO, pilot light keeps data replicated with minimal compute, warm standby runs a smaller ready copy, and active-active serves from both regions with near-zero RTO at the highest cost. Data needs cross-region replication, like Aurora Global Database, DynamoDB global tables or S3 replication, plus isolated backups. Traffic fails over with Route 53 health checks or a global load balancer. The second region is built from the same Terraform, and we run regular DR drills, because an untested plan isn't a plan.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Hardest problems in active-active?</strong> Write conflicts and consistency, global uniqueness, data residency, split-brain, and doubling operational complexity.</li>
+  <li><strong>How do you protect against ransomware?</strong> Immutable, cross-account backups with object lock.</li>
+  <li><strong>How often should you drill?</strong> At least quarterly for critical services, plus after major architecture changes.</li>
+</ul>
+</article>
+</body>
+</html>

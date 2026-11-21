@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-098 · What is the difference between synchronized methods and synchronized blocks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-098" data-topic="Concurrency">
+<h1>What is the difference between synchronized methods and synchronized blocks?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>synchronized method</strong> locks <code>this</code> (or the <strong><code>Class</code> object</strong> for static methods) for the <strong>whole method</strong>; a <strong>synchronized block</strong> locks an <strong>object you choose</strong> for <strong>only the statements inside</strong>, which keeps critical sections small and lets you use a <strong>private lock</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Both use the same mechanism, the object's <strong>intrinsic monitor</strong>, and give the same atomicity, reentrancy and visibility guarantees. The difference is <strong>scope</strong> and <strong>which lock</strong>.</p>
+<p><code>public synchronized void add()</code> is equivalent to wrapping the whole body in <code>synchronized (this) { ... }</code>. A <code>static synchronized</code> method is equivalent to <code>synchronized (MyClass.class)</code>. Note that instance and static synchronized methods use <strong>different locks</strong>, so they do not exclude each other.</p>
+<p>A <strong>synchronized block</strong> lets you choose the scope: do validation, logging, computation or I/O outside, and lock only the few lines that touch shared state. Shorter critical sections mean less <strong>contention</strong> and better throughput.</p>
+<p>It also lets you choose the <strong>lock object</strong>. Locking on <code>this</code> exposes your lock publicly: any outside code holding a reference can do <code>synchronized (yourObject)</code> and block you or create a deadlock. A <strong><code>private final Object lock = new Object()</code></strong> is invisible to outsiders. You can also use <strong>separate locks</strong> for independent state (lock striping), for example one for a cache and one for statistics, so they do not block each other.</p>
+<p>Synchronized methods are still fine for small classes where the whole method is the critical section; they are more readable. One subtle point: the <code>synchronized</code> method modifier is not part of the method's contract and is not inherited by overrides.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Method form: the JVM marks the method with <code>ACC_SYNCHRONIZED</code> and acquires the monitor of <code>this</code>/<code>Class</code> on entry.</li>
+  <li>Block form: the compiler emits <code>monitorenter</code>/<code>monitorexit</code> around the block, on the given object.</li>
+  <li>Other threads on the same monitor wait as <code>BLOCKED</code>.</li>
+  <li>The monitor is released on normal exit and on exceptions.</li>
+  <li>Release publishes writes to the next thread that acquires the same monitor.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Inventory {
+    private final Object stockLock = new Object();   // private: outsiders cannot use it
+    private final Map&lt;String, Integer&gt; stock = new HashMap&lt;&gt;();
+
+    // Whole method locked on 'this'
+    public synchronized int total() {
+        return stock.values().stream().mapToInt(Integer::intValue).sum();
+    }
+
+    public void reserve(String sku, int qty) {
+        validate(sku, qty);                  // outside the lock
+        int remaining;
+        synchronized (stockLock) {           // only the shared-state update
+            remaining = stock.merge(sku, -qty, Integer::sum);
+        }
+        auditClient.send(sku, remaining);    // slow I/O outside the lock
+    }
+}</code></pre>
+<p>(In real code <code>total()</code> and <code>reserve()</code> must use the same lock if they guard the same map.)</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Synchronized method</th><th>Synchronized block</th></tr></thead>
+<tbody>
+<tr><td>Lock</td><td><code>this</code> or <code>Class</code></td><td>Any chosen object</td></tr>
+<tr><td>Scope</td><td>Entire method</td><td>Only the block</td></tr>
+<tr><td>External interference</td><td>Possible (public lock)</td><td>Avoidable (private lock)</td></tr>
+<tr><td>Multiple locks</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Guarding the same data with <code>this</code> in one place and a private lock in another.</li>
+  <li>Synchronising on a <code>String</code> literal or boxed <code>Integer</code>, which may be shared JVM-wide.</li>
+  <li>Synchronising on a field that gets reassigned, so threads lock different objects.</li>
+  <li>Doing I/O inside the critical section.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A synchronized instance method locks on this for the whole method, and a static synchronized method locks on the Class object. A synchronized block locks on an object I choose and only for the statements inside. I usually prefer blocks: I keep the critical section small, doing slow work like I/O outside the lock, and I can use a private final lock object so outside code cannot lock the same object and interfere or deadlock with me. I can also use separate locks for independent state. The visibility and atomicity guarantees are otherwise the same.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What can go wrong if you synchronize on a String literal or a boxed Integer?</strong> Literals are interned and small Integers cached, so unrelated code may share the same lock, causing contention or deadlocks.</li>
+  <li><strong>Do a static and an instance synchronized method block each other?</strong> No; they use different monitors.</li>
+  <li><strong>Is synchronized inherited by overriding methods?</strong> No; the override must declare it again if needed.</li>
+</ul>
+</article>
+</body>
+</html>

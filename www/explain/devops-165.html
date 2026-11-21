@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-165 · What is a reverse proxy, and how would you configure NGINX in front of an application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-165" data-topic="Networking">
+<h1>What is a reverse proxy, and how would you configure NGINX in front of an application?</h1>
+<p class="ex-meta">Networking · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>reverse proxy</strong> sits <strong>in front of backends</strong>, accepting client requests and forwarding them; with <strong>NGINX</strong> you define an <strong><code>upstream</code></strong> for load balancing, a <strong><code>server</code></strong> block that <strong>terminates TLS</strong>, <strong><code>proxy_pass</code></strong> to the upstream, set <strong>forwarding headers</strong>, and tune <strong>timeouts, body limits, compression, caching and rate limiting</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Clients only see the proxy; backends stay private. Benefits: <strong>TLS termination</strong> in one place, <strong>load balancing</strong> and health handling, routing by host or path, <strong>caching</strong> and <strong>compression</strong>, <strong>rate limiting</strong> and request size limits, security headers, and a single place for access logs.</p>
+<p><strong>Key NGINX pieces:</strong></p>
+<ul>
+  <li><code>upstream app { ... }</code> lists backend servers, with algorithms (<code>least_conn</code>, <code>ip_hash</code>), passive health (<code>max_fails</code>, <code>fail_timeout</code>) and <code>keepalive</code> connection pooling to backends.</li>
+  <li>A <code>server</code> block on port 80 that redirects to HTTPS, and on 443 with <code>ssl_certificate</code>, <code>ssl_certificate_key</code> and modern <code>ssl_protocols TLSv1.2 TLSv1.3</code>.</li>
+  <li><code>location /</code> with <code>proxy_pass http://app;</code>.</li>
+  <li><strong>Headers:</strong> by default NGINX sends the upstream name as Host and the proxy's IP as the source, so set <code>Host $host</code>, <code>X-Real-IP $remote_addr</code>, <code>X-Forwarded-For $proxy_add_x_forwarded_for</code> and <code>X-Forwarded-Proto $scheme</code>. The app must <strong>trust</strong> these only from the proxy.</li>
+  <li><strong>Timeouts:</strong> <code>proxy_connect_timeout</code>, <code>proxy_read_timeout</code> (raise for slow endpoints, otherwise 504), <code>proxy_send_timeout</code>.</li>
+  <li><strong>Body size:</strong> <code>client_max_body_size</code> (default 1 MB, so uploads fail with 413).</li>
+  <li><strong>WebSockets:</strong> <code>proxy_http_version 1.1</code> plus <code>Upgrade</code> and <code>Connection</code> headers.</li>
+  <li><strong>Compression and caching:</strong> <code>gzip on</code> for text types; <code>proxy_cache</code> for cacheable responses; long cache headers for static assets.</li>
+  <li><strong>Rate limiting:</strong> <code>limit_req_zone</code> and <code>limit_req</code> per client IP.</li>
+</ul>
+<p>Validate with <code>nginx -t</code> and reload gracefully with <code>nginx -s reload</code> (or <code>systemctl reload nginx</code>) so existing connections aren't dropped.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client connects to NGINX on 443; TLS is terminated.</li>
+  <li>NGINX matches <code>server_name</code> and <code>location</code>.</li>
+  <li>It applies limits, then forwards to an upstream server with added headers.</li>
+  <li>The response is optionally compressed or cached and returned.</li>
+  <li>Failed upstreams are temporarily skipped.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-nginx">limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;
+upstream app { least_conn; server 10.0.1.10:8080 max_fails=3 fail_timeout=10s; server 10.0.1.11:8080; keepalive 32; }
+server { listen 80; server_name app.example.com; return 301 https://$host$request_uri; }
+server {
+    listen 443 ssl; http2 on; server_name app.example.com;
+    ssl_certificate /etc/ssl/app/fullchain.pem; ssl_certificate_key /etc/ssl/app/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 20m; gzip on; gzip_types text/css application/json application/javascript;
+    location / {
+        limit_req zone=api burst=40 nodelay;
+        proxy_pass http://app; proxy_http_version 1.1; proxy_set_header Connection &quot;&quot;;
+        proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Missing forwarding headers, so the app logs only the proxy IP and builds http:// redirect URLs.</li>
+  <li>Default <code>client_max_body_size</code>, breaking uploads.</li>
+  <li>Restarting instead of reloading NGINX.</li>
+  <li>Trusting <code>X-Forwarded-For</code> from any client.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A reverse proxy accepts client requests in front of the backends and forwards them, hiding the servers. In NGINX I define an upstream block with the app instances, and a server block on 443 that terminates TLS and does proxy_pass to the upstream, with a port-80 block redirecting to HTTPS. I set Host, X-Forwarded-For and X-Forwarded-Proto so the app knows the real client and scheme. I tune timeouts and body size, enable gzip, cache static content and add rate limiting. I test with nginx -t and reload gracefully.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why does the app see every request from the proxy IP?</strong> It's the TCP peer; the app must read X-Forwarded-For or X-Real-IP from trusted proxies.</li>
+  <li><strong>What causes a 502 or 504 from NGINX?</strong> 502: upstream refused or returned an invalid response; 504: upstream too slow for <code>proxy_read_timeout</code>.</li>
+  <li><strong>How do you proxy WebSockets?</strong> HTTP/1.1 with Upgrade and Connection headers.</li>
+</ul>
+</article>
+</body>
+</html>

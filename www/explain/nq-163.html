@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-163 · What happens to newly created objects in the young generation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-163" data-topic="JVM &amp; Performance">
+<h1>What happens to newly created objects in the young generation?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A new object is normally allocated in <strong>Eden</strong> by a cheap <strong>pointer bump in the thread's TLAB</strong>; most objects become <strong>unreachable almost immediately</strong> and their memory is reclaimed for free at the next <strong>minor GC</strong>, while <strong>survivors</strong> are <strong>copied</strong> to a survivor space and <strong>aged</strong>, and <strong>long-lived</strong> ones are <strong>promoted</strong> to the old generation; <strong>very large objects</strong> may go straight to old or <strong>humongous</strong> regions.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Allocation.</strong> When code runs <code>new Invoice()</code>, the JVM needs memory for the object header and fields. Each thread owns a <strong>thread-local allocation buffer (TLAB)</strong> inside Eden, so the JVM simply advances the thread's &quot;top&quot; pointer by the object size and initialises the memory. No lock, very few instructions: often cheaper than <code>malloc</code> in C. If the TLAB is full, the thread gets a new TLAB from Eden; if Eden is full, a minor GC runs.</p>
+<p><strong>Short lives.</strong> Most objects in a web service live for the duration of a single request or less: request and response DTOs, temporary strings, collections built and discarded, iterators, boxed numbers, lambdas. By the time the next minor GC runs, they are no longer referenced from any GC root.</p>
+<p><strong>Minor GC.</strong> The collector traces only <strong>live</strong> objects in the young generation, copying them into a survivor space. Dead objects are never visited: Eden is just reset to empty. So the cost of garbage is almost zero; the cost is proportional to what survives. That is why &quot;allocate freely, but do not retain&quot; is generally good Java advice.</p>
+<p><strong>Aging and promotion.</strong> Each survival increments an object's age. Objects that survive enough cycles (the tenuring threshold, up to 15) are copied to the old generation, assumed to be long-lived (cache entries, sessions, pooled objects). If the survivor space is too small, objects may be promoted early.</p>
+<p><strong>Large objects.</strong> An allocation too big for a TLAB is done directly in Eden outside the TLAB; in <strong>G1</strong>, objects of at least half a region are <strong>humongous</strong> and are placed directly in dedicated old-generation regions. Some collectors also allocate very large arrays directly in the old generation.</p>
+<p><strong>Optimisation.</strong> For hot code, escape analysis may remove the allocation entirely if the object does not escape the method.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>new</code> bumps the pointer in the thread's TLAB in Eden.</li>
+  <li>Object is used, then usually becomes unreachable.</li>
+  <li>Eden fills: minor GC copies only live objects to a survivor space.</li>
+  <li>Survivors age; old enough ones are promoted.</li>
+  <li>Huge objects skip Eden (humongous regions in G1).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@GetMapping(&quot;/invoices/{id}&quot;)
+InvoiceDto get(@PathVariable long id) {
+    Invoice inv = repo.findById(id).orElseThrow();   // entity: short-lived
+    String label = &quot;INV-&quot; + inv.number();            // temporary string
+    return new InvoiceDto(inv.id(), label, inv.total()); // dies after response is written
+}
+
+private final Map&lt;Long, Customer&gt; cache = new ConcurrentHashMap&lt;&gt;(); // long-lived: promoted
+byte[] report = new byte[64 * 1024 * 1024];  // with 32 MB G1 regions: humongous</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Object kind</th><th>Where allocated</th><th>Usual fate</th></tr></thead>
+<tbody>
+<tr><td>Temporary (DTOs, strings)</td><td>Eden (TLAB)</td><td>Reclaimed at next minor GC</td></tr>
+<tr><td>Medium-lived</td><td>Eden, then survivors</td><td>Dies after a few GCs</td></tr>
+<tr><td>Long-lived (caches, beans)</td><td>Eden, then promoted</td><td>Old generation</td></tr>
+<tr><td>Very large arrays</td><td>Humongous/old directly</td><td>Reclaimed by old-gen GC or eager reclaim</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking every allocation is expensive and pooling small objects (usually slower).</li>
+  <li>Believing dead objects are freed one by one.</li>
+  <li>Ignoring humongous allocations of big buffers.</li>
+  <li>Assuming objects are promoted after exactly one GC.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A new object is normally allocated in Eden, very cheaply, by bumping a pointer in the current thread's thread-local allocation buffer. Most objects, like temporary strings, DTOs and iterators, become unreachable almost immediately. When Eden fills up, a minor GC runs: unreachable objects aren't copied, so their memory is reclaimed for free, while reachable ones are copied into a survivor space and their age increases. Objects that survive enough collections are promoted to the old generation. Very large objects can be allocated directly in the old generation, or in humongous regions with G1. That's why short-lived allocation is cheap in Java, while retaining objects is what costs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is allocating many short-lived objects relatively cheap in Java?</strong> Allocation is a pointer bump, and copying collectors never visit dead objects.</li>
+  <li><strong>Is object pooling a good idea?</strong> Generally not for small objects; pooled objects become long-lived and cost more GC work. Pool only expensive resources such as connections.</li>
+  <li><strong>What triggers a minor GC?</strong> An allocation that cannot fit in Eden.</li>
+</ul>
+</article>
+</body>
+</html>

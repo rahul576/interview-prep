@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-016 · How do you run tasks concurrently in Java? Explain Runnable, Callable, ExecutorService and Future.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-016" data-topic="Concurrency">
+<h1>How do you run tasks concurrently in Java? Explain Runnable, Callable, ExecutorService and Future.</h1>
+<p class="ex-meta">Concurrency · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><strong>Runnable</strong> is a task with <strong>no result</strong> and no checked exceptions, <strong>Callable</strong> <strong>returns a value</strong> and can throw; you submit them to an <strong>ExecutorService</strong> (a managed <strong>thread pool</strong>), get a <strong>Future</strong> to wait, time out or cancel, use <strong>CompletableFuture</strong> for composition, and always <strong>shut the executor down</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Creating <code>new Thread(...)</code> per task is expensive for platform threads and gives no control over concurrency, queueing or lifecycle. The <strong>Executor framework</strong> separates <strong>what</strong> to run from <strong>how</strong> it runs.</p>
+<p><strong>Runnable</strong> has <code>void run()</code>. It can't return a value or throw checked exceptions. <strong>Callable&lt;V&gt;</strong> has <code>V call() throws Exception</code>, so it suits tasks that compute results or call APIs that throw.</p>
+<p><strong>ExecutorService</strong> manages a pool of worker threads and a task queue. <code>execute(Runnable)</code> fires and forgets; <code>submit(Runnable | Callable)</code> returns a <strong>Future</strong>; <code>invokeAll</code> and <code>invokeAny</code> handle groups. The <code>Executors</code> factory methods are convenient, but <code>newFixedThreadPool</code> and <code>newSingleThreadExecutor</code> use an <strong>unbounded queue</strong> and <code>newCachedThreadPool</code> can create <strong>unbounded threads</strong>. For server code I build a <strong>ThreadPoolExecutor</strong> explicitly with a bounded queue, a named thread factory and a rejection policy. Since <strong>Java 21</strong>, <code>Executors.newVirtualThreadPerTaskExecutor()</code> starts a virtual thread per task, ideal for blocking I/O.</p>
+<p>A <strong>Future&lt;V&gt;</strong> represents a pending result. <code>get()</code> blocks until done and wraps task failures in <code>ExecutionException</code>; <code>get(timeout, unit)</code> throws <code>TimeoutException</code>; <code>cancel(true)</code> interrupts the running task; <code>isDone()</code> polls. Java 19 added <code>resultNow()</code> and <code>state()</code>. Future can't be chained, so for non-blocking pipelines use <strong>CompletableFuture</strong> (<code>supplyAsync</code>, <code>thenApply</code>, <code>thenCombine</code>, <code>exceptionally</code>).</p>
+<p><strong>Shutdown matters</strong>: pool threads are non-daemon by default and keep the JVM alive. Call <code>shutdown()</code>, then <code>awaitTermination</code>, then <code>shutdownNow()</code> if needed. Since <strong>Java 19</strong>, ExecutorService is <code>AutoCloseable</code>, so try-with-resources calls <code>close()</code>, which shuts down and waits.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the executor (pool size, queue, policy).</li>
+  <li><code>submit</code> tasks; they are queued and run by worker threads.</li>
+  <li>Collect results through Futures with timeouts.</li>
+  <li>Handle <code>ExecutionException</code> and <code>InterruptedException</code>.</li>
+  <li>Shut down and await termination.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) { // Java 21
+    Future&lt;User&gt; user = pool.submit(() -&gt; userClient.find(id));          // Callable
+    Future&lt;List&lt;Order&gt;&gt; orders = pool.submit(() -&gt; orderClient.byUser(id));
+    return new Dashboard(user.get(2, SECONDS), orders.get(2, SECONDS));
+} // close(): shutdown + wait
+
+ThreadPoolExecutor cpuPool = new ThreadPoolExecutor(
+        8, 8, 0, SECONDS, new ArrayBlockingQueue&lt;&gt;(500),
+        Thread.ofPlatform().name(&quot;cpu-&quot;, 0).factory(),
+        new ThreadPoolExecutor.CallerRunsPolicy());</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>get()</code> without a timeout on a request thread.</li>
+  <li>Ignoring exceptions from <code>execute</code>'d tasks (they go to the uncaught handler) or never calling <code>get</code> on submitted ones (silently lost).</li>
+  <li>Never shutting the executor down.</li>
+  <li>Using unbounded <code>Executors</code> factories in production services.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Runnable is a task with no result that can't throw checked exceptions, while Callable returns a value and can throw. Instead of raw threads I submit tasks to an ExecutorService backed by a pool, usually a ThreadPoolExecutor with a bounded queue so size and rejection policy are explicit, or a virtual-thread-per-task executor for blocking I/O on Java 21. submit returns a Future, whose get blocks until the result is ready and supports timeouts and cancel. For non-blocking composition I use CompletableFuture. And I always shut the executor down, or use try-with-resources since Java 19.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What goes wrong with newFixedThreadPool under load?</strong> The unbounded LinkedBlockingQueue grows until memory runs out and latency explodes.</li>
+  <li><strong>execute vs submit for exceptions?</strong> execute surfaces them to the uncaught exception handler; submit stores them in the Future.</li>
+  <li><strong>What does cancel(true) do?</strong> Interrupts the thread running the task; it only stops if the task honours interruption.</li>
+</ul>
+</article>
+</body>
+</html>

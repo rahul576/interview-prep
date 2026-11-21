@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-410 · What are Redis eviction policies and persistence options?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-410" data-topic="Caching">
+<h1>What are Redis eviction policies and persistence options?</h1>
+<p class="ex-meta">Caching · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>When Redis hits <strong><code>maxmemory</code></strong>, an <strong>eviction policy</strong> (such as <code>allkeys-lru</code>, <code>allkeys-lfu</code>, <code>volatile-ttl</code> or <code>noeviction</code>) decides what happens; <strong>RDB</strong> snapshots and the <strong>AOF</strong> append-only log provide persistence, and <strong>replication with Sentinel</strong> or <strong>Redis Cluster</strong> provides high availability.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Eviction policies</strong> (set with <code>maxmemory-policy</code>):</p>
+<ul>
+  <li><code>noeviction</code>: refuse writes with an OOM error when memory is full. Right when data must not silently disappear, like a queue or primary store. It is the default.</li>
+  <li><code>allkeys-lru</code> / <code>allkeys-lfu</code>: evict any key by approximate least-recently or least-frequently used. Best for a pure cache; LFU suits skewed popularity.</li>
+  <li><code>volatile-lru</code> / <code>volatile-lfu</code> / <code>volatile-random</code>: evict only keys with a TTL, protecting persistent keys in a mixed instance.</li>
+  <li><code>volatile-ttl</code>: evict keys closest to expiry first.</li>
+</ul>
+<p><strong>Persistence</strong>:</p>
+<ul>
+  <li><strong>RDB</strong>: point-in-time snapshots via a forked child (<code>BGSAVE</code>, <code>save</code> rules). Compact, fast restarts and good for backups, but you lose writes since the last snapshot; forking a large dataset needs extra memory through copy-on-write.</li>
+  <li><strong>AOF</strong>: logs every write command; <code>appendfsync everysec</code> (the usual choice) loses at most about one second, <code>always</code> is safest and slowest. AOF is periodically rewritten to compact it, and since Redis 7 uses a multi-part base plus incremental files.</li>
+  <li>Both can be enabled together; using an RDB preamble in the AOF speeds up loading.</li>
+</ul>
+<p><strong>High availability</strong>: asynchronous primary-replica <strong>replication</strong>; <strong>Sentinel</strong> monitors and promotes a replica on failure; <strong>Redis Cluster</strong> shards keys over 16,384 hash slots with replicas per shard and automatic failover. Because replication is asynchronous, a failover can lose recently acknowledged writes (<code>WAIT</code> can reduce that window).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Set <code>maxmemory</code> below the machine's RAM, leaving headroom for forks and buffers.</li>
+  <li>Choose the policy based on whether the data is a cache or must be kept.</li>
+  <li>On a write beyond the limit, Redis samples keys and evicts according to the policy.</li>
+  <li>Persistence writes snapshots and/or the AOF in the background.</li>
+  <li>Replicas copy the stream; Sentinel or Cluster handles failover.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-conf"># Pure cache
+maxmemory 6gb
+maxmemory-policy allkeys-lfu
+save &quot;&quot;               # no snapshots needed
+appendonly no
+
+# Session / cart store
+maxmemory 6gb
+maxmemory-policy volatile-lru   # or noeviction + alerting
+appendonly yes
+appendfsync everysec
+save 900 1</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Option</th><th>Data loss window</th><th>Restart speed</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td>RDB</td><td>Since last snapshot</td><td>Fast</td><td>Compact</td></tr>
+<tr><td>AOF everysec</td><td>About 1 s</td><td>Slower</td><td>Larger</td></tr>
+<tr><td>AOF always</td><td>Minimal</td><td>Slower</td><td>Larger, slow writes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Leaving <code>noeviction</code> on a cache and getting OOM errors on writes.</li>
+  <li>Using <code>volatile-*</code> policies when keys have no TTL, so nothing can be evicted.</li>
+  <li>Setting <code>maxmemory</code> to all RAM, then crashing during a fork for RDB or AOF rewrite.</li>
+  <li>Believing replication alone is a backup.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;When Redis reaches maxmemory, the eviction policy decides what to drop. For a pure cache I'd use allkeys-lru or allkeys-lfu; volatile policies evict only keys with a TTL, and noeviction, the default, returns errors, which suits data that must not vanish. For persistence, RDB takes periodic snapshots, which are compact but lose recent writes, while AOF logs every write and with fsync every second loses at most about a second; many setups use both. For high availability I'd use replicas with Sentinel failover, or Redis Cluster when I also need sharding, keeping in mind replication is asynchronous. For a session store I'd enable AOF and use volatile-lru or noeviction with alerting.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which policy for a session store?</strong> <code>volatile-lru</code> with TTLs on sessions, or <code>noeviction</code> plus memory alerts, with AOF on.</li>
+  <li><strong>Why does RDB need extra memory?</strong> The fork uses copy-on-write, so pages changed during the snapshot are duplicated.</li>
+  <li><strong>How is a Redis Cluster key placed?</strong> CRC16 of the key modulo 16,384 slots; hash tags <code>{...}</code> keep related keys together.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-100 · A pipeline ran terraform destroy against the wrong environment because of a misconfigured variable. How do you respond and prevent it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-100" data-topic="Terraform">
+<h1>A pipeline ran terraform destroy against the wrong environment because of a misconfigured variable. How do you respond and prevent it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Stop pipelines and declare an incident</strong>, assess and <strong>recover</strong> (re-apply code for stateless resources, <strong>restore data</strong> from backups and soft delete), then prevent recurrence with <strong>per-environment pipeline identities</strong>, <strong>prevent_destroy and cloud delete locks</strong>, <strong>explicit destroy approvals with environment checks</strong>, and a <strong>blameless postmortem</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The first priority is to <strong>contain</strong>: pause or disable all related pipelines so a retry or scheduled run does not make it worse, declare an incident and tell the affected teams and stakeholders. Then <strong>assess</strong> precisely what was destroyed, using the pipeline log (Terraform prints every destroyed address), the state file history in the versioned backend and the cloud activity log.</p>
+<p><strong>Recovery</strong> splits into two parts. <strong>Stateless infrastructure</strong> — networks, compute, app services, IAM — comes back by running <code>terraform apply</code> with the correct environment's configuration. <strong>Data</strong> is the hard part: databases from point-in-time restore or backups, storage accounts and Key Vaults from <strong>soft delete</strong>, disks from snapshots, AWS resources from AWS Backup. This is exactly why soft delete, purge protection and tested backups are part of the design. Also check DNS names, IPs and certificates that may have changed on recreation.</p>
+<p><strong>Prevention</strong> addresses the root cause, not the typo. The real failure is that <strong>one identity could reach the wrong environment</strong>. Each environment gets its <strong>own pipeline identity</strong> with rights only on its subscription or account, so a wrong variable leads to an authorisation error instead of destruction. Critical resources get <code>lifecycle { prevent_destroy = true }</code> and <strong>cloud-level protection</strong>: Azure <strong>CanNotDelete</strong> locks, RDS deletion protection, S3 object lock, GCP deletion protection. Destroy runs require a <strong>separate, explicit approval</strong> in a protected environment, and the pipeline runs a <strong>preflight check</strong> that the backend key, workspace and target subscription match the selected environment. Finally, a <strong>blameless postmortem</strong> documents the timeline and actions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Disable pipelines, declare the incident, communicate.</li>
+  <li>List destroyed resources from logs, state versions and activity logs.</li>
+  <li>Restore data from backups, snapshots and soft-deleted resources.</li>
+  <li>Re-apply infrastructure from the correct configuration and verify.</li>
+  <li>Separate identities per environment; add locks and prevent_destroy.</li>
+  <li>Gate destroy behind approval and a preflight environment check.</li>
+  <li>Hold a blameless postmortem and track actions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># preflight in the pipeline
+expected_sub=$(jq -r &quot;.${ENV}.subscription_id&quot; envs.json)
+actual_sub=$(az account show --query id -o tsv)
+[ &quot;$expected_sub&quot; = &quot;$actual_sub&quot; ] || { echo &quot;Subscription mismatch for $ENV&quot;; exit 1; }
+grep -q &quot;key = \&quot;${ENV}.tfstate\&quot;&quot; &quot;env/${ENV}.backend.hcl&quot; || exit 1</code></pre>
+<pre><code class="language-hcl">resource &quot;azurerm_management_lock&quot; &quot;db&quot; {
+  name       = &quot;no-delete&quot;
+  scope      = azurerm_postgresql_flexible_server.main.id
+  lock_level = &quot;CanNotDelete&quot;
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Rushing to re-run the pipeline before understanding what happened.</li>
+  <li>Fixing only the variable and calling it done.</li>
+  <li>Backups that were never tested, or soft delete disabled.</li>
+  <li>A postmortem that blames the engineer instead of the system.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I stop all related pipelines and declare an incident. I assess exactly what was destroyed from the run log, state history and activity logs, then recover: stateless resources come back by re-applying the code, data comes from backups, point-in-time restore and soft-deleted resources. For prevention, the real root cause is that one identity could reach the wrong environment, so each environment gets its own pipeline identity scoped to its subscription, making this mistake an authorisation error. Critical resources get prevent_destroy and cloud deletion locks. Destroy requires a separate approval and a preflight check that backend and subscription match the environment. And I run a blameless postmortem.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which guard would have stopped this most cheaply?</strong> Per-environment identities; a wrong variable would simply fail authorisation.</li>
+  <li><strong>Does prevent_destroy stop everything?</strong> No, removing the resource from code removes the guard; cloud locks are stronger.</li>
+  <li><strong>Should destroy be allowed in pipelines at all?</strong> Only for ephemeral environments; production destroy should be exceptional and gated.</li>
+</ul>
+</article>
+</body>
+</html>

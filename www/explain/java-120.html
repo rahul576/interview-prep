@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-120 · A Java service shows 100 percent CPU in production. How do you find the cause?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-120" data-topic="JVM &amp; Performance">
+<h1>A Java service shows 100 percent CPU in production. How do you find the cause?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>First rule out <strong>GC</strong> as the CPU consumer; then find the <strong>hot threads</strong> with <strong><code>top -H</code></strong>, convert their ids to <strong>hex</strong> and match the <strong><code>nid</code></strong> in several <strong>thread dumps</strong> (<code>jstack</code>/<code>jcmd</code>), or better, record a <strong>flame graph</strong> with <strong>async-profiler or JFR</strong>; usual culprits are <strong>infinite loops, regex backtracking, spin waits, serialization and hot-path logging</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Is it GC?</strong> If the heap is nearly full, the collector runs constantly and burns CPU without freeing much. <code>jstat -gcutil &lt;pid&gt; 1000</code> showing old generation near 100% with rising full GC counts, or GC logs with back-to-back collections, means this is a <strong>memory problem</strong> (leak or undersized heap), not code; follow the leak investigation path. GC threads also appear in <code>top -H</code> with names like <code>GC Thread#0</code> or <code>G1 Conc#0</code>.</p>
+<p><strong>Which threads?</strong> <code>top -H -p &lt;pid&gt;</code> lists native threads by CPU usage. Take the hot thread id (decimal), convert it with <code>printf '%x'</code>, and search the thread dump for <code>nid=0x...</code>. Take <strong>three to five dumps a few seconds apart</strong>: a thread showing the same stack frames in every dump at 100% CPU is a loop or a pathological regex. JIT compiler threads (<code>C2 CompilerThread</code>) at high CPU right after startup are normal warm-up.</p>
+<p><strong>Profiling is better.</strong> A sampling profiler shows where CPU goes across all threads, with low overhead and no safepoint bias. <strong>async-profiler</strong> (<code>asprof -e cpu -d 30 -f cpu.html &lt;pid&gt;</code>) produces an interactive <strong>flame graph</strong>: the widest frames are where time is spent. <strong>JFR</strong> (<code>jcmd &lt;pid&gt; JFR.start duration=60s filename=cpu.jfr</code>) records execution samples you open in <strong>JDK Mission Control</strong>. Both are safe in production for short recordings.</p>
+<p><strong>Common causes.</strong> Infinite or very long loops (bad termination condition, <code>HashMap</code> corruption in old JDKs from concurrent modification), <strong>catastrophic regex backtracking</strong> on unexpected input, busy-wait or spin loops, retry loops without backoff, heavy JSON or XML serialisation, expensive logging (string building, stack traces), cryptography or compression in hot paths, and excessive JIT deoptimisation cycles.</p>
+<p><strong>Kubernetes specifics.</strong> CPU limits cause <strong>throttling</strong>, which looks like slowness rather than 100% on the host; check <code>container_cpu_cfs_throttled_seconds_total</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Check GC activity with <code>jstat</code>, GC logs or metrics.</li>
+  <li><code>top -H -p &lt;pid&gt;</code> to find hot thread ids.</li>
+  <li>Convert ids to hex; match <code>nid</code> in thread dumps taken a few seconds apart.</li>
+  <li>Record a CPU flame graph with async-profiler or JFR.</li>
+  <li>Identify the method, reproduce, fix and verify with a benchmark.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">top -H -p 4211                # thread 4250 at 99% CPU
+printf '%x\n' 4250            # 109a
+for i in 1 2 3; do jcmd 4211 Thread.print &gt; dump$i.txt; sleep 5; done
+grep -A 15 'nid=0x109a' dump*.txt
+# &quot;http-nio-8080-exec-7&quot; ... nid=0x109a runnable
+#   at java.util.regex.Pattern$Loop.match(...)
+#   at com.acme.validation.EmailValidator.isValid(...)
+
+asprof -e cpu -d 30 -f /tmp/cpu.html 4211   # flame graph</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Restarting the pod immediately and losing all evidence.</li>
+  <li>Taking a single thread dump and drawing conclusions.</li>
+  <li>Forgetting that the cause may be GC, not application code.</li>
+  <li>Ignoring container CPU throttling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I check whether it's GC: if jstat or the GC logs show constant collections with the old generation full, it's memory pressure, not code. Otherwise I find the busy threads with top -H on the process, convert the thread id to hex and take a few thread dumps with jcmd or jstack a few seconds apart, matching the nid, to see which stack keeps appearing. Better still, I record a short CPU profile with async-profiler or JFR and read the flame graph, which is safe in production. Common causes are an infinite loop, catastrophic regex backtracking, a spin wait, heavy serialization or logging in a hot path.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you do this safely inside a Kubernetes pod without a shell?</strong> Use <code>kubectl debug</code> with an ephemeral container sharing the process namespace, or trigger JFR via <code>jcmd</code> from it, then <code>kubectl cp</code> the files.</li>
+  <li><strong>What is safepoint bias?</strong> Profilers sampling only at safepoints misattribute time; async-profiler and JFR avoid it.</li>
+  <li><strong>How do you prevent regex backtracking?</strong> Avoid nested quantifiers, use possessive quantifiers or atomic groups, limit input length.</li>
+</ul>
+</article>
+</body>
+</html>

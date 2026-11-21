@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-155 · What is database replication? Explain primary-replica architecture.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-155" data-topic="Databases &amp; SQL">
+<h1>What is database replication? Explain primary-replica architecture.</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Replication</strong> keeps copies of data on several servers; in a <strong>primary-replica</strong> setup the <strong>primary</strong> takes all writes and streams its change log (WAL/binlog) to <strong>replicas</strong> that serve reads and can be <strong>promoted on failover</strong>, with <strong>synchronous vs asynchronous</strong> replication trading safety against latency and causing <strong>replication lag</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The primary records every change in its log: the <strong>WAL</strong> in PostgreSQL, the <strong>binlog</strong> in MySQL, redo logs in Oracle (Data Guard). Replicas receive that stream and replay it, ending up with the same data. PostgreSQL streaming replication is physical (byte-level); logical replication and MySQL row-based binlog replication ship row changes, which also enables replicating subsets or across versions.</p>
+<p>Benefits:</p>
+<ul>
+  <li><strong>Read scaling</strong>: send reports, searches and read-heavy endpoints to replicas.</li>
+  <li><strong>High availability</strong>: if the primary fails, a replica is <strong>promoted</strong>, by tools such as Patroni, Orchestrator, or managed services (RDS Multi-AZ, Aurora, Cloud SQL).</li>
+  <li><strong>Backups and analytics</strong> can run on a replica without loading the primary.</li>
+</ul>
+<p><strong>Asynchronous</strong> replication (the common default) commits on the primary immediately; replicas lag by milliseconds to seconds under load. It is fast, but if the primary dies, recently committed transactions not yet shipped can be <strong>lost</strong>. <strong>Synchronous</strong> replication makes the commit wait until at least one replica confirms (PostgreSQL <code>synchronous_commit</code> with <code>synchronous_standby_names</code>, MySQL semi-synchronous replication), protecting data at the cost of write latency and the risk of stalls if replicas are unavailable.</p>
+<p>Lag creates the <strong>read-your-writes</strong> problem: a user saves a profile, the next request reads from a replica, and the old value appears. Solutions include reading from the primary for a short time after a write, routing the session's reads to the primary, or waiting for the replica to reach a given log position. Replication is not a backup: an accidental <code>DELETE</code> replicates instantly.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Client writes go to the primary, which writes the WAL/binlog.</li>
+  <li>Replicas connect and stream the log continuously.</li>
+  <li>Replicas apply changes and serve read-only queries.</li>
+  <li>The app routes reads to replicas and writes to the primary.</li>
+  <li>Health checks detect primary failure; the most up-to-date replica is promoted.</li>
+  <li>Clients reconnect via DNS, a virtual IP or a proxy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Spring Boot: route read-only transactions to a replica
+public class RoutingDataSource extends AbstractRoutingDataSource {
+    @Override protected Object determineCurrentLookupKey() {
+        return TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+               ? &quot;replica&quot; : &quot;primary&quot;;
+    }
+}
+// Wrap it in LazyConnectionDataSourceProxy so the read-only flag is known
+// before a connection is taken.
+
+@Transactional(readOnly = true)
+public List&lt;Order&gt; history(long customerId) { return repo.findByCustomerId(customerId); }</code></pre>
+<pre><code class="language-sql">-- PostgreSQL: check lag on the primary
+SELECT client_addr, state, replay_lag FROM pg_stat_replication;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Treating replicas as backups.</li>
+  <li>Ignoring lag and showing users stale data straight after they save.</li>
+  <li>Running heavy long queries on a hot-standby replica that conflict with replay.</li>
+  <li>Failing over without fencing the old primary, causing <strong>split brain</strong>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Replication keeps copies of data on multiple servers. In primary-replica, one primary handles all writes and streams its change log, the WAL in Postgres or binlog in MySQL, to replicas that apply it and serve reads. That scales reads and gives high availability, since a replica can be promoted on failover. Asynchronous replication is fast but has lag, and you can lose the last few transactions on failure; synchronous waits for a replica, which is safer but slower. In the application I route read-only transactions to replicas, but for read-your-writes cases, like right after a user updates something, I read from the primary.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to route reads to replicas in Spring Boot?</strong> <code>AbstractRoutingDataSource</code> keyed on read-only transactions, with <code>LazyConnectionDataSourceProxy</code>.</li>
+  <li><strong>What is split brain?</strong> Two nodes both acting as primary after a failover; prevented by fencing and consensus-based failover.</li>
+  <li><strong>Is replication a backup?</strong> No; deletes and corruption replicate too. You still need point-in-time recovery backups.</li>
+</ul>
+</article>
+</body>
+</html>

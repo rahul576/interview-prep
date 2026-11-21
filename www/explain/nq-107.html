@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-107 · How would you optimize the grouping algorithm?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-107" data-topic="DSA: Arrays &amp; Strings">
+<h1>How would you optimize the grouping algorithm?</h1>
+<p class="ex-meta">DSA: Arrays &amp; Strings · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>The biggest win is <strong>algorithmic</strong>: replace pairwise comparison with <strong>hashing by a signature</strong> (quadratic → linear in n); then use a <strong>counting key</strong> (O(k) per word), build keys efficiently with <strong>char arrays/StringBuilder</strong>, <strong>pre-size</strong> the map, and for huge inputs use <strong>parallel streams</strong> or a <strong>MapReduce-style partition</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Optimise in order of impact:</p>
+<p><strong>1. Fix the algorithm.</strong> Pairwise comparison is O(n²·k). Grouping by a canonical key in a <code>HashMap</code> is O(n·k log k) or O(n·k). No micro-optimisation comes close to this gain.</p>
+<p><strong>2. Cheaper keys.</strong> Sorting costs O(k log k). A frequency count in an <code>int[26]</code> is O(k), and the serialised key has fixed size, so hashing is cheap. For short dictionary words the difference is small; for long strings it matters.</p>
+<p><strong>3. Reduce allocations.</strong> Avoid <code>key += count + &quot;#&quot;</code> string concatenation in a loop, which creates many temporary strings. Reuse one <code>int[26]</code> and one <code>StringBuilder</code> (<code>setLength(0)</code>), or encode counts directly into a <code>char[26]</code> and use <code>new String(chars)</code> (valid when counts stay below 65,536). Fewer objects mean less GC pressure.</p>
+<p><strong>4. Pre-size the map.</strong> If n is known, <code>HashMap.newHashMap(n)</code> (Java 19+) or <code>new HashMap&lt;&gt;(n * 4 / 3 + 1)</code> avoids repeated resizing and rehashing.</p>
+<p><strong>5. Early exits and filtering.</strong> Normalise once; skip empty or invalid words; if only groups of size &gt; 1 are needed, filter at the end rather than building extra structures.</p>
+<p><strong>6. Parallelism.</strong> For millions of words on a multi-core machine, <code>Arrays.stream(words).parallel().collect(Collectors.groupingByConcurrent(Solution::key))</code> spreads key computation across cores. Measure first: for small inputs the overhead outweighs the gain, and group order is not preserved.</p>
+<p><strong>7. Beyond one machine.</strong> For a billion words that do not fit in memory, treat it as <strong>MapReduce</strong>: map each word to (key, word), <strong>shuffle/partition by key</strong> so all anagrams go to the same reducer, then reduce into groups. Spark's <code>groupByKey</code> or <code>reduceByKey</code>, or a streaming job partitioned by key, implements this. Alternatively, an external sort by key followed by a linear scan works on a single machine with disk.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Replace O(n²) comparisons with signature hashing.</li>
+  <li>Switch to an O(k) counting key.</li>
+  <li>Reuse buffers and pre-size the map.</li>
+  <li>Parallelise with concurrent collectors when profiling shows benefit.</li>
+  <li>Partition by key across machines for data beyond memory.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public static Collection&lt;List&lt;String&gt;&gt; groupFast(String[] words) {
+    Map&lt;String, List&lt;String&gt;&gt; map = HashMap.newHashMap(words.length);  // pre-sized
+    char[] counts = new char[26];                                       // reused buffer
+    for (String w : words) {
+        Arrays.fill(counts, (char) 0);
+        for (int i = 0, len = w.length(); i &lt; len; i++) counts[w.charAt(i) - 'a']++;
+        map.computeIfAbsent(new String(counts), k -&gt; new ArrayList&lt;&gt;()).add(w);
+    }
+    return map.values();
+}
+
+// Multi-core for very large inputs
+Map&lt;String, List&lt;String&gt;&gt; big = Arrays.stream(words).parallel()
+        .collect(Collectors.groupingByConcurrent(Solution::countKey));</code></pre>
+<pre><code class="language-python"># Spark (PySpark) for a billion words
+words.map(lambda w: (&quot;&quot;.join(sorted(w)), w)).groupByKey().mapValues(list)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Micro-optimising before fixing the quadratic algorithm.</li>
+  <li>Using parallel streams for small inputs and getting slower code.</li>
+  <li>String concatenation in tight loops.</li>
+  <li>Not measuring with a profiler or JMH benchmark.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The biggest gain is algorithmic: stop comparing pairs and group by a signature in a hash map, going from quadratic to linear in the number of words. Next, for long words I'd compute the key by counting into an int[26] instead of sorting, so it's O(k) per word, and build the key with a char array or StringBuilder rather than concatenation. I'd pre-size the HashMap if I know the count. For very large inputs a parallel stream with groupingByConcurrent can use several cores, and if the data doesn't fit in memory, I'd partition by key across machines, MapReduce style, for example with Spark.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you handle a billion words?</strong> Map to (key, word), partition by key, reduce per partition (Spark or MapReduce), or external sort by key.</li>
+  <li><strong>How would you prove an optimisation helped?</strong> Benchmark with JMH and profile allocations.</li>
+  <li><strong>Why reuse buffers?</strong> Fewer allocations reduce GC pressure in tight loops.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-026 · What does the intern() method do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-026" data-topic="Core Java &amp; OOP">
+<h1>What does the intern() method do?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><code>intern()</code> returns the <strong>canonical pooled instance</strong> of a string: if an equal string is already in the pool it returns that one, otherwise it <strong>adds this string</strong> and returns it, so equal interned strings are the <strong>same object</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The JVM keeps a global <strong>string table</strong> (the string pool). Literals go there automatically. <code>intern()</code> lets you put runtime-created strings there too. After <code>String a = x.intern(); String b = y.intern();</code>, if <code>x.equals(y)</code> then <code>a == b</code>.</p>
+<p>Why you might use it:</p>
+<ul>
+  <li><strong>Memory deduplication</strong>: if you parse millions of records with a small set of repeated values (country codes, currency codes, status values, XML tag names), each parsed value is a fresh String. Interning collapses them to one instance per distinct value, which can save significant heap.</li>
+  <li><strong>Fast identity comparison</strong>: interned strings can be compared with <code>==</code>, which some parsers and compilers use for symbol tables. In ordinary application code this is a micro-optimisation not worth the risk.</li>
+</ul>
+<p>Costs and caveats:</p>
+<ul>
+  <li>The pool is a native <strong>hash table</strong>; each <code>intern()</code> call computes a hash and does a lookup, which is not free and was historically contended.</li>
+  <li>The table has a fixed number of buckets (<code>-XX:StringTableSize</code>, default 65536 in modern JDKs); with millions of entries, chains grow. <code>-XX:+PrintStringTableStatistics</code> shows its state.</li>
+  <li>Interning <strong>unbounded or high-cardinality</strong> values (user ids, request ids) bloats the table and costs more than it saves. Pooled strings can be GC'd since Java 7, but cleanup adds work.</li>
+  <li>Since Java 7 the pool is in the heap, not PermGen, so the old &quot;PermGen OOM from intern&quot; problem is gone.</li>
+</ul>
+<p>Alternatives:</p>
+<ul>
+  <li><strong>G1 string deduplication</strong> (<code>-XX:+UseStringDeduplication</code>, also supported by other collectors in recent JDKs) shares the backing byte arrays of equal long-lived strings automatically, with no code change; the String objects stay distinct.</li>
+  <li>A <strong>local canonicalising map</strong> (<code>ConcurrentHashMap&lt;String,String&gt;</code> with <code>computeIfAbsent</code>) or Guava's <code>Interners</code>, scoped and bounded to your use case.</li>
+  <li><strong>Enums</strong> for truly fixed value sets.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>s.intern()</code> computes the hash of <code>s</code>.</li>
+  <li>Looks up the JVM string table.</li>
+  <li>If an equal string exists, returns that reference.</li>
+  <li>Otherwise inserts <code>s</code> (or a reference to it) and returns it.</li>
+  <li>Unreferenced entries are removed during GC.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">String fromInput = new String(&quot;IN&quot;);          // e.g. parsed from CSV
+String pooled = fromInput.intern();
+System.out.println(pooled == &quot;IN&quot;);           // true
+System.out.println(fromInput == &quot;IN&quot;);        // false
+
+// Dedup low-cardinality field while parsing
+record Row(String country, BigDecimal amount) {}
+Row parse(String[] cols) {
+    return new Row(cols[0].intern(), new BigDecimal(cols[1]));
+}</code></pre>
+<pre><code class="language-bash">java -XX:+UseG1GC -XX:+UseStringDeduplication -jar app.jar   # automatic alternative</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Interning every string, including unique ones.</li>
+  <li>Using <code>==</code> after interning in only some code paths.</li>
+  <li>Assuming interned strings are never collected.</li>
+  <li>Using intern as a lock object, which can be shared across unrelated code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;intern returns the canonical instance of a string from the string pool. If the pool already has an equal string, it returns that; otherwise it adds this one and returns it. After interning, equal strings share one object, so == works and memory is saved when the same values repeat a lot, like country codes parsed from a large file. But the pool is a hash table, so each call has a cost, and interning high-cardinality values just bloats it. For general duplicate strings I'd rather enable G1 string deduplication, which needs no code changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When could interning strings actually hurt performance?</strong> With many unique values: table growth, long chains, extra GC work and lookup overhead.</li>
+  <li><strong>Where is the pool stored?</strong> In the heap since Java 7.</li>
+  <li><strong>What's the difference from string deduplication?</strong> Dedup shares byte arrays; intern shares the String object.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-090 · How does CompletableFuture handle return values, exceptions, and chained tasks?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-090" data-topic="Concurrency">
+<h1>How does CompletableFuture handle return values, exceptions, and chained tasks?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Each stage <strong>receives the previous result</strong> (<code>thenApply</code>, <code>thenCompose</code>, <code>thenCombine</code>, <code>thenAccept</code>); an <strong>exception completes the future exceptionally and skips dependent stages</strong> until <strong><code>exceptionally</code>, <code>handle</code> or <code>whenComplete</code></strong> deals with it; <strong><code>join()</code></strong> throws <code>CompletionException</code>, <strong><code>get()</code></strong> throws <code>ExecutionException</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Return values.</strong> A chain is a series of futures, each depending on the one before. <code>thenApply(fn)</code> takes the value and returns a transformed one, synchronously. <code>thenCompose(fn)</code> is for functions that themselves return a <code>CompletableFuture</code>; it flattens the result so you get <code>CompletableFuture&lt;T&gt;</code> instead of a nested future. <code>thenCombine(other, bifn)</code> waits for two independent futures and merges their values. <code>thenAccept</code> consumes the value and returns <code>CompletableFuture&lt;Void&gt;</code>, and <code>thenRun</code> ignores it.</p>
+<p><strong>Exceptions.</strong> If the supplier or any stage throws, that stage completes <strong>exceptionally</strong>. Every dependent normal stage (<code>thenApply</code>, <code>thenAccept</code>...) is <strong>skipped</strong> and also completes exceptionally, typically with the cause wrapped in a <strong><code>CompletionException</code></strong>. The failure flows down until a handler:</p>
+<ul>
+  <li><strong><code>exceptionally(ex -&gt; fallback)</code></strong> runs <strong>only on failure</strong> and returns a replacement value, so the chain continues normally.</li>
+  <li><strong><code>handle((value, ex) -&gt; ...)</code></strong> <strong>always</strong> runs and can map either outcome to a new value.</li>
+  <li><strong><code>whenComplete((value, ex) -&gt; ...)</code></strong> always runs but <strong>does not change</strong> the result: use it for logging or metrics; the original value or exception passes through.</li>
+  <li>Java 12 added <code>exceptionallyCompose</code> for async recovery.</li>
+</ul>
+<p>Inside handlers the exception is often a <code>CompletionException</code>; unwrap <code>getCause()</code> before checking its type.</p>
+<p><strong>Getting the final value.</strong> <code>join()</code> throws an unchecked <strong><code>CompletionException</code></strong> wrapping the cause; <code>get()</code> throws the checked <strong><code>ExecutionException</code></strong>. A timeout from <code>orTimeout</code> appears as a <code>TimeoutException</code> cause.</p>
+<p><strong>Placement matters</strong>: a handler only covers stages <strong>before</strong> it. Put <code>exceptionally</code> right after a step to give a step-specific fallback, or at the end to handle any failure in the chain.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>supplyAsync</code> produces a value or exception.</li>
+  <li>Each <code>then...</code> stage runs only if its source completed normally.</li>
+  <li>On exception, normal stages are bypassed and the exception propagates.</li>
+  <li><code>exceptionally</code>/<code>handle</code> convert the failure into a value; later stages run normally again.</li>
+  <li><code>whenComplete</code> observes without changing the outcome; <code>join</code>/<code>get</code> deliver the final result or wrapped exception.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">CompletableFuture&lt;String&gt; result = CompletableFuture
+        .supplyAsync(() -&gt; orderRepo.find(orderId), pool)          // may throw
+        .thenApply(Order::customerId)                              // skipped on failure
+        .thenCompose(cid -&gt; customerClient.findAsync(cid))         // async step, flattened
+        .thenApply(Customer::email)
+        .exceptionally(ex -&gt; {
+            Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+            log.warn(&quot;Lookup failed: {}&quot;, cause.toString());
+            return &quot;support@example.com&quot;;                          // fallback value
+        })
+        .whenComplete((email, ex) -&gt; metrics.increment(&quot;email.lookup&quot;));
+
+String email = result.join();     // never throws here: failure was recovered
+
+CompletableFuture&lt;Integer&gt; h = CompletableFuture.supplyAsync(() -&gt; 10 / divisor)
+        .handle((v, ex) -&gt; ex == null ? v : -1);                    // maps both outcomes</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Runs on success</th><th>Runs on failure</th><th>Changes result</th></tr></thead>
+<tbody>
+<tr><td><code>thenApply</code></td><td>Yes</td><td>No (skipped)</td><td>Yes</td></tr>
+<tr><td><code>exceptionally</code></td><td>No</td><td>Yes</td><td>Yes (recovery)</td></tr>
+<tr><td><code>handle</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><td><code>whenComplete</code></td><td>Yes</td><td>Yes</td><td>No</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>thenApply</code> with an async function and getting nested futures.</li>
+  <li>Checking <code>ex instanceof MyException</code> without unwrapping <code>CompletionException</code>.</li>
+  <li>Expecting <code>whenComplete</code> to recover from an error.</li>
+  <li>Putting <code>exceptionally</code> too early and then letting later stages fail unhandled.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Each stage receives the previous stage's result: thenApply transforms it, thenCompose flattens a function returning another CompletableFuture, thenCombine merges two results and thenAccept consumes it. If any stage throws, the future completes exceptionally and the dependent stages are skipped, so the exception propagates down the chain. I recover with exceptionally, which runs only on failure, or handle, which always runs and can map either outcome; whenComplete lets me observe, for logging, without changing the result. join throws an unchecked CompletionException wrapping the cause, while get throws a checked ExecutionException.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Where should exceptionally be placed in a long chain?</strong> After the stages it should cover: right after a step for a step-specific fallback, or at the end as a catch-all.</li>
+  <li><strong>Why unwrap CompletionException?</strong> Exceptions from earlier stages are wrapped, so the real cause is in getCause().</li>
+  <li><strong>What does exceptionallyCompose do?</strong> Recovers with another CompletableFuture, for example calling a fallback service asynchronously.</li>
+</ul>
+</article>
+</body>
+</html>

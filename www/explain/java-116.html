@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-116 · What is ThreadLocal, and what are its risks in thread pools and with virtual threads?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-116" data-topic="Concurrency">
+<h1>What is ThreadLocal, and what are its risks in thread pools and with virtual threads?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>ThreadLocal</strong> gives <strong>each thread its own value</strong>, used for <strong>request context, MDC and non-thread-safe helpers</strong>; in <strong>thread pools</strong> forgotten values <strong>leak memory and leak data between requests</strong> unless you call <strong>remove() in finally</strong>, with <strong>virtual threads</strong> per-thread copies multiply, and <strong>ScopedValue</strong> (final in <strong>Java 25</strong>) is the modern, immutable alternative.</p>
+
+<h2>Detailed explanation</h2>
+<p>A <code>ThreadLocal&lt;T&gt;</code> is a key into a map stored on each <code>Thread</code> object (<code>threadLocals</code>). <code>get()</code> looks up the current thread's entry, initialising it via <code>withInitial</code> if needed; <code>set()</code> and <code>remove()</code> change only the current thread's copy. Frameworks use it heavily: Spring's <code>SecurityContextHolder</code> and transaction synchronisation, the logging <strong>MDC</strong> (correlation ids in log lines), Hibernate sessions, and per-thread instances of non-thread-safe objects such as <code>SimpleDateFormat</code>.</p>
+<p><strong>Risks in thread pools.</strong> Pool threads live for the lifetime of the application. A value set during request A remains when the same thread serves request B. That causes:</p>
+<ul>
+  <li><strong>Data leakage</strong>: request B sees A's user id or tenant, a security bug.</li>
+  <li><strong>Memory leaks</strong>: large objects stay referenced. In application servers, a ThreadLocal value whose class comes from a web app's classloader pins the entire <strong>classloader</strong> after redeploy. ThreadLocalMap keys are weak, but values are strong.</li>
+</ul>
+<p>The rule: <strong>set in try, <code>remove()</code> in finally</strong>, or use framework filters/interceptors that do it.</p>
+<p><strong>Async boundaries.</strong> ThreadLocal values don't follow work to other threads. With <code>CompletableFuture</code> or <code>@Async</code>, the MDC is empty unless you copy it, e.g. a Spring <code>TaskDecorator</code> or Micrometer context propagation. <code>InheritableThreadLocal</code> copies only at thread creation, which is wrong for pools.</p>
+<p><strong>Virtual threads.</strong> They support ThreadLocal, but with a million virtual threads, each holding its own copy of an expensive cached object, memory explodes, and the &quot;cache an object per thread&quot; trick no longer saves anything because threads aren't reused.</p>
+<p><strong>ScopedValue</strong> (JEP 506, <strong>final in Java 25</strong>) binds an <strong>immutable</strong> value for the <strong>dynamic scope</strong> of a call: <code>ScopedValue.where(USER, u).run(() -&gt; ...)</code>. It is automatically unbound when the scope exits, can't be mutated, is cheap to read, and is inherited by subtasks of <strong>structured concurrency</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>set(v)</code>: store <code>(threadLocal → v)</code> in the current thread's map.</li>
+  <li><code>get()</code>: read the current thread's entry.</li>
+  <li><code>remove()</code>: delete the entry.</li>
+  <li>Without remove, the entry lives as long as the thread.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">private static final ThreadLocal&lt;String&gt; TENANT = new ThreadLocal&lt;&gt;();
+
+void handle(Request req) {
+    TENANT.set(req.tenant());
+    MDC.put(&quot;traceId&quot;, req.traceId());
+    try {
+        service.process(req);
+    } finally {
+        TENANT.remove();          // prevents leaks between pooled requests
+        MDC.clear();
+    }
+}
+
+// Java 25+: ScopedValue
+private static final ScopedValue&lt;String&gt; TENANT_SV = ScopedValue.newInstance();
+ScopedValue.where(TENANT_SV, req.tenant()).run(() -&gt; service.process(req));
+// inside: TENANT_SV.get()</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting without removing in pooled threads.</li>
+  <li>Expecting ThreadLocal values in <code>@Async</code> or <code>CompletableFuture</code> callbacks.</li>
+  <li>Using InheritableThreadLocal with pools.</li>
+  <li>Caching heavyweight objects per virtual thread.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ThreadLocal gives each thread its own copy of a value, used for request context like the security context, the logging MDC, or non-thread-safe objects. The risk is that pool threads live a long time, so if I don't call remove in a finally block, values leak memory and stale data from one request can show up in the next, which can even be a security issue. Values also don't propagate to async threads automatically. With millions of virtual threads, heavy ThreadLocal use costs a lot of memory. ScopedValue, final since Java 25, is the immutable, scope-bounded alternative for passing context.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does MDC reach async threads?</strong> Copy it with a TaskDecorator or context-propagation library when submitting the task.</li>
+  <li><strong>Why are ThreadLocalMap keys weak?</strong> So an unreachable ThreadLocal can be collected; the value still leaks until cleanup or remove.</li>
+  <li><strong>ScopedValue vs ThreadLocal?</strong> Immutable, bounded lifetime, cheaper, inherited by structured subtasks.</li>
+</ul>
+</article>
+</body>
+</html>

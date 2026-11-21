@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-087 · How can you wait for multiple concurrent tasks to complete?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-087" data-topic="Concurrency">
+<h1>How can you wait for multiple concurrent tasks to complete?</h1>
+<p class="ex-meta">Concurrency · scenario · levels mid</p>
+
+<h2>In one line</h2>
+<p>Wait for multiple tasks with <strong><code>Future.get()</code>/<code>invokeAll</code></strong> on an <code>ExecutorService</code>, <strong><code>CompletableFuture.allOf(...).join()</code></strong>, a <strong><code>CountDownLatch</code></strong>, or <code>Thread.join()</code>; on modern Java also <strong>try-with-resources executors</strong> and <strong>structured concurrency</strong>; always add <strong>timeouts</strong> and a <strong>failure policy</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>From low to high level:</p>
+<p><strong><code>Thread.join()</code></strong> on each thread. Works, but you manage raw threads and get no results or exceptions back.</p>
+<p><strong><code>CountDownLatch</code></strong>: each task counts down, the coordinator awaits. Good when the events are not tasks you submitted yourself; results must be passed separately.</p>
+<p><strong><code>ExecutorService</code> with Futures</strong>: submit <code>Callable</code>s, keep the <code>Future</code>s, call <code>get()</code> on each. Or use <strong><code>invokeAll(tasks, timeout, unit)</code></strong>, which waits until all complete (or the timeout expires, in which case unfinished tasks are cancelled) and returns the Futures. Exceptions come out as <code>ExecutionException</code> when you <code>get()</code>.</p>
+<p><strong><code>CompletableFuture.allOf(f1, f2, f3)</code></strong> returns a future that completes when all complete; <code>join()</code> it and then read each <code>f.join()</code>. It composes well: <code>allOf(...).thenApply(v -&gt; combine(...))</code> without blocking. Add <strong><code>orTimeout</code></strong> or <code>completeOnTimeout</code> (Java 9+). Note <code>allOf</code> completes exceptionally if any fails, but only after <strong>all</strong> have finished; it does not fail fast by itself.</p>
+<p><strong>Try-with-resources executor</strong> (Java 19+): <code>ExecutorService.close()</code> waits for all submitted tasks, so the end of the <code>try</code> block is a natural join point. Combined with <code>newVirtualThreadPerTaskExecutor()</code> it is very readable.</p>
+<p><strong>Structured concurrency</strong> (<code>StructuredTaskScope</code>, a <strong>preview</strong> API since Java 21 whose exact shape has changed between releases) treats subtasks as a unit: fork them, join the scope, and get policies such as &quot;fail fast and cancel the rest when one fails&quot;. Being preview, it needs <code>--enable-preview</code>.</p>
+<p>Whatever the mechanism, decide on <strong>timeouts</strong> and <strong>failure semantics</strong>: should one failure cancel the others, or should you collect partial results?</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start the tasks on an executor (platform pool or virtual threads).</li>
+  <li>Keep handles: Futures, CompletableFutures or a latch.</li>
+  <li>Wait for completion with a bounded timeout.</li>
+  <li>On completion, read each result; on failure, cancel the rest if required.</li>
+  <li>Propagate or aggregate errors and clean up the executor.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService pool = Executors.newFixedThreadPool(3);
+
+CompletableFuture&lt;User&gt;    user    = CompletableFuture.supplyAsync(() -&gt; users.get(id), pool);
+CompletableFuture&lt;List&lt;Order&gt;&gt; orders = CompletableFuture.supplyAsync(() -&gt; orderApi.list(id), pool);
+CompletableFuture&lt;Score&gt;   score   = CompletableFuture.supplyAsync(() -&gt; credit.score(id), pool);
+
+Dashboard d = CompletableFuture.allOf(user, orders, score)
+        .orTimeout(2, TimeUnit.SECONDS)
+        .thenApply(v -&gt; new Dashboard(user.join(), orders.join(), score.join()))
+        .join();                                    // CompletionException on failure/timeout
+
+// Alternative: invokeAll with a timeout
+List&lt;Future&lt;Integer&gt;&gt; results = pool.invokeAll(jobs, 5, TimeUnit.SECONDS);
+for (Future&lt;Integer&gt; f : results) {
+    if (!f.isCancelled()) total += f.get();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Results</th><th>Exceptions</th><th>Non-blocking composition</th></tr></thead>
+<tbody>
+<tr><td>Thread.join</td><td>No</td><td>No</td><td>No</td></tr>
+<tr><td>CountDownLatch</td><td>Separate</td><td>Separate</td><td>No</td></tr>
+<tr><td>invokeAll / Futures</td><td>Yes</td><td>ExecutionException</td><td>No</td></tr>
+<tr><td>CompletableFuture.allOf</td><td>Yes</td><td>CompletionException</td><td>Yes</td></tr>
+<tr><td>Structured concurrency</td><td>Yes</td><td>Policy-based, cancels siblings</td><td>Blocking but structured</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>get()</code> with no timeout.</li>
+  <li>Assuming <code>allOf</code> cancels other tasks when one fails.</li>
+  <li>Running blocking calls in <code>supplyAsync</code> without a dedicated executor.</li>
+  <li>Ignoring partially completed results and leaked tasks after a timeout.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;There are options at different levels. I can join each Thread, or use a CountDownLatch counted down by each task. More commonly I submit Callables to an ExecutorService and call get on each Future, or use invokeAll with a timeout. With CompletableFuture I use allOf(f1, f2, f3), then read each result, ideally composing with thenApply instead of blocking. On Java 19+ an executor in try-with-resources waits for its tasks on close, and Java 21's structured concurrency, still a preview, lets a group of subtasks succeed or fail together. In all cases I add timeouts, like orTimeout, and decide whether one failure should cancel the rest.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you fail fast if one of the tasks throws?</strong> Attach <code>exceptionally</code>/<code>whenComplete</code> to each future that cancels the others, or use a structured-concurrency scope with a fail-on-first-error policy.</li>
+  <li><strong>What does invokeAny do?</strong> Returns the first successful result and cancels the remaining tasks.</li>
+  <li><strong>Why does allOf return CompletableFuture&lt;Void&gt;?</strong> Because the inputs can have different types; you read each original future afterwards.</li>
+</ul>
+</article>
+</body>
+</html>

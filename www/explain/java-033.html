@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-033 · How do database indexes work, and what are their trade-offs?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-033" data-topic="Databases &amp; SQL">
+<h1>How do database indexes work, and what are their trade-offs?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>An index is a separate, usually <strong>B-tree</strong>, structure keeping column values <strong>sorted with pointers to rows</strong>, so lookups, range scans, joins and ORDER BY avoid <strong>full table scans</strong>; the cost is <strong>slower writes, extra storage and memory</strong>, composite indexes follow the <strong>leftmost-prefix rule</strong>, and you verify with <strong>EXPLAIN</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Without an index, <code>WHERE email = ?</code> forces the database to read every row: O(n). A <strong>B-tree (B+tree)</strong> index stores keys in sorted order in a shallow, wide tree; with hundreds of keys per page, even a billion rows need only 4-5 page reads, O(log n). Leaf entries point to the row (a heap TID in PostgreSQL) or, in <strong>MySQL InnoDB</strong>, secondary indexes store the <strong>primary key</strong>, and the table itself is a <strong>clustered index</strong> ordered by the primary key.</p>
+<p>Because keys are sorted, B-trees also serve <strong>range queries</strong> (<code>BETWEEN</code>, <code>&gt;</code>), <strong>prefix LIKE</strong> (<code>'abc%'</code>), <strong>ORDER BY</strong> and <strong>MIN/MAX</strong> without sorting, and speed up <strong>joins</strong> on foreign keys. Other index types exist: hash, GIN (full text, JSONB, arrays), GiST/BRIN in PostgreSQL, partial and expression indexes.</p>
+<p><strong>Trade-offs:</strong></p>
+<ul>
+  <li>Every INSERT, UPDATE of an indexed column, and DELETE must also maintain each index: <strong>write amplification</strong>.</li>
+  <li>Indexes consume disk and buffer-cache memory.</li>
+  <li>Too many indexes slow writes and confuse the planner; unused indexes are pure cost.</li>
+</ul>
+<p><strong>Composite indexes</strong> <code>(customer_id, created_at)</code> are sorted by the first column, then the second. They serve <code>WHERE customer_id = ?</code>, <code>WHERE customer_id = ? AND created_at &gt; ?</code>, and <code>ORDER BY created_at</code> within a customer, but not <code>WHERE created_at &gt; ?</code> alone (leftmost prefix). Put equality columns first, then range or sort columns.</p>
+<p><strong>Why an index isn't used:</strong> low selectivity (a <code>status</code> with 3 values: a scan may be cheaper), a function or cast on the column (<code>WHERE LOWER(email) = ?</code> unless you create an expression index), leading-wildcard LIKE, implicit type conversion, OR conditions, or stale statistics.</p>
+<p>A <strong>covering index</strong> includes all columns a query needs, enabling an <strong>index-only scan</strong> (<code>INCLUDE</code> in PostgreSQL/SQL Server). Always confirm with <strong>EXPLAIN / EXPLAIN ANALYZE</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The database builds the B-tree from the column values.</li>
+  <li>A query predicate is matched against available indexes by the planner using statistics.</li>
+  <li>The engine descends the tree to the first matching key.</li>
+  <li>It scans leaf entries in order for ranges.</li>
+  <li>It fetches rows from the table, unless the index covers the query.</li>
+  <li>On writes, the engine updates every affected index.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">CREATE INDEX idx_orders_customer_created
+    ON orders (customer_id, created_at DESC) INCLUDE (status, total);
+
+EXPLAIN ANALYZE
+SELECT status, total FROM orders
+WHERE customer_id = 42 AND created_at &gt; now() - interval '30 days'
+ORDER BY created_at DESC;
+-- Index Only Scan using idx_orders_customer_created on orders ...
+
+-- Not usable for this: leftmost column missing
+EXPLAIN SELECT * FROM orders WHERE created_at &gt; now() - interval '1 day';
+
+-- Function on column: needs an expression index
+CREATE INDEX idx_users_email_lower ON users (LOWER(email));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Indexing every column &quot;to be safe&quot;.</li>
+  <li>Wrong column order in composite indexes.</li>
+  <li>Wrapping indexed columns in functions or casting them.</li>
+  <li>Not indexing foreign keys used in joins and cascades.</li>
+  <li>Trusting assumptions instead of EXPLAIN ANALYZE on realistic data.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;An index is a separate structure, usually a B-tree, that keeps column values sorted with pointers to the rows, so the database finds rows in logarithmic time instead of scanning the whole table; it also helps ORDER BY, ranges and joins. The trade-off is that every insert, update and delete must maintain the index, so writes slow down, and indexes take storage and memory. For composite indexes order matters: they serve queries on the leftmost prefix, so I put equality columns first, then range or sort columns. Functions on indexed columns or low selectivity often prevent index use, so I always check the plan with EXPLAIN ANALYZE.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a covering index?</strong> One containing all columns a query needs, allowing an index-only scan.</li>
+  <li><strong>Clustered vs non-clustered?</strong> Clustered stores rows in index order (InnoDB primary key); non-clustered points to rows.</li>
+  <li><strong>Why might the planner ignore an index?</strong> Low selectivity, stale statistics or non-sargable predicates.</li>
+</ul>
+</article>
+</body>
+</html>

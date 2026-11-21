@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-259 · Which join is appropriate for retrieving matching customer and order records?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-259" data-topic="Databases &amp; SQL">
+<h1>Which join is appropriate for retrieving matching customer and order records?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Use an <strong>INNER JOIN</strong> between customers and orders when you only need customers who actually have orders (for example, revenue per customer per year); switch to a <strong>LEFT JOIN</strong> only if customers with zero orders must also appear.</p>
+
+<h2>Detailed explanation</h2>
+<p>A join combines rows from two tables using a join condition, here <code>c.customer_id = o.customer_id</code>. An <strong>INNER JOIN</strong> keeps only the pairs where the condition is true, so every output row is a real customer–order combination. For a revenue report that is exactly right: a customer with no orders has no revenue, so leaving them out changes nothing in the totals.</p>
+<p>The choice changes when the business question changes. If the report must list <strong>every customer</strong>, including those with zero revenue, you need <code>customers LEFT JOIN orders</code>. Unmatched customers then come back with <code>NULL</code> order columns, so you wrap the total in <code>COALESCE(SUM(o.amount), 0)</code>. There is a catch: the year comes from <code>o.order_date</code>, which is <code>NULL</code> for customers without orders. To show &quot;zero revenue in 2024&quot; you need a year list (a calendar table or a generated series) cross-joined with customers, then left-joined to orders.</p>
+<p>Also think about <strong>cardinality</strong>. Customer-to-orders is one-to-many, so the join repeats customer columns once per order. That is fine before <code>GROUP BY</code>, but joining a second one-to-many table such as order items will multiply rows and inflate sums.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The database reads <code>customers</code> and <code>orders</code> (the optimiser picks hash, merge or nested-loop join).</li>
+  <li>For each customer it finds orders whose <code>customer_id</code> matches.</li>
+  <li>INNER JOIN outputs only matched pairs; LEFT JOIN also outputs unmatched customers with NULLs.</li>
+  <li><code>WHERE</code> filters the joined rows, then <code>GROUP BY</code> and <code>SUM</code> aggregate them.</li>
+  <li>An index on <code>orders(customer_id)</code> or <code>orders(customer_id, order_date)</code> speeds this up.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT c.customer_id, c.name,
+       EXTRACT(YEAR FROM o.order_date) AS order_year,
+       SUM(o.amount) AS total_revenue
+FROM customers c
+INNER JOIN orders o ON o.customer_id = c.customer_id
+WHERE o.status = 'COMPLETED'
+GROUP BY c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date)
+ORDER BY c.name, order_year;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using LEFT JOIN &quot;to be safe&quot; and then filtering <code>o.status</code> in <code>WHERE</code>, which silently turns it back into an inner join.</li>
+  <li>Forgetting that LEFT JOIN gives <code>NULL</code> sums, not zero, without <code>COALESCE</code>.</li>
+  <li>Joining order items as well and double-counting order amounts.</li>
+  <li>Joining on customer name instead of the key.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use an INNER JOIN on customer_id, because the report is revenue from orders, and a customer without orders contributes nothing, so only matching rows are needed. If the business wants every customer listed, even with zero revenue, I'd switch to customers LEFT JOIN orders with COALESCE on the sum, and I'd mention that the year then has to come from a calendar or year list, since unmatched customers have no order date. I'd also check that no other one-to-many join inflates the totals.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does WHERE behave differently with a LEFT JOIN?</strong> A WHERE condition on right-table columns removes the NULL rows; put it in the ON clause to keep unmatched customers.</li>
+  <li><strong>Which index helps this query?</strong> An index on <code>orders(customer_id, order_date)</code>, plus the customer primary key.</li>
+  <li><strong>What does a RIGHT JOIN do?</strong> The mirror of LEFT JOIN; most teams rewrite it as a LEFT JOIN for readability.</li>
+</ul>
+</article>
+</body>
+</html>

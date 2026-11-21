@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-251 · How would you implement retry mechanisms and dead-letter topics?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-251" data-topic="Kafka">
+<h1>How would you implement retry mechanisms and dead-letter topics?</h1>
+<p class="ex-meta">Kafka · design · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Classify</strong> errors as transient or permanent, retry transient ones <strong>in place with backoff</strong> or via <strong>non-blocking retry topics</strong>, and after the last attempt send the record to a <strong>dead-letter topic (DLT)</strong> with error metadata that you <strong>monitor and replay</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Not every failure deserves a retry. <strong>Transient</strong> errors (downstream timeout, 503, deadlock, broker hiccup) often succeed later. <strong>Permanent</strong> errors (deserialisation failure, schema mismatch, validation error, a null field that will always be null) will fail forever; such a <strong>poison message</strong> must not block the partition. So the first step is a clear list of retryable and non-retryable exceptions.</p>
+<p>In <strong>Spring Kafka</strong>, the <code>DefaultErrorHandler</code> performs <strong>blocking retries</strong>: it re-seeks the partition and redelivers the failed record with a <code>BackOff</code> (fixed or exponential). Order is preserved because nothing else from that partition is processed, but the partition <strong>stalls</strong>, and long waits risk exceeding <code>max.poll.interval.ms</code>, so keep these short (a few seconds). Wrap deserialisers in <code>ErrorHandlingDeserializer</code> so bad bytes become a handled error rather than an endless loop.</p>
+<p>For longer delays use <strong>non-blocking retries</strong>: <code>@RetryableTopic</code> (or <code>RetryTopicConfiguration</code>) creates topics such as <code>orders-retry-0</code>, <code>orders-retry-1</code> with increasing delays; a failed record is republished to the next retry topic and the main partition moves on. The trade-off is that <strong>ordering is lost</strong> for that key: later events may be processed before the retried one.</p>
+<p>After <strong>max attempts</strong>, the <code>DeadLetterPublishingRecoverer</code> publishes to a <strong>DLT</strong> (<code>orders-dlt</code> with <code>@RetryableTopic</code>, <code>orders.DLT</code> by default for the recoverer), adding headers with the exception class, message, stack trace, original topic, partition, offset and timestamp. Operations must <strong>alert on DLT traffic</strong>, provide a tool to inspect and <strong>replay</strong> after the bug or data is fixed, and consumers must be <strong>idempotent</strong> because replays and retries produce duplicates.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Listener throws an exception.</li>
+  <li>Error handler checks if it is retryable.</li>
+  <li>Blocking: retry in place N times with backoff. Non-blocking: publish to the next retry topic with a delay.</li>
+  <li>After the final attempt, publish to the DLT with error headers and commit the original offset.</li>
+  <li>Alert on DLT; investigate, fix, replay to the main topic.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@RetryableTopic(
+    attempts = &quot;4&quot;,
+    backoff = @Backoff(delay = 60_000, multiplier = 10.0),   // 1m, 10m, 100m
+    exclude = { ValidationException.class, DeserializationException.class },
+    dltTopicSuffix = &quot;-dlt&quot;)
+@KafkaListener(topics = &quot;orders&quot;, groupId = &quot;fulfilment&quot;)
+public void onOrder(OrderPlaced evt) { fulfilmentService.handle(evt); }
+
+@DltHandler
+public void onDlt(OrderPlaced evt, @Header(KafkaHeaders.EXCEPTION_MESSAGE) String error) {
+    log.error(&quot;Order {} dead-lettered: {}&quot;, evt.orderId(), error);
+    metrics.counter(&quot;orders.dlt&quot;).increment();
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Ordering</th><th>Partition blocked</th><th>Good for</th></tr></thead>
+<tbody>
+<tr><td>Blocking retry (DefaultErrorHandler)</td><td>Kept</td><td>Yes</td><td>Short blips, strict order</td></tr>
+<tr><td>Retry topics</td><td>Lost per key</td><td>No</td><td>Long outages of dependencies</td></tr>
+<tr><td>Straight to DLT</td><td>n/a</td><td>No</td><td>Permanent errors</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Retrying permanent errors, so a poison message loops forever.</li>
+  <li>Long blocking backoffs that trigger rebalances.</li>
+  <li>A DLT nobody watches.</li>
+  <li>Replaying DLT records into non-idempotent consumers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I first separate transient errors from permanent ones like deserialisation or validation failures. Transient errors get a few blocking retries with exponential backoff through Spring Kafka's <code>DefaultErrorHandler</code>, which keeps ordering but briefly stalls the partition. For longer outages I use non-blocking retry topics with <code>@RetryableTopic</code>, accepting that ordering for that key is lost. After the final attempt the record goes to a dead-letter topic with headers for the exception and the original topic, partition and offset. I alert on DLT volume and have a replay tool, and because retries and replays cause duplicates, the consumers are idempotent.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When do retry topics break ordering?</strong> When later events for the same entity are processed while an earlier one waits in a retry topic, for example &quot;OrderCancelled&quot; before &quot;OrderCreated&quot;.</li>
+  <li><strong>How do you replay a DLT?</strong> A small consumer or admin tool republishes fixed records to the main topic, ideally preserving the key.</li>
+  <li><strong>How do you handle deserialisation errors?</strong> <code>ErrorHandlingDeserializer</code> delegates and routes the bad record to the DLT without retries.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-018 · How do you compose asynchronous work with CompletableFuture, and what pitfalls do you watch for?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-018" data-topic="Concurrency">
+<h1>How do you compose asynchronous work with CompletableFuture, and what pitfalls do you watch for?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Use <strong>thenApply</strong> to transform a result and <strong>thenCompose</strong> to chain a call that itself returns a future (flatMap); combine with <strong>thenCombine/allOf</strong>, handle errors with <strong>exceptionally/handle/whenComplete</strong>, run blocking I/O on a <strong>dedicated executor</strong> instead of the <strong>common pool</strong>, and add <strong>timeouts</strong> with <strong>orTimeout/completeOnTimeout</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>CompletableFuture&lt;T&gt;</code> is both a Future and a <strong>CompletionStage</strong>: you attach callbacks that run when the value is ready, building a non-blocking pipeline.</p>
+<p><strong>Transforming vs chaining.</strong> <code>thenApply(fn)</code> maps <code>T → U</code> (like <code>map</code>). <code>thenCompose(fn)</code> takes <code>T → CompletableFuture&lt;U&gt;</code> and <strong>flattens</strong> it (like <code>flatMap</code>); using thenApply there would give a nested <code>CompletableFuture&lt;CompletableFuture&lt;U&gt;&gt;</code>. <code>thenAccept</code> and <code>thenRun</code> consume without producing.</p>
+<p><strong>Combining.</strong> <code>a.thenCombine(b, (x, y) -&gt; ...)</code> runs when both independent futures finish. <code>allOf(f1, f2, f3)</code> returns <code>CompletableFuture&lt;Void&gt;</code> that completes when all do; then <code>join</code> each (they are done, so no blocking). <code>anyOf</code> completes with the first result.</p>
+<p><strong>Errors.</strong> An exception skips subsequent stages until a handler. <code>exceptionally(ex -&gt; fallback)</code> recovers; <code>handle((v, ex) -&gt; ...)</code> sees both outcomes and returns a new value; <code>whenComplete</code> observes for logging without changing the result. Exceptions arrive wrapped in <code>CompletionException</code>, so unwrap <code>getCause()</code>. Java 12 added <code>exceptionallyCompose</code> for async fallbacks.</p>
+<p><strong>Threads.</strong> Methods without <code>Async</code> run on whichever thread completes the previous stage (or the caller if already complete). The <code>*Async</code> variants without an executor use <strong>ForkJoinPool.commonPool()</strong>, sized to cores minus one and shared JVM-wide with parallel streams. Blocking JDBC or HTTP calls there <strong>starve</strong> everything else, so pass a dedicated executor, today often <code>Executors.newVirtualThreadPerTaskExecutor()</code>.</p>
+<p><strong>Timeouts and cancellation.</strong> Java 9 added <code>orTimeout(d, unit)</code> (fails with <code>TimeoutException</code>) and <code>completeOnTimeout(value, d, unit)</code> (fallback). Note that <code>cancel(true)</code> does <strong>not</strong> interrupt the underlying task. Avoid <code>join()</code>/<code>get()</code> on request threads in reactive code; return the future instead.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start stages with <code>supplyAsync(supplier, executor)</code>.</li>
+  <li>Chain with thenApply/thenCompose.</li>
+  <li>Fan out and join with thenCombine/allOf.</li>
+  <li>Attach timeouts and error handlers.</li>
+  <li>Return or join at the boundary.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService io = Executors.newVirtualThreadPerTaskExecutor();
+
+CompletableFuture&lt;User&gt; user = CompletableFuture
+        .supplyAsync(() -&gt; userClient.find(id), io);
+CompletableFuture&lt;List&lt;Order&gt;&gt; orders = user
+        .thenCompose(u -&gt; CompletableFuture.supplyAsync(() -&gt; orderClient.byUser(u.id()), io));
+CompletableFuture&lt;Prefs&gt; prefs = CompletableFuture
+        .supplyAsync(() -&gt; prefsClient.get(id), io)
+        .completeOnTimeout(Prefs.DEFAULT, 300, MILLISECONDS);
+
+CompletableFuture&lt;Dashboard&gt; dash = orders
+        .thenCombine(prefs, (o, p) -&gt; new Dashboard(user.join(), o, p))
+        .orTimeout(2, SECONDS)
+        .exceptionally(ex -&gt; Dashboard.degraded(ex.getCause()));</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using thenApply with a function returning a future (nested futures).</li>
+  <li>Blocking I/O on the common pool.</li>
+  <li>Swallowing exceptions by never attaching a handler or joining.</li>
+  <li>Expecting <code>cancel(true)</code> to stop the running work.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;thenApply transforms a result, while thenCompose flattens a function that itself returns a CompletableFuture, like flatMap. For independent calls I use thenCombine for two futures or allOf for many and then join the completed results. For errors I use exceptionally for a fallback, or handle and whenComplete to see both result and exception. The big pitfall is that async methods default to the ForkJoinPool common pool, so for blocking I/O I pass a dedicated executor. I add timeouts with orTimeout or completeOnTimeout, and avoid calling join on request threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>With virtual threads, still CompletableFuture?</strong> Often simple blocking code on virtual threads is clearer; CompletableFuture still helps for fan-out composition and existing async APIs, and structured concurrency is the emerging alternative.</li>
+  <li><strong>Why are exceptions wrapped?</strong> Stages wrap failures in CompletionException; unwrap the cause.</li>
+  <li><strong>Which thread runs thenApply?</strong> The thread that completed the previous stage, or the caller if already done.</li>
+</ul>
+</article>
+</body>
+</html>

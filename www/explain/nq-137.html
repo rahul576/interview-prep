@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-137 · How do these relationships affect dependency management?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-137" data-topic="Core Java &amp; OOP">
+<h1>How do these relationships affect dependency management?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Stronger relationships mean <strong>tighter coupling</strong>: keep <strong>composition parts internal</strong>, <strong>inject</strong> associated and aggregated collaborators <strong>as interfaces</strong>, prefer <strong>unidirectional</strong> links, avoid <strong>cycles</strong>, and remember <strong>inheritance is the tightest dependency</strong> of all.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every relationship is a dependency: if A references B, changes to B can force changes to A, and A can't be tested or deployed without B. The type of relationship tells you how to manage that dependency.</p>
+<p><strong>Composition parts</strong> are implementation details of their owner. They are usually small value objects or internal entities (an <code>OrderLine</code> inside <code>Order</code>). Create them inside the owner, keep them private or package-private, and don't expose them in the public API. Nobody else depends on them, so you can refactor them freely.</p>
+<p><strong>Associations and aggregations</strong> point to collaborators with their own lifecycle: repositories, gateways, other services, shared entities. These should be <strong>passed in</strong>, ideally through <strong>constructor injection</strong>, and typed as <strong>interfaces</strong>. That is the <strong>dependency inversion principle</strong>: high-level policy depends on abstractions, and details implement them. Spring wires this for you, and tests substitute fakes or mocks. Avoid <code>new</code>-ing collaborators or using static lookups.</p>
+<p><strong>Direction and cycles.</strong> Bidirectional associations double the coupling: both classes must change together and keep each other consistent. At the code level they cause infinite recursion in JSON serialisation, <code>toString</code>, <code>equals</code>. At the service level, <code>A -&gt; B -&gt; A</code> causes Spring circular-reference failures (disallowed by default since Spring Boot 2.6) and indicates muddled responsibilities. At the module level, cycles prevent independent builds and deployment. Prefer one direction, and break cycles by extracting a third component, introducing an interface owned by the lower layer, or communicating through <strong>domain events</strong>.</p>
+<p><strong>Inheritance</strong> is the strongest coupling: the subclass depends on the parent's internals, and changes ripple downwards. Another reason to favour composition.</p>
+<p>Tools help keep this healthy: <strong>ArchUnit</strong> tests for layer and cycle rules, <strong>Spring Modulith</strong> for module boundaries, and the module system or Gradle modules for hard boundaries.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Classify each reference as composition, aggregation/association, or inheritance.</li>
+  <li>Composition: construct internally, hide.</li>
+  <li>Collaborators: depend on interfaces, inject via constructors.</li>
+  <li>Choose one navigation direction; add the reverse only when justified.</li>
+  <li>Detect and break cycles with extraction, interfaces or events; enforce with architecture tests.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@Service
+class OrderService {
+    private final OrderRepository orders;            // association: injected interface
+    private final PaymentGateway payments;           // association: injected interface
+    private final ApplicationEventPublisher events;
+
+    OrderService(OrderRepository orders, PaymentGateway payments, ApplicationEventPublisher events) {
+        this.orders = orders; this.payments = payments; this.events = events;
+    }
+
+    void place(Cart cart) {
+        Order order = Order.from(cart);              // composition: lines created internally
+        payments.charge(order.total());
+        orders.save(order);
+        events.publishEvent(new OrderPlaced(order.id())); // InventoryService listens; no cycle
+    }
+}</code></pre>
+<pre><code class="language-java">@ArchTest
+static final ArchRule noCycles =
+    slices().matching(&quot;com.shop.(*)..&quot;).should().beFreeOfCycles();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating collaborators with <code>new</code> inside services, blocking tests and substitution.</li>
+  <li>Bidirectional entity links everywhere &quot;just in case&quot;.</li>
+  <li>Fixing circular beans with <code>@Lazy</code> or field injection instead of redesigning.</li>
+  <li>Exposing composition internals in public APIs and DTOs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The stronger the relationship, the tighter the coupling. Composition parts are internal details owned by the class, so I create them inside and keep them hidden. Associations and aggregations point to collaborators with their own lifecycle, so I pass them in through constructor injection and type them as interfaces, which is how Spring works and keeps things testable. Bidirectional associations and cycles between classes or modules make change harder and cause issues like infinite JSON serialisation or circular bean errors, so I prefer one direction and break cycles with an extracted component or events. Inheritance is the tightest dependency of all.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you break a circular dependency between two services?</strong> Extract the shared logic into a third service, invert with an interface, or use events.</li>
+  <li><strong>Why constructor injection?</strong> Required dependencies are explicit, fields can be final, and tests are easy.</li>
+  <li><strong>How do you enforce boundaries?</strong> ArchUnit tests, Spring Modulith or separate build modules.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-404 · What is the difference between a clustered and a non-clustered index, and what is a covering index?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-404" data-topic="Databases &amp; SQL">
+<h1>What is the difference between a clustered and a non-clustered index, and what is a covering index?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>clustered index</strong> stores the table rows themselves in key order (so only one exists), a <strong>non-clustered (secondary) index</strong> is a separate structure that points to the rows, and a <strong>covering index</strong> contains every column a query needs so it can be answered from the index alone.</p>
+
+<h2>Detailed explanation</h2>
+<p>In <strong>MySQL InnoDB</strong> the table is a B+tree <strong>clustered on the primary key</strong>: leaf pages hold the full rows. If you do not define a primary key, InnoDB uses the first unique not-null index or a hidden row id. Every <strong>secondary index</strong> stores the indexed columns plus the <strong>primary key value</strong>, so a lookup by secondary index finds the PK and then traverses the clustered index again (a &quot;bookmark&quot; lookup). SQL Server lets you choose any clustered index, defaulting to the primary key.</p>
+<p><strong>PostgreSQL</strong> is different: rows live in an unordered <strong>heap</strong>, and every index, including the primary key, is secondary and points to a physical tuple location (TID). <code>CLUSTER</code> reorders the heap once but the order is not maintained. Oracle uses heap tables by default and index-organised tables optionally.</p>
+<p>Because secondary lookups cost extra I/O, a <strong>covering index</strong> helps: if the index contains all filtered, sorted and selected columns, the engine performs an <strong>index-only scan</strong>. You build one either with a composite index or with non-key <code>INCLUDE</code> columns (PostgreSQL 11+, SQL Server). In Postgres, index-only scans also depend on the <strong>visibility map</strong> being up to date, so vacuuming matters.</p>
+<p>This is also why InnoDB primary keys should be <strong>small and sequential</strong>: every secondary index carries a copy of the PK, and random keys like UUIDv4 cause page splits and fragmentation. Sequential or time-ordered keys (auto-increment, UUIDv7) append to the end of the tree.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The query planner chooses an index based on predicates and statistics.</li>
+  <li>It walks the B-tree from root to leaf for the key range.</li>
+  <li>With a clustered index (InnoDB PK), the leaf already holds the row.</li>
+  <li>With a secondary index, it fetches the row via PK (InnoDB) or TID (Postgres).</li>
+  <li>With a covering index, step 4 is skipped entirely.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Query
+SELECT status, total FROM orders WHERE customer_id = 42 ORDER BY created_at DESC;
+
+-- PostgreSQL covering index
+CREATE INDEX idx_orders_cust ON orders (customer_id, created_at DESC)
+  INCLUDE (status, total);
+
+-- MySQL: composite index that covers the query
+CREATE INDEX idx_orders_cust ON orders (customer_id, created_at, status, total);
+-- EXPLAIN shows &quot;Using index&quot; (MySQL) or &quot;Index Only Scan&quot; (Postgres)</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>Clustered</th><th>Non-clustered</th></tr></thead>
+<tbody>
+<tr><td>Stores</td><td>Full rows</td><td>Key + pointer/PK</td></tr>
+<tr><td>Per table</td><td>One</td><td>Many</td></tr>
+<tr><td>Range scans on key</td><td>Very fast</td><td>Extra lookups</td></tr>
+<tr><td>Postgres</td><td>Not maintained (heap)</td><td>All indexes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying PostgreSQL has a clustered primary key like InnoDB.</li>
+  <li>Using random UUIDv4 primary keys in InnoDB on large, write-heavy tables.</li>
+  <li>Building wide covering indexes for every query, which slows writes.</li>
+  <li>Forgetting <code>SELECT *</code> defeats a covering index.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A clustered index is the table itself stored in index order, so there's only one. InnoDB clusters every table by its primary key, while PostgreSQL stores rows in a heap and all its indexes are secondary. A non-clustered index is a separate B-tree holding the key and a pointer, which in InnoDB is the primary key, so using it can mean an extra lookup. A covering index includes all the columns the query needs, through a composite key or INCLUDE columns, so the database can do an index-only scan. That's also why I keep InnoDB primary keys small and sequential: every secondary index repeats them and random keys fragment the tree.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why small, sequential InnoDB PKs?</strong> Every secondary index stores the PK, and sequential inserts avoid page splits.</li>
+  <li><strong>What is a bookmark/key lookup?</strong> Fetching the full row after finding it in a secondary index.</li>
+  <li><strong>Why might Postgres not use an index-only scan?</strong> The visibility map is stale, so it must still check the heap.</li>
+</ul>
+</article>
+</body>
+</html>

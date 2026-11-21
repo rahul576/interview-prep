@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-052 · What is the difference between orElse(), orElseGet(), and orElseThrow()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-052" data-topic="Java 8+ Features">
+<h1>What is the difference between orElse(), orElseGet(), and orElseThrow()?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>All three return the value when present; when empty, <strong><code>orElse(other)</code></strong> returns a default that is <strong>always evaluated eagerly</strong>, <strong><code>orElseGet(supplier)</code></strong> computes a default <strong>lazily only if empty</strong>, and <strong><code>orElseThrow</code></strong> throws <strong><code>NoSuchElementException</code></strong> or <strong>your own exception</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The difference comes from how Java evaluates arguments. In <code>opt.orElse(createDefaultUser())</code>, Java must evaluate <code>createDefaultUser()</code> <strong>before</strong> calling <code>orElse</code>, because it is a normal method argument. So the default is computed <strong>every time</strong>, even when the Optional holds a value and the default is thrown away. For a constant like <code>&quot;Unknown&quot;</code> or <code>Collections.emptyList()</code> that costs nothing. For a database query, a remote call, a heavy object construction or anything with <strong>side effects</strong> (saving a record, incrementing a counter, sending an email), it wastes work or causes real bugs.</p>
+<p><strong><code>orElseGet(Supplier&lt;? extends T&gt;)</code></strong> takes a lambda, and the lambda is invoked <strong>only when the Optional is empty</strong>. That makes it the right choice for expensive or side-effecting defaults. The cost is a tiny lambda object, usually negligible.</p>
+<p><strong><code>orElseThrow()</code></strong> with no arguments (Java 10) throws <code>NoSuchElementException(&quot;No value present&quot;)</code>. It is the preferred replacement for <code>get()</code>, because the name states the intent. <strong><code>orElseThrow(Supplier&lt;? extends X&gt;)</code></strong> throws an exception you build, typically a domain exception such as <code>UserNotFoundException</code>, which a Spring <code>@ControllerAdvice</code> maps to a <strong>404</strong>. The supplier is lazy too, so the exception and its message are only built when needed.</p>
+<p>Related options: <code>or(Supplier&lt;Optional&lt;T&gt;&gt;)</code> (Java 9) to try another source but stay in <code>Optional</code>, and <code>ifPresentOrElse</code> when you want actions rather than a value.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Optional has a value: all three return it (but <code>orElse</code>'s argument was already computed).</li>
+  <li>Optional is empty and <code>orElse</code>: return the precomputed default.</li>
+  <li>Optional is empty and <code>orElseGet</code>: call the supplier now and return its result.</li>
+  <li>Optional is empty and <code>orElseThrow</code>: build and throw the exception.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Bug: a default user is INSERTED even when the user exists
+User u = userRepo.findByEmail(email)
+    .orElse(userRepo.save(new User(email)));   // save() always runs
+
+// Fix: lazy default
+User u2 = userRepo.findByEmail(email)
+    .orElseGet(() -&gt; userRepo.save(new User(email)));
+
+// Cheap constant: orElse is fine
+String name = nickname.orElse(&quot;Guest&quot;);
+
+// Service layer: domain exception mapped to 404
+public Order getOrder(long id) {
+    return orderRepo.findById(id)
+        .orElseThrow(() -&gt; new OrderNotFoundException(id));
+}
+
+// No-arg form instead of get()
+Config cfg = loadConfig().orElseThrow();</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Method</th><th>Default evaluated</th><th>When empty</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>orElse(T)</td><td>Always, eagerly</td><td>Returns default</td><td>Constants, cheap values</td></tr>
+<tr><td>orElseGet(Supplier)</td><td>Only if empty</td><td>Calls supplier</td><td>Expensive or side-effecting defaults</td></tr>
+<tr><td>orElseThrow()</td><td>n/a</td><td>NoSuchElementException</td><td>Value must exist (replaces get)</td></tr>
+<tr><td>orElseThrow(Supplier)</td><td>Only if empty</td><td>Throws your exception</td><td>Service layers, 404 mapping</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>orElse(repository.load())</code> or <code>orElse(save(...))</code> running on every call.</li>
+  <li><code>orElse(null)</code> used to turn Optional back into nulls everywhere.</li>
+  <li>Using <code>get()</code> instead of <code>orElseThrow()</code>.</li>
+  <li>Throwing generic <code>RuntimeException</code> instead of a meaningful domain exception.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;All three return the contained value when it is present and differ only when it is empty. orElse takes the default as a normal argument, so Java evaluates it before the call, even when the Optional has a value; orElse of a repository call or object creation always runs that code. orElseGet takes a Supplier and calls it only when empty, so I use it for expensive or side-effecting defaults. orElseThrow without arguments throws NoSuchElementException and is the clean replacement for get; with a supplier it throws my own exception, like UserNotFoundException, which my exception handler maps to a 404.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can you show a bug caused by using orElse with a method call?</strong> <code>findByEmail(e).orElse(repo.save(new User(e)))</code> inserts a new user even when one exists.</li>
+  <li><strong>Is <code>orElseGet</code> always better?</strong> For constants <code>orElse</code> is simpler and equally fast.</li>
+  <li><strong>When to use <code>or()</code>?</strong> To fall back to another Optional-returning source, such as cache then database.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-044 · What are sequential and parallel streams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-044" data-topic="Java 8+ Features">
+<h1>What are sequential and parallel streams?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>A <strong>sequential stream</strong> processes elements one after another in the <strong>calling thread</strong>; a <strong>parallel stream</strong> (created with <code>parallelStream()</code> or <code>.parallel()</code>) <strong>splits the source</strong> with a <code>Spliterator</code> and processes chunks concurrently on the <strong>common ForkJoinPool</strong>, then <strong>combines</strong> the partial results.</p>
+
+<h2>Detailed explanation</h2>
+<p>By default every stream is <strong>sequential</strong>. Elements are processed in <strong>encounter order</strong> (for ordered sources such as lists), in the thread that called the terminal operation. This is predictable, has no threading overhead and is the right default for most code.</p>
+<p>A <strong>parallel stream</strong> uses the same API but a different execution strategy. The source's <strong><code>Spliterator</code></strong> splits the data into chunks, each chunk is processed by a task in <strong><code>ForkJoinPool.commonPool()</code></strong>, and the calling thread joins in as a worker too. Partial results, such as partial sums or partial lists, are merged at the end using the reduction's combiner or the collector's combiner. On a machine with 8 cores, CPU-heavy work on a large <code>ArrayList</code> can run several times faster.</p>
+<p>The results are the same as sequential execution <strong>only if</strong> your operations follow the rules: lambdas must be <strong>stateless</strong>, <strong>non-interfering</strong> (do not modify the source) and reductions must be <strong>associative</strong>. Side effects such as <code>forEach</code> happen in no particular order, and printing from a parallel stream shows interleaved output. Ordered operations like <code>findFirst</code>, <code>limit</code> and <code>forEachOrdered</code> still work but cost extra coordination; <code>unordered()</code> or <code>findAny</code> can be cheaper when order does not matter.</p>
+<p>Calling <code>.parallel()</code> or <code>.sequential()</code> sets a flag on the <strong>whole pipeline</strong>; the <strong>last call wins</strong>. You cannot make only one stage parallel. Use <code>isParallel()</code> to check.</p>
+<p>Parallel is not automatically faster: splitting, scheduling and merging have overhead, so for small collections or cheap operations sequential is usually better. Always measure.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>parallelStream()</code> or <code>.parallel()</code> marks the pipeline as parallel.</li>
+  <li>At the terminal operation the source is split recursively via <code>trySplit()</code>.</li>
+  <li>Each chunk runs the full pipeline as a fork/join task.</li>
+  <li>Worker threads of the common pool plus the caller execute the tasks.</li>
+  <li>Partial results are combined up the task tree into the final result.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">List&lt;Integer&gt; numbers = IntStream.rangeClosed(1, 10_000_000).boxed().toList();
+
+long seq = numbers.stream()
+    .mapToLong(n -&gt; n * 2L)
+    .sum();
+
+long par = numbers.parallelStream()
+    .mapToLong(n -&gt; n * 2L)
+    .sum();                  // same result: sum is associative
+
+numbers.parallelStream()
+    .limit(5)
+    .forEach(n -&gt; System.out.println(Thread.currentThread().getName() + &quot; &quot; + n));
+// order and thread names vary, e.g. ForkJoinPool.commonPool-worker-3</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Sequential</th><th>Parallel</th></tr></thead>
+<tbody>
+<tr><td>Threads</td><td>Calling thread</td><td>Common ForkJoinPool + caller</td></tr>
+<tr><td>Order of side effects</td><td>Encounter order</td><td>Not guaranteed</td></tr>
+<tr><td>Overhead</td><td>None</td><td>Split, schedule, merge</td></tr>
+<tr><td>Good for</td><td>Default, small data, I/O</td><td>Large, CPU-bound, splittable data</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming <code>.parallel()</code> always speeds things up.</li>
+  <li>Printing or adding to an <code>ArrayList</code> inside a parallel <code>forEach</code>.</li>
+  <li>Thinking <code>.sequential()</code> later in the chain affects only later stages.</li>
+  <li>Using parallel streams for blocking I/O calls.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;By default streams are sequential: elements are processed one by one in the calling thread, in encounter order. A parallel stream, created with parallelStream or parallel, splits the source with a Spliterator, processes the chunks concurrently on the common ForkJoinPool plus the calling thread, and then combines the partial results. The API is the same, and the result is the same if my operations are stateless, non-interfering and associative, but the order of side effects like forEach is not guaranteed. The parallel or sequential flag applies to the whole pipeline and the last call wins. I only use parallel for large, CPU-bound work and I measure first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How many threads does a parallel stream use by default?</strong> The common pool has parallelism of available processors minus one, plus the calling thread.</li>
+  <li><strong>Can you change that?</strong> Via the system property <code>java.util.concurrent.ForkJoinPool.common.parallelism</code>, or by running inside a custom <code>ForkJoinPool</code>.</li>
+  <li><strong>Is <code>findFirst</code> slower in parallel?</strong> It must respect encounter order; <code>findAny</code> is cheaper.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-118 · How does class loading work in the JVM? Explain the delegation model.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-118" data-topic="JVM &amp; Performance">
+<h1>How does class loading work in the JVM? Explain the delegation model.</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Class loading has three phases, <strong>loading, linking (verify, prepare, resolve) and initialisation</strong>, performed by a hierarchy of <strong>bootstrap, platform and application class loaders</strong> that use <strong>parent-first delegation</strong>, so core classes cannot be replaced; problems show up as <strong><code>ClassNotFoundException</code>, <code>NoClassDefFoundError</code></strong> and <strong>jar version conflicts</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Loading.</strong> When a class is first needed, a class loader finds its bytes (from a jar, the module image, the network, or generated in memory) and creates a <code>Class</code> object plus its metadata in Metaspace. A class is identified by its <strong>name plus its defining loader</strong>, so the same class name loaded by two loaders gives two distinct, incompatible types.</p>
+<p><strong>Linking.</strong> <strong>Verification</strong> checks the bytecode is structurally valid and type-safe. <strong>Preparation</strong> allocates static fields and sets them to default values (0, null, false). <strong>Resolution</strong> turns symbolic references in the constant pool into direct references; HotSpot does this lazily on first use.</p>
+<p><strong>Initialisation.</strong> Runs static initialisers and static field assignments (<code>&lt;clinit&gt;</code>), exactly once, thread-safely, triggered on first active use: creating an instance, calling a static method, accessing a non-constant static field, or reflection. This guarantee is why the holder-class idiom gives lazy, thread-safe singletons.</p>
+<p><strong>Loader hierarchy (Java 9+).</strong> The <strong>bootstrap loader</strong> (native, shown as <code>null</code>) loads core modules like <code>java.base</code>. The <strong>platform class loader</strong> loads other Java SE and JDK modules (it replaced the old extension loader). The <strong>application (system) class loader</strong> loads your classpath and module path. Frameworks add their own loaders.</p>
+<p><strong>Parent delegation.</strong> A loader first delegates to its parent; only if the parent cannot find the class does it search itself. This keeps a single version of <code>java.lang.String</code>, prevents spoofing core classes and avoids duplicates.</p>
+<p><strong>Typical problems.</strong> <code>ClassNotFoundException</code> is a checked exception from explicit loading (<code>Class.forName</code>, <code>loadClass</code>) when the class is not found. <code>NoClassDefFoundError</code> is an error when a class present at compile time is missing at runtime, or when its static initialiser previously failed (after an <code>ExceptionInInitializerError</code>). <strong>Version conflicts</strong> (two versions of Jackson or Guava) give <code>NoSuchMethodError</code> or <code>ClassCastException</code> such as &quot;X cannot be cast to X&quot; across loaders.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Code references class <code>A</code> for the first time.</li>
+  <li>The application loader delegates to platform, which delegates to bootstrap.</li>
+  <li>Parents cannot find it; the application loader reads <code>A.class</code> from the classpath.</li>
+  <li>The JVM verifies and prepares <code>A</code>, resolving references lazily.</li>
+  <li>On first active use, <code>A</code>'s static initialiser runs once.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">System.out.println(String.class.getClassLoader());        // null (bootstrap)
+System.out.println(java.sql.Driver.class.getClassLoader()); // platform loader
+System.out.println(MyService.class.getClassLoader());     // app loader
+
+class Config {
+    static final Map&lt;String,String&gt; VALUES = load(); // fails -&gt; ExceptionInInitializerError,
+}                                                     // later uses -&gt; NoClassDefFoundError</code></pre>
+<pre><code class="language-bash">java -Xlog:class+load=info -jar app.jar | grep Jackson   # which jar a class came from
+mvn dependency:tree -Dincludes=com.fasterxml.jackson.core # find version conflicts</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ClassNotFoundException</th><th>NoClassDefFoundError</th></tr></thead>
+<tbody>
+<tr><td>Type</td><td>Checked exception</td><td>Error (LinkageError)</td></tr>
+<tr><td>Trigger</td><td>Explicit load by name</td><td>Implicit use of a class</td></tr>
+<tr><td>Typical cause</td><td>Missing driver/plugin jar</td><td>Missing at runtime or failed static init</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking verification and static initialisation happen at load time together.</li>
+  <li>Confusing <code>ClassNotFoundException</code> with <code>NoClassDefFoundError</code>.</li>
+  <li>Naming the Java 8 extension loader for modern JDKs.</li>
+  <li>Ignoring the root <code>ExceptionInInitializerError</code> behind a <code>NoClassDefFoundError</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Class loading has three phases: loading the bytecode, linking, which verifies it, prepares static fields with default values and resolves symbolic references, and initialisation, which runs static initialisers once on first active use. There's a hierarchy of loaders: bootstrap for core classes, the platform loader for other JDK modules, and the application loader for the classpath. They use parent delegation: a loader asks its parent first, so core classes cannot be replaced and there is one copy of them. Typical problems are ClassNotFoundException when explicit loading by name fails, NoClassDefFoundError when a class was there at compile time but is missing at runtime or its static initialiser failed, and version conflicts between jars that cause NoSuchMethodError.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do application servers or plugins break the parent-first rule, and why?</strong> Web containers use child-first loaders so each application can ship its own library versions; core <code>java.*</code> classes still go to the parent.</li>
+  <li><strong>What is the thread context class loader?</strong> A per-thread loader that frameworks like JDBC's <code>ServiceLoader</code> use to find classes in application code.</li>
+  <li><strong>Can two classes with the same name coexist?</strong> Yes, if loaded by different loaders; they are different types.</li>
+</ul>
+</article>
+</body>
+</html>

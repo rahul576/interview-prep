@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-011 · What happens, at a network level, when you type a URL into the browser and press Enter?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-011" data-topic="Networking">
+<h1>What happens, at a network level, when you type a URL into the browser and press Enter?</h1>
+<p class="ex-meta">Networking · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>The browser <strong>resolves the name with DNS</strong>, opens a <strong>TCP connection</strong> (three-way handshake), negotiates <strong>TLS</strong>, sends an <strong>HTTP request</strong> that may pass through a <strong>CDN and load balancer</strong> to a backend, receives the response and <strong>renders</strong> the page, fetching further resources.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>1. URL parsing and caches.</strong> The browser parses scheme, host, port and path, checks HSTS (forcing HTTPS) and its HTTP cache; a fresh cached response may avoid the network entirely.</p>
+<p><strong>2. DNS resolution.</strong> It checks the browser DNS cache, then the OS resolver (and <code>/etc/hosts</code>), then asks the configured <strong>recursive resolver</strong> (ISP, corporate, or public like 1.1.1.1, possibly over DNS-over-HTTPS). On a miss, the resolver queries a <strong>root server</strong>, the <strong>TLD server</strong> (for <code>.com</code>) and the <strong>authoritative server</strong> for the domain, caching each answer for its <strong>TTL</strong>. Modern browsers may also query HTTPS/SVCB records to learn HTTP/3 support.</p>
+<p><strong>3. TCP handshake.</strong> The client sends <strong>SYN</strong>, the server replies <strong>SYN-ACK</strong>, the client sends <strong>ACK</strong>, to port 443. That costs one round trip.</p>
+<p><strong>4. TLS handshake.</strong> With <strong>TLS 1.3</strong>, ClientHello carries key shares and <strong>SNI</strong>; the server responds with its key share, <strong>certificate chain</strong> and finishes; the browser validates the chain against trusted CAs, hostname and expiry. Session keys are derived via <strong>ECDHE</strong>. TLS 1.3 adds one round trip (zero with resumption). ALPN negotiates HTTP/2.</p>
+<p><strong>5. HTTP request.</strong> <code>GET /path</code> with headers (Host, cookies, Accept-Encoding). On the server side, a <strong>CDN edge</strong> may answer from cache; otherwise it forwards to the origin, where a <strong>load balancer</strong> picks a healthy backend, possibly via a reverse proxy, and the application talks to caches and databases.</p>
+<p><strong>6. Response and rendering.</strong> The server returns a status code, headers and body (often compressed). The browser parses HTML, builds the DOM, discovers CSS, JavaScript and images, fetches them (reusing connections, multiplexed over HTTP/2), builds the CSSOM, runs scripts, lays out and paints.</p>
+<p><strong>HTTP/3</strong> runs over <strong>QUIC on UDP</strong>, merging transport and TLS 1.3 handshakes into one round trip and avoiding TCP head-of-line blocking.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Parse URL, check HSTS and caches.</li>
+  <li>DNS: browser, OS, recursive resolver, root, TLD, authoritative.</li>
+  <li>TCP SYN, SYN-ACK, ACK to port 443.</li>
+  <li>TLS 1.3 handshake with certificate validation and key exchange.</li>
+  <li>HTTP request via CDN and load balancer to the application.</li>
+  <li>Response, then parse, fetch sub-resources and render.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">dig +short www.example.com
+curl -sv -o /dev/null https://www.example.com 2&gt;&amp;1 | grep -E &quot;Connected|SSL connection|ALPN|HTTP/&quot;
+curl -s -o /dev/null -w &quot;dns=%{time_namelookup} tcp=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n&quot; https://www.example.com</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting caching layers (browser, DNS, CDN).</li>
+  <li>Saying TLS happens before TCP for HTTP/1.1 and HTTP/2.</li>
+  <li>Mixing up the recursive resolver and authoritative server.</li>
+  <li>Ignoring that a CDN may answer without contacting the origin.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The browser first checks its caches and HSTS, then resolves the domain via DNS: browser and OS caches, then a recursive resolver that walks root, TLD and authoritative servers and caches the answer for the TTL. It opens a TCP connection with SYN, SYN-ACK, ACK on port 443, then does a TLS 1.3 handshake where the server presents its certificate, the browser validates it and keys are agreed. It sends an HTTP GET, which may be answered by a CDN or forwarded through a load balancer to a backend. Finally the browser parses the HTML, fetches CSS, JavaScript and images and renders the page. With HTTP/3, QUIC over UDP combines the transport and TLS handshakes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does HTTP/2 or HTTP/3 change this?</strong> HTTP/2 multiplexes many requests over one TCP connection; HTTP/3 uses QUIC over UDP with a combined handshake and no TCP head-of-line blocking.</li>
+  <li><strong>What is SNI?</strong> The hostname sent in ClientHello so one IP can serve many certificates.</li>
+  <li><strong>Where would you look if the page is slow?</strong> Browser dev tools waterfall or curl timings to split DNS, connect, TLS, time to first byte and download.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-091 · What is the purpose of thenApply() and thenApplyAsync()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-091" data-topic="Concurrency">
+<h1>What is the purpose of thenApply() and thenApplyAsync()?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Both <strong>transform the previous result with a <code>Function</code></strong> and return a new <code>CompletableFuture</code>; <strong><code>thenApply</code></strong> runs the function <strong>in the thread that completed the previous stage</strong> (or the caller if already complete), while <strong><code>thenApplyAsync</code></strong> <strong>submits it to an executor</strong>: the common pool or one you pass.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>thenApply(fn)</code> is the <code>map</code> operation of <code>CompletableFuture</code>. The question is <strong>which thread runs <code>fn</code></strong>.</p>
+<p>For <strong><code>thenApply</code></strong> there are two cases. If the source future is <strong>not yet complete</strong> when you register the stage, <code>fn</code> will run in the <strong>thread that completes the source</strong>, for example the pool thread that ran <code>supplyAsync</code>, or an HTTP client's I/O thread. If the source is <strong>already complete</strong>, <code>fn</code> runs <strong>immediately in the calling thread</strong>, inside the <code>thenApply</code> call. So you do not control the thread, but you avoid a hand-off, which is efficient for cheap work.</p>
+<p><strong><code>thenApplyAsync(fn)</code></strong> always submits <code>fn</code> as a <strong>new task</strong> to the default async executor, which is <code>ForkJoinPool.commonPool()</code> (unless the common pool's parallelism is below two, in which case a new thread is used per task). <strong><code>thenApplyAsync(fn, executor)</code></strong> uses your executor. This costs a queue hand-off and possibly a context switch, but guarantees the function does not run on the completing thread.</p>
+<p>When to use which:</p>
+<ul>
+  <li><strong><code>thenApply</code></strong>: cheap, non-blocking transformations: mapping an entity to a DTO, extracting a field, simple arithmetic.</li>
+  <li><strong><code>thenApplyAsync</code> with your own executor</strong>: heavy CPU work or <strong>blocking</strong> calls, or when the completing thread must not be held up. Example: an async HTTP client or Netty event loop completes the future; running a slow transformation there would stall all other connections on that event loop. Also useful to move work out of a caller thread that must return quickly.</li>
+</ul>
+<p>The same pattern applies to every stage: <code>thenAccept</code>/<code>thenAcceptAsync</code>, <code>thenCompose</code>/<code>thenComposeAsync</code>, <code>thenCombine</code>/<code>thenCombineAsync</code>, <code>whenComplete</code>/<code>whenCompleteAsync</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>supplyAsync(task, pool)</code> runs on a <code>pool</code> thread.</li>
+  <li><code>thenApply(fn)</code> registered before completion: <code>fn</code> runs on that same pool thread right after <code>task</code>.</li>
+  <li><code>thenApply(fn)</code> registered after completion: <code>fn</code> runs immediately on the caller thread.</li>
+  <li><code>thenApplyAsync(fn)</code>: <code>fn</code> is submitted to the common pool.</li>
+  <li><code>thenApplyAsync(fn, exec)</code>: <code>fn</code> is submitted to <code>exec</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ExecutorService io = Executors.newFixedThreadPool(8, Thread.ofPlatform().name(&quot;io-&quot;, 0).factory());
+ExecutorService cpu = Executors.newFixedThreadPool(4, Thread.ofPlatform().name(&quot;cpu-&quot;, 0).factory());
+
+CompletableFuture.supplyAsync(() -&gt; downloadImage(url), io)       // io-N
+    .thenApply(bytes -&gt; bytes.length)                               // cheap: same io-N thread
+    .thenApplyAsync(len -&gt; log(&quot;size &quot; + len), cpu);                // runs on cpu-N
+
+CompletableFuture&lt;byte[]&gt; raw = httpClient.sendAsync(req, ofByteArray())
+        .thenApply(HttpResponse::body);                             // cheap, client thread OK
+CompletableFuture&lt;Thumbnail&gt; thumb =
+        raw.thenApplyAsync(ImageUtil::resize, cpu);                 // heavy: own executor</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>thenApply</th><th>thenApplyAsync</th></tr></thead>
+<tbody>
+<tr><td>Thread</td><td>Completing thread or caller</td><td>Executor thread</td></tr>
+<tr><td>Overhead</td><td>Minimal</td><td>Task hand-off</td></tr>
+<tr><td>Control over thread</td><td>No</td><td>Yes (with executor arg)</td></tr>
+<tr><td>Best for</td><td>Cheap mapping</td><td>Heavy or blocking work</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>thenApplyAsync</code> everywhere, adding hand-offs for trivial work.</li>
+  <li>Running blocking calls in <code>thenApply</code> on an event-loop thread.</li>
+  <li>Using <code>thenApplyAsync</code> without an executor for blocking work, clogging the common pool.</li>
+  <li>Assuming <code>thenApply</code> always runs on a background thread.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Both apply a Function to the previous stage's result and return a new CompletableFuture with the transformed value. thenApply runs the function synchronously, in the thread that completed the previous stage, or in the calling thread if the future is already complete. thenApplyAsync submits the function as a new task to the common ForkJoinPool or to an executor I pass. I use thenApply for cheap transformations such as mapping to a DTO, and thenApplyAsync with my own executor when the work is heavy or blocking, or when I must not run it on the completing thread, such as an I/O event loop.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is the downside of making every stage async?</strong> Each stage becomes a separate task with queueing and context-switch overhead, and thread-local context is lost more often.</li>
+  <li><strong>Which executor does thenApplyAsync use by default?</strong> The ForkJoinPool common pool, or a new thread per task if its parallelism is below two.</li>
+  <li><strong>Does the same apply to thenCompose?</strong> Yes; every stage method has a synchronous and an Async variant with the same rules.</li>
+</ul>
+</article>
+</body>
+</html>

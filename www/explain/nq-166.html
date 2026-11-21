@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-166 · What are the different types of garbage collectors in Java?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-166" data-topic="JVM &amp; Performance">
+<h1>What are the different types of garbage collectors in Java?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>HotSpot offers <strong>Serial</strong> (single-threaded, small heaps), <strong>Parallel</strong> (multi-threaded, <strong>maximum throughput</strong>), <strong>G1</strong> (the <strong>default since Java 9</strong>, region-based with <strong>pause targets</strong>), <strong>ZGC</strong> and <strong>Shenandoah</strong> (<strong>concurrent, low-latency</strong>, pauses around a millisecond or less), and <strong>Epsilon</strong> (no-op, for testing); <strong>CMS</strong> was <strong>removed in Java 14</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Serial GC</strong> (<code>-XX:+UseSerialGC</code>). One thread does all collection work with stop-the-world pauses. Lowest overhead and footprint, suitable for small heaps, client tools, and containers with one CPU. The JVM selects it automatically when it sees fewer than two CPUs or under about 1.8 GB of memory.</p>
+<p><strong>Parallel GC</strong> (<code>-XX:+UseParallelGC</code>), the &quot;throughput collector&quot;. Many threads collect young and old generations in parallel, still stop-the-world. It maximises total throughput and minimises GC CPU overhead, making it ideal for batch jobs, ETL and analytics, where long pauses are acceptable.</p>
+<p><strong>G1 GC</strong> (<code>-XX:+UseG1GC</code>), default on server-class machines since Java 9. The heap is split into regions; young collections are parallel pauses; old-generation marking is concurrent; mixed collections reclaim the regions with the most garbage first. It aims at a pause goal (<code>MaxGCPauseMillis</code>, default 200 ms). A strong general-purpose choice for most web services with heaps from a few GB to tens of GB.</p>
+<p><strong>ZGC</strong> (<code>-XX:+UseZGC</code>). Production-ready since Java 15. Uses coloured pointers and load barriers to mark, relocate and compact <strong>concurrently</strong>; pauses are typically well under a millisecond, independent of heap size, scaling to multi-terabyte heaps. <strong>Generational</strong> since Java 21 and generational-only in later releases. Costs some throughput and CPU, and needs headroom.</p>
+<p><strong>Shenandoah</strong> (<code>-XX:+UseShenandoahGC</code>). Developed by Red Hat, available in most OpenJDK builds (not Oracle's JDK). Also concurrent compaction with very short pauses; a generational mode has been added in recent releases.</p>
+<p><strong>Epsilon</strong> (<code>-XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC</code>). Allocates but never collects; the JVM dies when the heap is exhausted. Useful for performance testing and very short-lived jobs.</p>
+<p><strong>CMS</strong> (Concurrent Mark Sweep) was the former low-pause collector: deprecated in Java 9, <strong>removed in Java 14</strong>. Its fragmentation and tuning complexity were replaced by G1 and ZGC.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Define the goal: footprint, throughput or latency.</li>
+  <li>Small and single-CPU: Serial.</li>
+  <li>Batch throughput: Parallel.</li>
+  <li>General services: G1 with a pause goal.</li>
+  <li>Strict latency or very large heaps: ZGC (or Shenandoah).</li>
+  <li>Validate with GC logs under realistic load.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+UseParallelGC -Xmx8g -jar nightly-batch.jar
+java -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:MaxRAMPercentage=70 -jar api.jar
+java -XX:+UseZGC -Xmx32g -jar trading-gateway.jar
+java -XX:+PrintCommandLineFlags -version | grep -o 'Use[A-Za-z]*GC'  # which GC?</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Collector</th><th>Pauses</th><th>Throughput</th><th>Best for</th></tr></thead>
+<tbody>
+<tr><td>Serial</td><td>Long, single thread</td><td>Fine for small heaps</td><td>Tiny containers, tools</td></tr>
+<tr><td>Parallel</td><td>Long, multi-thread</td><td>Highest</td><td>Batch, ETL</td></tr>
+<tr><td>G1</td><td>Tens of ms, goal-driven</td><td>Good</td><td>Most services</td></tr>
+<tr><td>ZGC</td><td>Sub-millisecond, typically</td><td>Slightly lower</td><td>Low latency, huge heaps</td></tr>
+<tr><td>Shenandoah</td><td>Very short</td><td>Slightly lower</td><td>Low latency (OpenJDK builds)</td></tr>
+<tr><td>Epsilon</td><td>None (no collection)</td><td>Max</td><td>Tests, short jobs</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Recommending CMS on modern JDKs.</li>
+  <li>Not realising small pods silently get Serial GC.</li>
+  <li>Choosing ZGC for small heaps where G1 is simpler and enough.</li>
+  <li>Picking a collector without measuring.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Serial GC uses one thread with stop-the-world pauses, fine for small heaps and single-CPU containers. Parallel GC is the throughput collector: many threads, longer pauses, great for batch jobs. G1, the default since Java 9, divides the heap into regions, collects the regions with the most garbage first and aims at a pause target like 200 ms, so it's a good general choice. ZGC and Shenandoah do almost all work concurrently, giving pauses around a millisecond or less regardless of heap size, for latency-sensitive services; ZGC has been generational since Java 21. CMS was removed in Java 14, and Epsilon is a no-op collector for testing. For a typical REST service I'd start with G1 and measure.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which collector would you choose for a 4 GB REST service, and why?</strong> G1 with a suitable pause goal; consider ZGC only if p99 latency targets are still missed.</li>
+  <li><strong>Why was CMS removed?</strong> Fragmentation, complex tuning and maintenance cost, with G1 and ZGC as better alternatives.</li>
+  <li><strong>How do you check which GC is active?</strong> <code>-XX:+PrintCommandLineFlags</code>, <code>jcmd VM.flags</code>, or the first lines of the GC log.</li>
+</ul>
+</article>
+</body>
+</html>

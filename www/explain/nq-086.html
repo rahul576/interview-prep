@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-086 · What is CountDownLatch, and how does it work with multiple threads?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-086" data-topic="Concurrency">
+<h1>What is CountDownLatch, and how does it work with multiple threads?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>CountDownLatch</code></strong> is a one-shot synchroniser created with a <strong>count</strong>: worker threads call <strong><code>countDown()</code></strong>, and threads calling <strong><code>await()</code></strong> block <strong>until the count reaches zero</strong>, after which the latch stays open and <strong>cannot be reset</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A latch is like a gate that opens once. You create it with <code>new CountDownLatch(n)</code>. Any thread can call <code>countDown()</code>, which decrements the count (it never goes below zero). Any number of threads can call <code>await()</code>; they block until the count hits <strong>zero</strong>, then all of them are released together. Once zero, later <code>await()</code> calls return immediately. There is also <code>await(timeout, unit)</code>, which returns <code>false</code> if the time runs out, and <code>getCount()</code> for diagnostics.</p>
+<p>Memory visibility is part of the contract: actions in a thread before calling <code>countDown()</code> <strong>happen-before</strong> actions after a successful return from <code>await()</code> in another thread. So results written by workers before counting down are safely visible to the waiting thread.</p>
+<p>Typical uses:</p>
+<ul>
+  <li><strong>Wait for N tasks to finish</strong>: a coordinator starts N workers and awaits a latch of N.</li>
+  <li><strong>Wait for N services to initialise</strong> before accepting traffic.</li>
+  <li><strong>Starting gun</strong>: a latch of 1 that many threads await, released with a single <code>countDown()</code>, so they start at the same instant; very useful in concurrency tests.</li>
+</ul>
+<p>The latch is deliberately <strong>one-time use</strong>. For repeated phases where a group of threads waits for each other at a barrier, use <strong><code>CyclicBarrier</code></strong> (resets automatically and can run a barrier action) or <strong><code>Phaser</code></strong> (dynamic number of parties, multiple phases). For &quot;wait for these tasks&quot; in modern code, <code>invokeAll</code>, <code>CompletableFuture.allOf</code> or structured concurrency are often clearer, but a latch remains useful when the events are not tasks you submitted.</p>
+<p>Always call <code>countDown()</code> in a <strong><code>finally</code></strong> block: if a worker throws before counting down, the waiting thread blocks forever (or until timeout).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Coordinator creates <code>new CountDownLatch(3)</code> and shares it with three workers.</li>
+  <li>Coordinator calls <code>await()</code> and blocks.</li>
+  <li>Each worker does its job and calls <code>countDown()</code> in <code>finally</code>.</li>
+  <li>On the third <code>countDown()</code> the count reaches 0 and all awaiting threads are released.</li>
+  <li>The latch stays at 0; it cannot be reused.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">CountDownLatch ready = new CountDownLatch(3);
+ExecutorService pool = Executors.newFixedThreadPool(3);
+
+for (String svc : List.of(&quot;cache&quot;, &quot;search-index&quot;, &quot;pricing&quot;)) {
+    pool.execute(() -&gt; {
+        try {
+            warmUp(svc);
+        } finally {
+            ready.countDown();                    // always, even on failure
+        }
+    });
+}
+
+if (!ready.await(30, TimeUnit.SECONDS)) {
+    throw new IllegalStateException(&quot;Warm-up incomplete, remaining: &quot; + ready.getCount());
+}
+startAcceptingTraffic();
+pool.shutdown();</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>CountDownLatch</th><th>CyclicBarrier</th></tr></thead>
+<tbody>
+<tr><td>Who waits</td><td>Any threads, for events</td><td>The parties, for each other</td></tr>
+<tr><td>Reusable</td><td>No</td><td>Yes, resets each cycle</td></tr>
+<tr><td>Counting by</td><td>Any thread, any number of times</td><td>Each party calls await</td></tr>
+<tr><td>Barrier action</td><td>No</td><td>Optional Runnable</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>countDown()</code> outside <code>finally</code>, so failures hang the waiter.</li>
+  <li>Waiting without a timeout in production code.</li>
+  <li>Trying to reuse a latch for multiple rounds.</li>
+  <li>Creating the latch with the wrong count when the number of tasks is dynamic (use <code>Phaser</code> instead).</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;CountDownLatch is a synchroniser created with a count, say three. Each worker calls countDown when it finishes its part, and one or more threads call await, which blocks until the count reaches zero; then all waiters proceed, and what the workers did before counting down is visible to them. Typical uses are a main thread waiting for services to initialise, or a test using a latch of one as a starting gun for many threads. It's one-shot and can't be reset, so for repeated rounds I'd use CyclicBarrier or Phaser. And I always call countDown in finally so a failing worker doesn't leave everyone waiting forever.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How is CyclicBarrier different from CountDownLatch?</strong> A barrier makes a fixed group of threads wait for each other and resets for the next round; a latch waits for events and is single use.</li>
+  <li><strong>What happens if countDown is called more times than the count?</strong> The count stays at zero; extra calls have no effect.</li>
+  <li><strong>What is a Phaser?</strong> A reusable barrier with a dynamic number of registered parties and multiple phases.</li>
+</ul>
+</article>
+</body>
+</html>

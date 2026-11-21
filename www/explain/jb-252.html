@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-252 · What happens when a consumer takes longer to process a message than the configured poll interval?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-252" data-topic="Kafka">
+<h1>What happens when a consumer takes longer to process a message than the configured poll interval?</h1>
+<p class="ex-meta">Kafka · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>If processing outlasts <strong><code>max.poll.interval.ms</code></strong> (5 min default), the consumer is <strong>evicted</strong> from the group, a <strong>rebalance</strong> gives its partitions to others, its <strong>offset commit fails</strong> and the records are <strong>processed again</strong>; repeated, this becomes a <strong>rebalance storm</strong> with no progress.</p>
+
+<h2>Detailed explanation</h2>
+<p>Kafka uses two liveness checks. A background thread sends <strong>heartbeats</strong>, judged against <code>session.timeout.ms</code> (45 s default), which detects crashed processes. Separately, the consumer must call <strong><code>poll()</code></strong> again within <strong><code>max.poll.interval.ms</code></strong>, which detects a process that is alive but <strong>stuck</strong> or too slow. If the gap between polls exceeds the limit, the client proactively leaves the group.</p>
+<p>The consequences chain together. The coordinator triggers a <strong>rebalance</strong> and assigns the slow consumer's partitions to other members, which start from the <strong>last committed offset</strong>. When the slow consumer finally finishes its batch and tries to commit, it gets a <strong><code>CommitFailedException</code></strong> (or Spring Kafka logs that the commit failed because the group rebalanced), so its work is not recorded and another consumer <strong>reprocesses</strong> the same records: <strong>duplicates</strong>, and possibly concurrent processing of the same records for a while. If the cause is structural, for example every batch of 500 records takes six minutes, every member keeps being evicted, the group keeps rebalancing, lag grows and <strong>nothing ever commits</strong>: a <strong>rebalance storm</strong>.</p>
+<p><strong>Fixes</strong>, in order of preference:</p>
+<ul>
+  <li>Reduce the work per poll with a smaller <strong><code>max.poll.records</code></strong> (default 500).</li>
+  <li>Make processing faster: batch database writes, add timeouts on downstream calls, remove slow synchronous work.</li>
+  <li>Increase <strong><code>max.poll.interval.ms</code></strong> for genuinely long jobs, knowing that it also delays detection of stuck consumers.</li>
+  <li>Hand records to a <strong>worker pool</strong> and <strong><code>pause()</code></strong> the partitions while you keep calling <code>poll()</code>, then <code>resume()</code> and commit when done.</li>
+  <li>Move heavy, long-running work to a job system, with Kafka only triggering it.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Consumer polls 500 records.</li>
+  <li>Processing takes longer than <code>max.poll.interval.ms</code>.</li>
+  <li>Client leaves the group; coordinator rebalances.</li>
+  <li>Partitions go to another consumer, which restarts from the committed offset.</li>
+  <li>Slow consumer's commit fails; records are processed twice.</li>
+  <li>If every batch is slow, steps 1-5 repeat forever.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-properties"># Symptom in logs:
+# &quot;consumer poll timeout has expired... the poll loop is spending too much time processing messages&quot;
+max.poll.records=50
+max.poll.interval.ms=600000
+session.timeout.ms=45000</code></pre>
+<pre><code class="language-java">// Pause/resume pattern with the plain consumer
+ConsumerRecords&lt;String, Order&gt; recs = consumer.poll(Duration.ofMillis(200));
+if (!recs.isEmpty()) {
+    consumer.pause(consumer.assignment());
+    Future&lt;?&gt; job = workers.submit(() -&gt; processAll(recs));
+    while (!job.isDone()) consumer.poll(Duration.ofMillis(200)); // keeps membership, returns nothing
+    consumer.commitSync();
+    consumer.resume(consumer.assignment());
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Setting</th><th>Detects</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>session.timeout.ms</code></td><td>Dead process (no heartbeats)</td><td>45 s</td></tr>
+<tr><td><code>heartbeat.interval.ms</code></td><td>Heartbeat frequency</td><td>3 s</td></tr>
+<tr><td><code>max.poll.interval.ms</code></td><td>Stuck or slow poll loop</td><td>5 min</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Only raising <code>session.timeout.ms</code>, which does not help.</li>
+  <li>Setting <code>max.poll.interval.ms</code> to hours, hiding real hangs.</li>
+  <li>Calling downstream services with no timeouts inside the listener.</li>
+  <li>Processing asynchronously but still committing immediately, losing messages.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Kafka expects the consumer to call poll again within <code>max.poll.interval.ms</code>, five minutes by default. If a batch takes longer, the consumer is considered stuck and leaves the group, a rebalance hands its partitions to others, and they restart from the last committed offset. When the slow consumer tries to commit it gets a <code>CommitFailedException</code>, so those records are processed twice. If every batch is slow, the group rebalances endlessly and makes no progress. I fix it by lowering <code>max.poll.records</code>, speeding up processing, raising the interval only when justified, or processing on a worker pool while pausing the partitions and continuing to poll.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How is max.poll.interval.ms different from session.timeout.ms?</strong> One checks poll-loop progress, the other heartbeats from a background thread.</li>
+  <li><strong>How do you detect this in production?</strong> Rebalance rate, commit failures, growing lag and the poll-timeout log warning.</li>
+  <li><strong>Does static membership help?</strong> It reduces rebalances on restarts, but not evictions caused by slow processing.</li>
+</ul>
+</article>
+</body>
+</html>

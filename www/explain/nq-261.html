@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-261 · How would you extract the year from an order date?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-261" data-topic="Databases &amp; SQL">
+<h1>How would you extract the year from an order date?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>EXTRACT(YEAR FROM order_date)</code></strong> (SQL standard, PostgreSQL, Oracle, MySQL) or <strong><code>YEAR(order_date)</code></strong> (MySQL, SQL Server); in <strong>WHERE</strong> clauses prefer a <strong>date range</strong> so an index on the column can still be used.</p>
+
+<h2>Detailed explanation</h2>
+<p>Every major database can pull the year out of a date, but the syntax differs:</p>
+<ul>
+  <li><strong>Standard SQL / PostgreSQL / Oracle / MySQL:</strong> <code>EXTRACT(YEAR FROM o.order_date)</code>.</li>
+  <li><strong>MySQL and SQL Server:</strong> <code>YEAR(o.order_date)</code>; SQL Server also has <code>DATEPART(year, o.order_date)</code>.</li>
+  <li><strong>PostgreSQL:</strong> <code>DATE_PART('year', o.order_date)</code> or <code>date_trunc('year', ...)</code> which returns a timestamp at the start of the year.</li>
+  <li><strong>Oracle:</strong> <code>TO_CHAR(o.order_date, 'YYYY')</code> returns <strong>text</strong>, not a number, so sorting and comparisons behave like strings.</li>
+  <li><strong>SQLite:</strong> <code>strftime('%Y', order_date)</code>, also text.</li>
+</ul>
+<p>In the <code>SELECT</code> list and <code>GROUP BY</code> this is perfectly fine, because the database has to read every row anyway. The performance issue appears in filtering. <code>WHERE YEAR(order_date) = 2024</code> applies a function to the column, so a normal B-tree index on <code>order_date</code> cannot be used for a range seek; the query is not <strong>sargable</strong> and tends to scan. Rewrite it as a half-open range: <code>order_date &gt;= DATE '2024-01-01' AND order_date &lt; DATE '2025-01-01'</code>. The half-open form also works correctly for <code>TIMESTAMP</code> columns, where <code>BETWEEN ... '2024-12-31'</code> would miss times later on 31 December. Alternatively, some databases support an index on the expression (function-based or generated column).</p>
+<p>Also consider <strong>time zones</strong>: if <code>order_date</code> is a UTC timestamp, the &quot;year&quot; of an order placed at 23:30 on 31 December in India may differ, so convert before extracting if the business year is local.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The function reads the date value of each row.</li>
+  <li>It returns the year component (integer for EXTRACT/YEAR, string for TO_CHAR/strftime).</li>
+  <li>The result can be aliased (<code>AS order_year</code>) and grouped on.</li>
+  <li>For filtering, the optimiser can only use the index if the column is compared directly.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Grouping: function is fine
+SELECT EXTRACT(YEAR FROM order_date) AS order_year, SUM(amount)
+FROM orders
+GROUP BY EXTRACT(YEAR FROM order_date);
+
+-- Filtering: use a sargable range
+SELECT * FROM orders
+WHERE order_date &gt;= DATE '2024-01-01'
+  AND order_date &lt;  DATE '2025-01-01';</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>WHERE YEAR(order_date) = 2024</code> on a large indexed table.</li>
+  <li>Using <code>BETWEEN '2024-01-01' AND '2024-12-31'</code> on timestamps and losing the last day.</li>
+  <li>Treating <code>TO_CHAR</code> output as a number.</li>
+  <li>Ignoring time zone conversion for business years.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In standard SQL, PostgreSQL and Oracle I'd write EXTRACT(YEAR FROM order_date); MySQL and SQL Server also give me YEAR(order_date). In the SELECT and GROUP BY that's fine. But I avoid it in WHERE, because wrapping the column in a function usually stops the database using the index on order_date. To filter one year I'd write order_date &gt;= 1 January 2024 and order_date &lt; 1 January 2025, which is index-friendly and also correct for timestamps.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is <code>WHERE YEAR(order_date) = 2024</code> slow?</strong> The function hides the column from the index, forcing a scan of every row.</li>
+  <li><strong>What does sargable mean?</strong> A predicate the engine can answer with an index seek, typically a bare column compared to a constant.</li>
+  <li><strong>How else can you index it?</strong> A function-based index or an indexed generated column on the year.</li>
+</ul>
+</article>
+</body>
+</html>

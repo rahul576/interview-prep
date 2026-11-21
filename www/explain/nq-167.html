@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-167 · What is G1 GC?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-167" data-topic="JVM &amp; Performance">
+<h1>What is G1 GC?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>G1 (Garbage First)</strong>, the <strong>default collector since Java 9</strong>, divides the heap into <strong>equal-sized regions</strong> (typically 1-32 MB) tagged <strong>eden, survivor, old or humongous</strong>, runs <strong>young collections</strong>, <strong>concurrent marking</strong> and <strong>mixed collections</strong> that evacuate the <strong>old regions with the most garbage first</strong>, compacting by <strong>evacuation</strong>, all sized to a <strong>pause goal</strong> (<code>MaxGCPauseMillis</code>, default 200 ms).</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Regions.</strong> Instead of fixed contiguous generations, the heap is a grid of around 2,048 regions of the same size, a power of two chosen from the heap size. Each region's role changes over time. This flexibility lets G1 resize the young generation every cycle and collect any chosen set of regions, the <strong>collection set</strong>.</p>
+<p><strong>Young collections.</strong> When the eden regions fill, G1 pauses the application and, with many parallel threads, <strong>evacuates</strong> live objects from eden and survivor regions into fresh survivor or old regions. Evacuated regions become free. G1 picks the number of eden regions so that the predicted pause fits the goal.</p>
+<p><strong>Concurrent marking.</strong> When old-generation occupancy crosses the <strong>Initiating Heap Occupancy Percent</strong> (adaptive, initially 45%), G1 starts a cycle: an initial mark during a young pause, <strong>concurrent marking</strong> of the whole heap while the application runs, a short <strong>remark</strong> pause, and a cleanup that immediately frees regions with no live data. Marking produces liveness statistics per region.</p>
+<p><strong>Mixed collections.</strong> In the following pauses, G1 adds to the young regions a selection of old regions with the <strong>least live data</strong> (most garbage): they are cheapest to evacuate and free the most memory per millisecond. That is the &quot;garbage first&quot; idea. Evacuation copies live objects together, so <strong>compaction</strong> happens naturally, without a separate phase.</p>
+<p><strong>Humongous objects.</strong> Objects of at least <strong>half a region</strong> are allocated in contiguous <strong>humongous regions</strong>. They are expensive and can waste space; frequent big arrays may trigger marking cycles and evacuation failures. Humongous objects that die young can be eagerly reclaimed during young pauses.</p>
+<p><strong>Supporting structures.</strong> <strong>Remembered sets</strong> per region and a <strong>card table</strong> track cross-region references, maintained by write barriers, so regions can be collected independently.</p>
+<p><strong>Fallback.</strong> If there are no free regions for evacuation, G1 performs a (parallel) <strong>full GC</strong>, a long pause to avoid through headroom and lower allocation. G1 suits heaps from a few GB to tens of GB with a balance of throughput and latency.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocation fills eden regions.</li>
+  <li>Young pause evacuates live young objects.</li>
+  <li>Old occupancy passes IHOP: concurrent marking computes per-region liveness.</li>
+  <li>Remark and cleanup pauses; empty regions freed.</li>
+  <li>Mixed pauses evacuate young plus garbage-rich old regions.</li>
+  <li>Cycle repeats; full GC only on failure.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+UseG1GC -Xms8g -Xmx8g \
+     -XX:MaxGCPauseMillis=150 \
+     -XX:G1HeapRegionSize=16m \
+     -Xlog:gc*:file=gc.log:time,uptime -jar api.jar</code></pre>
+<pre><code class="language-text">GC(30) Pause Young (Normal) (G1 Evacuation Pause) 2900M-&gt;700M(8192M) 12.1ms
+GC(31) Pause Young (Concurrent Start) (G1 Evacuation Pause) ...
+GC(31) Concurrent Mark Cycle 410.5ms
+GC(34) Pause Young (Mixed) (G1 Evacuation Pause) 3600M-&gt;1900M(8192M) 35.7ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Fixing the young size with <code>-Xmn</code>, which overrides G1's pause-driven sizing.</li>
+  <li>Setting an unrealistic pause goal like 10 ms.</li>
+  <li>Ignoring humongous allocations in logs.</li>
+  <li>Assuming G1 never runs a full GC.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;G1, Garbage First, is the default collector since Java 9. It divides the heap into many equal regions, typically 1 to 32 MB, each acting as eden, survivor, old or humongous for very large objects. Young collections evacuate live objects from young regions. When the heap fills, G1 runs concurrent marking alongside the application to learn how much live data each old region has, then mixed collections evacuate young regions plus the old regions with the most garbage first, hence the name. Copying live objects out compacts memory as a side effect. I set a goal with MaxGCPauseMillis, 200 ms by default, and G1 sizes its work to meet it. It balances throughput and latency for heaps from a few to tens of gigabytes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What are humongous objects and why can they be a problem?</strong> Objects of at least half a region placed in contiguous humongous regions; they waste space, trigger marking early and can cause evacuation failures.</li>
+  <li><strong>What is a collection set?</strong> The set of regions G1 chooses to evacuate in a given pause.</li>
+  <li><strong>When would you move from G1 to ZGC?</strong> When pause times still violate latency targets after reducing allocation and tuning.</li>
+</ul>
+</article>
+</body>
+</html>

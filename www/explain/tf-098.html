@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-098 · An engineer accidentally committed a cloud access key in a tfvars file to a Git repository. What do you do?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-098" data-topic="Terraform">
+<h1>An engineer accidentally committed a cloud access key in a tfvars file to a Git repository. What do you do?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior, lead</p>
+
+<h2>In one line</h2>
+<p>Treat the key as <strong>compromised immediately</strong>: <strong>revoke and rotate</strong> it first, <strong>check audit logs</strong> for misuse, then <strong>clean the history</strong> knowing that does not make it safe, and prevent recurrence with <strong>OIDC instead of static keys</strong>, a <strong>secret store</strong> and <strong>secret scanning with push protection</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Automated scanners watch public repositories and find leaked cloud keys within minutes; internal repositories are also cloned to laptops, CI caches and forks. So the right mindset is not &quot;can we hide it?&quot; but &quot;assume an attacker has it&quot;.</p>
+<p><strong>Contain.</strong> The first action, before discussing anything else, is to <strong>deactivate and delete the key</strong> in IAM or rotate the Entra client secret, and issue a replacement to whatever legitimately used it. Every minute counts.</p>
+<p><strong>Investigate.</strong> Search the audit logs — AWS <strong>CloudTrail</strong>, the Azure <strong>activity log</strong> and Entra sign-in logs, GCP audit logs — for use of that credential since it was committed: unfamiliar IPs, new regions, created users or keys, launched instances (crypto-mining is common), or data access. Check the billing anomaly reports. If anything looks suspicious, escalate to the security team and follow the incident process, because the attacker may have created persistence.</p>
+<p><strong>Clean up.</strong> Remove the file and rewrite history with <strong>git filter-repo</strong> or BFG, force-push and ask collaborators to re-clone; for GitHub, contact support to purge cached views if needed. But this is hygiene, not remediation — clones and forks may still contain the key.</p>
+<p><strong>Prevent.</strong> Remove the need for static keys: Terraform pipelines authenticate with <strong>OIDC federation</strong> (GitHub Actions, GitLab, Azure DevOps workload identity), locally engineers use SSO-based short-lived credentials. Secrets live in Vault, Key Vault or Secrets Manager. <code>*.tfvars</code> containing secrets are in <code>.gitignore</code>. <strong>Secret scanning with push protection</strong> and <strong>gitleaks</strong> pre-commit hooks block such commits before they reach the server. A blameless postmortem captures the gaps.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Revoke and rotate the key immediately.</li>
+  <li>Update legitimate consumers with new credentials or move them to OIDC.</li>
+  <li>Review audit logs and billing for misuse; escalate if found.</li>
+  <li>Remove the secret from the repository and rewrite history.</li>
+  <li>Add push protection, pre-commit scanning and <code>.gitignore</code> rules.</li>
+  <li>Run a blameless postmortem.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">aws iam update-access-key --user-name ci-user --access-key-id AKIA... --status Inactive
+aws iam delete-access-key --user-name ci-user --access-key-id AKIA...
+aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIA... --max-results 50
+
+git filter-repo --path envs/prod.tfvars --invert-paths</code></pre>
+<pre><code class="language-yaml"># .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deleting the commit first and rotating later, or not at all.</li>
+  <li>Assuming a private repository makes the leak harmless.</li>
+  <li>Not checking logs, so an attacker's persistence goes unnoticed.</li>
+  <li>Replacing the key with another static key in the same place.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I treat the key as compromised from the moment it was pushed, because scanners find keys within minutes. First I revoke and rotate it and update whatever used it legitimately. Then I check CloudTrail or the Azure activity log for any use from unexpected places and escalate to security if there's misuse. I remove the file and clean history with git filter-repo, but that doesn't make the key safe, since clones and forks exist. To prevent recurrence, Terraform authenticates with OIDC instead of static keys, secrets live in a secret store, tfvars with secrets are gitignored, and secret scanning with push protection or gitleaks hooks blocks such commits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is deleting the commit not enough?</strong> The key has already been copied to clones, forks, caches and possibly attackers.</li>
+  <li><strong>What should the replacement look like?</strong> Short-lived credentials via OIDC or SSO, not a new long-lived key.</li>
+  <li><strong>Who do you inform?</strong> Security team, key owner and affected service owners, following the incident process.</li>
+</ul>
+</article>
+</body>
+</html>

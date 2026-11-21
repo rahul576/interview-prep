@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-097 · How do you deal with prerequisites that cannot be created by Terraform, such as purchased domains, quota approvals or manual vendor setup?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-097" data-topic="Terraform">
+<h1>How do you deal with prerequisites that cannot be created by Terraform, such as purchased domains, quota approvals or manual vendor setup?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Make prerequisites outside Terraform <strong>explicit</strong>: <strong>document</strong> them in a README and environment runbook, <strong>reference</strong> them with <strong>data sources or variables</strong>, <strong>fail early with preconditions</strong> when they are missing, and <strong>automate</strong> them wherever an API exists.</p>
+
+<h2>Detailed explanation</h2>
+<p>Some dependencies cannot, or should not, be created by Terraform: a <strong>purchased domain</strong>, a <strong>quota increase</strong> awaiting approval, a <strong>marketplace agreement</strong>, an <strong>ExpressRoute or Direct Connect circuit</strong> ordered from a provider, a certificate from an external CA, or manual configuration in a vendor portal. The danger is not that they exist, but that they are <strong>implicit</strong> — a new engineer creates an environment and the apply fails 40 minutes in with an obscure API error, leaving a half-built environment.</p>
+<p>First, <strong>document</strong> them: a &quot;Prerequisites&quot; section in the module README and a checklist in the runbook for creating a new environment, with owners and lead times (quota requests and circuit provisioning can take days).</p>
+<p>Second, <strong>reference instead of create</strong>. Use data sources like <code>azurerm_dns_zone</code> or <code>aws_route53_zone</code> to look up the existing zone, or pass IDs such as a circuit ID as variables. This also makes the dependency visible in code.</p>
+<p>Third, <strong>fail early</strong>. A data source fails at plan time if the object does not exist. For more subtle conditions — enough quota, an accepted agreement, a circuit in the provisioned state — use <code>precondition</code> blocks or <code>check</code> blocks with clear error messages, so the plan stops before anything is created.</p>
+<p>Fourth, <strong>automate where possible</strong>. Many &quot;manual&quot; steps have APIs: Azure <strong>Quota</strong> API and AWS <strong>Service Quotas</strong> can be requested programmatically, <code>azurerm_marketplace_agreement</code> accepts terms, and DNS delegation can be automated once the domain exists.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List every external prerequisite with owner and lead time.</li>
+  <li>Add it to the README and new-environment runbook.</li>
+  <li>Reference it with a data source or variable in code.</li>
+  <li>Add preconditions that check its state with a helpful message.</li>
+  <li>Automate the step through its API when one exists.</li>
+  <li>Run a preflight plan for new environments before the real apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">data &quot;azurerm_dns_zone&quot; &quot;public&quot; {
+  name                = var.domain_name
+  resource_group_name = var.dns_rg
+}
+
+data &quot;azurerm_express_route_circuit&quot; &quot;er&quot; {
+  name                = var.circuit_name
+  resource_group_name = var.network_rg
+}
+
+resource &quot;azurerm_virtual_network_gateway_connection&quot; &quot;er&quot; {
+  # ...
+  express_route_circuit_id = data.azurerm_express_route_circuit.er.id
+
+  lifecycle {
+    precondition {
+      condition     = data.azurerm_express_route_circuit.er.service_provider_provisioning_state == &quot;Provisioned&quot;
+      error_message = &quot;ExpressRoute circuit is not provisioned by the provider yet. See runbook step 4.&quot;
+    }
+  }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Prerequisites known only to one engineer.</li>
+  <li>Hard-coding IDs of external objects instead of looking them up.</li>
+  <li>Discovering quota limits only when the apply fails half-way.</li>
+  <li>Treating steps as manual although an API exists.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Some things live outside Terraform — buying a domain, a quota approval, a marketplace agreement or a provider-delivered circuit. I make them explicit: documented as prerequisites in the README and in a new-environment runbook. In code I reference them with data sources or variables, like looking up the existing DNS zone or passing the circuit ID, and add preconditions that fail early with a clear message instead of failing deep in an apply. Where APIs exist, I automate even these, like quota requests through the quotas API or accepting marketplace terms with a resource.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you avoid a new environment failing halfway on quota?</strong> A preflight script or check block querying current usage and limits before apply.</li>
+  <li><strong>Should Terraform buy the domain?</strong> Usually not; registration is a business decision, then delegation is automated.</li>
+  <li><strong>Data source or variable?</strong> Data source when it can be looked up reliably; variable when it lives in another account or system.</li>
+</ul>
+</article>
+</body>
+</html>

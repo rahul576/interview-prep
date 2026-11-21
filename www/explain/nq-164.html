@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-164 · What is minor garbage collection?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-164" data-topic="JVM &amp; Performance">
+<h1>What is minor garbage collection?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>minor GC</strong> (young collection) cleans <strong>only the young generation</strong>, is <strong>triggered when Eden is full</strong>, is a <strong>stop-the-world</strong> but usually <strong>short</strong> pause whose cost is proportional to the <strong>live objects</strong>, finds old-to-young references via <strong>card tables or remembered sets</strong>, <strong>copies survivors</strong> and <strong>promotes</strong> aged ones; <strong>major/full GCs</strong> collect the old generation or whole heap and cost more.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Trigger.</strong> An allocation fails because Eden (or G1's eden regions) has no room. The JVM brings all application threads to a <strong>safepoint</strong> and starts the collection.</p>
+<p><strong>Work done.</strong> The collector finds live young objects starting from <strong>GC roots</strong> (thread stacks, statics, JNI) plus <strong>references from the old generation into the young one</strong>. Scanning the whole old generation would defeat the purpose, so a <strong>write barrier</strong> marks a <strong>card</strong> (a small chunk of the old generation) dirty whenever a reference field there is updated; the minor GC scans only dirty cards. G1 additionally keeps per-region <strong>remembered sets</strong>. Live objects are <strong>copied</strong> into a survivor space (or into old if aged or if survivors overflow), their age is incremented, and references are updated. Eden and the source survivor are then simply marked empty.</p>
+<p><strong>Cost.</strong> Proportional to live objects and the number of dirty cards and roots, <strong>not to Eden size</strong>. A 1 GB Eden full of garbage is collected quickly; a small Eden in which most objects are still alive (say, during a large batch load) is slow. Multiple GC threads work in parallel in modern collectors, so typical pauses are a few to tens of milliseconds.</p>
+<p><strong>Frequency.</strong> Depends on allocation rate divided by Eden size. A service allocating 500 MB/s with a 1 GB Eden runs a minor GC every two seconds. Frequent minor GCs are normal; they become a problem when total pause time or GC CPU becomes significant.</p>
+<p><strong>Contrast.</strong> A <strong>major</strong> collection targets the old generation (in G1, concurrent marking and mixed collections). A <strong>full</strong> GC collects and compacts the entire heap in one long stop-the-world pause and should be rare. In <strong>ZGC</strong>, young collections are mostly concurrent with very short pauses.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocation fails in Eden.</li>
+  <li>Threads stop at a safepoint.</li>
+  <li>Roots and dirty cards are scanned for references into young.</li>
+  <li>Live objects are copied to survivor/old; ages incremented.</li>
+  <li>Eden and the source survivor are reset; threads resume.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+UseG1GC -Xlog:gc,gc+phases=debug:file=gc.log -jar app.jar</code></pre>
+<pre><code class="language-text">[101.2s] GC(210) Pause Young (Normal) (G1 Evacuation Pause) 1530M-&gt;212M(4096M) 7.9ms
+[101.2s] GC(210)   Merge Heap Roots: 0.4ms
+[101.2s] GC(210)   Evacuate Collection Set: 6.1ms
+[103.6s] GC(211) Pause Young (Normal) (G1 Evacuation Pause) 1540M-&gt;215M(4096M) 8.3ms</code></pre>
+<p>About 1.3 GB of garbage reclaimed in 8 ms because only around 200 MB was live.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Minor GC</th><th>Full GC</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>Young generation</td><td>Whole heap</td></tr>
+<tr><td>Trigger</td><td>Eden full</td><td>Promotion failure, System.gc, etc.</td></tr>
+<tr><td>Cost driver</td><td>Live young objects</td><td>Entire live set</td></tr>
+<tr><td>Typical pause</td><td>Milliseconds</td><td>Hundreds of ms to seconds</td></tr>
+<tr><td>Frequency</td><td>Often</td><td>Rarely (ideally never)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming a minor GC is concurrent; in G1 and Parallel it is stop-the-world.</li>
+  <li>Shrinking Eden to &quot;reduce pause time&quot;, which increases frequency and promotion.</li>
+  <li>Believing pause time scales with Eden size.</li>
+  <li>Treating frequent minor GCs as a problem without measuring cost.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A minor GC, or young collection, cleans only the young generation. It's triggered when Eden is full and an allocation fails. It's a stop-the-world pause, but usually short, because it only traces and copies live young objects, and most young objects are dead, so the cost is proportional to live objects, not to Eden's size. References from the old generation into the young one are found through card tables or remembered sets instead of scanning the whole old generation. Survivors are copied into a survivor space and old enough ones are promoted. A major or full GC, by contrast, collects the old generation or the entire heap and is much more expensive.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What causes frequent minor GCs, and is that always a problem?</strong> A high allocation rate or small Eden; it is fine unless total pause time or GC CPU is significant.</li>
+  <li><strong>What is a card table?</strong> A byte array where each entry represents a small old-generation region, marked dirty when it gains a reference that may point into young.</li>
+  <li><strong>Why must threads stop?</strong> Objects are moved and references updated, so the heap must not change during copying (except in concurrent collectors).</li>
+</ul>
+</article>
+</body>
+</html>

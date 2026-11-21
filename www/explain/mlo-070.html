@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-070 · An expensive multi-GPU training job shows only 30 percent GPU utilisation. How do you find the bottleneck?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-070" data-topic="MLOps">
+<h1>An expensive multi-GPU training job shows only 30 percent GPU utilisation. How do you find the bottleneck?</h1>
+<p class="ex-meta">MLOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Low GPU utilisation means the GPUs are <strong>waiting</strong>; <strong>profile</strong> the loop to see whether the gap is <strong>data loading</strong> (CPU preprocessing, slow storage), <strong>communication</strong> between GPUs or nodes, or <strong>synchronisation points</strong> such as small batches, logging and evaluation.</p>
+
+<h2>Detailed explanation</h2>
+<p>Don't guess: use the <strong>PyTorch Profiler</strong> (with TensorBoard or the trace viewer) or <strong>NVIDIA Nsight Systems</strong> to see a timeline of CPU work, CUDA kernels, data loader waits and NCCL collectives. Also look at simple signals: <code>nvidia-smi dmon</code> utilisation, CPU usage per core, disk and network throughput, and step-time breakdown.</p>
+<p><strong>Data loading</strong> is the most common culprit. Image decoding and augmentation are CPU-heavy; many small files on network storage cause high latency; a single loader worker can't keep eight GPUs fed. Fixes: increase <code>num_workers</code>, use <code>pin_memory</code> and <code>prefetch_factor</code>, keep workers persistent, move augmentation to the GPU (NVIDIA DALI or torchvision v2 on GPU), cache data on local NVMe, and use <strong>sharded sequential formats</strong> like WebDataset, Parquet or TFRecord instead of millions of small files.</p>
+<p><strong>Communication overhead</strong> shows up as long NCCL all-reduce or all-gather kernels. Causes are slow interconnects (no NVLink, no InfiniBand or EFA between nodes), small batches so communication dominates, or no overlap of communication with backward computation. Fixes: better networking, larger per-GPU batch or gradient accumulation, DDP bucket tuning, and checking NCCL is actually using the fast fabric.</p>
+<p><strong>Synchronisation points</strong>: calling <code>.item()</code> or printing every step forces CPU-GPU sync; frequent checkpointing or evaluation blocks training; tiny kernels with Python overhead underuse the GPU, which <code>torch.compile</code> or CUDA graphs can help.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Measure step time and utilisation per GPU; check CPU and I/O.</li>
+  <li>Run a short profile of 20-50 steps.</li>
+  <li>Test with synthetic data in memory: if utilisation jumps, the input pipeline is the bottleneck.</li>
+  <li>Test on one GPU versus many: if scaling is poor, look at communication.</li>
+  <li>Apply fixes one at a time and re-measure throughput (samples per second).</li>
+  <li>Keep a throughput benchmark in CI for future regressions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from torch.profiler import profile, schedule, ProfilerActivity, tensorboard_trace_handler
+loader = DataLoader(ds, batch_size=64, num_workers=16, pin_memory=True,
+                    persistent_workers=True, prefetch_factor=4)
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+             schedule=schedule(wait=5, warmup=5, active=20),on_trace_ready=tensorboard_trace_handler(&quot;./prof&quot;)) as p:
+    for step, batch in enumerate(loader):
+        train_step(batch); p.step()
+        if step &gt; 40: break</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Adding GPUs when the input pipeline is the bottleneck.</li>
+  <li>Reading millions of small files from network storage.</li>
+  <li>Logging scalars with <code>.item()</code> every step.</li>
+  <li>Ignoring that nodes communicate over standard TCP networking instead of the fast fabric.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Thirty percent means the GPUs are waiting, so I'd profile with the PyTorch profiler or Nsight Systems rather than guess. A quick test is feeding synthetic data from memory: if utilisation jumps, it's the input pipeline. Then I'd add loader workers, pinned memory and prefetching, move augmentation to the GPU, cache data locally and use sharded formats like WebDataset or Parquet. If scaling across GPUs is the issue, I'd look at NCCL time and the interconnect, increase per-GPU batch or overlap communication. I'd also remove sync points like per-step logging and blocking evaluation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How does storage affect throughput?</strong> Object storage and network file systems have high per-file latency; sharded files, local NVMe caching or high-throughput file systems such as FSx for Lustre help a lot.</li>
+  <li><strong>How do you confirm NCCL uses the fast network?</strong> Set <code>NCCL_DEBUG=INFO</code> and check the selected transport.</li>
+  <li><strong>What throughput metric do you track?</strong> Samples or tokens per second per GPU, and model FLOPs utilisation.</li>
+</ul>
+</article>
+</body>
+</html>

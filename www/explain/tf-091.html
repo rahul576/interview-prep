@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-091 · You inherited Terraform code written for version 0.12 with interpolation-only syntax and old patterns. How do you modernise it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-091" data-topic="Terraform">
+<h1>You inherited Terraform code written for version 0.12 with interpolation-only syntax and old patterns. How do you modernise it?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Modernise <strong>stepwise</strong>: upgrade Terraform through <strong>0.13, 0.14, 0.15 to 1.x</strong> with a clean plan and apply at each step, add <strong>required_providers source addresses</strong> and a <strong>lock file</strong>, remove <strong>interpolation-only syntax</strong> and deprecated features, then refactor with <strong>moved blocks</strong> so nothing is recreated.</p>
+
+<h2>Detailed explanation</h2>
+<p>Terraform 0.12 introduced HCL2, so the code is already in the modern language, but it usually carries habits from 0.11 and misses later features. The safe approach is many small steps, each ending with <strong>no unexpected changes in the plan</strong>.</p>
+<p><strong>Version upgrades.</strong> You should not jump straight from 0.12 to the latest 1.x. Version <strong>0.13</strong> introduced provider <strong>source addresses</strong> (<code>hashicorp/aws</code>) in <code>required_providers</code>, and the <code>terraform 0.13upgrade</code> command helps add them. <strong>0.14</strong> introduced the <strong>dependency lock file</strong> <code>.terraform.lock.hcl</code> and sensitive output handling. <strong>0.15</strong> removed many deprecated features and stabilised the state format leading to <strong>1.0</strong>, after which upgrades within 1.x are smooth. At each step you run <code>init -upgrade</code>, <code>plan</code> and an <code>apply</code> so the state is written in the new format. Provider major versions (for example AWS provider 3 to 5, azurerm 2 to 4) have their own upgrade guides and should be a separate step.</p>
+<p><strong>Code cleanup.</strong> Replace <code>&quot;${var.name}&quot;</code> with <code>var.name</code> where the expression is not inside a string, remove deprecated functions like <code>list()</code> and <code>map()</code> in favour of <code>tolist</code>/<code>tomap</code> or literal syntax, replace provisioners with cloud-init or configuration management where possible, and pin provider versions with constraints.</p>
+<p><strong>Refactoring.</strong> Once versions are current, convert <code>count</code> to <code>for_each</code> for stable addresses, extract modules and rename resources. Since <strong>1.1</strong>, <code>moved</code> blocks record these address changes in code, so the plan shows a move instead of destroy and create. Importing unmanaged resources can use <code>import</code> blocks (1.5+).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Freeze changes, back up the state and run <code>terraform plan</code> to confirm a clean baseline.</li>
+  <li>Upgrade to 0.13, run <code>0.13upgrade</code>, init, plan, apply.</li>
+  <li>Repeat for 0.14 (commit the lock file), 0.15 and then the latest 1.x.</li>
+  <li>Upgrade providers one major version at a time following their upgrade guides.</li>
+  <li>Clean syntax with <code>terraform fmt</code> and manual edits; plans must stay empty.</li>
+  <li>Refactor <code>count</code> to <code>for_each</code> and into modules using <code>moved</code> blocks.</li>
+  <li>Roll through dev, test and finally production.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl"># before
+resource &quot;aws_instance&quot; &quot;web&quot; {
+  count         = 2
+  ami           = &quot;${var.ami}&quot;
+  instance_type = &quot;${var.type}&quot;
+}
+
+# after
+resource &quot;aws_instance&quot; &quot;web&quot; {
+  for_each      = toset([&quot;a&quot;, &quot;b&quot;])
+  ami           = var.ami
+  instance_type = var.type
+}
+
+moved {
+  from = aws_instance.web[0]
+  to   = aws_instance.web[&quot;a&quot;]
+}
+moved {
+  from = aws_instance.web[1]
+  to   = aws_instance.web[&quot;b&quot;]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Jumping several major Terraform versions at once and getting state or syntax errors.</li>
+  <li>Upgrading Terraform and providers in the same step, so you cannot tell which caused a diff.</li>
+  <li>Accepting plans with replacements because &quot;it is only a refactor&quot;.</li>
+  <li>Forgetting other users and pipelines still pinned to the old version.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I modernise in small safe steps with a clean plan after each. First Terraform itself: 0.13 for provider source addresses with the upgrade command, 0.14 for the lock file, 0.15, then 1.x, applying at each step so the state format is upgraded. Then providers, one major version at a time. Then cleanup: remove interpolation-only expressions, deprecated functions and provisioners, and pin versions. Larger refactors like count to for_each or extracting modules come last, with moved blocks so nothing is recreated. The rule throughout is no unexpected changes in the plan, and I do it in lower environments first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which step carries the most risk?</strong> Provider major upgrades and count-to-for_each refactors, since they can trigger replacements.</li>
+  <li><strong>How do you keep everyone on the same version?</strong> <code>required_version</code> constraints, the lock file and a pinned version in CI.</li>
+  <li><strong>What replaces <code>terraform state mv</code> today?</strong> <code>moved</code> blocks, which are reviewable in code.</li>
+</ul>
+</article>
+</body>
+</html>

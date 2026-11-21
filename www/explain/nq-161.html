@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-161 · How is the heap divided into young and old generations?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-161" data-topic="JVM &amp; Performance">
+<h1>How is the heap divided into young and old generations?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Based on the <strong>weak generational hypothesis</strong> (most objects die young), the heap is split into a <strong>young generation</strong> (<strong>Eden + two survivor spaces</strong>), collected often and cheaply, and an <strong>old (tenured) generation</strong> for long-lived objects, collected rarely; objects are <strong>promoted</strong> after surviving a number of minor GCs (the <strong>tenuring threshold</strong>); <strong>G1</strong> implements the generations as sets of <strong>equal-sized regions</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Empirically, most objects in typical applications live very briefly: request DTOs, iterators, temporary strings, lambdas. A smaller fraction lives long: caches, connection pools, Spring beans, session data. Treating them the same would be wasteful, so collectors separate them.</p>
+<p><strong>Young generation.</strong> New objects are allocated in <strong>Eden</strong>. When it fills, a <strong>minor GC</strong> copies only the live objects into a <strong>survivor space</strong> and discards everything else. The cost depends on the number of <strong>live</strong> objects, which is small, so young collections are fast even if Eden is large. Survivors bounce between the two survivor spaces, and each survival increments the object's <strong>age</strong>.</p>
+<p><strong>Old generation.</strong> Objects whose age reaches the <strong>tenuring threshold</strong> (adaptive, maximum 15 by default via <code>-XX:MaxTenuringThreshold</code>) are <strong>promoted</strong>. Objects may also be promoted early if the survivor space overflows. The old generation is larger, fills slowly and is collected by more expensive mechanisms: concurrent marking plus mixed collections in G1, a full compaction in Parallel GC.</p>
+<p><strong>Cross-generation references.</strong> To collect the young generation without scanning the whole old generation, the JVM tracks old-to-young references with a <strong>card table</strong> and write barriers (and <strong>remembered sets</strong> in G1).</p>
+<p><strong>Benefits.</strong> Most garbage is reclaimed cheaply and often; expensive old-generation work happens rarely. Overall GC cost drops dramatically.</p>
+<p><strong>Region-based collectors.</strong> In <strong>G1</strong>, the heap is a grid of equal regions (1-32 MB typically), each dynamically tagged eden, survivor, old or humongous. Generation sizes are adapted automatically to meet the pause-time goal, which is why you should not fix the young size with <code>-Xmn</code> in G1. <strong>ZGC</strong> is also generational since Java 21, with young and old generations collected concurrently. Parallel and Serial GC use contiguous areas, with <code>-XX:NewRatio</code> (old:young, default 2) and <code>-XX:SurvivorRatio</code> (Eden:survivor, default 8) controlling sizes.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>New objects go into Eden.</li>
+  <li>Eden full: minor GC copies survivors into a survivor space, age +1.</li>
+  <li>Repeated survivals move objects between survivor spaces.</li>
+  <li>Age reaches the threshold or survivors overflow: promotion to old.</li>
+  <li>Old generation fills slowly: major, mixed or full collection.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+UseParallelGC -Xmx2g -XX:NewRatio=2 -XX:SurvivorRatio=8 \
+     -Xlog:gc+age=trace -jar app.jar</code></pre>
+<pre><code class="language-text">Desired survivor size 22020096 bytes, new threshold 7 (max threshold 15)
+- age   1:    4812344 bytes,    4812344 total
+- age   2:     991200 bytes,    5803544 total</code></pre>
+<p>With 2 GB heap and NewRatio=2: young about 680 MB (Eden about 545 MB, each survivor about 68 MB), old about 1.36 GB.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Young generation</th><th>Old generation</th></tr></thead>
+<tbody>
+<tr><td>Contents</td><td>New, short-lived objects</td><td>Long-lived objects</td></tr>
+<tr><td>Collected by</td><td>Minor GC</td><td>Major/mixed/full GC</td></tr>
+<tr><td>Frequency</td><td>High</td><td>Low</td></tr>
+<tr><td>Algorithm</td><td>Copying</td><td>Mark-compact or concurrent</td></tr>
+<tr><td>Cost driver</td><td>Live objects</td><td>Live set size</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking all objects start in the old generation once large; only very large ones do.</li>
+  <li>Setting <code>-Xmn</code> with G1, which disables its adaptive sizing.</li>
+  <li>Confusing NewRatio and SurvivorRatio.</li>
+  <li>Assuming generational layout means fixed contiguous memory in every collector.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Most collectors split the heap based on the weak generational hypothesis: most objects die young. The young generation is where new objects are allocated; it consists of Eden and two survivor spaces and is collected often and quickly, because cost depends only on the few live objects. Objects that survive several young collections, the tenuring threshold, are promoted to the old or tenured generation, which holds long-lived objects like caches and is collected less often but more expensively. Old-to-young references are tracked with card tables so young collections stay cheap. G1 divides the heap into equal regions tagged eden, survivor, old or humongous rather than fixed contiguous areas, and adapts their number to its pause goal.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What problem occurs if the young generation is too small?</strong> Very frequent minor GCs and premature promotion of medium-lived objects, filling the old generation and causing more major or full GCs.</li>
+  <li><strong>What is the tenuring threshold?</strong> The age after which survivors are promoted; adaptive up to <code>MaxTenuringThreshold</code> (15).</li>
+  <li><strong>What if the young generation is too large?</strong> Fewer but potentially longer young pauses and less room for the old generation.</li>
+</ul>
+</article>
+</body>
+</html>

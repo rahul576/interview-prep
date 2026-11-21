@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-093 · What is the difference between a process and a thread?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-093" data-topic="Concurrency">
+<h1>What is the difference between a process and a thread?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>process</strong> is an independent running program with its <strong>own address space</strong> and resources; a <strong>thread</strong> is a unit of execution <strong>inside a process</strong> that shares the process's <strong>heap</strong> but has its <strong>own stack and program counter</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The operating system isolates <strong>processes</strong> from each other: each has its own virtual memory, file descriptors, environment and security context. A bug in one process cannot directly corrupt another's memory. The price is that communication requires <strong>inter-process communication (IPC)</strong>: sockets, pipes, shared files or explicitly shared memory, and creating a process or switching between processes is relatively expensive.</p>
+<p>A <strong>thread</strong> lives inside a process. All threads of a process share the <strong>heap</strong>, loaded classes, static fields and open resources, so they can communicate simply by reading and writing the same objects. Each thread has its own <strong>call stack</strong> (local variables, method frames), <strong>program counter</strong> and register state. Threads are cheaper to create and switch than processes, which is why servers handle many requests with threads.</p>
+<p>That shared memory is both the benefit and the danger: two threads modifying the same object need <strong>synchronisation</strong>, or you get race conditions and visibility problems. And because nothing isolates threads, a severe failure such as <code>OutOfMemoryError</code> or a native crash affects the whole process.</p>
+<p>In Java, one running JVM is one OS process. Inside it run many threads: your application threads (for example Tomcat request threads), garbage-collector threads, JIT compiler threads and others. Platform threads map one-to-one to OS threads; <strong>virtual threads</strong> (Java 21) are lighter threads scheduled by the JVM on top of a few OS threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The OS starts a process (<code>java -jar app.jar</code>) with its own address space.</li>
+  <li>The JVM creates the main thread plus internal threads (GC, JIT, signal handling).</li>
+  <li>Your code starts more threads; each gets its own stack, all share the heap.</li>
+  <li>The OS scheduler runs threads on CPU cores, switching between them.</li>
+  <li>Processes talk via IPC (HTTP, sockets); threads talk via shared objects guarded by locks.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Demo {
+    static int shared = 0;                       // on the heap/statics: shared
+
+    public static void main(String[] args) throws Exception {
+        Runnable task = () -&gt; {
+            int local = 0;                       // on each thread's own stack
+            for (int i = 0; i &lt; 1000; i++) { local++; }
+            synchronized (Demo.class) { shared += local; }
+        };
+        Thread t1 = new Thread(task), t2 = new Thread(task);
+        t1.start(); t2.start(); t1.join(); t2.join();
+        System.out.println(ProcessHandle.current().pid() + &quot; -&gt; &quot; + shared); // one PID, 2000
+    }
+}</code></pre>
+<p>Running <code>jcmd &lt;pid&gt; Thread.print</code> shows many threads all inside that one process.</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Process</th><th>Thread</th></tr></thead>
+<tbody>
+<tr><td>Memory</td><td>Own address space</td><td>Shares heap, own stack</td></tr>
+<tr><td>Isolation</td><td>Strong</td><td>None between threads</td></tr>
+<tr><td>Creation/switch cost</td><td>Higher</td><td>Lower</td></tr>
+<tr><td>Communication</td><td>IPC (sockets, pipes)</td><td>Shared objects</td></tr>
+<tr><td>Failure impact</td><td>Contained</td><td>Can affect whole process</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying threads share the stack; each thread has its own stack.</li>
+  <li>Thinking more threads always means more speed; contention and switching cost add up.</li>
+  <li>Forgetting that shared heap data needs synchronisation.</li>
+  <li>Assuming one crashing thread is always isolated.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A process is an independent running program with its own memory address space, file handles and resources, and processes are isolated, so they communicate through sockets, pipes or files. A thread is a unit of execution inside a process. All threads in a process share the heap and resources, but each has its own stack and program counter. Threads are cheaper to create and switch, and sharing memory makes communication easy, but shared mutable data then needs synchronisation. A JVM is a good example: one process running many threads, such as request handlers, GC threads and JIT compiler threads.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a crash in one thread potentially fatal for the whole JVM?</strong> Threads share memory and the process; an OutOfMemoryError, corrupted shared state or a native crash takes down everything.</li>
+  <li><strong>What is a context switch?</strong> The OS saving one thread's registers and stack pointer and restoring another's; cheaper for threads than processes.</li>
+  <li><strong>Are Java threads OS threads?</strong> Platform threads are; virtual threads are scheduled by the JVM onto a small pool of OS carrier threads.</li>
+</ul>
+</article>
+</body>
+</html>

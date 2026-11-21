@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-022 · Your service crashes with OutOfMemoryError every few days. How do you find the memory leak?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-022" data-topic="JVM &amp; Performance">
+<h1>Your service crashes with OutOfMemoryError every few days. How do you find the memory leak?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Confirm it is a <strong>leak</strong> (old-gen usage <strong>after GC</strong> keeps rising), capture a <strong>heap dump</strong> (<code>HeapDumpOnOutOfMemoryError</code> or <code>jcmd GC.heap_dump</code>), analyse it in <strong>Eclipse MAT</strong> with the <strong>dominator tree</strong> and <strong>paths to GC roots</strong>, then fix typical causes: <strong>static or unbounded collections and caches, ThreadLocals, listeners, unclosed resources</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Leak or under-sizing?</strong> A healthy service shows a sawtooth: memory rises, a collection drops it back to a stable baseline. A leak shows the <strong>baseline after each GC creeping upward</strong> over hours or days until OOM. If the baseline is flat but peaks hit the limit, the heap is too small for the workload, not leaking. Micrometer metrics such as <code>jvm.memory.used</code> for the old-gen pool, or GC logs, show this trend. Also read the OOM message: &quot;Java heap space&quot; is a heap issue; &quot;Metaspace&quot;, &quot;Direct buffer memory&quot; or &quot;unable to create native thread&quot; point elsewhere, and a Kubernetes <strong>OOMKilled</strong> without a Java error is usually native memory or container sizing.</p>
+<p><strong>Capture evidence.</strong> Add <code>-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps</code> (on a persistent volume), so the next crash leaves an <code>.hprof</code>. Better, take a dump before the crash while usage is high: <code>jcmd &lt;pid&gt; GC.heap_dump /dumps/heap.hprof</code>. A dump triggers a full GC and pauses the process for seconds, so take it from an instance removed from the load balancer if possible. Two dumps hours apart make growth obvious. A quick <code>jcmd &lt;pid&gt; GC.class_histogram</code> comparison between two points is a cheap first look.</p>
+<p><strong>Analyse.</strong> Open the dump in <strong>Eclipse MAT</strong>. The <strong>Leak Suspects</strong> report often points directly at the problem. The <strong>dominator tree</strong> sorts objects by <strong>retained size</strong>, the memory that would be freed if that object were gone. From a suspicious object, use <strong>Path to GC Roots</strong> (excluding weak references) to see the chain keeping it alive, for example a static field in a class holding a <code>HashMap</code> with millions of entries.</p>
+<p><strong>Typical causes.</strong> Static maps used as caches without eviction; caches keyed by unbounded values (session ids, request URLs); <code>ThreadLocal</code> values never removed in pooled threads; listeners or callbacks registered and never unregistered; unclosed streams, connections or <code>ResultSet</code>s; queues growing because consumers fall behind; large in-memory result sets.</p>
+<p><strong>After the fix.</strong> Replace hand-made caches with <strong>Caffeine</strong> (size and time bounds), add <code>try</code>-with-resources, and set alerts on old-gen usage after GC and GC time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Plot old-gen usage after GC over days to confirm a leak.</li>
+  <li>Enable heap dump on OOM and take manual dumps at high usage.</li>
+  <li>Compare class histograms between two times.</li>
+  <li>Open the dump in MAT: leak suspects, dominator tree, retained sizes.</li>
+  <li>Follow paths to GC roots to find the owning reference.</li>
+  <li>Fix, deploy, and verify the post-GC baseline stays flat.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps \
+     -XX:+ExitOnOutOfMemoryError -jar orders.jar
+
+jcmd 4211 GC.class_histogram | head -20
+jcmd 4211 GC.heap_dump /dumps/orders-$(date +%s).hprof</code></pre>
+<pre><code class="language-java">// Typical culprit found via MAT: static unbounded cache
+private static final Map&lt;String, CustomerView&gt; CACHE = new HashMap&lt;&gt;();
+// Fix
+private static final Cache&lt;String, CustomerView&gt; CACHE = Caffeine.newBuilder()
+    .maximumSize(50_000).expireAfterWrite(Duration.ofMinutes(10)).build();</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Increasing <code>-Xmx</code> and calling it fixed; it only delays the crash.</li>
+  <li>Writing dumps to ephemeral container storage that disappears on restart.</li>
+  <li>Looking only at shallow size instead of retained size.</li>
+  <li>Ignoring ThreadLocals in thread pools.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I confirm it's a leak: in the metrics, heap usage after full GC keeps growing over days, rather than the heap being simply too small. I enable HeapDumpOnOutOfMemoryError with a HeapDumpPath on a persistent volume, or take a dump with jcmd GC.heap_dump while usage is high. Then I open it in Eclipse MAT, check the leak suspects report and the dominator tree by retained size, and follow the path to GC roots to see who keeps the objects alive. The usual causes are static maps or caches without eviction, ThreadLocals not removed in thread pools, listeners never unregistered and unclosed resources. I fix it, often with a bounded Caffeine cache, and add an alert on old-gen usage after GC.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you distinguish a heap leak from a native memory or Metaspace leak?</strong> Check the OOM message and pool metrics; for native, use Native Memory Tracking (<code>-XX:NativeMemoryTracking=summary</code>, <code>jcmd VM.native_memory</code>) and compare process RSS to heap.</li>
+  <li><strong>What is retained size?</strong> Memory freed if that object became unreachable, including everything only it references.</li>
+  <li><strong>Is a heap dump safe in production?</strong> It pauses the JVM and can contain personal data, so take it carefully and protect the file.</li>
+</ul>
+</article>
+</body>
+</html>

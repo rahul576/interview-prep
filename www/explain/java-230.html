@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-230 · How does the G1 garbage collector work?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-230" data-topic="JVM &amp; Performance">
+<h1>How does the G1 garbage collector work?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>G1</strong> splits the heap into <strong>equal-sized regions</strong>; eden, survivor and old are just <strong>sets of regions</strong>; <strong>young collections</strong> evacuate live young objects, <strong>concurrent marking</strong> measures live data per old region, and <strong>mixed collections</strong> evacuate the old regions with the <strong>most garbage first</strong>, all sized to a <strong>pause-time goal</strong> (<code>MaxGCPauseMillis</code>, default 200 ms); objects of half a region or more are <strong>humongous</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Regions.</strong> At startup G1 divides the heap into around 2,048 regions, each a power of two from 1 MB to 32 MB by default (<code>-XX:G1HeapRegionSize</code>). A region's role is dynamic: eden, survivor, old, humongous or free. This lets G1 resize generations freely and collect any subset of regions.</p>
+<p><strong>Young collections.</strong> When the eden regions allocated for the current cycle fill, G1 performs a <strong>stop-the-world evacuation</strong> pause, using many parallel threads: it copies live objects from eden and survivor regions into new survivor regions (or old regions when aged), then frees the evacuated regions. Copying compacts as a side effect. G1 adjusts the number of eden regions so that pauses meet the target.</p>
+<p><strong>Remembered sets.</strong> To collect a few regions without scanning the whole heap, each region keeps a <strong>remembered set</strong> of where references into it come from, maintained by write barriers and a card table.</p>
+<p><strong>Concurrent marking.</strong> When old-generation occupancy passes the <strong>Initiating Heap Occupancy Percent</strong> (adaptive, starting at 45%), G1 starts a cycle: an initial mark piggy-backed on a young pause, <strong>concurrent marking</strong> while the application runs (using snapshot-at-the-beginning), a short <strong>remark</strong> pause and a <strong>cleanup</strong> that frees completely empty regions immediately.</p>
+<p><strong>Mixed collections.</strong> Over the following pauses G1 evacuates young regions plus a chosen set of old regions with the most reclaimable garbage, the &quot;garbage first&quot; idea, until reclaiming more is not worth it.</p>
+<p><strong>Humongous objects.</strong> An object of at least half a region (a big array or buffer) is allocated directly in contiguous humongous regions. They are costly: they waste the tail of their last region, can trigger marking cycles early, and are not moved during normal evacuation. Short-lived humongous objects can be eagerly reclaimed in young pauses.</p>
+<p><strong>Full GC.</strong> If evacuation cannot find free regions (<strong>evacuation failure</strong> or &quot;to-space exhausted&quot;) or marking does not finish in time, G1 falls back to a full GC, which is parallel since Java 10 but still a long pause.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Allocate in eden regions via TLABs.</li>
+  <li>Eden full: young evacuation pause.</li>
+  <li>Old occupancy crosses IHOP: concurrent marking cycle.</li>
+  <li>Remark and cleanup; empty regions freed.</li>
+  <li>Mixed collections evacuate young plus the most garbage-rich old regions.</li>
+  <li>Repeat; full GC only as a last resort.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">java -XX:+UseG1GC -Xms8g -Xmx8g -XX:MaxGCPauseMillis=100 \
+     -Xlog:gc*,gc+humongous=debug:file=gc.log -jar api.jar
+
+# Sample log lines
+# [gc] GC(41) Pause Young (Normal) (G1 Evacuation Pause) 3100M-&gt;820M(8192M) 18.2ms
+# [gc] GC(45) Pause Young (Concurrent Start) (G1 Humongous Allocation) ...
+# [gc] GC(48) Pause Young (Mixed) (G1 Evacuation Pause) 4200M-&gt;2100M(8192M) 41.7ms</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Setting <code>-Xmn</code> or a fixed young size, which stops G1 from adapting to the pause goal.</li>
+  <li>Setting <code>MaxGCPauseMillis</code> unrealistically low (e.g. 5 ms).</li>
+  <li>Ignoring humongous allocations in logs.</li>
+  <li>Thinking G1 never does full GCs.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;G1 divides the heap into many equal-sized regions instead of fixed contiguous generations; eden, survivor and old are just sets of regions. Young collections evacuate live objects from eden and survivor regions in short parallel stop-the-world pauses, which also compacts. When old occupancy crosses a threshold, G1 runs concurrent marking alongside the application to learn how much live data each old region has, then mixed collections also evacuate the old regions with the most garbage first, hence the name. It sizes the work to meet MaxGCPauseMillis, 200 ms by default. Objects of at least half a region are humongous and allocated specially, and a full GC only happens when evacuation fails or marking can't keep up.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What causes a full GC in G1, and how do you avoid it?</strong> Evacuation failure or marking falling behind; give more heap headroom, reduce allocation, start marking earlier, avoid humongous churn.</li>
+  <li><strong>What is IHOP?</strong> The old-generation occupancy at which G1 starts concurrent marking; adaptive by default.</li>
+  <li><strong>How do you reduce humongous allocations?</strong> Smaller buffers or chunked arrays, or a larger region size.</li>
+</ul>
+</article>
+</body>
+</html>

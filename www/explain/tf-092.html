@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-092 · Changing the VM size of an AKS node pool forces replacement of the pool. How do you make the change without downtime?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-092" data-topic="Terraform">
+<h1>Changing the VM size of an AKS node pool forces replacement of the pool. How do you make the change without downtime?</h1>
+<p class="ex-meta">Terraform · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Because changing the VM size of an AKS node pool has traditionally <strong>forced replacement</strong>, the zero-downtime approach is to <strong>add a new pool with the new size</strong>, <strong>cordon and drain</strong> the old nodes while <strong>PodDisruptionBudgets</strong> keep apps available, then <strong>remove the old pool</strong> from code.</p>
+
+<h2>Detailed explanation</h2>
+<p>In the azurerm provider, <code>vm_size</code> on <code>azurerm_kubernetes_cluster_node_pool</code> (and on the default node pool) has historically been a <strong>ForceNew</strong> attribute: Terraform plans to destroy the pool and create a new one. Destroying a pool deletes all its nodes at once, so every pod on it is evicted simultaneously, ignoring the gradual rescheduling you want.</p>
+<p>The <strong>blue/green node pool</strong> pattern avoids this. You add a second pool resource with the new VM size and the <strong>same labels, taints and node selectors</strong>, so workloads can land on it. After applying, you <strong>cordon</strong> the old nodes so nothing new is scheduled there, then <strong>drain</strong> them one by one. Drain respects <strong>PodDisruptionBudgets</strong>, so a deployment with <code>minAvailable</code> keeps serving while pods move. The new pool must have enough capacity, or autoscaling headroom, for all moved pods.</p>
+<p>When the old pool is empty, remove it from the code and apply. For the <strong>system node pool</strong>, AKS requires at least one system-mode pool at all times, so create the new system pool first, then remove the old one. For the cluster's <strong>default node pool</strong>, newer azurerm versions offer <code>temporary_name_for_rotation</code>, which lets the provider rotate the default pool through a temporary pool automatically.</p>
+<p>AKS has also been adding support for <strong>resizing node pools in place via surge-based upgrades</strong>, so check the current AKS documentation and provider version before choosing the manual pattern.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Add a new node pool resource with the new <code>vm_size</code>, same labels and taints.</li>
+  <li><code>terraform apply</code> and wait until the new nodes are Ready.</li>
+  <li><code>kubectl cordon</code> all old-pool nodes.</li>
+  <li><code>kubectl drain</code> them gradually; PDBs throttle evictions.</li>
+  <li>Verify workloads are healthy on the new pool.</li>
+  <li>Remove the old pool from Terraform and apply.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;azurerm_kubernetes_cluster_node_pool&quot; &quot;apps_v2&quot; {
+  name                  = &quot;appsv2&quot;
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+  vm_size               = &quot;Standard_D8s_v5&quot;
+  auto_scaling_enabled  = true
+  min_count             = 3
+  max_count             = 10
+  node_labels           = { workload = &quot;apps&quot; }
+}</code></pre>
+<pre><code class="language-bash">kubectl cordon -l agentpool=apps
+for n in $(kubectl get nodes -l agentpool=apps -o name); do
+  kubectl drain &quot;$n&quot; --ignore-daemonsets --delete-emptydir-data --timeout=10m
+done</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Applying a plan that says &quot;must be replaced&quot; on a node pool in production.</li>
+  <li>Forgetting labels or taints on the new pool, so pods stay Pending.</li>
+  <li>Workloads without PDBs or with a single replica, which go down during drain.</li>
+  <li>Not checking quota for the new VM family before creating the pool.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Changing the VM size of a node pool has typically forced Terraform to destroy and recreate it, evicting every pod at once. Instead I add a new pool with the new size and the same labels and taints, apply, then cordon the old nodes and drain them gradually, so PodDisruptionBudgets keep applications available while pods move. Once the old pool is empty I remove it from the code. For system pools I make sure one system pool always exists, and for the default pool I'd use temporary_name_for_rotation. I'd also check whether the current AKS version supports resizing through a surge upgrade first.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you rename a node pool in code without destroying it?</strong> Change the Terraform address with a <code>moved</code> block; the AKS pool name itself is immutable.</li>
+  <li><strong>What if pods do not reschedule?</strong> Check requests vs new node capacity, taints and affinity, and PDBs that are too strict.</li>
+  <li><strong>What about quota?</strong> Request vCPU quota for the new VM family before the change.</li>
+</ul>
+</article>
+</body>
+</html>

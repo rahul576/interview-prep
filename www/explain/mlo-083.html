@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-083 · When do you compute features in real time, and when do you precompute them?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-083" data-topic="MLOps">
+<h1>When do you compute features in real time, and when do you precompute them?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Precompute in batch</strong> slowly changing features, compute <strong>at request time</strong> features from the current request, and use <strong>streaming aggregates</strong> for features over very recent events; choose by <strong>freshness value versus latency, cost and complexity</strong>, always with <strong>identical definitions for training</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Batch features</strong> (customer tenure, 90-day average spend, product attributes, embeddings) change slowly. Compute them in daily or hourly jobs in the warehouse or Spark, <strong>materialise</strong> to an online store (Redis, DynamoDB, a feature store's online layer) for millisecond lookup, and keep the history in the offline store for training. They're cheap, simple to test and backfill.</p>
+<p><strong>Request-time (on-demand) features</strong> depend on the request itself: transaction amount, device fingerprint, text of the message, distance between shipping and billing address, or ratios combining request data with stored features. They can only be computed when the request arrives, inside the latency budget.</p>
+<p><strong>Streaming features</strong> sit between the two: counts or sums over recent windows (logins in the last five minutes, card transactions in the last hour). These are computed continuously from event streams with <strong>Flink, Spark Structured Streaming or Kafka Streams</strong> (or a feature platform's streaming engine) and written to the online store, with freshness of seconds.</p>
+<p><strong>Trade-off:</strong> fresher features can improve models significantly (fraud, real-time recommendations), but streaming adds infrastructure, state management, late-event handling and on-call load. I add streaming only where an experiment shows measurable lift.</p>
+<p><strong>Consistency:</strong> whichever method, training must use the <strong>same definitions</strong> with <strong>point-in-time correct</strong> values. Feature stores (Feast, Tecton, Databricks, SageMaker, Vertex) help by defining a feature once and generating both offline (backfilled) and online values. On-demand transformations should be the same code in training and serving.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>List candidate features with their required freshness.</li>
+  <li>Classify: batch, streaming, or on-demand.</li>
+  <li>Build batch first; measure model lift from fresher variants offline by simulating freshness.</li>
+  <li>Add streaming only for features with proven value.</li>
+  <li>Define all features in one registry; materialise online and offline.</li>
+  <li>Monitor freshness and online/offline skew.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from feast import FeatureView, Field, StreamFeatureView
+from feast.on_demand_feature_view import on_demand_feature_view
+customer_profile = FeatureView(name=&quot;customer_profile&quot;, entities=[customer],
+    ttl=timedelta(days=2), schema=[Field(name=&quot;avg_spend_90d&quot;, dtype=Float32)], source=batch_src)
+
+@on_demand_feature_view(sources=[customer_profile, txn_request],
+                        schema=[Field(name=&quot;amount_vs_avg&quot;, dtype=Float64)])
+def amount_ratio(df):
+    return pd.DataFrame({&quot;amount_vs_avg&quot;: df[&quot;amount&quot;] / (df[&quot;avg_spend_90d&quot;] + 1)})</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Building streaming for everything &quot;just in case&quot;.</li>
+  <li>Different code for training and serving features (skew).</li>
+  <li>No point-in-time joins, leaking future values into training.</li>
+  <li>Not monitoring online feature freshness.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Slowly changing features like tenure or 90-day spend I precompute in batch and push to an online store; that's cheap and easy to test. Features that depend on the current request, like amount or device, are computed at request time. Features over very recent events, like logins in the last five minutes, need streaming aggregates with Flink or Spark Structured Streaming. The trade-off is freshness against latency, cost and complexity, so I only add streaming where it measurably improves the model. Whatever the method, training uses the same definitions with point-in-time correctness, ideally via a feature store.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you measure if a fresher feature is worth it?</strong> Simulate staleness offline (compute with a 24-hour versus 1-minute lag) and compare lift, then confirm with an online test.</li>
+  <li><strong>What is point-in-time correctness?</strong> Joining feature values as they were at each training event's timestamp, never later.</li>
+  <li><strong>What if the online store is slow?</strong> Timeouts with defaults and a fallback model trained to tolerate missing features.</li>
+</ul>
+</article>
+</body>
+</html>

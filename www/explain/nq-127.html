@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-127 · How does locking work in ConcurrentHashMap?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-127" data-topic="Collections">
+<h1>How does locking work in ConcurrentHashMap?</h1>
+<p class="ex-meta">Collections · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Up to <strong>Java 7</strong>, ConcurrentHashMap used <strong>lock striping</strong> with <strong>segments</strong> (16 by default, each a ReentrantLock); since <strong>Java 8</strong> the lock granularity is a <strong>single bin</strong>: <strong>CAS</strong> for empty bins, <strong>synchronized on the head node</strong> otherwise, <strong>non-blocking reads</strong>, and <code>compute</code> functions run <strong>while holding the bin lock</strong>, so keep them short.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Java 7 and earlier.</strong> The map was divided into <code>Segment</code> objects, each a small hash table extending <code>ReentrantLock</code>. The constructor's <code>concurrencyLevel</code> (default <strong>16</strong>) set the number of segments. A write hashed the key to a segment, locked it and modified its table, so at most 16 writers could proceed in parallel. Reads were mostly lock-free using volatile fields, and only retried under the lock in rare cases. Operations like <code>size()</code> first tried summing segment counts without locking and, if counts changed, locked all segments.</p>
+<p><strong>Java 8 and later.</strong> Segments were removed (the class still exists only for serialisation compatibility; <code>concurrencyLevel</code> is now just a sizing hint). The table is a single array of bins:</p>
+<ul>
+  <li><strong>Empty bin</strong>: insert with a <strong>CAS</strong>; no lock at all.</li>
+  <li><strong>Occupied bin</strong>: <code>synchronized</code> on the <strong>first node</strong> of the bin. Each bin is its own lock, so the number of possible concurrent writers grows with the table. JVM intrinsic locks are cheap when uncontended, which is the common case.</li>
+  <li><strong>Reads</strong>: volatile reads, never locked.</li>
+  <li><strong>Resize</strong>: bins are transferred one at a time under their own head lock, with helper threads.</li>
+</ul>
+<p>The important practical consequence: <code>compute</code>, <code>computeIfAbsent</code>, <code>computeIfPresent</code> and <code>merge</code> execute your <strong>function while the bin lock is held</strong>. Readers carry on unaffected, but other <strong>writers to that bin block</strong> until the function returns. If the function is slow (a remote call, a DB query), it creates contention. If it <strong>modifies the same map</strong> (for example recursive <code>computeIfAbsent</code> for memoisation), it can deadlock, livelock, or throw <code>IllegalStateException(&quot;Recursive update&quot;)</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Writer hashes key to bin.</li>
+  <li>Bin null → <code>casTabAt</code>; success ends the write.</li>
+  <li>Bin non-null → <code>synchronized (head)</code>; re-check head unchanged; update.</li>
+  <li>Compute functions run inside step 3.</li>
+  <li>Readers bypass locks entirely.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">ConcurrentHashMap&lt;String, Profile&gt; cache = new ConcurrentHashMap&lt;&gt;();
+
+// Risky: slow remote call holds the bin lock
+cache.computeIfAbsent(id, k -&gt; remoteClient.fetchProfile(k));
+
+// Better for expensive loads: cache futures, do the work outside the lock
+ConcurrentHashMap&lt;String, CompletableFuture&lt;Profile&gt;&gt; futures = new ConcurrentHashMap&lt;&gt;();
+CompletableFuture&lt;Profile&gt; f = futures.computeIfAbsent(id,
+        k -&gt; CompletableFuture.supplyAsync(() -&gt; remoteClient.fetchProfile(k), ioPool));
+
+// Never: modifying the same map inside compute
+// cache.computeIfAbsent(a, k -&gt; cache.computeIfAbsent(b, ...)); // recursive update</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Java 7</th><th>Java 8+</th></tr></thead>
+<tbody>
+<tr><td>Lock unit</td><td>segment (default 16)</td><td>single bin</td></tr>
+<tr><td>Lock type</td><td>ReentrantLock</td><td>CAS + synchronized on head</td></tr>
+<tr><td>Max parallel writers</td><td>number of segments</td><td>number of bins</td></tr>
+<tr><td>Reads</td><td>mostly lock-free</td><td>lock-free</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying Java 8+ still uses segments.</li>
+  <li>Remote I/O inside <code>computeIfAbsent</code>.</li>
+  <li>Recursive modification of the same map inside compute.</li>
+  <li>Thinking <code>synchronized</code> means slow; uncontended locks are cheap.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Up to Java 7 it used lock striping: the map was split into segments, sixteen by default, each a small hash table with its own ReentrantLock, so up to sixteen writers could work at once. From Java 8 segments were removed and the lock granularity is a single bin: inserting into an empty bin is a lock-free CAS, otherwise the writer synchronises on the bin's first node, and readers never lock. Because compute, computeIfAbsent and merge run my function while holding the bin lock, I keep those functions short and never update other entries of the same map inside them.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Risk of a remote call inside computeIfAbsent?</strong> It holds the bin lock for the duration, blocking other writers and risking timeouts piling up; cache a future or use Caffeine.</li>
+  <li><strong>What is concurrencyLevel now?</strong> Only an initial sizing hint.</li>
+  <li><strong>Why synchronized instead of ReentrantLock?</strong> Lower memory per bin and cheap uncontended locking.</li>
+</ul>
+</article>
+</body>
+</html>

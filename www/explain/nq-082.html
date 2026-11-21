@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-082 · What is the purpose of the volatile keyword?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-082" data-topic="Concurrency">
+<h1>What is the purpose of the volatile keyword?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>volatile</code></strong> guarantees <strong>visibility</strong> (every read sees the latest write) and <strong>ordering</strong> (no reordering across the access, via <strong>happens-before</strong>) for a single field, but it does <strong>not</strong> make compound operations like <code>count++</code> <strong>atomic</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Modern CPUs have caches and store buffers, and the JIT compiler may keep a field in a register or hoist a read out of a loop. So without any synchronisation, a thread can keep reading an old value forever. The classic bug: <code>while (!stopped) { work(); }</code> in one thread, and <code>stopped = true</code> in another; the JIT can turn the loop into <code>if (!stopped) while (true)</code> and it never ends.</p>
+<p>Declaring the field <strong><code>volatile</code></strong> fixes this. Under the <strong>Java Memory Model</strong>, a <strong>write to a volatile variable happens-before every subsequent read of that variable</strong>. Two consequences:</p>
+<ul>
+  <li><strong>Visibility</strong>: readers always see the most recent write.</li>
+  <li><strong>Ordering and publication</strong>: everything the writer did <em>before</em> the volatile write is visible to a reader <em>after</em> it reads that value. So you can prepare an object, then publish it by assigning it to a volatile field, and readers see it fully initialised. The compiler and CPU may not reorder ordinary accesses across the volatile access in a way that breaks this.</li>
+</ul>
+<p>What <code>volatile</code> does <strong>not</strong> do is <strong>atomicity</strong> of compound actions. <code>count++</code> on a volatile int is still read, add, write; two threads can interleave and lose an update. Check-then-act on a volatile reference is equally unsafe. For that you need <code>synchronized</code>, a <code>Lock</code> or atomic classes (which internally use volatile semantics plus CAS). Reads and writes of <code>volatile long</code> and <code>double</code> are atomic, unlike non-volatile ones, which may be split on some platforms.</p>
+<p>Good uses: <strong>stop or status flags</strong>, a <strong>configuration reference</strong> replaced wholesale by one writer, and the instance field in <strong>double-checked locking</strong>. Volatile access is cheaper than locking but not free, as it limits optimisations.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A writes ordinary fields, then writes the volatile field.</li>
+  <li>The JVM inserts memory barriers so those writes become visible no later than the volatile write.</li>
+  <li>Thread B reads the volatile field and sees A's value.</li>
+  <li>Because of happens-before, B also sees A's earlier ordinary writes.</li>
+  <li>No lock is taken; nothing prevents interleaving of multi-step operations.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Worker implements Runnable {
+    private volatile boolean running = true;     // without volatile the loop may never stop
+
+    public void run() { while (running) { doWork(); } }
+    public void stop() { running = false; }
+}
+
+// Double-checked locking needs volatile
+class Config {
+    private static volatile Config instance;
+    static Config get() {
+        Config c = instance;
+        if (c == null) {
+            synchronized (Config.class) {
+                c = instance;
+                if (c == null) instance = c = new Config();   // safely published
+            }
+        }
+        return c;
+    }
+}
+
+volatile int hits;
+void hit() { hits++; }   // still NOT atomic: use AtomicInteger</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>volatile</code> for counters or check-then-act logic.</li>
+  <li>Making a reference volatile and assuming the referenced object's fields become thread-safe.</li>
+  <li>Omitting <code>volatile</code> in double-checked locking, risking a partially constructed object.</li>
+  <li>Sprinkling <code>volatile</code> everywhere instead of designing the sharing.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;volatile guarantees visibility and ordering for a field. Without it a thread may keep reading a cached value and never see another thread's update, like a while-not-stopped loop that never ends. A write to a volatile variable happens-before every later read of it, so readers see the latest value and also everything the writer did before that write, and the JVM and CPU can't reorder across it. But it doesn't give atomicity: count++ on a volatile int still loses updates. I use it for simple flags, status fields written by one thread, and the instance field in double-checked locking.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is volatile needed in double-checked locking?</strong> Without it, the reference can be published before the constructor's writes are visible, so another thread may see a partially constructed object.</li>
+  <li><strong>Is a volatile reference to a mutable list thread-safe?</strong> No; only the reference is volatile, not the list's contents.</li>
+  <li><strong>Are long and double writes atomic?</strong> Not guaranteed for non-volatile fields; volatile makes them atomic.</li>
+</ul>
+</article>
+</body>
+</html>

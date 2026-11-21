@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-076 · How does champion-challenger work in a continuous training setup?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-076" data-topic="MLOps">
+<h1>How does champion-challenger work in a continuous training setup?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In <strong>champion-challenger</strong>, every retrain creates a <strong>challenger</strong> that is compared with the production <strong>champion</strong> on the <strong>same recent evaluation data</strong>, promoted only if it <strong>wins by a margin without guardrail regressions</strong>, ideally confirmed <strong>online</strong> via shadow or canary, with the decision <strong>recorded in the registry</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Continuous training produces a new model regularly, but newer isn't automatically better. A noisy retrain, a data glitch or a pipeline bug can produce a worse model. Champion-challenger is the gate that decides whether to switch.</p>
+<p><strong>Fair comparison:</strong> both models are scored on the <strong>same evaluation data</strong>, ideally from a period <strong>after</strong> both training windows (an out-of-time set), so neither has seen it. Evaluate the <strong>primary metric</strong> (for example PR-AUC or revenue lift), plus <strong>guardrails</strong>: important segments, fairness metrics, calibration, latency and model size.</p>
+<p><strong>Promotion rule:</strong> the challenger must beat the champion by a defined margin (for example +0.5 points PR-AUC, or statistically significant on a bootstrap) and must not regress any guardrail beyond a tolerance. The margin avoids <strong>churning</strong> models for noise; each swap has costs (downstream thresholds, explanations, operational risk).</p>
+<p><strong>Online confirmation:</strong> for important models, offline wins go through <strong>shadow</strong> and then a <strong>canary or A/B test</strong>, because offline metrics don't capture user reactions or feedback effects.</p>
+<p><strong>Registry:</strong> registries support <strong>aliases</strong> (MLflow <code>@champion</code>, <code>@challenger</code>) or stages, so promotion means moving the alias; serving loads <code>models:/fraud@champion</code>. The decision, metrics, data version and approver are recorded for audit.</p>
+<p><strong>Signals:</strong> if challengers lose repeatedly, the issue is likely data, features or labels rather than model freshness; retraining more won't fix it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Scheduled or drift-triggered pipeline trains a challenger.</li>
+  <li>Evaluation step scores champion and challenger on the same recent holdout.</li>
+  <li>Gate checks margin and guardrails per segment.</li>
+  <li>Passing challengers enter shadow, then canary.</li>
+  <li>On success, move the champion alias; keep the old one for rollback.</li>
+  <li>Log the decision and notify owners.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from mlflow import MlflowClient
+c = MlflowClient()
+champ = c.get_model_version_by_alias(&quot;fraud&quot;, &quot;champion&quot;)
+chall = c.get_model_version_by_alias(&quot;fraud&quot;, &quot;challenger&quot;)
+m_champ, m_chall = evaluate(champ, holdout), evaluate(chall, holdout)
+if (m_chall[&quot;pr_auc&quot;] - m_champ[&quot;pr_auc&quot;] &gt;= 0.005
+        and all(m_chall[&quot;seg&quot;][s] &gt;= m_champ[&quot;seg&quot;][s] - 0.01 for s in SEGMENTS)):
+    c.set_registered_model_alias(&quot;fraud&quot;, &quot;champion&quot;, chall.version)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Comparing on different test sets, or on data the challenger was trained on.</li>
+  <li>Promoting for tiny, noisy improvements.</li>
+  <li>Ignoring segment regressions hidden by overall gains.</li>
+  <li>No record of why a model was promoted.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The champion is the production model and each retrain produces a challenger. I evaluate both on the same recent out-of-time data, with important segments and fairness checks. The challenger is promoted only if it beats the champion by a set margin on the primary metric without regressing guardrails, which avoids swapping models for noise. For important models I confirm online with shadow and canary. In the registry, promotion just moves the champion alias, and the decision and metrics are recorded. If challengers keep losing, that tells me to look at the data and features.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Challenger better overall but worse for one important segment?</strong> Don't auto-promote; investigate, fix with targeted data or weighting, or route that segment to the champion temporarily, with an explicit decision.</li>
+  <li><strong>How do you pick the margin?</strong> From the metric's variance (bootstrap confidence intervals) and the cost of switching.</li>
+  <li><strong>Who approves?</strong> Automated for low-risk models; human sign-off for high-risk ones.</li>
+</ul>
+</article>
+</body>
+</html>

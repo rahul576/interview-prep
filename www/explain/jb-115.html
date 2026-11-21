@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-115 · How would you diagnose thread starvation in a production application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-115" data-topic="Concurrency">
+<h1>How would you diagnose thread starvation in a production application?</h1>
+<p class="ex-meta">Concurrency · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Thread starvation shows as <strong>rising latency and queued work with low CPU</strong>; diagnose it with <strong>several thread dumps</strong> taken seconds apart plus <strong>pool metrics</strong>, looking for pool threads all <strong>BLOCKED/WAITING on the same resource</strong>, then fix the cause (blocking calls in small pools, nested waits, long locks).</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Symptoms</strong> come first. Response times and timeouts climb, request or task queues grow, but <strong>CPU stays low</strong>: the work is not slow to compute, threads are stuck waiting. Health checks may fail because even they cannot get a thread. Garbage collection and the database may look fine.</p>
+<p><strong>Thread dumps</strong> are the main tool. Take three to five dumps 5-10 seconds apart with <code>jcmd &lt;pid&gt; Thread.print</code> or <code>jstack &lt;pid&gt;</code> (or the Spring Boot Actuator <code>threaddump</code> endpoint), so you can tell stuck threads from merely busy ones. Group threads by pool name (<code>http-nio-8080-exec-<em></code>, <code>ForkJoinPool.commonPool-worker-</em></code>, <code>task-*</code>) and by stack. If all 200 Tomcat threads sit in <code>HikariPool.getConnection</code>, the connection pool is the bottleneck. If all common-pool workers are <code>WAITING</code> in <code>CompletableFuture.join</code>, tasks are waiting on other tasks queued in the same pool: <strong>pool-induced deadlock</strong>. If many threads are <code>BLOCKED</code> on one monitor, find the holder's stack. Tools like fastThread or IntelliJ's dump analyser help group them. For virtual threads use <code>jcmd &lt;pid&gt; Thread.dump_to_file -format=json</code>.</p>
+<p><strong>Metrics</strong> confirm and quantify: with Micrometer, <code>executor.active</code>, <code>executor.queued</code>, <code>executor.pool.size</code> and rejected counts, Tomcat busy threads, and Hikari <code>hikaricp.connections.pending</code>. A pool permanently at max active with a growing queue is starved. <strong>JFR</strong> (Java Flight Recorder) shows thread park and monitor-blocked events with durations.</p>
+<p><strong>Common causes</strong>: blocking I/O on a small pool (or the common pool), nested submit-and-wait in the same bounded pool, long-held locks with slow calls inside, missing timeouts on HTTP or DB calls, unfair locks letting some threads always win, and one slow tenant consuming all threads. <strong>Fixes</strong>: timeouts everywhere, separate pools per workload (bulkheads), right-size pools against connection pools, avoid blocking inside async pools, move blocking work to dedicated executors or virtual threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Notice symptoms: latency up, queues up, CPU low.</li>
+  <li>Take several thread dumps a few seconds apart.</li>
+  <li>Group by pool and identical stacks; find what they all wait on.</li>
+  <li>Correlate with executor, Tomcat and connection-pool metrics and JFR.</li>
+  <li>Identify root cause (resource, lock, nested wait, missing timeout).</li>
+  <li>Fix and add alerts on pool saturation and queue depth.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-text">&quot;http-nio-8080-exec-187&quot; #212 daemon prio=5 WAITING (parking)
+   at jdk.internal.misc.Unsafe.park
+   at java.util.concurrent.locks.LockSupport.parkNanos
+   at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:181)
+   at com.example.OrderRepository.findOpen(OrderRepository.java:42)
+-- 200 of 200 exec threads show this stack in all 4 dumps
+-- hikaricp.connections.active = 10/10, pending = 190</code></pre>
+<pre><code class="language-bash">for i in 1 2 3 4; do jcmd $(pgrep -f app.jar) Thread.print &gt; dump_$i.txt; sleep 5; done
+grep -h -A3 '&quot;http-nio' dump_*.txt | grep 'at ' | sort | uniq -c | sort -rn | head</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Taking a single thread dump and drawing conclusions.</li>
+  <li>Simply increasing thread count, which just moves the queue to the connection pool.</li>
+  <li>Running blocking calls in <code>ForkJoinPool.commonPool()</code> via parallel streams or default <code>supplyAsync</code>.</li>
+  <li>No timeouts on outbound calls, so threads wait indefinitely.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Starvation shows up as rising latency and timeouts while CPU stays low, because work is queued but threads can't make progress. I take several thread dumps a few seconds apart with jcmd Thread.print and compare them. If all threads of one pool, say Tomcat or the ForkJoin common pool, are blocked or waiting on the same lock, socket read, connection pool or future, that's the bottleneck. I confirm with Micrometer metrics like active threads, queue size and rejections, and Hikari pending connections. Typical causes are blocking I/O in small pools, tasks waiting on other tasks in the same pool, long-held locks and missing timeouts, so fixes are separate pools, timeouts and proper sizing.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is calling join() on a CompletableFuture inside the common pool risky?</strong> The worker blocks waiting for a task that may be queued behind it in the same small pool, starving or deadlocking the pool.</li>
+  <li><strong>What is a bulkhead?</strong> Isolating workloads in separate pools so one slow dependency cannot consume all threads.</li>
+  <li><strong>How do you find the lock holder?</strong> Thread dumps show &quot;waiting to lock &lt;0x...&gt;&quot; and the thread with &quot;locked &lt;0x...&gt;&quot; for the same address.</li>
+</ul>
+</article>
+</body>
+</html>

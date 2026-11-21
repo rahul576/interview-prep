@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-335 · After a release, error rates rise slowly over several hours. How do you investigate?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-335" data-topic="Troubleshooting">
+<h1>After a release, error rates rise slowly over several hours. How do you investigate?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong>Correlate the timing</strong> with the release and other changes; a <strong>slow rise over hours suggests accumulation</strong> — memory, connection or thread leaks, growing queues, filling disks — so <strong>compare old and new versions</strong> (ideally a canary), check <strong>dependencies</strong>, and <strong>roll back</strong> to protect users and confirm the hypothesis.</p>
+
+<h2>Detailed explanation</h2>
+<p>The shape of the graph is a clue. An error rate that jumps the minute a release goes out points to a functional bug, bad config or an incompatible dependency. A rate that <strong>climbs slowly for hours</strong> suggests something that <strong>accumulates</strong> with time or traffic:</p>
+<ul>
+  <li>A <strong>memory leak</strong>: heap after garbage collection grows, GC pauses lengthen, latency rises, and eventually pods are <strong>OOMKilled</strong> and restart, causing errors during restarts.</li>
+  <li><strong>Connection or thread leaks</strong>: a code path that does not return connections to the pool; requests start waiting and timing out once the pool is exhausted.</li>
+  <li><strong>Growing queues or backlogs</strong>: a consumer slower than before, so lag grows until timeouts hit.</li>
+  <li><strong>Disk filling</strong> with logs or temp files, or a cache that grows without eviction.</li>
+  <li><strong>Dependency effects</strong>: a new query without an index gets slower as a table grows, or a lower <strong>cache hit rate</strong> gradually overloads the database.</li>
+</ul>
+<p>First I <strong>correlate</strong>: release time, config or feature flag changes, traffic patterns (is this just the daily peak?) and dependency incidents. Then I <strong>compare versions</strong> side by side. If there was a <strong>canary</strong>, I compare canary and baseline on heap after GC, open connections, thread count, restarts, p99 latency and error types. Without a canary, I compare the same hours on the previous day.</p>
+<p>If evidence points to the release, I <strong>roll back</strong>: it protects users and also <strong>tests the hypothesis</strong> — if errors stop climbing after rollback, the release is confirmed as the cause. Then, before fixing forward, I take <strong>heap dumps</strong>, thread dumps or traces from the new version in a test environment to find the actual leak.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Overlay release markers on error and latency graphs.</li>
+  <li>Rule out traffic peaks and dependency incidents.</li>
+  <li>Check accumulation metrics: heap after GC, connections, threads, queue lag, disk.</li>
+  <li>Compare canary vs baseline, or today vs yesterday.</li>
+  <li>Roll back and watch whether the trend stops.</li>
+  <li>Analyse dumps or profiles and fix forward with a test.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-promql"># heap used after GC trend per version
+max by (version) (jvm_memory_used_bytes{area=&quot;heap&quot;})
+# pool exhaustion
+max by (pod) (hikaricp_connections_pending)
+# restarts
+increase(kube_pod_container_status_restarts_total{container=&quot;orders&quot;}[1h])</code></pre>
+<pre><code class="language-bash">jcmd 1 GC.heap_dump /tmp/orders.hprof    # analyse with Eclipse MAT</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming the release is innocent because the first hour looked fine.</li>
+  <li>Restarting pods regularly to hide a leak.</li>
+  <li>Fixing forward under pressure without confirming the cause.</li>
+  <li>Canaries that only compare error rates, not resource trends.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;First I correlate the timing with the release and anything else that changed, like config, traffic or a dependency. A slow rise over hours rather than a jump suggests accumulation: a memory leak causing GC pressure and OOM restarts, connection or thread leaks exhausting pools, growing queues, or a disk filling with logs. I compare old and new versions, ideally canary versus baseline, on heap after GC, open connections, restarts and latency percentiles, and check database load and cache hit rate. If evidence points to the release, I roll back to protect users and confirm the hypothesis, then analyse heap dumps or traces before fixing forward.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Which metrics would you add to the canary?</strong> Heap after GC, pool usage, thread count, restarts and p99 latency, analysed over a longer window.</li>
+  <li><strong>Why does a canary sometimes miss this?</strong> It runs too briefly or at too low traffic for accumulation to show.</li>
+  <li><strong>How do you find a connection leak?</strong> Pool leak detection logs with stack traces, or checking code paths that skip close on exceptions.</li>
+</ul>
+</article>
+</body>
+</html>

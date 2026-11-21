@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-226 · How do you make a class thread-safe? Describe the main strategies.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-226" data-topic="Concurrency">
+<h1>How do you make a class thread-safe? Describe the main strategies.</h1>
+<p class="ex-meta">Concurrency · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Make a class thread-safe by, in order of preference, <strong>not sharing state</strong> (confinement), <strong>not mutating it</strong> (immutability), or <strong>coordinating access</strong> (locks, atomics, concurrent collections), plus <strong>safe publication</strong> and <strong>documented guarantees</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A class is <strong>thread-safe</strong> if it behaves correctly when used from multiple threads without callers adding their own synchronisation. All thread-safety bugs come from <strong>shared mutable state</strong>, so the strategies attack either &quot;shared&quot; or &quot;mutable&quot; first, and only coordinate access when both are unavoidable.</p>
+<p><strong>Immutability</strong> is the strongest tool: <code>final</code> fields, no setters, defensive copies of mutable inputs. Immutable objects can be shared freely. <strong>Thread confinement</strong> means data is only ever touched by one thread: local variables, request-scoped objects, <code>ThreadLocal</code>, or an actor or single-thread executor that owns the state.</p>
+<p>When state must be shared and mutable, protect every <strong>invariant</strong> with the same lock. <strong>Compound actions</strong> such as check-then-act or read-modify-write must be atomic as a whole, not just each call. Keep critical sections short and never call alien methods while holding a lock. For single variables, <strong>atomic classes</strong> (<code>AtomicLong</code>, <code>LongAdder</code>) use CAS without locks; for collections use <code>ConcurrentHashMap</code>, <code>CopyOnWriteArrayList</code> or <code>BlockingQueue</code>, and use their atomic methods (<code>computeIfAbsent</code>, <code>merge</code>).</p>
+<p>Finally, <strong>safe publication</strong>: another thread must see a fully constructed object. That happens through <code>final</code> fields, a <code>volatile</code> reference, a lock, a concurrent collection or static initialisation. Do not let <code>this</code> escape from the constructor. And <strong>document</strong> the policy, for example &quot;thread-safe; guarded by <code>lock</code>&quot; or &quot;not thread-safe&quot;, so maintainers do not break it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Identify the state and its invariants (which fields must change together).</li>
+  <li>Remove sharing where you can: confine to a thread or request.</li>
+  <li>Remove mutation where you can: make the object or its value types immutable.</li>
+  <li>For what remains, pick one guard per invariant: a lock, an atomic or a concurrent collection.</li>
+  <li>Make compound actions atomic and publish objects safely.</li>
+  <li>Document the guarantee and test under concurrency (stress tests, jcstress for low-level code).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">/** Thread-safe. All mutable state guarded by 'lock'. */
+public final class RateCounter {
+    private final Object lock = new Object();
+    private long windowStart;   // guarded by lock
+    private int count;          // guarded by lock
+
+    public boolean tryAcquire(int limit, long nowMillis) {
+        synchronized (lock) {                // compound action is atomic
+            if (nowMillis - windowStart &gt;= 1000) {
+                windowStart = nowMillis;
+                count = 0;
+            }
+            if (count &gt;= limit) return false;
+            count++;
+            return true;
+        }
+    }
+}
+
+// Simpler alternative for independent counters
+private final ConcurrentHashMap&lt;String, LongAdder&gt; hits = new ConcurrentHashMap&lt;&gt;();
+void hit(String key) { hits.computeIfAbsent(key, k -&gt; new LongAdder()).increment(); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a thread-safe collection but doing check-then-act across two calls.</li>
+  <li>Guarding a field with different locks in different methods.</li>
+  <li>Leaking <code>this</code> from a constructor (starting a thread or registering a listener).</li>
+  <li>Returning internal mutable collections, so callers modify state without the lock.</li>
+  <li>Making everything <code>synchronized</code>, which hurts throughput and risks deadlocks.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My first choice is to avoid shared mutable state: make objects immutable, or confine data to one thread, like local or request-scoped variables. When state really is shared, I protect each invariant with one lock and make compound actions like check-then-act atomic, keeping critical sections small, or I use atomic variables and concurrent collections such as ConcurrentHashMap with their atomic methods. I make sure objects are safely published, through final fields, volatile or a concurrent container, and I document the class's thread-safety guarantee so nobody breaks it later.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is a class with only final fields always thread-safe?</strong> No; if a final field refers to a mutable object such as an ArrayList that is modified, the class is not thread-safe.</li>
+  <li><strong>What is safe publication?</strong> Making a fully constructed object visible to other threads through a happens-before edge, such as volatile, final fields or a lock.</li>
+  <li><strong>When would you use LongAdder over AtomicLong?</strong> For heavily contended counters that are written often and read rarely.</li>
+</ul>
+</article>
+</body>
+</html>

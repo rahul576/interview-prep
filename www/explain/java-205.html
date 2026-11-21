@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-205 · How does Java serialization work, and why is it discouraged today?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-205" data-topic="Core Java &amp; OOP">
+<h1>How does Java serialization work, and why is it discouraged today?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Java serialization writes object graphs of <strong>Serializable</strong> classes to a binary stream with <strong>ObjectOutputStream</strong>, using <strong>serialVersionUID</strong> for versioning and skipping <strong>transient</strong> fields; it is discouraged because of <strong>deserialization attacks</strong>, tight coupling to internals and poor portability.</p>
+
+<h2>Detailed explanation</h2>
+<p>A class opts in by implementing the marker interface <code>java.io.Serializable</code>. <code>ObjectOutputStream.writeObject</code> walks the whole object graph, writing class descriptors and non-transient, non-static field values; <code>ObjectInputStream.readObject</code> recreates the objects <strong>without calling their constructors</strong> (only the no-arg constructor of the first non-serialisable superclass runs). Hooks such as <code>writeObject</code>, <code>readObject</code>, <code>readResolve</code> and <code>writeReplace</code> customise the process.</p>
+<p><strong>serialVersionUID</strong> identifies the class version. If you do not declare it, the JVM computes one from the class structure, so even adding a method can change it and cause <code>InvalidClassException</code> when reading old data. Declare it explicitly if you must serialise.</p>
+<p>Why it is discouraged:</p>
+<ul>
+  <li><strong>Security.</strong> Deserialising untrusted bytes can execute code through <strong>gadget chains</strong>: classes on the classpath whose readObject or related methods do dangerous things. This caused major remote-code-execution incidents (for example via Apache Commons Collections in many app servers). Oracle's own architects have called serialization a &quot;horrible mistake&quot;.</li>
+  <li><strong>Fragility.</strong> The format exposes private fields, so refactoring breaks compatibility, and invariants enforced in constructors are bypassed.</li>
+  <li><strong>Interoperability and performance.</strong> It is Java-only, verbose and slow compared with modern formats.</li>
+</ul>
+<p>Prefer <strong>JSON</strong> (Jackson), <strong>Protocol Buffers</strong> or <strong>Avro</strong> with explicit schemas for APIs, messages and caches. If you are stuck with it, use <strong>deserialization filters</strong> (<code>ObjectInputFilter</code>, Java 9, and context-specific filter factories in Java 17) to allow-list classes, and use the serialization proxy pattern.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Class implements Serializable; optionally declares <code>serialVersionUID</code>.</li>
+  <li><code>writeObject</code> writes class metadata and field values recursively, handling shared references and cycles.</li>
+  <li>transient and static fields are skipped.</li>
+  <li><code>readObject</code> allocates objects without constructors and fills fields.</li>
+  <li>Filters (if configured) accept or reject classes before instantiation.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class Session implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private String userId;
+    private transient String accessToken;   // not written
+}
+
+// Allow-list classes when reading
+ObjectInputFilter filter = ObjectInputFilter.Config.createFilter(
+        &quot;com.shop.Session;java.base/*;!*&quot;);
+try (var in = new ObjectInputStream(input)) {
+    in.setObjectInputFilter(filter);
+    Session s = (Session) in.readObject();
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Deserialising data from network, cookies or queues without filters.</li>
+  <li>Relying on the generated serialVersionUID.</li>
+  <li>Assuming constructors and validation run on deserialisation.</li>
+  <li>Using Java serialization for caches (for example Redis) that outlive deployments.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A class implements the Serializable marker interface, and ObjectOutputStream writes the object graph into a binary format, skipping transient and static fields. serialVersionUID identifies the class version, and a mismatch throws InvalidClassException. It's discouraged because deserialising untrusted data has led to many remote code execution attacks via gadget chains, it couples the format to private internals and bypasses constructors, and it's Java-only and slow. I use JSON with Jackson or Protobuf and Avro for messaging. If it's unavoidable, I configure ObjectInputFilter allow-lists.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to a static field during serialization?</strong> It isn't serialised; after reading you see the current class value.</li>
+  <li><strong>What does readResolve do?</strong> Replaces the deserialised object, e.g. to preserve singletons.</li>
+  <li><strong>How do records serialise?</strong> Through their canonical constructor, which is safer.</li>
+</ul>
+</article>
+</body>
+</html>

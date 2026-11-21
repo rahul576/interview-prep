@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-250 · How do you handle duplicate messages in Kafka consumers?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-250" data-topic="Kafka">
+<h1>How do you handle duplicate messages in Kafka consumers?</h1>
+<p class="ex-meta">Kafka · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With <strong>at-least-once</strong> delivery duplicates are normal, so make consumers <strong>idempotent</strong>: record each <strong>event id</strong> under a <strong>unique constraint in the same transaction</strong> as the business change, or design operations to be <strong>naturally idempotent</strong> (upserts, set-not-increment, version checks).</p>
+
+<h2>Detailed explanation</h2>
+<p>Duplicates are not a bug in Kafka; they are the price of not losing data. A consumer can process a record and crash before committing its offset, a rebalance can hand a partition to another consumer mid-batch, a producer can resend a message after a timeout (without idempotence), or an upstream service can publish the same business event twice. In all cases the consumer sees the record again.</p>
+<p>The robust pattern is the <strong>idempotent consumer</strong>. Every event carries a stable, unique <strong>event id</strong> (a UUID set by the producer, or a business key such as <code>paymentId</code>). The consumer keeps a <code>processed_events</code> table with a <strong>primary key or unique constraint</strong> on that id and inserts into it <strong>in the same local database transaction</strong> as the business update. If the event was already handled, the insert fails (or <code>ON CONFLICT DO NOTHING</code> affects zero rows) and the consumer skips the work but still commits the offset. Because both writes share one transaction, there is no window where the change is applied but the id is not recorded.</p>
+<p>Even better is <strong>natural idempotency</strong>: &quot;set order status to PAID&quot; can run twice safely, &quot;add 10 to balance&quot; cannot. Use <strong>upserts</strong>, absolute values instead of deltas, and <strong>optimistic version checks</strong> (apply event version 7 only if the stored version is 6). For external side effects like sending emails or calling a payment API, pass an <strong>idempotency key</strong> to the downstream system.</p>
+<p>Kafka's <strong>exactly-once semantics</strong> (idempotent producer plus transactions) only cover <strong>Kafka-to-Kafka</strong> read-process-write flows. A database write or HTTP call inside your listener is outside that transaction, so you still need idempotency.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Producer attaches <code>eventId</code> in the payload or a header.</li>
+  <li>Consumer begins a DB transaction.</li>
+  <li>Insert <code>eventId</code> into <code>processed_events</code>; if it already exists, skip.</li>
+  <li>Apply the business change in the same transaction; commit.</li>
+  <li>Commit the Kafka offset afterwards.</li>
+  <li>A scheduled job purges ids older than the replay window.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">@KafkaListener(topics = &quot;payments&quot;, groupId = &quot;orders&quot;)
+@Transactional
+public void onPaymentCompleted(PaymentCompleted evt) {
+    int inserted = jdbc.update(&quot;&quot;&quot;
+        INSERT INTO processed_events(event_id, processed_at)
+        VALUES (?, now()) ON CONFLICT (event_id) DO NOTHING&quot;&quot;&quot;, evt.eventId());
+    if (inserted == 0) return;                 // duplicate, already handled
+    orderRepository.markPaid(evt.orderId());   // natural idempotency too
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Technique</th><th>Works for</th><th>Limitation</th></tr></thead>
+<tbody>
+<tr><td>Processed-id table</td><td>Any DB side effect</td><td>Storage and cleanup</td></tr>
+<tr><td>Natural idempotency / upsert</td><td>State updates</td><td>Not for counters/deltas</td></tr>
+<tr><td>Version check</td><td>Ordered entity events</td><td>Needs versions in events</td></tr>
+<tr><td>Kafka transactions</td><td>Kafka-to-Kafka only</td><td>Not external systems</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Recording the id in a separate transaction from the business change.</li>
+  <li>Using the Kafka offset as the dedup key; republished events get new offsets.</li>
+  <li>Believing <code>enable.idempotence</code> removes consumer-side duplicates.</li>
+  <li>Never purging the processed-id table.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I assume duplicates will happen, because with at-least-once delivery a consumer can process a record and crash before committing. So my consumers are idempotent. Each event has a unique id, and in the same database transaction as the business change I insert that id into a table with a unique constraint; if it already exists, I skip the work. Where I can, I make operations naturally idempotent, setting a status instead of incrementing, using upserts or version checks. Kafka's exactly-once only covers Kafka-to-Kafka flows, so it does not replace this for database writes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How long do you keep processed ids?</strong> Longer than the maximum redelivery or replay window, often days, then purge or partition the table.</li>
+  <li><strong>What about non-transactional side effects like emails?</strong> Use an idempotency key with the provider or an outbox.</li>
+  <li><strong>Why not dedupe in Redis?</strong> Possible, but without a shared transaction you risk gaps between the check and the write.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-246 · What is database denormalization, and when would you use it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-246" data-topic="Databases &amp; SQL">
+<h1>What is database denormalization, and when would you use it?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong>Denormalization</strong> deliberately adds <strong>redundant or precomputed data</strong> to make <strong>reads faster</strong> by avoiding expensive joins and aggregations, used for <strong>read-heavy, reporting and large-scale</strong> workloads, at the cost of <strong>more storage, more complex writes and possible inconsistency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A normalised schema is the right starting point for transactional data, but some queries become too slow or too costly at scale: a dashboard that joins six tables and aggregates millions of rows on every page load, or a product listing that needs data from many tables. Denormalisation trades write-time effort for read-time speed.</p>
+<p>Common techniques:</p>
+<ul>
+  <li><strong>Copying columns</strong>: store <code>customer_name</code> on orders for listing pages, or product name and <strong>price on each order line</strong>, which also preserves the historical value.</li>
+  <li><strong>Precomputed aggregates</strong>: <code>order_count</code> or <code>lifetime_value</code> on customer, a <code>total</code> on orders.</li>
+  <li><strong>Summary tables and materialised views</strong>: daily sales per store refreshed by a job (<code>REFRESH MATERIALIZED VIEW CONCURRENTLY</code> in PostgreSQL).</li>
+  <li><strong>Star schemas</strong> in data warehouses: fact tables with wide, denormalised dimension tables.</li>
+  <li><strong>Read models (CQRS)</strong> and <strong>search indexes</strong> in Elasticsearch/OpenSearch built from events.</li>
+  <li>In <strong>NoSQL</strong>, denormalisation is the default: one Cassandra table per query, embedded documents in MongoDB, single-table design in DynamoDB.</li>
+</ul>
+<p>Costs: every copy must be updated when the source changes, writes become slower and more complex, storage grows, and bugs or failures lead to <strong>inconsistent copies</strong>. You therefore need a clear <strong>source of truth</strong> and a sync mechanism: update both in the same transaction, database triggers, domain events or CDC (Debezium) to update read models, or periodic batch rebuilds. Decide how stale each copy may be.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Start normalised and measure the slow query.</li>
+  <li>Try indexes and query rewrites first.</li>
+  <li>Identify the redundant data or aggregate that removes the expensive work.</li>
+  <li>Choose the sync mechanism and acceptable staleness.</li>
+  <li>Implement and backfill.</li>
+  <li>Monitor drift, for example with reconciliation jobs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">-- Precomputed counter kept in the same transaction
+BEGIN;
+INSERT INTO orders(id, customer_id, total) VALUES (991, 42, 49.00);
+UPDATE customer SET order_count = order_count + 1, lifetime_value = lifetime_value + 49.00
+WHERE id = 42;
+COMMIT;
+
+-- Summary for dashboards
+CREATE MATERIALIZED VIEW daily_sales AS
+SELECT store_id, date_trunc('day', created_at) AS day, SUM(total) AS revenue
+FROM orders GROUP BY store_id, day;
+CREATE UNIQUE INDEX ON daily_sales(store_id, day);
+REFRESH MATERIALIZED VIEW CONCURRENTLY daily_sales;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Denormalising before measuring a real performance problem.</li>
+  <li>No owner or mechanism to keep copies in sync.</li>
+  <li>Counter columns updated under heavy concurrency, creating row-lock hotspots.</li>
+  <li>Forgetting to backfill existing rows when adding redundant columns.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Denormalisation deliberately adds redundant or precomputed data to speed up reads, after a normalised design has proven too slow. Examples are storing product name and price on order lines, an order count on customers, materialised views or summary tables for dashboards, star schemas in a warehouse, and query-shaped tables in Cassandra or embedded documents in MongoDB. I use it for read-heavy workloads and reporting where joins at scale are too expensive. The cost is more storage, more complex writes and the risk of copies drifting, so I define the source of truth and keep copies in sync with transactions, events or CDC, or batch rebuilds.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to keep denormalised data in sync?</strong> Same transaction, triggers, events/CDC to update read models, or scheduled rebuilds with reconciliation.</li>
+  <li><strong>Materialised view vs summary table?</strong> A materialised view is managed by the database and refreshed on demand; a summary table is maintained by your code.</li>
+  <li><strong>Why is denormalisation normal in NoSQL?</strong> Joins are unavailable or expensive, so data is shaped around queries.</li>
+</ul>
+</article>
+</body>
+</html>

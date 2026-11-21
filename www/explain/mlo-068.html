@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-068 · A training job fails with CUDA errors after upgrading the container image. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-068" data-topic="MLOps">
+<h1>A training job fails with CUDA errors after upgrading the container image. How do you troubleshoot it?</h1>
+<p class="ex-meta">MLOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>CUDA errors after an image upgrade are almost always a <strong>version mismatch</strong> between the <strong>node's NVIDIA driver</strong>, the <strong>CUDA runtime in the container</strong> and the <strong>framework build</strong>, or a <strong>GPU architecture</strong> the new build no longer supports; verify with <code>nvidia-smi</code> and framework checks, then <strong>pin a compatible combination</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>There are three layers. The <strong>kernel driver</strong> lives on the host node and is exposed into containers by the NVIDIA Container Toolkit or GPU Operator. The <strong>CUDA runtime and libraries</strong> (cuDNN, NCCL) live in the image. The <strong>framework</strong> (PyTorch, TensorFlow, JAX) is compiled against a specific CUDA version and for a list of <strong>compute capabilities</strong> (GPU architectures).</p>
+<p>Typical failures:</p>
+<ul>
+  <li><strong>Driver too old:</strong> the image moved to a newer CUDA major or minor version than the host driver supports. Errors look like &quot;CUDA driver version is insufficient for CUDA runtime version&quot; or <code>torch.cuda.is_available()</code> returning <code>False</code>. CUDA has <strong>minor version compatibility</strong> within a major release, but some features need newer drivers, and a new major (for example CUDA 12 to 13) needs a newer driver branch.</li>
+  <li><strong>Framework/CUDA mismatch:</strong> a pip wheel built for a different CUDA version, or mixed libraries from conda and pip, causing missing <code>libcudnn</code> or symbol errors.</li>
+  <li><strong>Unsupported architecture:</strong> &quot;no kernel image is available for execution on the device&quot; means the build doesn't include kernels for your GPU's compute capability, for example older GPUs dropped from a new release.</li>
+  <li><strong>NCCL issues</strong> in multi-GPU jobs after the upgrade.</li>
+</ul>
+<p><code>nvidia-smi</code> inside the container shows the driver version and the <strong>maximum CUDA version the driver supports</strong> (not what's installed in the image). The framework reports the CUDA version it was built with.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the exact error and compare old and new image tags and changelogs.</li>
+  <li>Run <code>nvidia-smi</code> in the container: driver version, max CUDA, GPU model.</li>
+  <li>Run framework checks: CUDA availability, build CUDA version, device capability.</li>
+  <li>Check the framework's support matrix against driver and GPU.</li>
+  <li>Fix: use an image matching the driver, upgrade the node driver, or choose a build that supports the architecture.</li>
+  <li>Pin versions and add a GPU smoke test in CI on each target GPU type.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl exec -it train-pod -- nvidia-smi
+kubectl exec -it train-pod -- python - &lt;&lt;'PY'
+import torch
+print(torch.__version__, torch.version.cuda, torch.backends.cudnn.version())
+print(torch.cuda.is_available(), torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))
+print(torch.cuda.get_arch_list())
+x = torch.randn(1024, 1024, device=&quot;cuda&quot;); print((x @ x).sum().item())
+PY</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reading <code>nvidia-smi</code>'s CUDA version as the version installed in the container.</li>
+  <li>Installing CUDA toolkits manually on top of framework wheels that bundle their own.</li>
+  <li>Using <code>latest</code> tags for base images.</li>
+  <li>Upgrading images without testing on every GPU type in the fleet.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;After an image upgrade I'd suspect compatibility across three layers: the node driver, the CUDA runtime in the image and the framework build. I'd run nvidia-smi in the container to see the driver and the maximum CUDA it supports, and check torch.version.cuda, is_available and the device capability. Typical causes are a CUDA version newer than the driver, a wheel built for a different CUDA, or a GPU architecture dropped from the new build. The fix is pinning a compatible combination, preferably official framework images, and running a GPU smoke test on each GPU type in CI before rollout.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you upgrade GPU drivers without breaking workloads?</strong> Roll out via a new node pool or GPU Operator canary, drain gradually, and keep the old pool until jobs pass.</li>
+  <li><strong>What does &quot;no kernel image is available&quot; mean?</strong> The build lacks kernels for that GPU's compute capability.</li>
+  <li><strong>Why use official framework images?</strong> They ship tested CUDA, cuDNN and NCCL combinations.</li>
+</ul>
+</article>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-017 · What causes a deadlock, and how do you prevent and diagnose one in production?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-017" data-topic="Concurrency">
+<h1>What causes a deadlock, and how do you prevent and diagnose one in production?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>deadlock</strong> needs all four <strong>Coffman conditions</strong>, <strong>mutual exclusion, hold and wait, no preemption, circular wait</strong>; prevent it mainly with a <strong>global lock ordering</strong>, short critical sections and <strong>tryLock with timeout</strong>, and diagnose it with <strong>thread dumps</strong> (<code>jstack</code>, <code>jcmd Thread.print</code>) or <strong>ThreadMXBean.findDeadlockedThreads</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A deadlock occurs when a set of threads each hold a resource and wait for one held by another, so none can proceed. Coffman's four conditions must all hold:</p>
+<ol>
+  <li><strong>Mutual exclusion</strong>: a lock can be held by one thread.</li>
+  <li><strong>Hold and wait</strong>: a thread holds one lock while requesting another.</li>
+  <li><strong>No preemption</strong>: locks can't be forcibly taken away.</li>
+  <li><strong>Circular wait</strong>: A waits for B's lock while B waits for A's.</li>
+</ol>
+<p>Break any one and deadlock is impossible. <strong>Circular wait</strong> is the practical target. The classic example is a money transfer that locks <code>from</code> then <code>to</code>: transfer(A, B) and transfer(B, A) running together lock in opposite orders. A <strong>global lock ordering</strong>, for example always locking the account with the lower id first, removes the cycle.</p>
+<p>Other prevention techniques: keep critical sections small; <strong>don't call external or overridable code</strong> (listeners, callbacks, remote calls) while holding a lock, because you can't know which locks it takes; prefer higher-level concurrency (<code>ConcurrentHashMap</code>, queues, immutability) over nested locks. With <code>ReentrantLock</code>, <strong>tryLock(timeout)</strong> breaks hold-and-wait: if the second lock isn't available, release the first, back off with jitter and retry. Deadlocks also happen with <strong>database row locks</strong> and with pool tasks waiting on other tasks queued in the same full pool (<strong>thread-starvation deadlock</strong>).</p>
+<p><strong>Diagnosis.</strong> Symptoms are requests that hang with low CPU. Take a thread dump with <code>jcmd &lt;pid&gt; Thread.print</code> or <code>jstack &lt;pid&gt;</code>. The JVM detects monitor and <code>java.util.concurrent</code> lock cycles and prints &quot;Found one Java-level deadlock&quot; with each thread, the lock it holds and the lock it waits for. Programmatically, <code>ThreadMXBean.findDeadlockedThreads()</code> can feed a health check.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A locks L1, Thread B locks L2.</li>
+  <li>A requests L2 (held by B) and blocks.</li>
+  <li>B requests L1 (held by A) and blocks: cycle.</li>
+  <li>Fix: both acquire L1 before L2, so one waits without holding L2.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">void transfer(Account from, Account to, long amount) {
+    Account first  = from.id() &lt; to.id() ? from : to;   // global ordering
+    Account second = first == from ? to : from;
+    synchronized (first) {
+        synchronized (second) {
+            from.debit(amount);
+            to.credit(amount);
+        }
+    }
+}</code></pre>
+<pre><code class="language-bash">jcmd 4242 Thread.print | grep -A 20 &quot;Found one Java-level deadlock&quot;</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling callbacks or remote services while holding a lock.</li>
+  <li>Lock ordering by <code>hashCode</code> without a tie-breaker.</li>
+  <li>Using <code>tryLock</code> without releasing the first lock on failure.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A deadlock needs four conditions: mutual exclusion, hold and wait, no preemption and circular wait, for example thread A holds lock 1 and wants lock 2 while B holds lock 2 and wants lock 1. The most practical prevention is a global lock ordering, so every thread acquires locks in the same order, plus small critical sections and never calling external code while holding a lock. With ReentrantLock I can use tryLock with a timeout and back off. To diagnose, I take a thread dump with jcmd Thread.print or jstack; the JVM reports 'Found one Java-level deadlock' and shows who holds and waits for what. ThreadMXBean.findDeadlockedThreads can detect it for monitoring.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Livelock vs deadlock?</strong> In a livelock threads keep running and reacting to each other but make no progress; add randomised back-off.</li>
+  <li><strong>What is starvation?</strong> A thread never gets the resource because others always win; fairness can help.</li>
+  <li><strong>Can virtual threads deadlock?</strong> Yes, deadlock is a logic problem independent of thread type.</li>
+</ul>
+</article>
+</body>
+</html>

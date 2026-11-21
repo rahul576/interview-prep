@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-231 · Which JDK command-line tools do you use to diagnose a running JVM?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-231" data-topic="JVM &amp; Performance">
+<h1>Which JDK command-line tools do you use to diagnose a running JVM?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong><code>jps</code></strong> lists JVMs, <strong><code>jcmd</code></strong> is the Swiss-army knife (thread dumps, heap dumps, histograms, flags, native memory, <strong>JFR</strong>), <strong><code>jstack</code></strong> prints thread dumps, <strong><code>jmap</code></strong> dumps heaps, <strong><code>jstat</code></strong> shows live GC statistics, and <strong>JFR</strong> plus <strong>JDK Mission Control</strong> give low-overhead production profiling.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>jps -l</code></strong> shows Java process ids and main classes or jars, the starting point for every other tool.</p>
+<p><strong><code>jcmd</code></strong> is the recommended modern tool because it covers almost everything through one interface: <code>jcmd &lt;pid&gt; help</code> lists commands. Useful ones: <code>Thread.print</code> (thread dump, with <code>-l</code> for lock info), <code>GC.heap_dump &lt;file&gt;</code>, <code>GC.class_histogram</code> (objects by class, quick leak hint), <code>GC.heap_info</code>, <code>VM.flags</code> and <code>VM.system_properties</code> (the effective configuration), <code>VM.native_memory summary</code> (requires <code>-XX:NativeMemoryTracking=summary</code> at startup), <code>Compiler.codecache</code>, <code>JFR.start</code>, <code>JFR.dump</code>, <code>JFR.stop</code>, and <code>Thread.dump_to_file</code> which can write JSON and includes <strong>virtual threads</strong> (Java 21).</p>
+<p><strong><code>jstack &lt;pid&gt;</code></strong> prints all thread stacks and detects Java-level <strong>deadlocks</strong>. It is good for stuck requests, lock contention and matching hot native threads (<code>nid</code>) from <code>top -H</code>.</p>
+<p><strong><code>jmap</code></strong>: <code>jmap -dump:live,format=b,file=heap.hprof &lt;pid&gt;</code> for a heap dump, <code>jmap -histo:live</code> for a histogram. Note <code>live</code> forces a full GC first.</p>
+<p><strong><code>jstat -gcutil &lt;pid&gt; 1000</code></strong> prints utilisation of survivor, eden, old and Metaspace every second, plus counts and total time of young and full GCs. It is perfect for spotting a filling old generation or GC storms live.</p>
+<p><strong>JFR (Java Flight Recorder)</strong> is built into the JDK (free since JDK 11), records CPU samples, allocation samples, GC, locks, I/O, exceptions and JVM events with roughly 1-2% overhead, so it can run continuously in production. <strong>JDK Mission Control</strong> analyses the <code>.jfr</code> files; <code>jfr print</code> and <code>jfr summary</code> work on the command line.</p>
+<p><strong>Containers.</strong> Tools must run as the same user and see the same process; in Kubernetes use <code>kubectl exec</code> if the image includes a JDK, or <code>kubectl debug</code> with an ephemeral container sharing the process namespace. Slim JRE images may lack these tools, so plan for it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>jps</code> to get the pid.</li>
+  <li><code>jstat</code> for a live view of GC health.</li>
+  <li><code>jcmd Thread.print</code> or <code>jstack</code> for hangs and CPU hotspots.</li>
+  <li><code>jcmd GC.class_histogram</code> then <code>GC.heap_dump</code> for memory issues.</li>
+  <li><code>jcmd JFR.start</code> for a profile; analyse in Mission Control.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">jps -l
+# 4211 orders-service.jar
+
+jstat -gcutil 4211 1000 5
+#  S0  S1     E     O     M   YGC  YGCT  FGC  FGCT
+#  0.0 42.1  63.5  71.2  94.8 1520 12.3    2  1.10
+
+jcmd 4211 Thread.print -l &gt; threads.txt
+jcmd 4211 GC.class_histogram | head -15
+jcmd 4211 GC.heap_dump /tmp/orders.hprof
+jcmd 4211 VM.flags
+jcmd 4211 JFR.start name=prof duration=120s filename=/tmp/prof.jfr settings=profile
+jfr summary /tmp/prof.jfr</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Tool</th><th>Main use</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>jps</td><td>List JVMs</td><td>Starting point</td></tr>
+<tr><td>jcmd</td><td>Almost everything</td><td>Preferred modern tool</td></tr>
+<tr><td>jstack</td><td>Thread dumps, deadlocks</td><td>Same as jcmd Thread.print</td></tr>
+<tr><td>jmap</td><td>Heap dumps, histograms</td><td>-dump:live triggers full GC</td></tr>
+<tr><td>jstat</td><td>Live GC stats</td><td>Low overhead</td></tr>
+<tr><td>JFR + JMC</td><td>Profiling, events</td><td>Production-safe</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Running tools as a different OS user than the JVM and getting attach errors.</li>
+  <li>Taking heap dumps on a live, overloaded instance without considering the pause.</li>
+  <li>Forgetting to enable Native Memory Tracking before needing it.</li>
+  <li>Shipping images without any diagnostic tooling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;jps lists the running JVMs and their process ids. jcmd is my Swiss-army knife: thread dumps, heap dumps, class histograms, effective VM flags, native memory tracking and starting or dumping Java Flight Recorder. jstack prints thread dumps for deadlocks and contention, jmap creates heap dumps and histograms, and jstat shows live GC statistics such as utilisation of each generation and GC counts. JFR records low-overhead profiling data that's safe in production, and I analyse it in JDK Mission Control. In Kubernetes I run them via kubectl exec or an ephemeral debug container that shares the process namespace, then copy the files out.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you take a heap dump from a JVM running in a Kubernetes pod?</strong> <code>kubectl exec</code> (or <code>kubectl debug</code>) then <code>jcmd &lt;pid&gt; GC.heap_dump /tmp/h.hprof</code>, and <code>kubectl cp</code> it out; make sure disk space is enough.</li>
+  <li><strong>How do you find a deadlock?</strong> A thread dump; jstack and jcmd print &quot;Found one Java-level deadlock&quot; with the threads involved.</li>
+  <li><strong>What overhead does JFR have?</strong> Typically about 1% with default settings, a bit more with the profile settings.</li>
+</ul>
+</article>
+</body>
+</html>

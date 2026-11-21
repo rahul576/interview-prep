@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-127 · Can we force garbage collection using System.gc()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-127" data-topic="JVM &amp; Performance">
+<h1>Can we force garbage collection using System.gc()?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>No: <strong><code>System.gc()</code> is only a request</strong>; the specification does not guarantee a collection. In HotSpot it <strong>usually triggers a full stop-the-world GC</strong>, which is why it should <strong>not be called in production code</strong>; it can be disabled with <strong><code>-XX:+DisableExplicitGC</code></strong> or made concurrent with <strong><code>-XX:+ExplicitGCInvokesConcurrent</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The Javadoc says <code>System.gc()</code> &quot;suggests that the Java Virtual Machine expend effort toward recycling unused objects&quot;. The JVM is free to ignore it. <code>Runtime.getRuntime().gc()</code> is the same thing.</p>
+<p>In practice, HotSpot <strong>does</strong> honour the call by default, and with G1 or Parallel GC it performs a <strong>full GC</strong>: all application threads stop while the whole heap is collected and compacted. On a multi-gigabyte heap that can be hundreds of milliseconds or seconds. This is exactly why calling it in application code is bad practice:</p>
+<ul>
+  <li>It adds long pauses at unpredictable moments, often under load.</li>
+  <li>It rarely helps: the collector already runs when memory is needed and knows better when to do so.</li>
+  <li>It defeats GC ergonomics, since collections are tuned around allocation patterns.</li>
+  <li>If you feel you need it to &quot;free memory&quot;, you probably have a <strong>leak</strong> or an undersized heap to fix.</li>
+</ul>
+<p><strong>JVM options.</strong></p>
+<ul>
+  <li><strong><code>-XX:+DisableExplicitGC</code></strong> turns calls into no-ops. Common in production, but be careful: the JDK's NIO code calls <code>System.gc()</code> when <strong>direct memory</strong> is exhausted to free unreachable <code>DirectByteBuffer</code>s; disabling it can turn that into <code>OutOfMemoryError: Direct buffer memory</code>.</li>
+  <li><strong><code>-XX:+ExplicitGCInvokesConcurrent</code></strong> makes G1 start a concurrent cycle instead of a full GC, often the safer choice. ZGC treats explicit GC as a concurrent cycle by default.</li>
+</ul>
+<p><strong>Who calls it?</strong> Old <strong>RMI</strong> distributed GC (periodically, controlled by <code>sun.rmi.dgc.server.gcInterval</code>), NIO direct-buffer reservation, some libraries and monitoring tools, and test or benchmark code. Legitimate uses are rare: benchmarks between iterations (JMH handles this), or tools measuring heap after collection.</p>
+<p><strong>Detection.</strong> GC logs show the cause, for example <code>Pause Full (System.gc())</code>. JFR records <code>jdk.GarbageCollection</code> events with the cause, and the stack trace of the caller can be found via a JFR or async-profiler recording, or by searching dependencies.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Code calls <code>System.gc()</code>.</li>
+  <li>With <code>DisableExplicitGC</code>, the call returns immediately.</li>
+  <li>With <code>ExplicitGCInvokesConcurrent</code>, G1 starts a concurrent cycle.</li>
+  <li>Otherwise HotSpot runs a stop-the-world full GC.</li>
+  <li>The GC log records the cause as <code>System.gc()</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Anti-pattern in a batch processor
+for (Batch b : batches) {
+    process(b);
+    System.gc();          // full GC after every batch: slower, not safer
+}</code></pre>
+<pre><code class="language-bash"># Detect explicit GCs in logs
+grep &quot;System.gc()&quot; gc.log
+# [3456.2s] GC(88) Pause Full (System.gc()) 1800M-&gt;420M(4096M) 1320.4ms
+
+# Production options
+java -XX:+UseG1GC -XX:+ExplicitGCInvokesConcurrent -jar app.jar</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>System.gc()</code> to &quot;fix&quot; memory leaks.</li>
+  <li>Disabling explicit GC without considering direct buffers.</li>
+  <li>Assuming the call is ignored; in HotSpot it usually is not.</li>
+  <li>Calling it in tight loops or request handlers.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;No, System.gc is only a request; the specification doesn't guarantee that a collection runs. In HotSpot it usually does trigger a full stop-the-world GC, which is exactly why calling it in production code is bad: long pauses, and it rarely helps because the collector already runs when it's needed. It can be disabled with DisableExplicitGC, or with G1 turned into a concurrent cycle with ExplicitGCInvokesConcurrent, which I prefer because NIO relies on it to free direct buffers. If I think I need it, I probably have a memory problem to fix. I'd detect unexpected calls by looking for System.gc as the cause in GC logs or JFR.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do some libraries call System.gc() and how would you detect it?</strong> RMI's distributed GC and NIO direct-buffer cleanup; detect via <code>System.gc()</code> causes in GC logs or JFR.</li>
+  <li><strong>Does <code>finalize()</code> run after <code>System.gc()</code>?</strong> Not guaranteed; finalisation is deprecated anyway.</li>
+  <li><strong>What is <code>Runtime.gc()</code>?</strong> The same request; <code>System.gc()</code> delegates to it.</li>
+</ul>
+</article>
+</body>
+</html>

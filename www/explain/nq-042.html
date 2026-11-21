@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-042 · Does map() modify existing objects or create transformed values?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-042" data-topic="Java 8+ Features">
+<h1>Does map() modify existing objects or create transformed values?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p><code>map</code> <strong>produces new values</strong> and never changes the <strong>source collection</strong>, but if the mapper function calls <strong>setters</strong> on the elements and returns the same reference, it <strong>mutates the shared objects</strong>; keep mappers <strong>pure</strong> and prefer <strong>immutable objects or records</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A stream does not own its data; it reads from a source such as a list. <code>map</code> passes each element to your function and sends whatever the function returns downstream. The source list itself is never modified: it still has the same size and holds the same references after the pipeline runs.</p>
+<p>Whether the <strong>objects</strong> referenced by the list change is a separate question, and it depends entirely on your function. Java passes references by value, so the mapper receives the same object the list holds. If the function builds a new object, for example <code>p -&gt; new Product(p.name(), p.price() * 0.85)</code>, the originals are untouched and you get a new list of discounted products. If instead it does <code>p -&gt; { p.setPrice(p.getPrice() * 0.85); return p; }</code>, the result list contains the <strong>same objects</strong>, now mutated. Anyone else holding the original list, including a cache, sees the discounted prices too.</p>
+<p>That kind of hidden <strong>side effect</strong> breaks the expectations of the stream API. The <code>java.util.stream</code> documentation asks for behavioural parameters to be <strong>non-interfering</strong> and preferably <strong>stateless</strong> and side-effect free. In a <strong>parallel stream</strong>, mutating shared objects can cause races if the same object appears twice or is shared with other threads. It also makes code harder to test and reason about.</p>
+<p>The clean approach is functional: treat <code>map</code> as &quot;compute a new value from the old one&quot;. Java <strong>records</strong> make this natural because they have no setters, and &quot;wither&quot; style methods (<code>withPrice(...)</code>) return copies. If you truly need to update objects in place, a plain loop or <code>list.forEach(...)</code> makes the intent explicit.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The source list holds references to <code>Product</code> objects.</li>
+  <li><code>map</code> passes each reference to the mapper.</li>
+  <li>A pure mapper creates and returns a new object; the original is unchanged.</li>
+  <li>A mutating mapper changes the original object and returns the same reference.</li>
+  <li>The collected list contains whatever references the mapper returned.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">record Product(String name, double price) {
+    Product withPrice(double p) { return new Product(name, p); }
+}
+
+List&lt;Product&gt; catalogue = List.of(new Product(&quot;Lamp&quot;, 100), new Product(&quot;Desk&quot;, 400));
+
+List&lt;Product&gt; sale = catalogue.stream()
+    .map(p -&gt; p.withPrice(p.price() * 0.85))   // new objects
+    .toList();
+// catalogue still has 100 and 400; sale has 85 and 340
+
+// Mutating version with a mutable class (avoid):
+List&lt;MutableProduct&gt; changed = mutableList.stream()
+    .map(p -&gt; { p.setPrice(p.getPrice() * 0.85); return p; })
+    .toList();
+// mutableList now also shows discounted prices</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Claiming &quot;streams are immutable so nothing can change&quot;; the objects can still be mutated.</li>
+  <li>Calling setters inside <code>map</code> and reusing the original list elsewhere.</li>
+  <li>Mutating objects in parallel streams without thinking about thread safety.</li>
+  <li>Using <code>peek</code> to modify elements.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;map is designed to produce new values. Each element is passed to the function and whatever it returns flows downstream; the source collection is never changed. But Java passes references, so whether the original objects change depends on the function. If it creates a new object, like a record with a discounted price, the originals are untouched. If it calls a setter and returns the same reference, it mutates the shared objects, which is a side effect that surprises other callers and can race in a parallel stream. So I keep mappers pure, prefer records and immutable objects, and if I really need in-place updates I use a normal loop to make that explicit.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why are side effects in map especially dangerous with parallel streams?</strong> Several threads may touch shared objects concurrently without synchronisation, giving races and non-deterministic results.</li>
+  <li><strong>Does <code>stream()</code> copy the collection?</strong> No; it reads the source lazily, which is why modifying the source during the pipeline is interference.</li>
+  <li><strong>How do records help?</strong> Their fields are final, so mappers must return new instances.</li>
+</ul>
+</article>
+</body>
+</html>

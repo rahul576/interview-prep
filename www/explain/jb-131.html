@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-131 · How do you identify excessive object creation in a Java application?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-131" data-topic="JVM &amp; Performance">
+<h1>How do you identify excessive object creation in a Java application?</h1>
+<p class="ex-meta">JVM &amp; Performance · scenario · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Excessive object creation shows up as a <strong>high allocation rate</strong> and <strong>frequent young GCs</strong>; confirm it with <strong>GC logs and JVM metrics</strong>, find the <strong>hot allocation sites</strong> with <strong>JFR or async-profiler in allocation mode</strong>, fix culprits such as <strong>boxing, string building, temporary collections and redundant mapping</strong>, and verify with <strong>JMH <code>-prof gc</code></strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Symptoms.</strong> CPU partly spent in GC threads, minor GCs several times per second, latency jitter under load, and an allocation rate of hundreds of MB/s or more. The number itself matters less than the trend: an allocation rate that grows faster than traffic points to a regression.</p>
+<p><strong>Confirm with data.</strong></p>
+<ul>
+  <li><strong>GC logs</strong> (<code>-Xlog:gc*</code>) show young GC frequency and how much Eden is filled between collections; tools like GCeasy calculate allocation and promotion rates.</li>
+  <li><strong>Micrometer</strong> exports <code>jvm.gc.memory.allocated</code> (bytes allocated in the young generation) and <code>jvm.gc.pause</code>; graph allocation per request alongside request rate in Prometheus/Grafana.</li>
+  <li><code>jstat -gc</code> shows Eden filling speed live.</li>
+</ul>
+<p><strong>Find the sources.</strong></p>
+<ul>
+  <li><strong>JFR</strong>: the <code>jdk.ObjectAllocationSample</code> event (JDK 16+) samples allocations with throttling, cheap enough for production. In JDK Mission Control, the &quot;Allocations&quot; view groups by class and stack trace.</li>
+  <li><strong>async-profiler</strong> <code>-e alloc</code> builds an <strong>allocation flame graph</strong> showing exactly which methods allocate the most bytes.</li>
+  <li>A class histogram (<code>jcmd GC.class_histogram</code>) shows what lives in the heap, not what is allocated, so it is less useful for this.</li>
+</ul>
+<p><strong>Typical culprits.</strong></p>
+<ul>
+  <li><strong>Autoboxing</strong> in loops and in <code>Map&lt;Long, ...&gt;</code> or <code>List&lt;Integer&gt;</code>.</li>
+  <li>String concatenation for disabled log levels, <code>String.format</code>, <code>toString</code>.</li>
+  <li>Streams and lambdas in very hot, tiny loops (iterators, capturing lambdas), and temporary <code>ArrayList</code>s or <code>Optional</code>s.</li>
+  <li>Layered <strong>mapping</strong> (entity to DTO to view model) copying large graphs per request.</li>
+  <li>Reading whole payloads into byte arrays and strings instead of streaming; regex <code>Pattern.compile</code> inside methods.</li>
+  <li><code>new</code> of heavy objects per call (<code>ObjectMapper</code>, <code>DateTimeFormatter</code>, <code>Random</code>) that should be shared.</li>
+</ul>
+<p><strong>Verify.</strong> Write a <strong>JMH</strong> benchmark for the hot method and run with <code>-prof gc</code>, which reports <code>gc.alloc.rate.norm</code> (bytes allocated per operation). Compare before and after, then confirm the allocation rate and GC frequency dropped in production.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Notice frequent young GCs or high GC CPU.</li>
+  <li>Measure allocation rate from logs or metrics.</li>
+  <li>Profile allocations with JFR or async-profiler.</li>
+  <li>Pick the widest allocation frames and fix them.</li>
+  <li>Verify bytes per operation with JMH and production metrics.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash"># Short allocation profile in production
+jcmd &lt;pid&gt; JFR.start name=alloc duration=120s settings=profile filename=/tmp/alloc.jfr
+jfr print --events jdk.ObjectAllocationSample /tmp/alloc.jfr | head
+
+asprof -e alloc -d 60 -f /tmp/alloc.html &lt;pid&gt;</code></pre>
+<pre><code class="language-java">// Culprit: boxing and a new formatter per call
+Map&lt;Long, Long&gt; counts = new HashMap&lt;&gt;();
+counts.merge(userId, 1L, Long::sum);                 // boxes keys and values
+String day = DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd&quot;).format(ts);
+
+// Fix
+Long2LongOpenHashMap counts2 = new Long2LongOpenHashMap();
+counts2.addTo(userId, 1);
+private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd&quot;);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using a heap histogram to find allocation hot spots.</li>
+  <li>Profiling only in development with unrealistic data.</li>
+  <li>Micro-optimising code that is not hot.</li>
+  <li>Tuning GC flags before reducing allocation.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The symptom is a high allocation rate, often hundreds of megabytes per second, causing very frequent young GCs and CPU spent in GC. I confirm it with GC logs and the JVM metrics from Micrometer in Prometheus. Then I profile allocations with JFR's allocation sampling or async-profiler in allocation mode, which gives flame graphs of the methods allocating the most bytes. Typical culprits are autoboxing in loops, string concatenation in logging, temporary collections and streams on hot paths, mapping layers copying objects, and heavy objects like ObjectMapper created per call. After fixing them I verify with a JMH benchmark using the GC profiler, which reports allocated bytes per operation.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you enable allocation profiling with JFR in production safely?</strong> Use the built-in throttled <code>ObjectAllocationSample</code> event with the default or profile settings for a limited duration.</li>
+  <li><strong>Does allocation always hurt?</strong> Allocation is cheap; the cost is the GC work and cache misses at high rates.</li>
+  <li><strong>What is <code>gc.alloc.rate.norm</code>?</strong> JMH's bytes allocated per benchmark operation.</li>
+</ul>
+</article>
+</body>
+</html>

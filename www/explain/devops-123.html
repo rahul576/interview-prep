@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-123 · How do you scale Prometheus for many clusters and long-term retention?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-123" data-topic="Observability &amp; SRE">
+<h1>How do you scale Prometheus for many clusters and long-term retention?</h1>
+<p class="ex-meta">Observability &amp; SRE · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A single Prometheus hits limits on <strong>memory, local retention, HA and global view</strong>, so run <strong>Prometheus or an agent per cluster</strong> and <strong>remote write</strong> to a horizontally scalable backend (<strong>Grafana Mimir, Thanos, Cortex, VictoriaMetrics</strong>) storing data in <strong>object storage</strong>, with a <strong>global query view</strong>, <strong>HA deduplication</strong> and strict <strong>cardinality control</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Limits of one Prometheus:</strong> it's a single process with a local TSDB. Memory grows with active series (a few kilobytes per series), so a few million series need a big machine. Local disk retention makes months or years of data expensive and fragile. There's no built-in <strong>HA</strong>: the usual answer is two identical replicas, which produces duplicate data. And each cluster's Prometheus sees only its own targets, so there's no <strong>global view</strong> across clusters or regions.</p>
+<p><strong>Scaling patterns:</strong></p>
+<ul>
+  <li><strong>Remote write</strong> from each cluster's Prometheus or <strong>Prometheus in agent mode</strong> (or Grafana Alloy / OpenTelemetry Collector) to a central backend. Agent mode only scrapes and forwards, with a small write-ahead log.</li>
+  <li><strong>Grafana Mimir</strong> and <strong>Cortex</strong>: horizontally scalable, multi-tenant, microservice architectures (distributors, ingesters, store-gateways, queriers, compactors) storing blocks in <strong>S3, GCS or Azure Blob</strong>; Mimir is the actively developed successor to Cortex.</li>
+  <li><strong>Thanos</strong>: a <strong>sidecar</strong> next to each Prometheus uploads TSDB blocks to object storage and serves recent data; the <strong>querier</strong> fans out across sidecars and store gateways for a global view with <strong>deduplication</strong> of HA replicas; the <strong>compactor</strong> downsamples old data; Thanos Receive supports remote write.</li>
+  <li><strong>VictoriaMetrics</strong>: single-node or cluster version, resource-efficient, compatible with PromQL (MetricsQL).</li>
+  <li><strong>Federation</strong> (a parent scraping <code>/federate</code> from children) only suits small sets of aggregated series, not full data.</li>
+  <li>Managed options: Amazon Managed Service for Prometheus, Azure Monitor managed Prometheus, Google Managed Prometheus, Grafana Cloud.</li>
+</ul>
+<p><strong>Cardinality control</strong> is the biggest operational issue: enforce label conventions, avoid unbounded labels, <strong>drop unused metrics</strong> with <code>metric_relabel_configs</code> or <code>write_relabel_configs</code>, aggregate with <strong>recording rules</strong> before shipping, and set <strong>per-tenant limits</strong> on series and ingestion rate in the backend. Use <strong>downsampling</strong> for long retention, and tier retention (raw 30 days, 5-minute resolution for a year).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Each cluster runs Prometheus (HA pair) or an agent with external labels (<code>cluster</code>, <code>replica</code>).</li>
+  <li>Metrics are filtered and remote-written to the central backend.</li>
+  <li>The backend ingests, replicates and writes blocks to object storage.</li>
+  <li>Compactors merge and downsample blocks.</li>
+  <li>Queriers serve a global PromQL view to Grafana, deduplicating replicas.</li>
+  <li>Limits and dashboards track series per tenant.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">global:
+  external_labels: { cluster: prod-eu-1, replica: &quot;0&quot; }
+remote_write:
+  - url: https://mimir.internal/api/v1/push
+    headers: { X-Scope-OrgID: platform }
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: &quot;go_gc_.*|apiserver_request_duration_seconds_bucket&quot;
+        action: drop</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using federation to copy all data centrally.</li>
+  <li>Scaling up one huge Prometheus instead of distributing.</li>
+  <li>No external labels, so data from clusters collides.</li>
+  <li>Ignoring cardinality until the backend falls over.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A single Prometheus is limited by memory, local retention, and has no built-in HA or global view. For many clusters I run Prometheus or an agent in each cluster with external labels and remote write to a scalable backend like Grafana Mimir, Thanos, Cortex or VictoriaMetrics. These store data in object storage like S3 for cheap long retention, downsample old data and give a global query view, deduplicating HA pairs. The biggest operational issue is cardinality, so I control labels, drop unused metrics before shipping and set per-tenant limits.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you find which metrics cause a cardinality explosion?</strong> The TSDB status page or <code>topk(10, count by (__name__)({__name__=~&quot;.+&quot;}))</code>, Mimir's cardinality API, and checking labels with many values.</li>
+  <li><strong>Thanos sidecar versus remote write?</strong> Sidecar uploads blocks and keeps local querying; remote write streams samples to a central system.</li>
+  <li><strong>What is agent mode?</strong> Prometheus that only scrapes and remote-writes, without local querying or long storage.</li>
+</ul>
+</article>
+</body>
+</html>

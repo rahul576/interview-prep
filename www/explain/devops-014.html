@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devops-014 · How does DNS resolution work, and how would you troubleshoot a DNS issue?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="devops-014" data-topic="Networking">
+<h1>How does DNS resolution work, and how would you troubleshoot a DNS issue?</h1>
+<p class="ex-meta">Networking · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A <strong>recursive resolver</strong> answers from cache or walks <strong>root, TLD and authoritative servers</strong>, caching by <strong>TTL</strong>; troubleshoot with <strong><code>dig</code></strong> against different resolvers and the authoritative server, <strong><code>dig +trace</code></strong>, and by checking <strong>caching, TTLs and local resolver configuration</strong> (including <strong>CoreDNS</strong> in Kubernetes).</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Resolution chain:</strong> the application calls the OS stub resolver, which checks local caches and <code>/etc/hosts</code>, then asks the configured <strong>recursive resolver</strong> (from <code>/etc/resolv.conf</code>, DHCP, a corporate resolver, cloud VPC resolver or a public one). On a cache miss, the resolver asks a <strong>root server</strong>, which refers it to the <strong>TLD servers</strong> for <code>.com</code>; those refer it to the domain's <strong>authoritative name servers</strong> (from the NS records at the registrar), which return the answer. Every response carries a <strong>TTL</strong>, and each layer caches it; negative answers (NXDOMAIN) are cached too, per the SOA record.</p>
+<p><strong>Record types:</strong> <strong>A</strong> (IPv4), <strong>AAAA</strong> (IPv6), <strong>CNAME</strong> (alias to another name), <strong>MX</strong> (mail servers with priority), <strong>TXT</strong> (verification, SPF, DKIM, DMARC), <strong>NS</strong> (delegation), <strong>SOA</strong> (zone metadata), <strong>SRV</strong> (service locations), <strong>CAA</strong> (which CAs may issue certificates), <strong>PTR</strong> (reverse lookups).</p>
+<p><strong>Troubleshooting approach:</strong></p>
+<ul>
+  <li>Reproduce with <code>dig name type</code> from the affected host, then from elsewhere.</li>
+  <li>Compare <strong>resolvers</strong>: local, public (<code>@1.1.1.1</code>, <code>@8.8.8.8</code>) and the <strong>authoritative</strong> server directly (<code>@ns1.provider.com</code>). If authoritative is right but resolvers are wrong, it's caching: wait for the TTL or flush.</li>
+  <li><code>dig +trace</code> follows delegation from the root, revealing wrong NS records or broken delegation.</li>
+  <li>Check status codes: <strong>NXDOMAIN</strong> (name doesn't exist), <strong>SERVFAIL</strong> (often DNSSEC validation or unreachable authoritative servers), <strong>REFUSED</strong>.</li>
+  <li>Check split-horizon DNS (private zones answering differently inside a VPC).</li>
+  <li>In <strong>Kubernetes</strong>, check CoreDNS pods and logs, the <code>search</code> domains and <code>ndots:5</code> in the pod's <code>resolv.conf</code> (which causes several queries per lookup), and NetworkPolicies blocking port 53.</li>
+</ul>
+<p><strong>Migrations:</strong> lower the TTL (for example to 60 seconds) a day or more <strong>before</strong> changing records, then raise it again afterwards.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>App asks the stub resolver; local cache and hosts file are checked.</li>
+  <li>Recursive resolver checks its cache.</li>
+  <li>On a miss: root, TLD, authoritative.</li>
+  <li>Answer is returned and cached for its TTL.</li>
+  <li>Troubleshooting compares each layer's answer to isolate the faulty one.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">dig api.example.com A +noall +answer
+dig @1.1.1.1 api.example.com
+dig @ns-123.awsdns-45.com api.example.com     # ask the authoritative server
+dig +trace api.example.com
+kubectl exec -it app-pod -- cat /etc/resolv.conf
+kubectl -n kube-system logs -l k8s-app=kube-dns --tail=50</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Changing a record with a 24-hour TTL and expecting instant effect.</li>
+  <li>Testing only from your laptop, which uses a different resolver.</li>
+  <li>Forgetting negative caching after creating a record that was queried before.</li>
+  <li>Ignoring <code>ndots</code> and search domains in Kubernetes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The client asks a recursive resolver. If it isn't cached, the resolver asks a root server, then the TLD server for com, then the authoritative server, and caches the answer for its TTL. Main records are A, AAAA, CNAME, MX and TXT. To troubleshoot I use dig to query the record, compare answers from different resolvers and directly from the authoritative server, and use dig +trace to follow the delegation. Many issues are caching, so before migrations I lower the TTL in advance. In Kubernetes I also check CoreDNS and the search domains and ndots in resolv.conf.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why no CNAME at the zone apex?</strong> The apex must hold SOA and NS records and a CNAME can't coexist with other records; providers offer ALIAS/ANAME or Route 53 alias records that resolve server-side.</li>
+  <li><strong>What does SERVFAIL usually mean?</strong> DNSSEC validation failure or the resolver couldn't reach authoritative servers.</li>
+  <li><strong>What is negative caching?</strong> Resolvers cache NXDOMAIN answers for the SOA-defined time.</li>
+</ul>
+</article>
+</body>
+</html>

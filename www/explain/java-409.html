@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-409 · How do you implement a distributed lock with Redis, and what are the caveats?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-409" data-topic="Caching">
+<h1>How do you implement a distributed lock with Redis, and what are the caveats?</h1>
+<p class="ex-meta">Caching · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>Acquire with <strong><code>SET key token NX PX ttl</code></strong>, release with a <strong>Lua script</strong> that deletes only if the value is still <strong>your token</strong>, and remember the lock can <strong>expire while you still work</strong>, so for strict correctness use <strong>fencing tokens</strong> or a consensus store like <strong>etcd or ZooKeeper</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>A distributed lock lets only one instance run a critical section, such as a scheduled job or processing one order. The minimal correct Redis recipe:</p>
+<ul>
+  <li><strong>Acquire</strong>: <code>SET lock:order:42 &lt;random-token&gt; NX PX 30000</code>. <code>NX</code> sets only if the key does not exist; <code>PX</code> gives a TTL so the lock disappears if the holder crashes. Both happen atomically in one command (do not use separate <code>SETNX</code> and <code>EXPIRE</code>).</li>
+  <li><strong>Release</strong>: a Lua script compares the value with your token and deletes it only if they match. A plain <code>DEL</code> might delete a lock that already expired and was taken by someone else.</li>
+</ul>
+<p>The fundamental caveat is <strong>timing</strong>. If the holder pauses longer than the TTL, the lock expires, another process acquires it, and now two processes act at once. Renewal (&quot;watchdog&quot;, as in <strong>Redisson</strong>, which extends the TTL while the holder is alive) reduces but does not eliminate the risk, because the paused process cannot know it lost the lock. Replication adds another: Redis replication is asynchronous, so a failover can lose a freshly acquired lock.</p>
+<p>For correctness-critical cases, use <strong>fencing tokens</strong>: the lock service issues a monotonically increasing number with each grant, and the protected resource (database, storage) rejects writes carrying an older token. etcd revisions and ZooKeeper zxids provide this naturally.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Generate a unique token (UUID) per attempt.</li>
+  <li><code>SET ... NX PX</code> to acquire; retry with backoff or give up.</li>
+  <li>Do the work, keeping it shorter than the TTL or renewing the TTL.</li>
+  <li>Release with compare-and-delete in Lua.</li>
+  <li>For strict safety, pass a fencing token to the resource, which rejects stale tokens.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">String token = UUID.randomUUID().toString();
+Boolean ok = redis.opsForValue()
+    .setIfAbsent(&quot;lock:job:nightly&quot;, token, Duration.ofSeconds(30));   // SET NX PX
+if (Boolean.TRUE.equals(ok)) {
+    try { runJob(); }
+    finally {
+        redis.execute(new DefaultRedisScript&lt;&gt;(
+            &quot;if redis.call('get', KEYS[1]) == ARGV[1] then &quot; +
+            &quot;  return redis.call('del', KEYS[1]) else return 0 end&quot;, Long.class),
+            List.of(&quot;lock:job:nightly&quot;), token);
+    }
+}
+// Redisson alternative: RLock lock = redisson.getLock(&quot;lock:job&quot;); lock.lock();  // watchdog renewal</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>SETNX</code> then <code>EXPIRE</code> as two commands: a crash in between leaves a lock forever.</li>
+  <li>Releasing with plain <code>DEL</code> without checking the token.</li>
+  <li>Assuming the lock guarantees mutual exclusion under GC pauses or failover.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd acquire with SET key, a unique token, NX and PX, so it's set only if absent and expires if I crash. To release, I run a Lua script that deletes the key only if it still holds my token, so I never remove someone else's lock. The big caveat is that a lock with a TTL can expire while I'm still working, for example during a long GC pause, and async replication can lose a lock on failover, so two holders are possible. For efficiency, such as avoiding duplicate cron runs, that's fine, and Redisson gives me a tested lock with watchdog renewal. For correctness I'd add fencing tokens checked by the resource, or use etcd, ZooKeeper or a database constraint.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What is a fencing token, and who checks it?</strong> An increasing number issued with each lock grant; the protected resource rejects requests with an older number.</li>
+  <li><strong>What is Redlock?</strong> Acquiring the lock on a majority of independent Redis nodes; it still relies on timing assumptions.</li>
+  <li><strong>Alternative without Redis?</strong> <code>SELECT ... FOR UPDATE</code>, PostgreSQL advisory locks, or ShedLock for scheduled jobs.</li>
+</ul>
+</article>
+</body>
+</html>

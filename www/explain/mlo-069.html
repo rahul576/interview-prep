@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-069 · Training crashes with a CUDA out of memory error. What are your options?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-069" data-topic="MLOps">
+<h1>Training crashes with a CUDA out of memory error. What are your options?</h1>
+<p class="ex-meta">MLOps · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>GPU memory holds <strong>weights, gradients, optimiser state and activations</strong>; fix OOM by <strong>smaller batches with gradient accumulation</strong>, <strong>mixed precision (BF16/FP16)</strong>, <strong>activation checkpointing</strong>, <strong>sharding with FSDP or DeepSpeed ZeRO</strong>, fixing <strong>memory leaks</strong>, and only then <strong>bigger or more GPUs</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Understanding where memory goes tells you which lever to pull. With the Adam optimiser in mixed precision, each parameter costs roughly 16 bytes (weights, gradients, FP32 master copy and two Adam moments), so a 7-billion-parameter model needs over 100 GB before activations. <strong>Activations</strong> scale with batch size and sequence length and often dominate for large inputs.</p>
+<ul>
+  <li><strong>Batch size and gradient accumulation:</strong> halve the micro-batch and accumulate gradients over two steps; the effective batch size and learning dynamics stay the same.</li>
+  <li><strong>Mixed precision:</strong> BF16 (preferred on Ampere and newer GPUs, no loss scaling needed) or FP16 with a gradient scaler roughly halves activation memory and speeds up tensor-core maths.</li>
+  <li><strong>Activation (gradient) checkpointing:</strong> store only some activations and recompute the rest in the backward pass, trading about 20-30 percent extra compute for large memory savings.</li>
+  <li><strong>Sharding:</strong> <strong>FSDP</strong> or <strong>DeepSpeed ZeRO</strong> stages 1-3 shard optimiser state, gradients and parameters across GPUs; ZeRO-Offload moves state to CPU memory. <strong>Tensor or pipeline parallelism</strong> split the model itself.</li>
+  <li><strong>Memory-efficient optimisers</strong> (8-bit Adam, Adafactor) and, for fine-tuning, <strong>LoRA/QLoRA</strong> shrink optimiser state.</li>
+  <li><strong>Bugs:</strong> accumulating <code>loss</code> tensors (with their graphs) in a list instead of <code>loss.item()</code>, keeping references to outputs, evaluating without <code>torch.no_grad()</code>, or <strong>fragmentation</strong> from varying shapes.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read the error: how much was requested and how much is reserved versus allocated.</li>
+  <li>Measure peak memory for one step with a small batch.</li>
+  <li>Check for leaks: memory growing every step indicates a bug.</li>
+  <li>Apply BF16 and activation checkpointing.</li>
+  <li>Reduce micro-batch and add accumulation.</li>
+  <li>For large models, shard with FSDP/ZeRO or use parameter-efficient fine-tuning; then consider larger GPUs.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">model = torch.compile(model)
+model.gradient_checkpointing_enable()          # Hugging Face models
+accum = 4
+for i, batch in enumerate(loader):
+    with torch.autocast(&quot;cuda&quot;, dtype=torch.bfloat16):
+        loss = model(**batch).loss / accum
+    loss.backward()
+    if (i + 1) % accum == 0:
+        optimizer.step(); optimizer.zero_grad(set_to_none=True)
+    running_loss += loss.item()               # .item(), not the tensor
+print(torch.cuda.max_memory_allocated() / 2**30, &quot;GiB peak&quot;)</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reducing batch size without accumulation and silently changing training dynamics.</li>
+  <li>Storing loss tensors instead of Python floats.</li>
+  <li>Running validation without <code>torch.no_grad()</code> or <code>inference_mode()</code>.</li>
+  <li>Jumping straight to bigger GPUs without profiling.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Memory is weights, gradients, optimiser state and activations, so I first see which dominates. The quick fix is a smaller micro-batch with gradient accumulation to keep the effective batch size. I'd enable BF16 mixed precision and activation checkpointing, which trades some compute for a lot of memory. For big models I'd shard parameters, gradients and optimiser state with FSDP or DeepSpeed ZeRO, or use LoRA for fine-tuning. I'd also check for leaks like storing loss tensors in a list. Only after that would I ask for bigger or more GPUs.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you measure peak memory to pick a batch size?</strong> <code>torch.cuda.max_memory_allocated()</code> or the memory snapshot tool after a few steps, increasing batch size until close to the limit with headroom.</li>
+  <li><strong>BF16 versus FP16?</strong> BF16 has FP32's exponent range so no loss scaling; FP16 needs a gradient scaler.</li>
+  <li><strong>What is ZeRO stage 3?</strong> Sharding parameters as well as gradients and optimiser states across all data-parallel ranks.</li>
+</ul>
+</article>
+</body>
+</html>

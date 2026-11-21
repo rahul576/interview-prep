@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-141 · What is the difference between DELETE, TRUNCATE, and DROP?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-141" data-topic="Databases &amp; SQL">
+<h1>What is the difference between DELETE, TRUNCATE, and DROP?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>DELETE</strong> is DML that removes selected rows (with <code>WHERE</code>), logged row by row, firing triggers and rollbackable; <strong>TRUNCATE</strong> quickly removes <strong>all</strong> rows by deallocating storage and usually resets identity; <strong>DROP</strong> removes the <strong>table itself</strong>, including structure, indexes and constraints.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>DELETE</strong> removes the rows that match an optional <code>WHERE</code>. Each row is locked, logged (undo and redo/WAL), checked against foreign keys and passed to row-level triggers. It runs inside a transaction and can be rolled back. In PostgreSQL deleted rows become dead tuples reclaimed later by VACUUM; in InnoDB space is reused but the file does not shrink. Deleting millions of rows in one statement creates huge transactions, long locks, replication lag and bloat.</p>
+<p><strong>TRUNCATE</strong> removes all rows by deallocating data pages or creating a fresh empty file, which makes it nearly instantaneous regardless of size. It does not fire row-level <code>DELETE</code> triggers, typically <strong>resets auto-increment/identity</strong> counters (MySQL always; PostgreSQL with <code>RESTART IDENTITY</code>), and takes an exclusive table lock. It refuses to run when other tables reference it through foreign keys (PostgreSQL offers <code>CASCADE</code>). It is classed as <strong>DDL</strong> in most databases: in <strong>MySQL and Oracle</strong> it causes an implicit commit and cannot be rolled back, while <strong>PostgreSQL</strong> and <strong>SQL Server</strong> allow it inside a transaction and can roll it back.</p>
+<p><strong>DROP TABLE</strong> removes the table definition plus its data, indexes, constraints, triggers and privileges. Dependent objects such as views or foreign keys from other tables block it unless you use <code>CASCADE</code>. Oracle may keep it in the recycle bin (<code>FLASHBACK TABLE</code>), but generally you need a backup to recover.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>DELETE: find rows, lock, write undo/WAL, apply FK actions and triggers, mark rows deleted.</li>
+  <li>TRUNCATE: take an exclusive lock, swap or deallocate the storage, reset counters.</li>
+  <li>DROP: remove catalogue entries and storage for the table and its dependants.</li>
+  <li>Transactional behaviour depends on the engine for TRUNCATE and DROP.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">DELETE FROM audit_log WHERE created_at &lt; DATE '2025-01-01';   -- selective, slow, rollbackable
+TRUNCATE TABLE staging_import;                                -- empty it fast
+TRUNCATE TABLE staging_import RESTART IDENTITY;               -- PostgreSQL
+DROP TABLE IF EXISTS tmp_migration;                           -- gone
+
+-- Deleting 50 million old rows safely: small batches
+DELETE FROM audit_log
+WHERE id IN (SELECT id FROM audit_log
+             WHERE created_at &lt; DATE '2025-01-01' LIMIT 10000);
+-- repeat until 0 rows, pausing between batches</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Aspect</th><th>DELETE</th><th>TRUNCATE</th><th>DROP</th></tr></thead>
+<tbody>
+<tr><td>Type</td><td>DML</td><td>DDL</td><td>DDL</td></tr>
+<tr><td>WHERE</td><td>Yes</td><td>No</td><td>No</td></tr>
+<tr><td>Triggers</td><td>Fire</td><td>Row triggers do not fire</td><td>No</td></tr>
+<tr><td>Speed on big table</td><td>Slow</td><td>Very fast</td><td>Very fast</td></tr>
+<tr><td>Rollback</td><td>Yes</td><td>Postgres/SQL Server only</td><td>Postgres/SQL Server only</td></tr>
+<tr><td>Structure kept</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saying TRUNCATE can never be rolled back; it depends on the database.</li>
+  <li>Running one giant DELETE on a busy production table.</li>
+  <li>Expecting DELETE to reclaim disk space immediately.</li>
+  <li>Using TRUNCATE where audit triggers must run.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;DELETE is DML: it removes rows matching a WHERE clause, logs each row, fires triggers, respects foreign keys and can be rolled back, but it's slow on large tables. TRUNCATE removes all rows at once by deallocating pages, so it's very fast, usually resets the identity counter and doesn't fire row triggers. It's treated as DDL, so in MySQL and Oracle it commits implicitly and can't be rolled back, while PostgreSQL allows it in a transaction. DROP removes the table itself, including structure, indexes and constraints. For deleting tens of millions of old rows in production, I'd delete in small batches, or better, partition by date and drop old partitions.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How to delete 50 million old rows from a busy table?</strong> Small batches by key range with pauses, off-peak, or drop date partitions.</li>
+  <li><strong>Why doesn't DELETE shrink the file?</strong> Space is marked reusable; VACUUM FULL or OPTIMIZE TABLE is needed to shrink.</li>
+  <li><strong>Can you TRUNCATE a table referenced by a foreign key?</strong> Not normally; PostgreSQL needs <code>CASCADE</code>, MySQL needs FK checks disabled.</li>
+</ul>
+</article>
+</body>
+</html>

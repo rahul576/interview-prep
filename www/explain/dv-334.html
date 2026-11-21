@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dv-334 · Kubernetes nodes are going NotReady. How do you troubleshoot it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="dv-334" data-topic="Troubleshooting">
+<h1>Kubernetes nodes are going NotReady. How do you troubleshoot it?</h1>
+<p class="ex-meta">Troubleshooting · scenario · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong><code>kubectl describe node</code></strong> to read <strong>conditions and events</strong>, check <strong>pressure conditions</strong> (memory, disk, PID), then the <strong>kubelet and containerd</strong> on the node, <strong>CNI and API server connectivity</strong>, and the <strong>cloud instance health</strong>; usually <strong>cordon, drain and replace</strong> the node first, then investigate.</p>
+
+<h2>Detailed explanation</h2>
+<p>A node becomes <strong>NotReady</strong> when the control plane stops receiving healthy status from its <strong>kubelet</strong>. The node controller marks the Ready condition <code>Unknown</code> if heartbeats stop, or <code>False</code> if the kubelet reports a problem.</p>
+<p><strong>Conditions and events.</strong> <code>kubectl describe node</code> shows <code>MemoryPressure</code>, <code>DiskPressure</code>, <code>PIDPressure</code> and <code>NetworkUnavailable</code>, plus the reason and last heartbeat time. <strong>DiskPressure</strong> is common: images, container logs and emptyDir volumes fill the root or image filesystem. <strong>MemoryPressure</strong> often comes from pods without memory limits or system daemons. <strong>PIDPressure</strong> comes from fork bombs or thread leaks.</p>
+<p><strong>Kubelet and runtime.</strong> If the status says &quot;Kubelet stopped posting node status&quot;, log in via SSH, the cloud serial console, or <code>kubectl debug node/&lt;name&gt;</code> if it is still reachable. Check <code>systemctl status kubelet containerd</code> and read <code>journalctl -u kubelet</code>. Typical findings: the kubelet crashed, the container runtime hangs, expired kubelet certificates, or the node is out of memory so system processes are killed.</p>
+<p><strong>Network.</strong> A broken <strong>CNI plugin</strong> (for example the Cilium or Calico agent failing) sets <code>NetworkUnavailable</code> or the runtime network not ready; lost connectivity to the <strong>API server</strong> (security group, route or DNS change) stops heartbeats entirely.</p>
+<p><strong>Cloud level.</strong> Instance status checks, host maintenance events, spot instance reclamation, or the VM being stopped.</p>
+<p>For production, the fastest safe action is usually to <strong>cordon and drain</strong> (or let it be evicted) and have the node replaced by the autoscaler or node pool, then investigate with logs. If many nodes go NotReady at once, suspect something shared: a network change, a CNI upgrade or a control-plane problem.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>kubectl get nodes</code> and <code>describe node</code> for conditions and events.</li>
+  <li>Check pressure conditions and resource usage.</li>
+  <li>On the node, check kubelet and containerd status and logs.</li>
+  <li>Check CNI pods on that node and API server connectivity.</li>
+  <li>Check cloud instance health and events.</li>
+  <li>Cordon, drain, replace; then root cause.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">kubectl describe node aks-apps-123 | sed -n '/Conditions/,/Addresses/p'
+kubectl get pods -n kube-system -o wide --field-selector spec.nodeName=aks-apps-123
+kubectl debug node/aks-apps-123 -it --image=busybox -- chroot /host sh
+  systemctl status kubelet containerd
+  journalctl -u kubelet --since &quot;30 min ago&quot; | tail -50
+  df -h /var/lib/containerd
+kubectl cordon aks-apps-123 &amp;&amp; kubectl drain aks-apps-123 --ignore-daemonsets --delete-emptydir-data</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Debugging one node when many are affected by a shared cause.</li>
+  <li>Leaving a NotReady node in service instead of draining it.</li>
+  <li>Pods without memory limits or ephemeral storage limits causing pressure.</li>
+  <li>Ignoring log rotation and image garbage collection settings.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I start with kubectl get nodes and describe node to see conditions and events. If memory, disk or PID pressure is true, the node is short of resources, often a full disk from images and logs, or pods without memory limits. If the kubelet stopped posting status, I check on the node itself whether kubelet and containerd are running and read journalctl for kubelet. CNI failures or lost connectivity to the API server also cause NotReady, and at cloud level I check instance health and events. Usually the fastest safe action is to cordon and drain the node and let the autoscaler replace it, then investigate.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens to pods on a node that stays NotReady?</strong> After the default 300-second toleration for not-ready/unreachable taints, they are evicted and recreated elsewhere.</li>
+  <li><strong>Why do StatefulSet pods take longer to move?</strong> Kubernetes will not create a replacement until it is sure the old pod is gone, to avoid two writers.</li>
+  <li><strong>How do you prevent DiskPressure?</strong> Log rotation, image GC thresholds, ephemeral-storage limits and larger OS disks.</li>
+</ul>
+</article>
+</body>
+</html>

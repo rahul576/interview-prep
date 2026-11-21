@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-079 · What is thread safety?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-079" data-topic="Concurrency">
+<h1>What is thread safety?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Code is <strong>thread-safe</strong> if it <strong>behaves correctly when used by multiple threads at the same time</strong>, whatever the scheduling, <strong>without callers adding extra synchronisation</strong>: no lost updates, no stale reads, no broken invariants.</p>
+
+<h2>Detailed explanation</h2>
+<p>Thread safety is about <strong>correctness under concurrency</strong>. The definition from &quot;Java Concurrency in Practice&quot;: a class is thread-safe if it behaves correctly when accessed from multiple threads, regardless of scheduling or interleaving, and with no additional synchronisation or coordination by the calling code.</p>
+<p>All problems come from <strong>shared mutable state</strong>. Three kinds of failure appear:</p>
+<ul>
+  <li><strong>Race conditions</strong>: the result depends on timing. <code>count++</code> (read, add, write) can lose updates; check-then-act (<code>if (!map.containsKey(k)) map.put(k, v)</code>) can insert twice.</li>
+  <li><strong>Visibility problems</strong>: without a happens-before relationship, one thread may never see another thread's write, for example a loop waiting on a non-volatile flag forever.</li>
+  <li><strong>Broken invariants</strong>: two related fields, such as <code>min</code> and <code>max</code>, are updated separately and another thread sees an inconsistent pair. Unsafe collections can even corrupt their internal structure.</li>
+</ul>
+<p>There are three families of solution:</p>
+<ol>
+  <li><strong>Do not share</strong>: <strong>thread confinement</strong>, such as local variables, request-scoped objects or <code>ThreadLocal</code>.</li>
+  <li><strong>Do not mutate</strong>: <strong>immutable objects</strong> (<code>String</code>, records with immutable components, <code>List.of</code>).</li>
+  <li><strong>Coordinate</strong>: <code>synchronized</code>, <code>Lock</code>s, <strong>atomic classes</strong> (<code>AtomicInteger</code>, <code>LongAdder</code>) and <strong>concurrent collections</strong> (<code>ConcurrentHashMap</code>, <code>CopyOnWriteArrayList</code>, <code>BlockingQueue</code>).</li>
+</ol>
+<p>Classic examples: <strong><code>StringBuilder</code> is not thread-safe, <code>StringBuffer</code> is</strong>; <strong><code>HashMap</code> is not, <code>ConcurrentHashMap</code> is</strong>; <code>ArrayList</code> is not, <code>CopyOnWriteArrayList</code> is. Note that a thread-safe class does not make compound operations across several calls safe automatically. And thread safety is a contract worth documenting, because callers need to know it.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Find the state that is shared between threads and mutable.</li>
+  <li>Eliminate sharing or mutation where possible.</li>
+  <li>For the rest, ensure each compound action is atomic.</li>
+  <li>Ensure visibility via a happens-before edge (lock, volatile, concurrent collection).</li>
+  <li>Verify with concurrent tests and code review; document the guarantee.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Not thread-safe: lost updates, HashMap may corrupt under concurrent writes
+class UnsafeStats {
+    private final Map&lt;String, Integer&gt; hits = new HashMap&lt;&gt;();
+    void hit(String page) { hits.put(page, hits.getOrDefault(page, 0) + 1); }
+}
+
+// Thread-safe: atomic per-key update in a concurrent map
+class SafeStats {
+    private final ConcurrentHashMap&lt;String, LongAdder&gt; hits = new ConcurrentHashMap&lt;&gt;();
+    void hit(String page) { hits.computeIfAbsent(page, p -&gt; new LongAdder()).increment(); }
+    long get(String page) {
+        LongAdder a = hits.get(page);
+        return a == null ? 0 : a.sum();
+    }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Not thread-safe</th><th>Thread-safe alternative</th></tr></thead>
+<tbody>
+<tr><td><code>StringBuilder</code></td><td><code>StringBuffer</code> (or confine the builder)</td></tr>
+<tr><td><code>HashMap</code></td><td><code>ConcurrentHashMap</code></td></tr>
+<tr><td><code>ArrayList</code></td><td><code>CopyOnWriteArrayList</code>, synchronizedList</td></tr>
+<tr><td><code>int</code> counter</td><td><code>AtomicInteger</code>, <code>LongAdder</code></td></tr>
+<tr><td><code>SimpleDateFormat</code></td><td><code>DateTimeFormatter</code> (immutable)</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming that using a thread-safe collection makes multi-step logic safe.</li>
+  <li>Sharing <code>SimpleDateFormat</code> across threads.</li>
+  <li>Making a class thread-safe with locks when confinement would avoid the need.</li>
+  <li>Assuming read-only access needs no thought: it does if anyone else writes.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Code is thread-safe when it behaves correctly however the threads are scheduled, without callers adding their own coordination: invariants hold, no updates are lost and every thread sees up-to-date values. The problems come from shared mutable state: race conditions like count++ losing updates, visibility issues where a thread never sees another's write, and broken invariants. I get thread safety by not sharing, with thread confinement and local variables, by not mutating, with immutable objects, or by coordinating with synchronized, locks, atomics and concurrent collections. For example HashMap and StringBuilder aren't thread-safe, while ConcurrentHashMap and StringBuffer are.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is an immutable object automatically thread safe?</strong> Yes, if it is truly immutable (all fields final, no mutable internals escape) and properly constructed without <code>this</code> escaping.</li>
+  <li><strong>Are local variables thread-safe?</strong> Yes, each thread has its own stack, though objects they reference may still be shared.</li>
+  <li><strong>Is ConcurrentHashMap enough for check-then-act?</strong> Only if you use its atomic methods like putIfAbsent, computeIfAbsent or merge.</li>
+</ul>
+</article>
+</body>
+</html>

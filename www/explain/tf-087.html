@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-087 · Should Terraform deploy application code, such as Lambda or Function App packages, or only the infrastructure?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-087" data-topic="Terraform">
+<h1>Should Terraform deploy application code, such as Lambda or Function App packages, or only the infrastructure?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Usually Terraform should manage the <strong>infrastructure and its configuration</strong> (function app, plan, identity, networking, settings) while the <strong>application pipeline deploys the code</strong>, because the two have different <strong>change rates, owners and release mechanics</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Application code changes many times a day and needs fast deployments with <strong>slots, canaries, traffic shifting and quick rollbacks</strong>. Infrastructure changes rarely and needs careful plans and reviews. When Terraform deploys the zip or container image too, every code release becomes an infrastructure run: slower, gated by the same approvals, and the plan mixes a harmless code change with a risky network change, making review harder.</p>
+<p>There is also an ownership problem. The platform or infrastructure team may own the Terraform repository, while product teams own the code. Coupling them forces product teams to wait for infrastructure pipelines, or gives them write access to infrastructure they should not touch.</p>
+<p>The common pattern is: Terraform creates the Lambda function or Function App with a <strong>placeholder package</strong> or initial image, and uses <code>lifecycle { ignore_changes = [...] }</code> on the attribute that holds the code or image version. The app pipeline then publishes new versions with <code>az functionapp deployment</code>, <code>aws lambda update-function-code</code>, a container image tag, or a tool like the Serverless Framework or SAM. Terraform no longer sees those updates as <strong>drift</strong>.</p>
+<p>There are sensible <strong>exceptions</strong>: small, infrastructure-like functions — a log forwarder, a custom resource handler, a scheduled tagging job — that change rarely and belong to the platform team can live with the Terraform code, packaged with the <code>archive_file</code> data source.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Terraform creates the compute resource, identity, networking, app settings and monitoring.</li>
+  <li>It deploys a placeholder package or bootstrap image so the resource is valid.</li>
+  <li><code>ignore_changes</code> tells Terraform not to manage the code or image version attribute.</li>
+  <li>The app pipeline builds, tests and deploys code, using slots or aliases for safe rollout.</li>
+  <li>Configuration the code depends on is added by Terraform first, with backward-compatible defaults.</li>
+  <li>The app release then starts using the new setting.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">resource &quot;aws_lambda_function&quot; &quot;api&quot; {
+  function_name = &quot;orders-api&quot;
+  role          = aws_iam_role.lambda.arn
+  runtime       = &quot;python3.12&quot;
+  handler       = &quot;app.handler&quot;
+  filename      = &quot;${path.module}/placeholder.zip&quot;
+
+  lifecycle {
+    ignore_changes = [filename, source_code_hash, s3_key, image_uri]
+  }
+}</code></pre>
+<pre><code class="language-bash"># app pipeline
+aws lambda update-function-code --function-name orders-api --zip-file fileb://build.zip --publish</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Putting the build artifact hash in Terraform, so every commit triggers an infrastructure apply.</li>
+  <li>Forgetting <code>ignore_changes</code>, so the next infrastructure apply rolls the code back to the placeholder.</li>
+  <li>Letting app pipelines also change infrastructure settings by CLI, causing drift.</li>
+  <li>Deploying code that needs a setting before Terraform has created it.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In most teams I let Terraform manage the infrastructure and its configuration — the function app, plan, identity, networking and app settings — and the application pipeline deploy the code. Code changes many times a day and needs slots, canaries and fast rollbacks; infrastructure changes rarely and needs careful plans. Coupling them makes releases slow and plans noisy. So Terraform creates the function with a placeholder package and uses ignore_changes on the code or image attribute, and the app pipeline publishes versions. The exception is small, infrastructure-like functions such as a log forwarder, which can live with the Terraform code.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How do you handle a config change the new code depends on?</strong> Apply the infrastructure change first, backward compatible, then release code; remove old settings later (expand and contract).</li>
+  <li><strong>What about container-based apps?</strong> Same pattern: Terraform owns the service, the pipeline sets the image tag; ignore the image attribute.</li>
+  <li><strong>When would you still let Terraform deploy code?</strong> Rarely-changing platform-owned functions packaged with <code>archive_file</code>.</li>
+</ul>
+</article>
+</body>
+</html>

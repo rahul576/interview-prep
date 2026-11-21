@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-166 · What are best practices for exception handling in a large Java codebase?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-166" data-topic="Exceptions">
+<h1>What are best practices for exception handling in a large Java codebase?</h1>
+<p class="ex-meta">Exceptions · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In a large codebase, <strong>never swallow exceptions</strong>, <strong>catch specific types</strong>, <strong>preserve the cause</strong> when wrapping, <strong>handle and log once at the right boundary</strong>, use <strong>try-with-resources</strong>, and keep exceptions for <strong>exceptional situations</strong>, not control flow.</p>
+
+<h2>Detailed explanation</h2>
+<p>Exception handling becomes a cross-team concern in big systems: inconsistent handling produces missing stack traces, duplicate log noise and incidents that nobody can diagnose. A few principles cover most of it.</p>
+<p><strong>Do not swallow.</strong> An empty <code>catch</code> hides bugs. If you genuinely can ignore an exception, write a comment explaining why. <strong>Catch specifically.</strong> Catching <code>Exception</code> or <code>Throwable</code> also catches programming errors and <code>InterruptedException</code>, which you then mishandle. Catch what you can actually handle. <strong>Preserve the cause.</strong> When translating a low-level exception (<code>SQLException</code>) into a domain one, pass it as the cause: <code>new OrderPersistenceException(&quot;...&quot;, e)</code>. Losing the cause loses the root of the stack trace.</p>
+<p><strong>Handle at the right layer and log once.</strong> Most code should let exceptions propagate. Handle them at boundaries: a Spring <code>@RestControllerAdvice</code>, a message listener's error handler, a scheduled job wrapper. Logging and rethrowing at every layer produces the same stack trace five times. <strong>Translate at boundaries</strong>: map domain exceptions to HTTP status codes and a stable error body (for example RFC 9457 Problem Details, which Spring supports via <code>ProblemDetail</code>).</p>
+<p>Also: restore the interrupt flag when catching <code>InterruptedException</code>, use try-with-resources for anything <code>AutoCloseable</code>, include useful context (ids, not secrets) in messages, and do not use exceptions for normal flow such as &quot;user not found during a search&quot;, because they are slow and obscure intent; return <code>Optional</code> instead.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Low-level code throws or lets exceptions propagate without logging.</li>
+  <li>Service code wraps infrastructure exceptions into meaningful domain or technical exceptions with the cause.</li>
+  <li>A central boundary handler catches, logs once with context and correlation id, and maps to a response.</li>
+  <li>Metrics count exceptions by type so alerts fire on unexpected ones.</li>
+  <li>Resources are closed by try-with-resources, keeping suppressed exceptions.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public Order load(long id) {
+    try {
+        return repository.findById(id).orElseThrow(() -&gt; new OrderNotFoundException(id));
+    } catch (DataAccessException e) {
+        throw new OrderStoreUnavailableException(&quot;Failed to load order &quot; + id, e); // keep cause
+    }
+}
+
+@RestControllerAdvice
+class ApiErrors {
+    @ExceptionHandler(OrderNotFoundException.class)
+    ProblemDetail notFound(OrderNotFoundException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li><code>catch (Exception e) { e.printStackTrace(); }</code> in production code.</li>
+  <li>Log-and-rethrow at every layer, producing duplicate logs.</li>
+  <li><code>throw new MyException(e.getMessage())</code>, which discards the original stack trace.</li>
+  <li>Catching <code>InterruptedException</code> and not restoring the interrupt status.</li>
+  <li>Exposing stack traces or internal messages in API responses.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;My rules are: never swallow exceptions, catch only specific types I can handle, and when I wrap a low-level exception into a domain one I always pass the cause. Most code just propagates; handling and logging happen once at boundaries like a controller advice or a listener error handler, which maps exceptions to proper status codes and a consistent error body. I use try-with-resources for cleanup, restore the interrupt flag, and I don't use exceptions for normal control flow. Finally, I add metrics per exception type so we notice new failures.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When would you create a custom exception class?</strong> When callers need to react to a specific condition or you need to map it to a specific response.</li>
+  <li><strong>Checked or unchecked for business errors?</strong> Usually unchecked in Spring services, documented in Javadoc.</li>
+  <li><strong>How do you correlate logs?</strong> Put a trace or correlation id in the MDC and include it in the error response.</li>
+</ul>
+</article>
+</body>
+</html>

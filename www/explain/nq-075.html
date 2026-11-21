@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-075 · What is the difference between extending Thread and implementing Runnable?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-075" data-topic="Concurrency">
+<h1>What is the difference between extending Thread and implementing Runnable?</h1>
+<p class="ex-meta">Concurrency · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Extending <strong><code>Thread</code></strong> uses up Java's <strong>single inheritance</strong> and ties the task to the thread; implementing <strong><code>Runnable</code></strong> <strong>separates the task from its execution</strong>, so it can run in any thread, pool or virtual thread, and the class stays free to extend something else. <strong>Prefer <code>Runnable</code>.</strong></p>
+
+<h2>Detailed explanation</h2>
+<p>Java classes can extend only <strong>one</strong> superclass. If <code>ReportJob extends Thread</code>, it cannot also extend <code>BaseJob</code>. Implementing an interface has no such cost: <code>ReportJob extends BaseJob implements Runnable</code> is fine.</p>
+<p>More important is <strong>separation of concerns</strong>. A <code>Thread</code> is an execution mechanism: it has a name, priority, state, daemon flag and a lifecycle that can be started only once. A <code>Runnable</code> is just a <strong>unit of work</strong>. When the work is a <code>Runnable</code>, the <em>how</em> is decided elsewhere: the same object can be passed to <code>new Thread(r)</code>, submitted to an <code>ExecutorService</code> thread pool, scheduled with a <code>ScheduledExecutorService</code>, wrapped in <code>CompletableFuture.runAsync</code>, or run on a <strong>virtual thread</strong>. A <code>Thread</code> subclass can technically be passed to an executor (because Thread implements Runnable), but you would be creating a heavyweight object that is never started as a thread, which is confusing.</p>
+<p>This is <strong>composition over inheritance</strong>: you do not inherit dozens of Thread methods you do not need, you just supply behaviour. Runnable is also a <strong>functional interface</strong>, so a lambda or method reference (<code>this::sync</code>) is enough, which reads better and makes testing easy: call <code>run()</code> directly in a unit test.</p>
+<p>Sharing is easier too: one Runnable instance can be given to several threads, all working on the same state (which then needs synchronisation), whereas each Thread subclass instance is its own thread.</p>
+<p>Extend <code>Thread</code> only when you genuinely customise <strong>thread behaviour</strong> itself, which is rare; even custom naming or daemon status is better done via a <code>ThreadFactory</code> or <code>Thread.Builder</code>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Extending: <code>class Job extends Thread { public void run() {...} }</code>, then <code>new Job().start()</code>.</li>
+  <li>Implementing: <code>class Job implements Runnable { public void run() {...} }</code>.</li>
+  <li>Execute anywhere: <code>new Thread(job).start()</code>, <code>pool.execute(job)</code>, <code>Thread.startVirtualThread(job)</code>.</li>
+  <li><code>Thread.run()</code> by default calls the target Runnable's <code>run()</code>.</li>
+  <li>Thread properties (name, daemon) are configured on the Thread or factory, not the task.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Extending Thread: task and mechanism are fused
+class EmailSenderThread extends Thread {
+    @Override public void run() { sendPendingEmails(); }
+}
+new EmailSenderThread().start();
+
+// Implementing Runnable: task is independent
+class EmailSender extends AuditedJob implements Runnable {   // can still extend
+    @Override public void run() { sendPendingEmails(); }
+}
+Runnable job = new EmailSender();
+new Thread(job, &quot;email-1&quot;).start();
+scheduler.scheduleAtFixedRate(job, 0, 1, TimeUnit.MINUTES);
+Thread.startVirtualThread(job);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>Extend Thread</th><th>Implement Runnable</th></tr></thead>
+<tbody>
+<tr><td>Inheritance</td><td>Uses the only superclass</td><td>Class can extend another</td></tr>
+<tr><td>Reuse with executors</td><td>Awkward</td><td>Natural</td></tr>
+<tr><td>Lambda support</td><td>No</td><td>Yes</td></tr>
+<tr><td>Coupling</td><td>Task tied to thread</td><td>Task separate from execution</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Extending Thread just to give it a name.</li>
+  <li>Passing a Thread subclass to an executor and expecting its thread settings to apply.</li>
+  <li>Calling <code>run()</code> on the Runnable expecting a new thread.</li>
+  <li>Sharing one Runnable across threads without synchronising its fields.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Extending Thread ties my task to the thread mechanism and uses up my only superclass, because Java has single inheritance. Implementing Runnable keeps the task separate from how it runs: the same Runnable can go to a new Thread, an ExecutorService, a scheduled executor or a virtual thread, and my class can still extend another class. It follows composition over inheritance, and as a functional interface it works with lambdas. So I prefer Runnable, and only extend Thread if I really need to customise thread behaviour itself.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Is Thread itself a Runnable?</strong> Yes, Thread implements Runnable; its run() calls the target Runnable if one was given.</li>
+  <li><strong>How do you name threads without extending Thread?</strong> Use a ThreadFactory or <code>Thread.ofPlatform().name(&quot;worker-&quot;, 0)</code>.</li>
+  <li><strong>When would you use Callable instead?</strong> When the task must return a value or throw checked exceptions.</li>
+</ul>
+</article>
+</body>
+</html>

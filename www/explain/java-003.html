@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-003 · What is the contract between equals and hashCode, and what goes wrong if you break it?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-003" data-topic="Core Java &amp; OOP">
+<h1>What is the contract between equals and hashCode, and what goes wrong if you break it?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels entry, mid</p>
+
+<h2>In one line</h2>
+<p>If <strong><code>a.equals(b)</code></strong> is true, then <strong><code>a.hashCode() == b.hashCode()</code></strong> must be true; unequal objects <strong>may</strong> share a hash code. <strong>Hash-based collections</strong> rely on this, so overriding <code>equals</code> without <code>hashCode</code> breaks <code>HashMap</code> and <code>HashSet</code> lookups.</p>
+
+<h2>Detailed explanation</h2>
+<p><code>Object.equals</code> defaults to identity (<code>==</code>), and <code>Object.hashCode</code> is typically derived from identity. When you give a class <strong>value semantics</strong> by overriding <code>equals</code> (two <code>Money</code> objects with the same amount and currency are equal), you must override <code>hashCode</code> consistently.</p>
+<p>The <strong>contract</strong> from <code>Object</code>'s Javadoc:</p>
+<ul>
+  <li><strong>equals</strong> must be <strong>reflexive</strong> (<code>a.equals(a)</code>), <strong>symmetric</strong>, <strong>transitive</strong>, <strong>consistent</strong> (same answer while the fields used do not change) and return <code>false</code> for <code>null</code>.</li>
+  <li><strong>hashCode</strong> must be consistent during an execution while the fields used in <code>equals</code> do not change.</li>
+  <li><strong>Equal objects must have equal hash codes.</strong> The reverse is not required: different objects can <strong>collide</strong>, though good hash functions minimise collisions for performance.</li>
+</ul>
+<p><strong>Why it matters</strong>: <code>HashMap</code>, <code>HashSet</code> and <code>ConcurrentHashMap</code> first use <code>hashCode()</code> to pick a <strong>bucket</strong>, then use <code>equals()</code> to find the exact key within it. If two equal objects have different hash codes, they land in different buckets: <code>map.get(equalKey)</code> returns <code>null</code>, <code>set.contains</code> returns false, and a <code>HashSet</code> can contain &quot;duplicates&quot;. If <code>hashCode</code> is constant (always 42), it is legal but every entry collides, turning O(1) lookups into a long chain or a tree (Java 8 treeifies large buckets).</p>
+<p><strong>Mutable keys</strong> are a related trap: if fields used in <code>hashCode</code> change after insertion, the entry sits in the wrong bucket and becomes unreachable.</p>
+<p><strong>Best practice</strong>: base both methods on the <strong>same, ideally immutable fields</strong>; generate them with <code>Objects.equals</code>/<code>Objects.hash</code>, the IDE, or use <strong>records</strong> (Java 16), which generate correct <code>equals</code>, <code>hashCode</code> and <code>toString</code> from their components. Be careful with inheritance: mixing subclass fields into <code>equals</code> usually breaks symmetry; prefer <code>final</code> classes or <code>getClass()</code> checks. JPA entities need special care because ids change at persist time.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>map.put(key, v)</code> calls <code>key.hashCode()</code>, spreads it and picks a bucket.</li>
+  <li>Within the bucket, it compares existing keys with <code>equals()</code>.</li>
+  <li><code>map.get(other)</code> repeats: <code>other.hashCode()</code> selects the bucket, <code>equals</code> finds the key.</li>
+  <li>Different hash codes for equal keys mean a different bucket, so the lookup misses.</li>
+  <li>Collisions are resolved by <code>equals</code>, so correctness holds, only speed suffers.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">final class Email {
+    private final String value;
+    Email(String value) { this.value = value.toLowerCase(); }
+
+    @Override public boolean equals(Object o) {
+        return o instanceof Email e &amp;&amp; value.equals(e.value);
+    }
+    // Omit this and the set below has size 2 and contains() returns false
+    @Override public int hashCode() { return value.hashCode(); }
+}
+
+Set&lt;Email&gt; set = new HashSet&lt;&gt;();
+set.add(new Email(&quot;A@shop.com&quot;));
+set.add(new Email(&quot;a@shop.com&quot;));
+System.out.println(set.size());                               // 1
+System.out.println(set.contains(new Email(&quot;a@SHOP.com&quot;)));    // true
+
+record Sku(String code, int version) {}                       // equals/hashCode generated</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Overriding <code>equals(Email other)</code> (an overload) instead of <code>equals(Object)</code>.</li>
+  <li>Overriding <code>equals</code> but not <code>hashCode</code>.</li>
+  <li>Using mutable fields in <code>hashCode</code> for objects used as keys.</li>
+  <li>Including fields in <code>hashCode</code> that are not in <code>equals</code>.</li>
+  <li>Breaking symmetry with subclass comparisons.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;If two objects are equal according to equals, they must return the same hashCode. The reverse isn't required: unequal objects can share a hash code, which is just a collision. HashMap and HashSet use hashCode to pick the bucket and then equals to find the exact key. If I override equals but not hashCode, two equal objects can land in different buckets, so lookups fail and a HashSet can hold duplicates. So I always override both together, based on the same, ideally immutable fields, keep equals reflexive, symmetric, transitive and consistent, and in modern Java I often just use a record.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if you use a mutable field in hashCode and change it after putting the object in a HashMap?</strong> The entry stays in the old bucket, so get and remove with that object fail and the entry is effectively lost (a memory leak).</li>
+  <li><strong>Is a constant hashCode legal?</strong> Yes, but every key collides and performance degrades badly.</li>
+  <li><strong>Why use instanceof vs getClass() in equals?</strong> instanceof allows subclasses but can break symmetry; getClass() is strict; for final classes either is fine.</li>
+</ul>
+</article>
+</body>
+</html>

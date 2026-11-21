@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-049 · How can you ensure thread safety when using parallel streams?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-049" data-topic="Java 8+ Features">
+<h1>How can you ensure thread safety when using parallel streams?</h1>
+<p class="ex-meta">Java 8+ Features · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Make parallel streams thread-safe by design: keep lambdas <strong>stateless and side-effect free</strong>, do <strong>not modify the source</strong>, build results with <strong><code>collect</code>, <code>reduce</code> and <code>Collectors</code></strong> that merge <strong>per-thread containers</strong>, use <strong>concurrent collectors</strong> when order does not matter, and <strong>atomics or <code>LongAdder</code></strong> only as a last resort.</p>
+
+<h2>Detailed explanation</h2>
+<p>The stream API's own contract gives the recipe. Behavioural parameters (the lambdas) should be:</p>
+<ul>
+  <li><strong>Non-interfering</strong>: they must not modify the source collection while the pipeline runs.</li>
+  <li><strong>Stateless</strong>: their result must not depend on state that changes during execution, such as a shared <code>Set</code> used to track &quot;seen&quot; items.</li>
+  <li><strong>Side-effect free</strong> where possible: no writes to external variables or collections.</li>
+</ul>
+<p>If you follow these rules, the stream does the coordination for you. <strong>Mutable reduction</strong> with <code>collect</code> gives each worker its own container (a list, a map, a <code>StringBuilder</code>) and then combines them with the collector's combiner. <strong><code>reduce</code></strong> needs an <strong>identity</strong> value (such as <code>0</code> for addition) and an <strong>associative</strong> accumulator and combiner, because partial results may be grouped in any way: <code>(a + b) + c</code> must equal <code>a + (b + c)</code>. Primitive operations like <code>sum</code>, <code>count</code>, <code>max</code> and <code>summaryStatistics</code> are already safe.</p>
+<p>When encounter order does not matter and you are grouping a large data set, <strong><code>Collectors.groupingByConcurrent</code></strong> and <strong><code>toConcurrentMap</code></strong> write into one shared <code>ConcurrentHashMap</code>, which avoids the cost of merging many partial maps. They are unordered by nature.</p>
+<p>If you really need a shared counter, for example for metrics, use <strong><code>LongAdder</code></strong> (low contention, stripes the count internally) or <code>AtomicLong</code>. These are correct, but they add contention, so prefer computing the value as part of the pipeline.</p>
+<p><strong>Immutability</strong> makes everything simpler: records and immutable value objects can be read safely by any number of threads. Finally, remember that context stored in <strong>ThreadLocal</strong> (logging MDC, security context, transactions) is not available on worker threads.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write pure lambdas that only use their input.</li>
+  <li>Never add, remove or set elements on the source during processing.</li>
+  <li>Produce results through collectors or reductions.</li>
+  <li>Supply a correct identity and an associative combiner for <code>reduce</code>.</li>
+  <li>Use concurrent collectors for large unordered groupings.</li>
+  <li>Use <code>LongAdder</code> only for unavoidable shared counters.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Safe aggregation
+Map&lt;String, Long&gt; countsByCity = customers.parallelStream()
+    .collect(Collectors.groupingByConcurrent(Customer::city, Collectors.counting()));
+
+// Correct three-argument reduce: identity, accumulator, combiner
+long totalChars = lines.parallelStream()
+    .reduce(0L, (acc, line) -&gt; acc + line.length(), Long::sum);
+
+// Unavoidable shared metric
+LongAdder invalid = new LongAdder();
+List&lt;Record&gt; valid = records.parallelStream()
+    .filter(r -&gt; { boolean ok = r.isValid(); if (!ok) invalid.increment(); return ok; })
+    .toList();
+
+// Stateful lambda (avoid): result depends on thread timing
+Set&lt;String&gt; seen = new HashSet&lt;&gt;();
+items.parallelStream().filter(i -&gt; seen.add(i.key())); // use distinct() instead</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>A non-associative reduction such as subtraction or average-of-averages.</li>
+  <li>An identity that is not neutral, for example <code>reduce(10, Integer::sum)</code>, which adds 10 per chunk.</li>
+  <li>Using a shared <code>HashSet</code> for de-duplication instead of <code>distinct()</code>.</li>
+  <li>Expecting ordered output from <code>groupingByConcurrent</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I write the pipeline so it does not need synchronisation. Lambdas are stateless and pure, they do not read or write shared mutable variables, and they never modify the source while it is processed. Results come from terminal operations designed for parallelism: collect with Collectors, toList, sum, or reduce with a true identity and an associative accumulator and combiner. When order does not matter, groupingByConcurrent or toConcurrentMap use a ConcurrentHashMap. If I really need a shared counter I use LongAdder, accepting some contention. Immutable objects and records make all of this easier, and I remember that ThreadLocal context does not propagate to the workers.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why must the reduce operation be associative?</strong> Chunks are reduced separately and combined in arbitrary groupings, so only associative operations give the same answer.</li>
+  <li><strong><code>LongAdder</code> vs <code>AtomicLong</code>?</strong> <code>LongAdder</code> spreads updates across cells, so it scales better under high write contention.</li>
+  <li><strong>What does non-interference mean?</strong> The source must not be modified during the stream's execution.</li>
+</ul>
+</article>
+</body>
+</html>

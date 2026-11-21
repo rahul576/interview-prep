@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-085 · What is the difference between wait(), sleep(), yield(), and join()?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-085" data-topic="Concurrency">
+<h1>What is the difference between wait(), sleep(), yield(), and join()?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p><strong><code>wait()</code></strong> (an <code>Object</code> method) <strong>releases the monitor</strong> and waits for a notification; <strong><code>sleep()</code></strong> pauses for a time <strong>keeping any locks</strong>; <strong><code>yield()</code></strong> is a <strong>scheduler hint</strong> to let other threads run; <strong><code>join()</code></strong> waits <strong>until another thread terminates</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>wait()</code></strong> belongs to <code>Object</code> and must be called while holding that object's monitor, inside <code>synchronized (obj)</code>, otherwise <code>IllegalMonitorStateException</code> is thrown. It atomically <strong>releases the lock</strong> and parks the thread in the object's wait set until <code>notify()</code>/<code>notifyAll()</code>, a timeout (<code>wait(ms)</code>), interruption or a spurious wakeup. Before returning it <strong>reacquires the lock</strong>. It is for <strong>condition-based coordination</strong>, and must be used in a <code>while</code> loop.</p>
+<p><strong><code>Thread.sleep(ms)</code></strong> is a <strong>static</strong> method that pauses the <em>current</em> thread for at least the given time. It does <strong>not release any locks</strong> it holds, so sleeping inside a synchronized block blocks every other thread needing that lock. It is for time-based delays, such as simple retry backoff or tests; it is not a coordination mechanism. On virtual threads, sleep parks the virtual thread without blocking a carrier.</p>
+<p><strong><code>Thread.yield()</code></strong> is a static <strong>hint</strong> that the current thread is willing to give up the CPU so other runnable threads can run. The scheduler may ignore it. It does not release locks, has no guarantees and is rarely useful outside of spin-wait experiments; <code>Thread.onSpinWait()</code> is the modern hint for busy-wait loops.</p>
+<p><strong><code>join()</code></strong> is an instance method called on <strong>another thread object</strong>: <code>worker.join()</code> makes the current thread wait until <code>worker</code> terminates (or until a timeout with <code>join(ms)</code>). When it returns, everything the worker did is visible (thread termination happens-before join returning). It is implemented with <code>wait</code> internally on platform threads.</p>
+<p><code>wait</code>, <code>sleep</code> and <code>join</code> all throw the checked <strong><code>InterruptedException</code></strong> if the thread is interrupted while waiting; <code>yield</code> does not.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>wait</code>: hold lock, call <code>obj.wait()</code>, lock released, sleep until notified, reacquire, re-check condition.</li>
+  <li><code>sleep</code>: thread goes <code>TIMED_WAITING</code> for the duration, locks still held.</li>
+  <li><code>yield</code>: thread moves from running to runnable; scheduler may reschedule it immediately.</li>
+  <li><code>join</code>: caller waits (<code>WAITING</code>) until target is <code>TERMINATED</code>.</li>
+  <li>Interrupts wake <code>wait</code>/<code>sleep</code>/<code>join</code> with <code>InterruptedException</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">Object lock = new Object();
+
+Thread worker = new Thread(() -&gt; {
+    synchronized (lock) {
+        try {
+            Thread.sleep(1000);      // holds 'lock' the whole second
+            lock.notifyAll();
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+});
+
+synchronized (lock) {
+    worker.start();
+    lock.wait(5000);                 // releases 'lock', so worker can enter
+}
+worker.join();                        // wait until worker has finished
+Thread.yield();                       // just a hint, no guarantee</code></pre>
+<p>(Real code would wait in a loop on a condition variable.)</p>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>wait</th><th>sleep</th><th>yield</th><th>join</th></tr></thead>
+<tbody>
+<tr><td>Defined on</td><td>Object (instance)</td><td>Thread (static)</td><td>Thread (static)</td><td>Thread (instance)</td></tr>
+<tr><td>Needs monitor</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
+<tr><td>Releases lock</td><td>Yes, that monitor</td><td>No</td><td>No</td><td>No (of caller's locks)</td></tr>
+<tr><td>Ends when</td><td>notify/timeout/interrupt</td><td>Time elapses</td><td>Immediately</td><td>Target thread ends</td></tr>
+<tr><td>InterruptedException</td><td>Yes</td><td>Yes</td><td>No</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Calling <code>wait()</code> without holding the monitor.</li>
+  <li>Sleeping while holding a lock, blocking others.</li>
+  <li>Using <code>sleep</code> to &quot;wait until another thread is ready&quot; instead of proper coordination.</li>
+  <li>Relying on <code>yield()</code> for correctness.</li>
+  <li>Swallowing <code>InterruptedException</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;wait is an Object method I call inside synchronized on that object: the thread releases the monitor and waits until another thread calls notify or notifyAll, or a timeout, then reacquires the lock. sleep is a static Thread method that pauses the current thread for a time without releasing any locks. yield is a static hint to the scheduler that the thread is willing to give up the CPU; it has no guarantees and is rarely useful. join is called on another thread and makes the current thread wait until that thread terminates, optionally with a timeout. wait, sleep and join all throw InterruptedException.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What happens if you call wait() without holding the lock?</strong> It throws IllegalMonitorStateException.</li>
+  <li><strong>Why is wait on Object and sleep on Thread?</strong> wait is tied to an object's monitor and wait set; sleep only concerns the current thread's timing.</li>
+  <li><strong>What does join guarantee about memory?</strong> All actions of the terminated thread are visible to the thread that returns from join.</li>
+</ul>
+</article>
+</body>
+</html>

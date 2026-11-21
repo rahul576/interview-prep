@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-107 · What is the Java Memory Model, and what does happens-before mean?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-107" data-topic="Core Java &amp; OOP">
+<h1>What is the Java Memory Model, and what does happens-before mean?</h1>
+<p class="ex-meta">Core Java &amp; OOP · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>The <strong>Java Memory Model (JMM)</strong> defines <strong>when writes by one thread are guaranteed visible to another</strong> and which <strong>reorderings</strong> are allowed; <strong>happens-before</strong> is its core rule: if A happens-before B, B sees A's effects. Without a happens-before edge you have a <strong>data race</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Compilers, the JIT and CPUs aggressively optimise: they keep values in registers, reorder independent instructions, and CPUs buffer stores and cache data per core. Within a single thread this is invisible (as-if-serial semantics), but across threads it means a write may be seen late, never, or in a different order than written. The <strong>JMM</strong> (JSR-133, Java 5) is the contract between programmers and the JVM about what is allowed.</p>
+<p><strong>Happens-before</strong> is a partial order on actions. If action A <strong>happens-before</strong> B, then A's effects (and everything before A in its thread) are visible to B, and they appear ordered. The main sources of happens-before edges:</p>
+<ul>
+  <li><strong>Program order</strong>: within one thread, each action happens-before later ones.</li>
+  <li><strong>Monitor lock</strong>: an unlock of a monitor happens-before every subsequent lock of the <strong>same</strong> monitor (<code>synchronized</code>, and equivalently <code>Lock.unlock</code>/<code>lock</code>).</li>
+  <li><strong>Volatile</strong>: a write to a volatile field happens-before every subsequent read of that field.</li>
+  <li><strong>Thread start</strong>: <code>thread.start()</code> happens-before any action in the started thread.</li>
+  <li><strong>Thread termination</strong>: all actions in a thread happen-before another thread returns from <code>join()</code> on it.</li>
+  <li><strong>Final fields</strong>: values written in a constructor to <code>final</code> fields are visible to all threads after construction, provided <code>this</code> did not escape.</li>
+  <li><strong>Transitivity</strong>: if A hb B and B hb C, then A hb C. <code>java.util.concurrent</code> classes document their own edges (e.g. putting into a <code>ConcurrentHashMap</code> or <code>BlockingQueue</code> happens-before retrieval).</li>
+</ul>
+<p>If two threads access the same variable, at least one writes, and there is <strong>no happens-before</strong> between them, the program has a <strong>data race</strong>. Results can include <strong>stale values</strong> (a stop flag never seen), <strong>reordering</strong> (a flag seen as true before the data it guards), and seeing <strong>partially constructed objects</strong> (classic broken double-checked locking). Correctly synchronised programs are guaranteed to behave as if sequentially consistent.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Thread A writes data, then performs a &quot;release&quot; action (unlock, volatile write, start, completing a future).</li>
+  <li>The JVM emits memory barriers to prevent reordering past that action.</li>
+  <li>Thread B performs the matching &quot;acquire&quot; (lock, volatile read, join, get).</li>
+  <li>By transitivity, all of A's earlier writes are visible to B.</li>
+  <li>Without the pair, no visibility or ordering guarantee exists.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Publisher {
+    private Config config;                 // plain field
+    private volatile boolean ready;        // publication flag
+
+    void writer() {                        // thread A
+        config = loadConfig();             // 1
+        ready = true;                      // 2: volatile write (release)
+    }
+
+    void reader() {                        // thread B
+        if (ready) {                       // 3: volatile read (acquire)
+            use(config);                   // 4: guaranteed to see config from 1
+        }
+    }
+}
+// Without volatile on 'ready', B could see ready == true but config == null,
+// or loop forever never seeing ready become true.
+
+Thread t = new Thread(() -&gt; result = compute());
+t.start();
+t.join();                                  // join: result is visible here
+System.out.println(result);</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Assuming writes are immediately visible to other threads.</li>
+  <li>Synchronising writers but not readers.</li>
+  <li>Using different locks and assuming they create happens-before with each other.</li>
+  <li>Double-checked locking without <code>volatile</code>.</li>
+  <li>Thinking <code>volatile</code> also gives atomicity for compound actions.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;The Java Memory Model defines when a write by one thread is guaranteed to be visible to another, and which reorderings the compiler and CPU may do. The key concept is happens-before: if action A happens-before B, then B sees A's effects. Edges come from releasing and acquiring the same lock, writing and then reading a volatile field, Thread start and join, final-field initialisation, and the concurrency utilities, and they're transitive. Without such an edge I have a data race, and threads can see stale values, reordered writes or partially constructed objects. So I make sure shared data is published through one of these mechanisms.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is safe publication of objects important, and how do you achieve it?</strong> Without it another thread may see a reference before the object's fields are initialised; publish via final fields, volatile, a lock, a concurrent collection or static initialisation.</li>
+  <li><strong>What is sequential consistency for data-race-free programs?</strong> The JMM guarantee that correctly synchronised programs behave as if all actions happened in some single interleaved order.</li>
+  <li><strong>Does synchronized on different objects create happens-before?</strong> No; the edge only exists between unlock and lock of the same monitor.</li>
+</ul>
+</article>
+</body>
+</html>

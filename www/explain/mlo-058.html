@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-058 · How do you handle highly imbalanced classes, such as fraud at 0.1 percent, in training and evaluation?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-058" data-topic="MLOps">
+<h1>How do you handle highly imbalanced classes, such as fraud at 0.1 percent, in training and evaluation?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>With heavy imbalance, <strong>accuracy is misleading</strong>; evaluate with <strong>precision, recall and PR-AUC</strong> plus business metrics, train with <strong>class weights or resampling</strong> (then <strong>recalibrate</strong>), ensure <strong>enough positives in splits</strong> (stratified or time-based), <strong>tune the threshold</strong> to operational capacity, and <strong>monitor alert volumes and precision</strong> in production.</p>
+
+<h2>Detailed explanation</h2>
+<p>At 0.1 percent fraud, a model that always says &quot;not fraud&quot; is 99.9 percent accurate and catches nothing. ROC-AUC can also look flattering, because the huge number of true negatives makes the false positive rate tiny even when most alerts are wrong.</p>
+<p><strong>Evaluation.</strong> Use <strong>precision</strong> (share of alerts that are fraud), <strong>recall</strong> (share of fraud caught), the <strong>precision-recall curve and PR-AUC</strong>, and metrics at the operating point, such as <strong>recall at a fixed alert budget</strong> or precision at 1 percent of transactions reviewed. Add business metrics: <strong>fraud value caught</strong> (not just count), false declines and alert volume.</p>
+<p><strong>Training.</strong> Options: <strong>class weights</strong> (for example <code>scale_pos_weight</code> in XGBoost, <code>class_weight</code> in scikit-learn) make errors on the rare class cost more; <strong>undersampling</strong> the majority class speeds training and focuses learning; <strong>oversampling</strong> or SMOTE duplicates or synthesises positives, with risk of overfitting. Resampling and weighting distort predicted probabilities, so <strong>recalibrate</strong> (Platt or isotonic on unresampled validation data) if probabilities matter. Often a strong gradient boosting model with modest weighting plus threshold tuning beats elaborate resampling. Focal loss helps in deep learning.</p>
+<p><strong>Splits.</strong> Ensure validation and test sets contain <strong>enough positives</strong> for stable metrics: stratified splits, or time-based splits covering long enough periods. Resample <strong>only the training set</strong>, never validation or test.</p>
+<p><strong>Threshold.</strong> Choose the operating point by <strong>investigator capacity</strong> and costs, not 0.5.</p>
+<p><strong>Production.</strong> Monitor alert volumes, precision of reviewed alerts and caught fraud value. Because positives are rare, small drifts translate into big workload changes, which is a useful early signal.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Establish metrics: PR-AUC, recall at alert budget, value caught.</li>
+  <li>Split by time or stratify, keeping enough positives.</li>
+  <li>Train with class weights or training-set-only resampling.</li>
+  <li>Calibrate on untouched validation data.</li>
+  <li>Select the threshold by capacity and cost.</li>
+  <li>Monitor alert volume and precision in production.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">from xgboost import XGBClassifier
+from sklearn.metrics import average_precision_score, precision_recall_curve
+
+ratio = (y_train == 0).sum() / (y_train == 1).sum()      # ~999
+model = XGBClassifier(n_estimators=600, max_depth=6, scale_pos_weight=ratio ** 0.5,
+                      eval_metric=&quot;aucpr&quot;)
+model.fit(X_train, y_train)
+p = model.predict_proba(X_val)[:, 1]
+print(&quot;PR-AUC&quot;, average_precision_score(y_val, p))
+
+k = int(0.005 * len(p))                                   # review top 0.5 %
+top = p.argsort()[::-1][:k]
+print(&quot;recall@0.5%&quot;, y_val.iloc[top].sum() / y_val.sum())</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Reporting accuracy or only ROC-AUC.</li>
+  <li>Resampling before the split, leaking duplicates into test.</li>
+  <li>Using resampled-model probabilities without recalibration.</li>
+  <li>Too few positives in the test set for stable metrics.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;At 0.1 percent fraud, predicting 'no fraud' is 99.9 percent accurate and useless, so I evaluate with precision, recall and PR-AUC, plus fraud value caught and alert volume. In training I use class weights or resampling on the training set only, and recalibrate probabilities afterwards because resampling distorts them. Splits need enough positives, stratified or time-based. The threshold is tuned to what investigators can handle. In production I monitor alert volumes and precision of reviewed alerts, since small drifts show up quickly as workload changes.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why might oversampling look better offline than it is?</strong> Duplicated positives leak into validation if resampled before splitting, and overfitting to repeats.</li>
+  <li><strong>Why not ROC-AUC?</strong> True negatives dominate, hiding poor precision.</li>
+  <li><strong>Anomaly detection instead?</strong> Useful when labels are very scarce, often combined with supervised models.</li>
+</ul>
+</article>
+</body>
+</html>

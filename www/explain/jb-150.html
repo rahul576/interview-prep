@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-150 · What is JDBC, and how does a Java application communicate with a database?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-150" data-topic="Databases &amp; SQL">
+<h1>What is JDBC, and how does a Java application communicate with a database?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>JDBC</strong> is the standard Java API (<code>java.sql</code> / <code>javax.sql</code>) for relational databases: a vendor <strong>driver</strong> implements it, and the application gets a <strong>Connection</strong> (from a pooled <strong>DataSource</strong> such as HikariCP), executes <strong>PreparedStatements</strong>, reads <strong>ResultSets</strong>, manages <strong>transactions</strong> and closes resources.</p>
+
+<h2>Detailed explanation</h2>
+<p>JDBC separates application code from database specifics. Interfaces such as <code>Connection</code>, <code>PreparedStatement</code> and <code>ResultSet</code> are defined by Java; each vendor ships a <strong>driver</strong> JAR (PostgreSQL, MySQL Connector/J, Oracle ojdbc) that implements them and speaks the database's <strong>wire protocol</strong> over TCP. Modern drivers are &quot;type 4&quot;, pure Java. Since JDBC 4 drivers register themselves via the service loader, so <code>Class.forName</code> is no longer needed.</p>
+<p>Opening a physical connection is expensive: TCP handshake, TLS, authentication, session setup. So production code obtains connections from a <strong>DataSource backed by a connection pool</strong>. <strong>HikariCP</strong> is the default in Spring Boot. &quot;Closing&quot; a pooled connection returns it to the pool.</p>
+<p>The basic flow:</p>
+<ol>
+  <li>Borrow a <code>Connection</code>.</li>
+  <li>Create a <code>PreparedStatement</code> with <code>?</code> placeholders and bind values.</li>
+  <li><code>executeQuery()</code> for SELECT, returning a <code>ResultSet</code> cursor, or <code>executeUpdate()</code> / <code>executeBatch()</code> for writes.</li>
+  <li>Iterate the <code>ResultSet</code>, mapping columns to objects.</li>
+  <li>Close ResultSet, statement and connection, ideally with <strong>try-with-resources</strong>.</li>
+</ol>
+<p>Transactions default to <strong>auto-commit</strong> (every statement commits). For a unit of work you call <code>setAutoCommit(false)</code>, then <code>commit()</code> or <code>rollback()</code>. <code>SQLException</code> carries a SQLState and vendor error code.</p>
+<p>Higher-level tools all sit on top of JDBC: Spring's <code>JdbcTemplate</code>/<code>JdbcClient</code>, jOOQ, MyBatis, and JPA/Hibernate. Spring's <code>@Transactional</code> binds a connection to the thread and handles commit and rollback for you.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The pool opens N physical connections at startup through the driver.</li>
+  <li>A thread borrows one; the pool tracks it as active.</li>
+  <li>The driver sends SQL and parameters using the database protocol.</li>
+  <li>The database returns rows, streamed according to fetch size.</li>
+  <li>Commit or rollback ends the transaction.</li>
+  <li>Close returns the connection to the pool for reuse.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// HikariCP DataSource (Spring Boot does this from application.yml)
+HikariConfig cfg = new HikariConfig();
+cfg.setJdbcUrl(&quot;jdbc:postgresql://db:5432/shop&quot;);
+cfg.setUsername(&quot;app&quot;); cfg.setPassword(System.getenv(&quot;DB_PASS&quot;));
+cfg.setMaximumPoolSize(20);
+DataSource ds = new HikariDataSource(cfg);
+
+String sql = &quot;SELECT id, total FROM orders WHERE customer_id = ?&quot;;
+try (Connection con = ds.getConnection();
+     PreparedStatement ps = con.prepareStatement(sql)) {
+    ps.setLong(1, 42L);
+    try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+            System.out.println(rs.getLong(&quot;id&quot;) + &quot; &quot; + rs.getBigDecimal(&quot;total&quot;));
+        }
+    }
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Using <code>DriverManager.getConnection</code> per request in production.</li>
+  <li>Not closing connections, leaking them from the pool.</li>
+  <li>Building SQL with string concatenation.</li>
+  <li>Forgetting to restore auto-commit or roll back on exceptions in manual transaction code.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;JDBC is Java's standard API for relational databases. The vendor's driver implements it and speaks the database protocol, so my code is the same for Postgres or MySQL. In practice I get a Connection from a DataSource backed by a pool like HikariCP, because opening connections is expensive. I create a PreparedStatement with bind parameters, execute it and iterate the ResultSet. For transactions I turn off auto-commit and commit or roll back, or let Spring's @Transactional do it. Everything is closed with try-with-resources. JdbcTemplate, jOOQ, MyBatis and Hibernate are all built on top of JDBC.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What if you forget to close a pooled connection?</strong> It is never returned; the pool exhausts and requests time out.</li>
+  <li><strong>What is fetch size?</strong> How many rows the driver fetches per round trip; important for streaming large results.</li>
+  <li><strong>What does auto-commit mean?</strong> Each statement is its own transaction, committed immediately.</li>
+</ul>
+</article>
+</body>
+</html>

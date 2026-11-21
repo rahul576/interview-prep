@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-113 · What are ReentrantLock, ReadWriteLock, and StampedLock?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-113" data-topic="Concurrency">
+<h1>What are ReentrantLock, ReadWriteLock, and StampedLock?</h1>
+<p class="ex-meta">Concurrency · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p><strong><code>ReentrantLock</code></strong> is an explicit, reentrant mutual-exclusion lock with <strong><code>tryLock</code>, timeouts, interruptible locking, fairness and <code>Condition</code>s</strong>; <strong><code>ReadWriteLock</code></strong> allows <strong>many readers or one writer</strong>; <strong><code>StampedLock</code></strong> adds <strong>optimistic reads</strong> validated with a stamp, but is <strong>not reentrant</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong><code>ReentrantLock</code></strong> has the same core semantics as <code>synchronized</code>: mutual exclusion, memory visibility and reentrancy (the owning thread can lock again; it must unlock the same number of times). It adds control: <code>tryLock()</code> and <code>tryLock(timeout)</code> to avoid waiting forever, <code>lockInterruptibly()</code> so cancellation works while waiting, an optional <strong>fair</strong> mode where the longest waiter goes next, multiple <strong><code>Condition</code></strong> objects (<code>newCondition()</code>), and inspection methods such as <code>isLocked</code> and <code>getQueueLength</code>. The price: you must <code>unlock()</code> in a <strong><code>finally</code></strong> block.</p>
+<p><strong><code>ReadWriteLock</code></strong>, implemented by <code>ReentrantReadWriteLock</code>, manages two locks. The <strong>read lock is shared</strong>: many threads can hold it while no writer holds the write lock. The <strong>write lock is exclusive</strong>. This helps read-heavy data with fairly expensive reads, like configuration or reference-data caches. You can <strong>downgrade</strong> (acquire read while holding write, then release write) but not upgrade read to write, which would deadlock. Under write-heavy or very short critical sections, its extra bookkeeping can make it slower than a plain lock, and non-fair mode can starve writers.</p>
+<p><strong><code>StampedLock</code></strong> (Java 8) offers write, read and <strong>optimistic read</strong> modes. <code>tryOptimisticRead()</code> returns a stamp without locking; you read fields into locals, then call <code>validate(stamp)</code>. If no write happened, you are done with zero locking cost; otherwise fall back to a real read lock. It scales very well for read-mostly data, but it is <strong>not reentrant</strong>, has no <code>Condition</code>s, and optimistic reads may see inconsistent values, so you must only work on local copies until validation succeeds.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li><code>ReentrantLock</code>: <code>lock()</code> in try, work, <code>unlock()</code> in finally; hold count tracks reentry.</li>
+  <li><code>ReentrantReadWriteLock</code>: readers call <code>readLock().lock()</code>, writers <code>writeLock().lock()</code>.</li>
+  <li>A writer waits until all readers release; new readers wait while a writer holds or (in fair mode) waits.</li>
+  <li><code>StampedLock</code>: <code>long s = tryOptimisticRead()</code>, read into locals, <code>validate(s)</code>.</li>
+  <li>If validation fails, <code>readLock()</code>, re-read, <code>unlockRead(stamp)</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Point {
+    private final StampedLock sl = new StampedLock();
+    private double x, y;
+
+    void move(double dx, double dy) {
+        long stamp = sl.writeLock();
+        try { x += dx; y += dy; } finally { sl.unlockWrite(stamp); }
+    }
+
+    double distanceFromOrigin() {
+        long stamp = sl.tryOptimisticRead();
+        double cx = x, cy = y;                  // copy to locals
+        if (!sl.validate(stamp)) {              // a write happened, retry with a lock
+            stamp = sl.readLock();
+            try { cx = x; cy = y; } finally { sl.unlockRead(stamp); }
+        }
+        return Math.hypot(cx, cy);
+    }
+}
+
+ReentrantLock lock = new ReentrantLock();
+if (lock.tryLock(200, TimeUnit.MILLISECONDS)) {
+    try { /* critical section */ } finally { lock.unlock(); }
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ReentrantLock</th><th>ReentrantReadWriteLock</th><th>StampedLock</th></tr></thead>
+<tbody>
+<tr><td>Concurrent readers</td><td>No</td><td>Yes</td><td>Yes, plus optimistic</td></tr>
+<tr><td>Reentrant</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+<tr><td>Conditions</td><td>Yes</td><td>Write lock only</td><td>No</td></tr>
+<tr><td>Best for</td><td>General explicit locking</td><td>Read-heavy, longer reads</td><td>Very read-heavy, simple state</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Forgetting <code>unlock()</code> in <code>finally</code>.</li>
+  <li>Trying to upgrade a read lock to a write lock and deadlocking.</li>
+  <li>Re-entering a <code>StampedLock</code> from the same thread.</li>
+  <li>Using values from an optimistic read before <code>validate()</code>.</li>
+  <li>Choosing ReadWriteLock for tiny critical sections where it adds overhead.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;ReentrantLock is an explicit lock with the same semantics as synchronized, including reentrancy, plus extras: tryLock with a timeout, interruptible locking, a fairness option and multiple Conditions. I always unlock in finally. ReadWriteLock, implemented by ReentrantReadWriteLock, allows many readers at once but only one writer, which helps read-heavy data like config caches. StampedLock adds optimistic reads: I read without locking, validate the stamp, and fall back to a real read lock only if a write happened. It's faster under read contention but not reentrant and easier to misuse.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can a ReadWriteLock be slower than a plain lock in practice?</strong> It tracks reader counts with more expensive atomic operations, so for short critical sections or frequent writes the overhead outweighs the parallelism.</li>
+  <li><strong>Can you upgrade a read lock?</strong> Not with ReentrantReadWriteLock; StampedLock offers <code>tryConvertToWriteLock</code>.</li>
+  <li><strong>What does fairness cost?</strong> Lower throughput, because threads cannot barge and more context switches occur.</li>
+</ul>
+</article>
+</body>
+</html>

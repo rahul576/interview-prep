@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-262 · How would you calculate total revenue using an aggregate function?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-262" data-topic="Databases &amp; SQL">
+<h1>How would you calculate total revenue using an aggregate function?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels entry</p>
+
+<h2>In one line</h2>
+<p>Use the aggregate <strong><code>SUM(o.amount)</code></strong> together with <strong><code>GROUP BY</code></strong> for per-group totals, wrap it in <strong><code>COALESCE(..., 0)</code></strong> when groups can be empty, filter out cancelled orders, and store money as <strong>DECIMAL/NUMERIC</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>An <strong>aggregate function</strong> takes many rows and returns one value. <code>SUM(o.amount)</code> adds up the amount of every row in a group; without <code>GROUP BY</code> the whole result is one group, giving one grand total.</p>
+<p>Important details:</p>
+<ul>
+  <li><strong>NULL handling:</strong> <code>SUM</code> ignores NULL values. If every value in a group is NULL, or there are no rows (for example an unmatched customer from a LEFT JOIN), the result is <strong>NULL</strong>, not 0. <code>COALESCE(SUM(o.amount), 0)</code> fixes that.</li>
+  <li><strong>Line items:</strong> if revenue lives in an <code>order_items</code> table, compute <code>SUM(oi.quantity * oi.unit_price)</code>, and decide whether discounts, tax and shipping are included.</li>
+  <li><strong>Business rules:</strong> revenue usually excludes cancelled, failed or refunded orders, so filter with <code>WHERE o.status = 'COMPLETED'</code> (or subtract refunds explicitly). Agree the definition with the business.</li>
+  <li><strong>Data types:</strong> money must be <code>DECIMAL(12,2)</code> or <code>NUMERIC</code>, never <code>FLOAT</code>/<code>DOUBLE</code>, because binary floating point cannot represent values like 0.10 exactly and errors accumulate across millions of rows. In Java, map it to <code>BigDecimal</code>.</li>
+  <li><strong>Currency:</strong> never sum amounts in different currencies; group by currency or convert first.</li>
+</ul>
+
+<h2>How it works</h2>
+<ol>
+  <li>FROM and JOIN produce the rows.</li>
+  <li>WHERE removes rows that should not count (cancelled orders).</li>
+  <li>GROUP BY splits rows into groups.</li>
+  <li>SUM is evaluated per group, skipping NULLs.</li>
+  <li>HAVING can filter on the total; SELECT returns it with an alias.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-sql">SELECT c.customer_id, c.name,
+       EXTRACT(YEAR FROM o.order_date) AS order_year,
+       COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS total_revenue,
+       COUNT(DISTINCT o.order_id)                     AS orders,
+       AVG(o.amount)                                  AS avg_order_value
+FROM customers c
+JOIN orders o       ON o.customer_id = c.customer_id
+JOIN order_items oi ON oi.order_id = o.order_id
+WHERE o.status = 'COMPLETED'
+GROUP BY c.customer_id, c.name, EXTRACT(YEAR FROM o.order_date);</code></pre>
+<p>Note <code>AVG(o.amount)</code> here would be wrong because each order repeats per item; compute it from a pre-aggregated subquery instead.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Storing or summing money as floating point.</li>
+  <li>Expecting <code>SUM</code> to return 0 for empty groups.</li>
+  <li>Summing <code>o.amount</code> after joining line items, which double-counts.</li>
+  <li>Including cancelled or refunded orders.</li>
+  <li>Mixing currencies in one sum.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I'd use SUM(o.amount) AS total_revenue with a GROUP BY for one total per customer and year. SUM skips NULLs and returns NULL for an empty group, so with a LEFT JOIN I'd wrap it in COALESCE to show zero. If revenue comes from line items I'd sum quantity times unit price, and I'd apply the business rules, like excluding cancelled or refunded orders. Money columns should be DECIMAL, mapped to BigDecimal in Java, never floating point.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>What other aggregates help in this report?</strong> <code>COUNT</code> for order count, <code>AVG</code> for average order value, <code>MIN</code>/<code>MAX</code> for first and last order dates.</li>
+  <li>**What is the difference between COUNT(<em>) and COUNT(column)?</em>* <code>COUNT(*)</code> counts rows; <code>COUNT(column)</code> skips NULLs.</li>
+  <li><strong>How do you filter on the total?</strong> Use <code>HAVING SUM(o.amount) &gt; 10000</code>.</li>
+</ul>
+</article>
+</body>
+</html>

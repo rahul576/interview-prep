@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-065 · How do you implement shadow deployment for a new model?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-065" data-topic="MLOps">
+<h1>How do you implement shadow deployment for a new model?</h1>
+<p class="ex-meta">MLOps · design · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>In <strong>shadow deployment</strong> the new model receives a <strong>mirrored copy of live requests asynchronously</strong>, its predictions are <strong>logged but never returned</strong>, and you compare it with the production model on <strong>agreement, distributions, latency and later labels</strong>, with no side effects.</p>
+
+<h2>Detailed explanation</h2>
+<p>Shadow mode answers the question &quot;how would this model behave on real traffic?&quot; without exposing users to it. Offline tests use historical data; shadow mode uses today's traffic, with real feature values, real latency and real load.</p>
+<p><strong>Mirroring options:</strong> serving platforms often support it natively (Azure ML mirrored traffic, SageMaker shadow tests, KServe or Seldon mirroring), a <strong>service mesh</strong> like Istio can mirror HTTP requests, or the application can <strong>publish each request to a queue or stream</strong> that a shadow consumer reads. The key property is that mirroring is <strong>fire-and-forget</strong>: shadow latency, errors or crashes can't slow or fail the user request.</p>
+<p>Both predictions are logged with the same <strong>request ID</strong>, model versions, feature vector and timestamp. Comparison then covers <strong>score distributions</strong>, <strong>agreement rate</strong> and, more importantly, <strong>where</strong> the models disagree (which segments), <strong>latency percentiles and resource usage</strong> under real load, and finally <strong>actual accuracy</strong> once ground-truth labels arrive.</p>
+<p><strong>Safeguards:</strong> the shadow path must have <strong>no side effects</strong> (no emails, no writes to decision tables, no payments), and must not overload shared dependencies like the <strong>feature store</strong> or databases; sample a percentage if needed, and give it its own capacity and rate limits.</p>
+<p>The limitation: shadow mode can't measure how <strong>users or downstream systems react</strong> to different decisions, so a <strong>canary or A/B test</strong> is still needed for impact.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Deploy the challenger alongside the champion with its own scaling.</li>
+  <li>Mirror a percentage of traffic (start at 10 percent, grow to 100).</li>
+  <li>Log both outputs with request IDs to the same table.</li>
+  <li>Build a comparison dashboard: agreement, distributions, latency, errors.</li>
+  <li>Join with labels when they arrive and compare metrics per segment.</li>
+  <li>If good, move to a canary; otherwise iterate.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata: { name: scoring }
+spec:
+  hosts: [scoring]
+  http:
+  - route:
+    - destination: { host: scoring-v1 }
+      weight: 100
+    mirror: { host: scoring-v2 }
+    mirrorPercentage: { value: 25.0 }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Shadow model writing decisions or triggering notifications.</li>
+  <li>Calling the shadow synchronously and adding its latency to users.</li>
+  <li>Forgetting the extra load on the feature store.</li>
+  <li>Comparing only overall agreement, not the segments where models differ.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I deploy the new model next to the current one and mirror a share of live requests to it asynchronously, using the platform's mirroring, a service mesh or a queue, so its latency or failures never touch users. Only the current model's answer is returned. Both predictions are logged with the request ID, and I compare distributions, agreement, disagreement by segment, latency and resource use, and accuracy once labels arrive. I make sure the shadow has no side effects and doesn't overload the feature store. Because it can't show how users react, I follow it with a canary.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why is a canary still needed?</strong> Shadow can't show the effect of new decisions on users or downstream systems.</li>
+  <li><strong>How long do you shadow?</strong> Long enough to cover traffic cycles (often one to two weeks) and gather labels.</li>
+  <li><strong>What if the shadow is slower?</strong> Fine in shadow, but it's a signal to optimise before it goes live.</li>
+</ul>
+</article>
+</body>
+</html>

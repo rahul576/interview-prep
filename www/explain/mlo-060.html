@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-060 · How do Azure Machine Learning workspaces, compute and managed online endpoints work for MLOps?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-060" data-topic="MLOps">
+<h1>How do Azure Machine Learning workspaces, compute and managed online endpoints work for MLOps?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>An <strong>Azure Machine Learning workspace</strong> is the hub that holds runs, models, data assets and environments; training runs as <strong>jobs on compute clusters or serverless compute</strong>, and models are served from <strong>managed online endpoints</strong> whose <strong>deployments</strong> share traffic for blue-green and canary releases.</p>
+
+<h2>Detailed explanation</h2>
+<p>The <strong>workspace</strong> is the top-level resource for a team or project. It tracks <strong>jobs and experiments</strong>, stores <strong>registered models</strong>, <strong>data assets</strong> (versioned pointers to files or tables in storage), <strong>environments</strong> (a Docker image plus a Conda or pip spec) and <strong>components</strong> (reusable pipeline steps). It links to a storage account, Key Vault, Container Registry and Application Insights. Azure ML uses <strong>MLflow</strong> natively: the workspace exposes an MLflow tracking URI, so <code>mlflow.log_metric</code> and <code>mlflow.log_model</code> work without extra servers.</p>
+<p>Training runs on <strong>compute clusters</strong> that autoscale between a minimum (often zero) and a maximum number of nodes, or on <strong>serverless compute</strong>, where you only pick a VM size and Azure manages the cluster. Jobs are defined in <strong>YAML (CLI v2)</strong> or the <strong>Python SDK v2</strong>, and multi-step workflows are <strong>pipelines</strong> built from components.</p>
+<p><strong>Registries</strong> sit outside workspaces and share models, environments and components across workspaces and regions, which is how a model trained in a dev workspace reaches a prod workspace without retraining.</p>
+<p>For real-time serving, a <strong>managed online endpoint</strong> is a stable URL with authentication; underneath it you create one or more <strong>deployments</strong> (for example <code>blue</code> and <code>green</code>), each with its own model version, environment, instance type and scaling. The endpoint <strong>traffic allocation</strong> splits live requests between deployments, and <strong>mirrored traffic</strong> copies a percentage of requests to a deployment whose responses are discarded, which is a built-in shadow test. <strong>Batch endpoints</strong> cover offline scoring. Access uses <strong>managed identities</strong>, RBAC and <strong>private endpoints / managed virtual networks</strong>.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Create the workspace with IaC (Bicep or Terraform), including private networking and a managed identity.</li>
+  <li>Register data assets and environments; define training as a pipeline job on a cluster or serverless compute.</li>
+  <li>Log metrics and the model with MLflow; register the model version (in the workspace or a shared registry).</li>
+  <li>Create a managed online endpoint and a <code>green</code> deployment with the new model, alongside the existing <code>blue</code>.</li>
+  <li>Mirror some traffic to <code>green</code>, then shift 10 percent live, watch metrics in Azure Monitor, then go to 100 percent.</li>
+  <li>Delete the old deployment once stable.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-bash">az ml online-deployment create -f green.yml --endpoint-name churn-ep
+az ml online-endpoint update -n churn-ep --mirror-traffic &quot;green=10&quot;
+az ml online-endpoint update -n churn-ep --mirror-traffic &quot;green=0&quot; --traffic &quot;blue=90 green=10&quot;
+az ml online-endpoint update -n churn-ep --traffic &quot;blue=0 green=100&quot;
+az ml online-deployment delete -n blue --endpoint-name churn-ep --yes</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Hard-coding storage keys instead of using managed identities and Key Vault.</li>
+  <li>Leaving compute clusters with a minimum node count above zero, paying for idle GPUs.</li>
+  <li>Retraining separately in prod instead of promoting the same model through a registry.</li>
+  <li>Forgetting that mirrored traffic still costs compute and can hit downstream dependencies.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;In Azure ML the workspace is the central place for jobs, models, data assets and environments, and it tracks everything with MLflow. I run training as pipeline jobs on autoscaling clusters or serverless compute, defined in YAML so they live in Git. For serving I use a managed online endpoint with two deployments, blue and green. I first mirror a slice of traffic to green, then shift ten percent live, watch latency and error metrics, and move to a hundred percent. Models move from dev to prod through a shared registry, and access is via managed identities and private endpoints.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How would you promote a model from dev to prod?</strong> Register it in a shared Azure ML registry from dev and deploy that exact version in the prod workspace through a gated pipeline.</li>
+  <li><strong>Managed online endpoint versus AKS?</strong> Managed endpoints remove cluster operations; Kubernetes online endpoints suit teams that already run AKS or need on-prem/Arc.</li>
+  <li><strong>How do you roll back?</strong> Move traffic back to the previous deployment, which is instant as long as you keep it running.</li>
+</ul>
+</article>
+</body>
+</html>

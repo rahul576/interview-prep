@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-093 · What is a ReadWriteLock, and how does it differ from ReentrantLock?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-093" data-topic="Concurrency">
+<h1>What is a ReadWriteLock, and how does it differ from ReentrantLock?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong><code>ReadWriteLock</code></strong> (e.g. <code>ReentrantReadWriteLock</code>) has a <strong>shared read lock</strong> that many threads can hold together and an <strong>exclusive write lock</strong>; a <strong><code>ReentrantLock</code></strong> is <strong>always exclusive</strong>, even for readers. It pays off for <strong>read-heavy</strong> data; <strong><code>StampedLock</code></strong> goes further with <strong>optimistic reads</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>With an exclusive lock, two threads that only <strong>read</strong> still wait for each other, although reading cannot corrupt anything. A <strong><code>ReadWriteLock</code></strong> exposes two locks: <code>readLock()</code> and <code>writeLock()</code>.</p>
+<ul>
+  <li>The <strong>read lock is shared</strong>: any number of threads can hold it at once <strong>as long as no thread holds the write lock</strong>.</li>
+  <li>The <strong>write lock is exclusive</strong>: it waits until all readers have released, and while held it blocks both readers and writers.</li>
+  <li>Both are <strong>reentrant</strong>. A writer can acquire the read lock (allowing <strong>downgrading</strong>: take read, release write), but a reader <strong>cannot upgrade</strong> to the write lock; trying blocks forever if other readers exist, including itself.</li>
+  <li>Memory semantics: releasing the write lock happens-before subsequent read-lock acquisitions.</li>
+  <li>Fairness is optional, as with <code>ReentrantLock</code>. In non-fair mode a constant stream of readers can <strong>starve writers</strong> (the implementation mitigates this by blocking new readers when a writer is queued first, but only heuristically).</li>
+</ul>
+<p><strong>When it helps</strong>: data read very often, written rarely, with read operations long enough that parallelism matters, for example an in-memory configuration, routing table or reference-data cache. <strong>When it does not</strong>: short critical sections or frequent writes, because the read lock's bookkeeping (atomic updates of reader counts) adds overhead and can make it slower than a plain <code>ReentrantLock</code>. Often a <code>ConcurrentHashMap</code> or an immutable snapshot in a <code>volatile</code>/<code>AtomicReference</code> (copy-on-write) is simpler and faster.</p>
+<p><strong><code>StampedLock</code></strong> (Java 8) adds <strong>optimistic reads</strong>: read without locking, then validate the stamp; fall back to a read lock only if a write happened. Very cheap for read-mostly cases, but <strong>not reentrant</strong> and without Conditions.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Readers call <code>rw.readLock().lock()</code>; several proceed together.</li>
+  <li>A writer calls <code>rw.writeLock().lock()</code> and waits until active readers release.</li>
+  <li>While the writer holds the lock, new readers and writers wait.</li>
+  <li>The writer updates the data and calls <code>unlock()</code> in <code>finally</code>.</li>
+  <li>Waiting readers acquire the read lock together and see the new data.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class RateTable {
+    private final ReadWriteLock rw = new ReentrantReadWriteLock();
+    private final Map&lt;String, BigDecimal&gt; rates = new HashMap&lt;&gt;();
+
+    public BigDecimal rate(String currency) {
+        rw.readLock().lock();                // many concurrent readers
+        try { return rates.get(currency); }
+        finally { rw.readLock().unlock(); }
+    }
+
+    public void reload(Map&lt;String, BigDecimal&gt; fresh) {
+        rw.writeLock().lock();               // exclusive
+        try { rates.clear(); rates.putAll(fresh); }
+        finally { rw.writeLock().unlock(); }
+    }
+}
+// Often simpler: volatile Map&lt;String, BigDecimal&gt; rates = Map.copyOf(fresh);</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ReentrantLock</th><th>ReentrantReadWriteLock</th><th>StampedLock</th></tr></thead>
+<tbody>
+<tr><td>Concurrent readers</td><td>No</td><td>Yes</td><td>Yes (+ optimistic)</td></tr>
+<tr><td>Writers</td><td>Exclusive</td><td>Exclusive</td><td>Exclusive</td></tr>
+<tr><td>Reentrant</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+<tr><td>Upgrade read to write</td><td>n/a</td><td>No</td><td>tryConvertToWriteLock</td></tr>
+<tr><td>Overhead</td><td>Lowest</td><td>Higher</td><td>Low for optimistic reads</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Trying to upgrade a read lock to a write lock and deadlocking.</li>
+  <li>Using a read lock while modifying data.</li>
+  <li>Using ReadWriteLock for tiny or write-heavy critical sections.</li>
+  <li>Forgetting writer starvation under constant read load.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A ReadWriteLock, like ReentrantReadWriteLock, holds a pair of locks: a read lock that many threads can hold at once as long as nobody holds the write lock, and an exclusive write lock that blocks all readers and writers. A ReentrantLock is always exclusive, so even two readers wait for each other. Read-write locks pay off for data that's read often and written rarely, like in-memory config or a cache, where readers can run in parallel. They have more overhead and can starve writers under heavy reading, and StampedLock adds optimistic reads for even cheaper read paths.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can you upgrade a read lock to a write lock?</strong> No with ReentrantReadWriteLock (it deadlocks); you can downgrade from write to read, and StampedLock offers tryConvertToWriteLock.</li>
+  <li><strong>What is a simpler alternative for read-mostly config?</strong> An immutable snapshot in a volatile field or AtomicReference, replaced on reload.</li>
+  <li><strong>Does the read lock support Conditions?</strong> No; only the write lock supports newCondition.</li>
+</ul>
+</article>
+</body>
+</html>

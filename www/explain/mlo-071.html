@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlo-071 · How do you design checkpointing so long training jobs survive failures and spot interruptions?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="mlo-071" data-topic="MLOps">
+<h1>How do you design checkpointing so long training jobs survive failures and spot interruptions?</h1>
+<p class="ex-meta">MLOps · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>A good checkpoint contains <strong>everything needed to resume exactly</strong> (weights, optimiser, scheduler, RNG and data position), is written to <strong>durable shared storage</strong>, is <strong>resumed automatically</strong>, uses <strong>sharded/async writes</strong> for large models, and is triggered on <strong>spot interruption notices</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Long jobs will fail: hardware faults, node preemption, out-of-memory spikes, network blips. On spot or preemptible capacity, interruptions are routine. Without proper checkpoints you lose days of compute.</p>
+<p><strong>Contents:</strong> model weights alone are not enough. Resuming needs the <strong>optimiser state</strong> (Adam moments), <strong>learning rate scheduler</strong> and step count, <strong>gradient scaler</strong> state for FP16, <strong>RNG states</strong> (Python, NumPy, torch, CUDA), and the <strong>data position</strong>: epoch, step and sampler or data loader state, so you don't repeat or skip data. Without the data position, a resumed run sees the beginning of the epoch again, biasing training.</p>
+<p><strong>Storage:</strong> write to <strong>object storage or a shared file system</strong>, never only to local disk that disappears with the node. Write to a temporary name and <strong>atomically rename</strong> or write a &quot;complete&quot; marker, so a crash mid-write doesn't leave a corrupt &quot;latest&quot; checkpoint.</p>
+<p><strong>Automatic resume:</strong> on start, the script looks for the latest valid checkpoint and continues. Combined with an orchestrator that restarts failed jobs (Kubernetes Job backoff, TorchElastic, managed training job retries), recovery needs no human.</p>
+<p><strong>Frequency:</strong> balance lost work against overhead; a rule of thumb is to checkpoint every 15-60 minutes, more often on spot. For large models, <strong>sharded checkpoints</strong> (each rank writes its shard, for example PyTorch Distributed Checkpoint) and <strong>asynchronous checkpointing</strong> (copy to CPU, write in background) keep pauses short.</p>
+<p><strong>Interruption notices:</strong> spot instances give a short warning (two minutes on AWS, about 30 seconds on Azure and GCP), so a signal handler triggers a final checkpoint if it can finish in time. <strong>Retention</strong> keeps the last few plus milestones.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>At start, find the newest checkpoint with a completion marker.</li>
+  <li>Load model, optimiser, scheduler, scaler, RNG and sampler state.</li>
+  <li>Every N steps or minutes, save asynchronously and in shards.</li>
+  <li>Upload to object storage; write the marker last.</li>
+  <li>On SIGTERM or an interruption notice, save a final checkpoint.</li>
+  <li>Prune old checkpoints with a retention policy.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-python">def save(step):
+    state = {&quot;model&quot;: model.state_dict(), &quot;optim&quot;: opt.state_dict(),
+             &quot;sched&quot;: sched.state_dict(), &quot;scaler&quot;: scaler.state_dict(),
+             &quot;step&quot;: step, &quot;sampler&quot;: sampler.state_dict(),
+             &quot;rng&quot;: {&quot;torch&quot;: torch.get_rng_state(), &quot;cuda&quot;: torch.cuda.get_rng_state_all()}}
+    tmp = f&quot;{CKPT}/step-{step}.tmp&quot;; torch.save(state, tmp)
+    os.replace(tmp, f&quot;{CKPT}/step-{step}.pt&quot;)
+signal.signal(signal.SIGTERM, lambda *_: (save(global_step), sys.exit(0)))</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Saving only weights, so the resumed run has a fresh optimiser and wrong learning rate.</li>
+  <li>Checkpoints on local ephemeral disk.</li>
+  <li>No atomic write, so the latest checkpoint is corrupted.</li>
+  <li>Never testing resume until a real failure.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A checkpoint must let you continue exactly, so it includes weights, optimiser, scheduler, scaler, RNG states and the data loader position, not just the model. I write it to object storage or a shared file system with an atomic rename. The script resumes automatically from the latest valid checkpoint, so a restart after a crash or spot reclaim needs nobody. Frequency balances lost work against overhead, and for large models I use sharded, asynchronous checkpoints. On spot I catch the interruption notice to save a final checkpoint, and old ones are pruned.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why include the data loader position?</strong> Otherwise the resumed job repeats or skips data, changing the training distribution and breaking reproducibility.</li>
+  <li><strong>How do you test it?</strong> Kill the job deliberately in CI or staging and check the loss curve continues smoothly.</li>
+  <li><strong>How often should you checkpoint?</strong> Based on failure rate and checkpoint cost; more often on spot capacity.</li>
+</ul>
+</article>
+</body>
+</html>

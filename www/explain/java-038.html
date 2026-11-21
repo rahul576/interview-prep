@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-038 · Explain the circuit breaker pattern and how you would configure it.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-038" data-topic="Microservices">
+<h1>Explain the circuit breaker pattern and how you would configure it.</h1>
+<p class="ex-meta">Microservices · concept · levels senior, lead</p>
+
+<h2>In one line</h2>
+<p>A <strong>circuit breaker</strong> wraps calls to a dependency and moves between <strong>closed</strong>, <strong>open</strong> and <strong>half-open</strong> states based on the <strong>failure or slow-call rate</strong> over a <strong>sliding window</strong>, failing fast with a <strong>fallback</strong> while the dependency recovers; in Spring I configure it with <strong>Resilience4j</strong> alongside timeouts, retries and bulkheads.</p>
+
+<h2>Detailed explanation</h2>
+<p>When a dependency is down or very slow, continuing to call it wastes threads, adds latency to every request and hammers a service that is trying to recover. A circuit breaker, like an electrical one, <strong>trips</strong> to stop the damage.</p>
+<p>In the <strong>closed</strong> state calls pass through and outcomes are recorded in a <strong>sliding window</strong>, count-based (last N calls) or time-based (last N seconds). Once at least <code>minimumNumberOfCalls</code> are recorded and the <strong>failure rate</strong> (exceptions you count as failures) or <strong>slow-call rate</strong> (calls longer than <code>slowCallDurationThreshold</code>) exceeds its threshold, the breaker goes <strong>open</strong>. In the open state calls are <strong>rejected immediately</strong> with <code>CallNotPermittedException</code>, and the code returns a <strong>fallback</strong>: cached data, a default, a degraded response or a clear error. After <code>waitDurationInOpenState</code> it goes <strong>half-open</strong> and allows a small number of trial calls; if they succeed it <strong>closes</strong>, otherwise it <strong>re-opens</strong>.</p>
+<p><strong>Resilience4j</strong> is the standard library for Spring Boot (Hystrix has been in maintenance mode since 2018 and is gone from Spring Cloud). Spring Cloud CircuitBreaker offers an abstraction over it. A breaker alone is not enough: combine it with a <strong>TimeLimiter/timeout</strong> (otherwise slow calls never count as failures), a small <strong>retry</strong> with backoff for transient errors, and a <strong>bulkhead</strong> to cap concurrent calls. In Resilience4j's Spring annotations the default aspect order applies Retry outermost, then CircuitBreaker, RateLimiter, TimeLimiter and Bulkhead, so each retry attempt is recorded by the breaker and retries stop when it is open.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Closed: call, record success/failure/slow in the window.</li>
+  <li>Threshold crossed (e.g. 50 percent of last 20 calls): open.</li>
+  <li>Open: reject instantly, return fallback, for 30 s.</li>
+  <li>Half-open: allow 5 trial calls.</li>
+  <li>Trials succeed: closed; fail: open again.</li>
+  <li>Metrics and state transitions exported via Micrometer for alerts.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-yaml">resilience4j:
+  circuitbreaker:
+    instances:
+      inventory:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        slowCallDurationThreshold: 2s
+        slowCallRateThreshold: 60
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 5
+        ignoreExceptions: [com.acme.NotFoundException]
+  timelimiter:
+    instances:
+      inventory: { timeoutDuration: 2s }</code></pre>
+<pre><code class="language-java">@CircuitBreaker(name = &quot;inventory&quot;, fallbackMethod = &quot;unknownStock&quot;)
+public Stock stock(String sku) { return inventoryClient.get(sku); }
+
+Stock unknownStock(String sku, Throwable t) { return Stock.unknown(sku); }</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Counting business errors like 404 or validation failures as failures.</li>
+  <li>No timeout, so slow calls tie up threads before the breaker reacts.</li>
+  <li>Fallbacks that call another fragile service.</li>
+  <li>Window too small, so the breaker flaps on a few errors.</li>
+  <li>Retrying aggressively in front of an open breaker without backoff.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A circuit breaker sits around calls to a dependency. While closed, calls pass and it records the failure and slow-call rate over a sliding window. When that crosses a threshold it opens and fails fast, returning a fallback such as cached data, which protects our threads and gives the dependency room to recover. After a wait it goes half-open and lets a few trial calls through to decide whether to close again. In Spring Boot I use Resilience4j and configure failure-rate threshold, window size, minimum calls, slow-call threshold, wait duration and half-open permits, and I always combine it with a timeout, a limited retry with backoff and a bulkhead.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why can retries without backoff make an outage worse?</strong> They multiply load on a struggling service exactly when it needs less.</li>
+  <li><strong>Count-based vs time-based window?</strong> Last N calls versus calls in the last N seconds; time-based suits variable traffic.</li>
+  <li><strong>Where should the breaker live: client or server?</strong> Client side, per dependency, often also at the gateway or mesh.</li>
+</ul>
+</article>
+</body>
+</html>

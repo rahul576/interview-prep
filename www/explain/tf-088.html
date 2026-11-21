@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-088 · How do you manage database-level objects such as roles, users and grants with Terraform, and what are the caveats?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-088" data-topic="Terraform">
+<h1>How do you manage database-level objects such as roles, users and grants with Terraform, and what are the caveats?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Providers such as <strong>postgresql, mysql and mssql</strong> can manage <strong>roles, users, grants, schemas and extensions</strong>, but they need <strong>network access</strong> to the database, can leak <strong>credentials into state</strong>, and should live in a <strong>separate state</strong> from the server; <strong>table schemas and migrations</strong> belong to the application.</p>
+
+<h2>Detailed explanation</h2>
+<p>Managing database-level objects with Terraform is attractive: every service gets its own <strong>least-privilege role</strong>, consistently across environments, reviewed in pull requests, and removed when the service is retired. The community <code>cyrilgdn/postgresql</code> provider and similar providers for MySQL and SQL Server expose resources like <code>postgresql_role</code>, <code>postgresql_grant</code> and <code>postgresql_extension</code>.</p>
+<p>The caveats are significant. First, <strong>network access</strong>: unlike cloud resource providers that talk to a public management API, these providers open a real database connection. For a private database this means running Terraform on <strong>self-hosted runners</strong> inside the network or through a bastion.</p>
+<p>Second, <strong>secrets in state</strong>: a password set on a role is stored in the state file. Prefer <strong>identity-based authentication</strong> — Entra ID authentication for Azure Database for PostgreSQL or SQL, IAM database authentication on AWS RDS — so services hold no passwords, or use <strong>ephemeral values and write-only arguments</strong> where your Terraform and provider versions support them, and always protect the state backend.</p>
+<p>Third, <strong>provider configuration ordering</strong>: if the same run creates the database server and configures the provider from its outputs, the provider receives unknown values during plan, and destroy ordering becomes fragile. A separate root module and state for database objects, applied after the server exists, is more reliable.</p>
+<p>Finally, <strong>drift detection</strong> is weaker. Grants are often expanded into many underlying privileges, default privileges behave differently, and changes made by DBAs in SQL may not map cleanly back to resources. <strong>Table schemas and data migrations</strong> are versioned with the application using Flyway, Liquibase or the framework's migration tool.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Root module A creates the server, networking and admin identity.</li>
+  <li>Root module B, a separate state, configures the database provider using outputs or data sources.</li>
+  <li>B creates per-service roles, schemas and grants, ideally mapped to Entra ID or IAM identities.</li>
+  <li>B runs on a runner that can reach the private endpoint.</li>
+  <li>The application pipeline runs migrations with Flyway or Liquibase using its own role.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">provider &quot;postgresql&quot; {
+  host      = data.azurerm_postgresql_flexible_server.main.fqdn
+  username  = var.admin_user
+  password  = var.admin_token   # short-lived Entra token
+  sslmode   = &quot;require&quot;
+  superuser = false
+}
+
+resource &quot;postgresql_role&quot; &quot;orders&quot; {
+  name  = &quot;orders_app&quot;
+  login = true
+}
+
+resource &quot;postgresql_grant&quot; &quot;orders_tables&quot; {
+  database    = &quot;shop&quot;
+  schema      = &quot;orders&quot;
+  role        = postgresql_role.orders.name
+  object_type = &quot;table&quot;
+  privileges  = [&quot;SELECT&quot;, &quot;INSERT&quot;, &quot;UPDATE&quot;]
+}</code></pre>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Creating the server and configuring the database provider in the same state.</li>
+  <li>Storing static passwords for every role in state without protecting the backend.</li>
+  <li>Managing table definitions in Terraform instead of migrations.</li>
+  <li>Running from cloud-hosted runners that cannot reach a private database.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Providers like postgresql or mssql let me manage roles, users, grants, schemas and extensions, which is great for giving each service a least-privilege role consistently and reviewing it in pull requests. The caveats: Terraform needs a real network connection, so private databases need private runners. Passwords end up in state, so I prefer Entra ID or IAM database authentication, or write-only arguments. I keep database objects in a separate state from the server, because configuring a provider from a resource created in the same run is fragile. And table schemas and migrations stay with the application, using Flyway or Liquibase.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why do database providers struggle with drift?</strong> Grants expand into many privileges, default privileges and manual SQL changes do not map one-to-one to resources.</li>
+  <li><strong>How do you give a pod database access without a password?</strong> Workload identity mapped to an Entra ID or IAM database role.</li>
+  <li><strong>Who runs migrations?</strong> The application pipeline or an init job, with a migration role separate from the runtime role.</li>
+</ul>
+</article>
+</body>
+</html>

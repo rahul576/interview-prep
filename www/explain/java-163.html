@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>java-163 · Compare cache-aside, read-through, write-through and write-behind caching.</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="java-163" data-topic="Caching">
+<h1>Compare cache-aside, read-through, write-through and write-behind caching.</h1>
+<p class="ex-meta">Caching · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Cache-aside</strong> has the app load on a miss, <strong>read-through</strong> lets the cache load from the DB itself, <strong>write-through</strong> writes cache and DB synchronously, and <strong>write-behind</strong> writes the cache and flushes to the DB asynchronously; the choice trades <strong>consistency and durability</strong> against <strong>latency</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Cache-aside (lazy loading)</strong> is the most common pattern with Redis. The application reads the cache; on a miss it queries the database and stores the result with a TTL. On writes it updates the database and <strong>deletes</strong> the cache key so the next read reloads it. It is simple and resilient: if the cache is down the app is slower but correct. The downsides are a miss penalty and a small window of staleness.</p>
+<p><strong>Read-through</strong> is the same idea, but the loading logic lives in the cache layer (a <code>CacheLoader</code> in Caffeine, a loader in Hazelcast, or Spring's <code>@Cacheable</code>). The application only talks to the cache, which keeps code clean.</p>
+<p><strong>Write-through</strong> sends each write to the cache and the database in the same operation, so the cache is always warm and consistent with the DB. Writes are slower, and you may cache data that is never read.</p>
+<p><strong>Write-behind (write-back)</strong> acknowledges the write once it is in the cache and flushes to the database later, often batched. Writes are very fast and DB load is reduced, but if the cache node fails before flushing, data is lost, and the DB is temporarily behind.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Read request checks the cache first.</li>
+  <li>On hit, return the value.</li>
+  <li>On miss, the app (cache-aside) or the cache (read-through) loads from the DB and stores it with a TTL.</li>
+  <li>On write, either update DB and invalidate (cache-aside), update both synchronously (write-through), or update cache and queue a DB write (write-behind).</li>
+  <li>TTLs and event-based invalidation limit staleness.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Cache-aside with Spring + Redis
+public Product get(long id) {
+    Product p = redis.opsForValue().get(&quot;product:&quot; + id);
+    if (p != null) return p;
+    p = repo.findById(id).orElseThrow();
+    redis.opsForValue().set(&quot;product:&quot; + id, p, Duration.ofMinutes(10));
+    return p;
+}
+
+@Transactional
+public void update(Product p) {
+    repo.save(p);
+    redis.delete(&quot;product:&quot; + p.getId());   // invalidate, don't overwrite
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Pattern</th><th>Read latency</th><th>Write latency</th><th>Consistency</th><th>Loss risk</th></tr></thead>
+<tbody>
+<tr><td>Cache-aside</td><td>Miss penalty</td><td>Normal</td><td>Short staleness</td><td>None</td></tr>
+<tr><td>Read-through</td><td>Miss penalty</td><td>Normal</td><td>Short staleness</td><td>None</td></tr>
+<tr><td>Write-through</td><td>Always warm</td><td>Higher</td><td>Strong-ish</td><td>None</td></tr>
+<tr><td>Write-behind</td><td>Warm</td><td>Lowest</td><td>DB lags</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Updating the cache value on write instead of deleting it, causing races that leave stale data.</li>
+  <li>No TTL, so stale entries live forever.</li>
+  <li>Using write-behind with a non-persistent, non-replicated cache for important data.</li>
+  <li>Same TTL for all keys, causing mass expiry and a stampede.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Cache-aside is my default: read from the cache, on a miss load from the database and set it with a TTL, and on writes update the database and delete the key. Read-through is the same flow but the cache owns the loading code. Write-through updates cache and database together, so reads are always warm but writes are slower. Write-behind writes only to the cache and flushes later, which is the fastest but can lose data if the cache fails. For a product catalogue I'd use cache-aside with TTL and invalidation events; for a shopping cart I'd keep it in a persistent, replicated Redis or write through to the database rather than risk write-behind.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why delete rather than update the cache on write?</strong> Two concurrent writers can otherwise leave an older value in the cache.</li>
+  <li><strong>How do you prevent a cache stampede?</strong> Request coalescing or a short lock, TTL jitter and stale-while-revalidate.</li>
+  <li><strong>Where would you put a local cache?</strong> Caffeine in-process for tiny hot data, in front of Redis, with short TTLs.</li>
+</ul>
+</article>
+</body>
+</html>

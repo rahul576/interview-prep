@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-078 · How do threads communicate with one another in Java?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-078" data-topic="Concurrency">
+<h1>How do threads communicate with one another in Java?</h1>
+<p class="ex-meta">Concurrency · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>Threads in one JVM communicate through <strong>shared memory</strong>, so the real question is coordinating it safely: <strong><code>synchronized</code> with <code>wait</code>/<code>notify</code></strong>, <strong><code>Lock</code> with <code>Condition</code></strong>, and preferably higher-level tools such as <strong><code>BlockingQueue</code></strong>, <strong><code>Future</code>/<code>CompletableFuture</code></strong>, <strong><code>CountDownLatch</code></strong>, <strong><code>Semaphore</code></strong>, and <strong><code>volatile</code></strong> flags.</p>
+
+<h2>Detailed explanation</h2>
+<p>Unlike processes, threads share the heap, so &quot;sending a message&quot; just means one thread writes to an object another thread reads. Two things must be handled: <strong>visibility</strong> (the reader must see the write, which requires a happens-before edge) and <strong>coordination</strong> (the reader must know when data is ready, without busy-waiting).</p>
+<p><strong>Low level:</strong> a shared object guarded by <code>synchronized</code>, with <strong><code>wait()</code></strong> to sleep until a condition changes and <strong><code>notify()</code>/<code>notifyAll()</code></strong> to wake waiters. The explicit-lock equivalent is <strong><code>Lock</code> with <code>Condition.await()</code>/<code>signal()</code></strong>, which allows several conditions per lock (for example <code>notFull</code> and <code>notEmpty</code>). These are powerful but error-prone: you must wait in a loop, hold the lock and avoid missed signals.</p>
+<p><strong>High level (preferred):</strong></p>
+<ul>
+  <li><strong><code>BlockingQueue</code></strong> (<code>ArrayBlockingQueue</code>, <code>LinkedBlockingQueue</code>): the standard <strong>producer-consumer</strong> hand-off. <code>put</code> blocks when full, <code>take</code> blocks when empty, and it gives correct visibility of the passed objects.</li>
+  <li><strong><code>Future</code> / <code>CompletableFuture</code></strong>: pass a single result from a task to whoever waits or registers a callback.</li>
+  <li><strong><code>CountDownLatch</code></strong>: one or more threads wait until N events have happened.</li>
+  <li><strong><code>CyclicBarrier</code></strong> / <strong><code>Phaser</code></strong>: a group of threads wait for each other at a rendezvous point.</li>
+  <li><strong><code>Semaphore</code></strong>: limit how many threads use a resource.</li>
+  <li><strong><code>Exchanger</code></strong>: two threads swap objects.</li>
+  <li><strong><code>volatile boolean</code></strong>: a simple flag, such as a stop signal, written by one thread and read by others.</li>
+</ul>
+<p>Concurrent collections like <code>ConcurrentHashMap</code> also give safe sharing. Choosing these tools avoids most visibility and missed-signal bugs.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Decide what is communicated: a stream of items, one result, a signal, or a count of events.</li>
+  <li>Pick the matching tool: queue, future, latch/barrier, flag.</li>
+  <li>The producer writes or signals (<code>put</code>, <code>complete</code>, <code>countDown</code>, <code>stopped = true</code>).</li>
+  <li>The tool establishes happens-before, so the consumer sees everything written before.</li>
+  <li>The consumer is woken or polls (<code>take</code>, <code>join</code>, <code>await</code>, reading the flag).</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">BlockingQueue&lt;Order&gt; queue = new ArrayBlockingQueue&lt;&gt;(100);
+AtomicBoolean running = new AtomicBoolean(true);  // shared stop flag (or a volatile field)
+
+Thread producer = new Thread(() -&gt; {
+    for (Order o : incomingOrders()) {
+        try { queue.put(o); }                     // blocks when full
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+    }
+});
+
+Thread consumer = new Thread(() -&gt; {
+    while (running.get() || !queue.isEmpty()) {
+        try {
+            Order o = queue.poll(500, TimeUnit.MILLISECONDS);   // waits when empty
+            if (o != null) process(o);
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+    }
+});
+producer.start(); consumer.start();</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Need</th><th>Tool</th></tr></thead>
+<tbody>
+<tr><td>Stream of work items</td><td>BlockingQueue</td></tr>
+<tr><td>One result</td><td>Future / CompletableFuture</td></tr>
+<tr><td>Wait for N events</td><td>CountDownLatch</td></tr>
+<tr><td>Group rendezvous</td><td>CyclicBarrier / Phaser</td></tr>
+<tr><td>Simple stop flag</td><td>volatile boolean</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Sharing a plain boolean flag without <code>volatile</code>, so the loop never sees it change.</li>
+  <li>Busy-waiting with <code>while (!ready) {}</code> instead of blocking.</li>
+  <li>Calling <code>wait</code> with <code>if</code> instead of <code>while</code>.</li>
+  <li>Using an unbounded queue so a fast producer exhausts memory.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Threads in one JVM communicate through shared memory, so the question is how to do it safely. The low-level way is a shared object guarded by synchronized, with wait and notifyAll so one thread can wait until another changes a condition, or Lock with Condition await and signal. In practice I prefer higher-level tools: a BlockingQueue for producer-consumer hand-off, where put blocks when full and take blocks when empty; Future or CompletableFuture to pass a result; CountDownLatch, CyclicBarrier, Semaphore or Exchanger for coordination; and a volatile boolean for a simple stop flag. These handle visibility and ordering correctly.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Why should wait() always be called in a loop?</strong> Because of spurious wakeups and because another thread may change the condition before the woken thread reacquires the lock.</li>
+  <li><strong>What is the advantage of BlockingQueue over wait/notify?</strong> It encapsulates locking, conditions and visibility correctly, so there is far less room for bugs.</li>
+  <li><strong>How do you stop a consumer thread cleanly?</strong> Interrupt it, use a volatile flag, or send a &quot;poison pill&quot; item through the queue.</li>
+</ul>
+</article>
+</body>
+</html>

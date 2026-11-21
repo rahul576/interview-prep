@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-170 · What are class loaders in Java?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-170" data-topic="JVM &amp; Performance">
+<h1>What are class loaders in Java?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid</p>
+
+<h2>In one line</h2>
+<p>A <strong>class loader</strong> is a JVM object that finds a class's bytecode and turns it into a <code>Class</code> object at runtime; loading is followed by <strong>linking</strong> (verify, prepare, resolve) and <strong>initialisation</strong>, and a class's identity is its <strong>name plus its defining loader</strong>.</p>
+
+<h2>Detailed explanation</h2>
+<p>Java does not link a whole program up front. Classes are loaded <strong>lazily</strong>, the first time they are actively used. A <code>ClassLoader</code> locates the bytes, from a directory, a JAR, a module image, the network or bytes generated in memory by frameworks such as Hibernate or Mockito, and calls <code>defineClass</code> to create the <code>Class</code> object, whose metadata lives in <strong>Metaspace</strong>.</p>
+<p>After <strong>loading</strong> comes <strong>linking</strong>. <strong>Verification</strong> checks the bytecode is well formed and type-safe, so malformed or malicious code cannot corrupt the JVM. <strong>Preparation</strong> allocates static fields and sets them to default values (0, null, false). <strong>Resolution</strong> turns symbolic references to other classes, methods and fields into direct references, often lazily. Finally <strong>initialisation</strong> runs the static initialisers and static field assignments, exactly once, in a thread-safe way.</p>
+<p>Loaders form a <strong>hierarchy</strong> (Bootstrap, Platform, Application, plus custom ones) and use <strong>parent delegation</strong>: ask the parent first, load yourself only if the parent cannot. The crucial design point is that <strong>a class is identified by its fully qualified name and its defining loader</strong>. Two <code>com.acme.Plugin</code> classes loaded by different loaders are different types, and casting one to the other throws <code>ClassCastException</code>. Application servers (one loader per web app), OSGi, IDE plugin systems and hot-reload tools such as Spring Boot DevTools rely on this to isolate library versions and to unload and reload code by discarding a loader.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Code triggers first use of a class (<code>new</code>, static call, reflection).</li>
+  <li>The requesting loader delegates to its parent chain.</li>
+  <li>The loader that can see the class reads its bytes and defines it.</li>
+  <li>Linking: verify, prepare statics, resolve references.</li>
+  <li>Initialisation runs <code>static {}</code> blocks.</li>
+  <li>The class stays loaded until its loader becomes unreachable and is garbage collected.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">public class PluginHost {
+    public static void main(String[] args) throws Exception {
+        URL jar = Path.of(&quot;plugins/report-plugin.jar&quot;).toUri().toURL();
+        try (URLClassLoader loader = new URLClassLoader(new URL[]{jar},
+                PluginHost.class.getClassLoader())) {
+            Class&lt;?&gt; cls = loader.loadClass(&quot;com.acme.ReportPlugin&quot;);
+            Runnable plugin = (Runnable) cls.getDeclaredConstructor().newInstance();
+            plugin.run();
+            System.out.println(cls.getClassLoader());   // the URLClassLoader
+            System.out.println(String.class.getClassLoader()); // null = bootstrap
+        }
+    }
+}</code></pre>
+<p>Closing the loader and dropping references lets the plugin classes be unloaded, enabling reload.</p>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking all classes are loaded at JVM start.</li>
+  <li>Confusing loading with initialisation: <code>Class.forName(name, false, loader)</code> loads without initialising.</li>
+  <li>Leaking a class loader (for example via a static ThreadLocal or JDBC driver registration), causing Metaspace leaks on redeploys.</li>
+  <li>Being surprised by <code>ClassCastException</code> between &quot;identical&quot; classes from different loaders.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;A class loader finds the bytecode for a class and defines a <code>Class</code> object in the JVM, lazily on first use. After loading the JVM links the class, verifying the bytecode, preparing static fields with defaults and resolving references, and then initialises it by running static initialisers. Loaders form a hierarchy with parent delegation. The important detail is that a class's identity is its name plus its loader, which is how Tomcat, OSGi or plugin systems isolate different library versions and reload applications.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>How can two classes with the same name differ in one JVM?</strong> They were defined by different class loaders.</li>
+  <li><strong>What causes a Metaspace leak on redeploy?</strong> Something outside the app keeps a reference to the old web-app class loader.</li>
+  <li><strong>When is a class unloaded?</strong> When its loader and all its classes and instances are unreachable and GC collects them.</li>
+</ul>
+</article>
+</body>
+</html>

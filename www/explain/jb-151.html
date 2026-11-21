@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jb-151 · What is the difference between Statement, PreparedStatement, and CallableStatement?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="jb-151" data-topic="Databases &amp; SQL">
+<h1>What is the difference between Statement, PreparedStatement, and CallableStatement?</h1>
+<p class="ex-meta">Databases &amp; SQL · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p><strong>Statement</strong> runs static SQL text (dangerous with concatenated input), <strong>PreparedStatement</strong> uses a precompiled SQL template with <strong>bind parameters</strong> (prevents <strong>SQL injection</strong>, reuses plans, supports batching), and <strong>CallableStatement</strong> calls <strong>stored procedures</strong> with IN, OUT and INOUT parameters.</p>
+
+<h2>Detailed explanation</h2>
+<p><strong>Statement</strong> sends a complete SQL string. If you build it with user input, such as <code>&quot;... WHERE name = '&quot; + name + &quot;'&quot;</code>, an input like <code>' OR '1'='1</code> changes the query's meaning: <strong>SQL injection</strong>. Every distinct string is also parsed and planned again, and you must handle quoting and date formats yourself. It is acceptable only for fixed DDL or admin scripts.</p>
+<p><strong>PreparedStatement</strong> sends the SQL with <code>?</code> placeholders, and values are bound separately with typed setters (<code>setLong</code>, <code>setString</code>, <code>setTimestamp</code>). The database treats bound values strictly as data, never as SQL, which <strong>prevents injection</strong>. Benefits:</p>
+<ul>
+  <li><strong>Plan and parse reuse</strong>: the server can cache the prepared statement; drivers also cache them (for example PostgreSQL's <code>prepareThreshold</code>, MySQL's <code>cachePrepStmts</code>).</li>
+  <li>Correct <strong>type handling</strong> and escaping.</li>
+  <li><strong>Batching</strong> with <code>addBatch()</code> / <code>executeBatch()</code>, dramatically faster for bulk inserts (MySQL needs <code>rewriteBatchedStatements=true</code> for the best effect).</li>
+</ul>
+<p><strong>CallableStatement</strong> extends PreparedStatement for stored procedures and functions using <code>{call proc(?, ?)}</code> escape syntax, registering <strong>OUT</strong> parameters with <code>registerOutParameter</code> and reading them after execution. It also handles procedures returning result sets or cursors.</p>
+<p>A limitation: placeholders bind <strong>values only</strong>. Table names, column names and <code>ORDER BY</code> direction cannot be parameters, so if they come from users, validate them against a whitelist.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>The application prepares SQL with placeholders.</li>
+  <li>The driver sends it for parsing (server-side or client-side preparation).</li>
+  <li>Values are bound with typed setters.</li>
+  <li>Execution uses the parsed or cached statement.</li>
+  <li>For batches, many parameter sets are sent in one round trip.</li>
+  <li>CallableStatement additionally maps OUT parameters back.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">// Vulnerable
+Statement st = con.createStatement();
+st.executeQuery(&quot;SELECT * FROM users WHERE email = '&quot; + email + &quot;'&quot;);
+
+// Safe
+try (PreparedStatement ps = con.prepareStatement(
+        &quot;SELECT id, name FROM users WHERE email = ?&quot;)) {
+    ps.setString(1, email);
+    try (ResultSet rs = ps.executeQuery()) { /* ... */ }
+}
+
+// Batch insert
+try (PreparedStatement ps = con.prepareStatement(
+        &quot;INSERT INTO event(type, payload) VALUES (?, ?)&quot;)) {
+    for (Event e : events) { ps.setString(1, e.type()); ps.setString(2, e.json()); ps.addBatch(); }
+    ps.executeBatch();
+}
+
+// Stored procedure
+try (CallableStatement cs = con.prepareCall(&quot;{call calc_bonus(?, ?)}&quot;)) {
+    cs.setLong(1, empId);
+    cs.registerOutParameter(2, Types.NUMERIC);
+    cs.execute();
+    BigDecimal bonus = cs.getBigDecimal(2);
+}</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Feature</th><th>Statement</th><th>PreparedStatement</th><th>CallableStatement</th></tr></thead>
+<tbody>
+<tr><td>Parameters</td><td>None</td><td>IN</td><td>IN, OUT, INOUT</td></tr>
+<tr><td>Injection safe</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Plan reuse</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Typical use</td><td>DDL, fixed SQL</td><td>All queries</td><td>Stored procedures</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Concatenating values into a PreparedStatement's SQL, which keeps the injection risk.</li>
+  <li>Trying to bind a table or column name as a parameter.</li>
+  <li>Running thousands of single inserts instead of a batch.</li>
+  <li>Thinking an ORM makes injection impossible; native or string-built JPQL can still be vulnerable.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Statement executes a raw SQL string, so concatenating user input exposes you to SQL injection and each string is parsed again. PreparedStatement uses placeholders with typed bind parameters, so values are never interpreted as SQL. That prevents injection, allows the plan to be reused, handles types properly and supports efficient batching with addBatch. CallableStatement extends it to call stored procedures, with OUT and INOUT parameters. In practice I always use PreparedStatement, directly or through JdbcTemplate or JPA, and for dynamic column names I whitelist allowed values because they can't be parameters.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>Can a parameter be a table or column name?</strong> No; only values. Whitelist identifiers instead.</li>
+  <li><strong>How do you speed up batch inserts in MySQL?</strong> Set <code>rewriteBatchedStatements=true</code> and use moderate batch sizes.</li>
+  <li><strong>Is JPA immune to SQL injection?</strong> Only when you use parameters; concatenated JPQL or native queries are still vulnerable.</li>
+</ul>
+</article>
+</body>
+</html>

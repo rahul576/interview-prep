@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tf-099 · How do you design Terraform variables and tfvars files for several environments without duplicating code?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="tf-099" data-topic="Terraform">
+<h1>How do you design Terraform variables and tfvars files for several environments without duplicating code?</h1>
+<p class="ex-meta">Terraform · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>Use <strong>one root configuration</strong> with a <strong>tfvars file and backend config per environment</strong>, <strong>sensible defaults</strong> so each tfvars only overrides real differences, <strong>validation rules</strong> to catch mistakes, and let the <strong>pipeline select the files</strong> so the same code version is promoted everywhere.</p>
+
+<h2>Detailed explanation</h2>
+<p>Copying the whole configuration into <code>dev/</code>, <code>test/</code> and <code>prod/</code> folders guarantees drift: a fix lands in one environment and is forgotten in the others. The better pattern keeps <strong>one root module</strong> and puts environment differences in data.</p>
+<p>Each environment gets <code>env/dev.tfvars</code>, <code>env/test.tfvars</code>, <code>env/prod.tfvars</code> and a matching <strong>backend configuration</strong> file (<code>env/dev.backend.hcl</code>) passed with <code>terraform init -backend-config=...</code>, so each environment has <strong>separate state</strong>, often in separate storage accounts or buckets with separate permissions.</p>
+<p>Variables are declared with <strong>types, descriptions and defaults</strong> that represent the common case. A tfvars file then contains only what genuinely differs: VM or database sizes, replica counts, CIDR ranges, feature flags, alert thresholds. A reviewer can see the entire difference between test and prod in two short files.</p>
+<p>For small variations, a <code>locals</code> map keyed by environment is possible, but it hides differences in code and forces an <code>environment</code> variable everywhere; explicit tfvars are usually clearer. <strong>Validation blocks</strong> catch invalid input at plan time: allowed regions, CIDR format with <code>can(cidrhost(...))</code>, minimum replica counts for prod.</p>
+<p>The <strong>pipeline</strong> chooses the tfvars and backend config based on the target environment, so no one types variables by hand, and the <strong>same commit</strong> flows dev → test → prod. When environments differ structurally — prod has extra regions or DR components — a separate root module per environment composing shared modules can be better than many feature flags.</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>Write one root module using shared modules.</li>
+  <li>Declare typed variables with defaults and validation.</li>
+  <li>Create per-environment tfvars containing only differences.</li>
+  <li>Create per-environment backend config files.</li>
+  <li>The pipeline runs init, plan and apply with the right files.</li>
+  <li>Promote the same commit through environments.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-hcl">variable &quot;app_replicas&quot; {
+  type    = number
+  default = 2
+  validation {
+    condition     = var.app_replicas &gt;= 1 &amp;&amp; var.app_replicas &lt;= 20
+    error_message = &quot;app_replicas must be between 1 and 20.&quot;
+  }
+}
+
+variable &quot;vnet_cidr&quot; {
+  type = string
+  validation {
+    condition     = can(cidrhost(var.vnet_cidr, 0))
+    error_message = &quot;vnet_cidr must be a valid CIDR.&quot;
+  }
+}</code></pre>
+<pre><code class="language-bash"># env/prod.tfvars: app_replicas = 6, vnet_cidr = &quot;10.30.0.0/16&quot;, sku = &quot;P2v3&quot;
+terraform init -backend-config=env/prod.backend.hcl
+terraform plan -var-file=env/prod.tfvars -out=prod.plan</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th>Approach</th><th>Pros</th><th>Cons</th></tr></thead>
+<tbody>
+<tr><td>One root + tfvars</td><td>No duplication, easy diffs</td><td>Structural differences need flags</td></tr>
+<tr><td>Folder per env, shared modules</td><td>Explicit, flexible</td><td>Some wiring duplicated</td></tr>
+<tr><td>Copied code per env</td><td>Simple at first</td><td>Drift and forgotten fixes</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Copy-pasting full configurations per environment.</li>
+  <li>Defaults that are only right for prod, so dev becomes expensive.</li>
+  <li>Forgetting a separate backend, so environments share one state.</li>
+  <li>Relying on people to pass <code>-var</code> flags by hand.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;I use one root configuration with a tfvars file per environment, plus a matching backend config file so each environment has its own state. Variables have sensible defaults for the common case, and each tfvars file only overrides real differences like sizes, replica counts, CIDRs and feature flags, so the difference between environments is visible in one small file. Validation rules catch mistakes like invalid regions or bad CIDRs. The pipeline selects the files per environment, nobody types variables by hand, and the same code version is promoted through every environment.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>When are separate root modules per environment better?</strong> When environments differ structurally, such as extra regions or DR in prod.</li>
+  <li><strong>What about workspaces?</strong> CLI workspaces share one backend and permissions; separate backends give stronger isolation.</li>
+  <li><strong>How do you keep secrets out of tfvars?</strong> Read them from a secret store via data sources or pipeline variables.</li>
+</ul>
+</article>
+</body>
+</html>

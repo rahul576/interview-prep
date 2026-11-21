@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nq-174 · How does the JVM locate and load a class?</title>
+<link rel="stylesheet" href="explain.css">
+</head>
+<body>
+<!-- InterviewPro "Read in detail" answer. Edit freely: keep the <article data-id> and the h2 section names. -->
+<article class="ex-md" data-id="nq-174" data-topic="JVM &amp; Performance">
+<h1>How does the JVM locate and load a class?</h1>
+<p class="ex-meta">JVM &amp; Performance · concept · levels mid, senior</p>
+
+<h2>In one line</h2>
+<p>On a class's <strong>first active use</strong>, the requesting loader <strong>delegates</strong> up the hierarchy, the responsible loader finds <code>com/acme/Order.class</code> on its path and <strong>defines</strong> it, then the JVM <strong>links</strong> and <strong>initialises</strong> it; failures surface as <code>ClassNotFoundException</code> or <code>NoClassDefFoundError</code>.</p>
+
+<h2>Detailed explanation</h2>
+<p>The JVM loads classes <strong>lazily</strong>. Loading is triggered by <strong>active use</strong>: <code>new</code>, invoking a static method, reading or writing a non-constant static field, initialising a subclass, <code>Class.forName</code>, reflection or <code>MethodHandle</code> lookups. Merely declaring a variable of a type does not load it immediately.</p>
+<p>The loader of the <strong>calling class</strong> handles the request and uses <strong>parent delegation</strong>. The loader that is responsible converts the <strong>binary name</strong> into a resource path (<code>com.acme.Order</code> becomes <code>com/acme/Order.class</code>) and searches its sources. For the Application loader that is the <strong>module path</strong> (modules are located by package) and the <strong>classpath</strong>, in order of entries: directories and JARs. It reads the bytes and calls <code>defineClass</code>, creating the <code>Class</code> object and storing metadata in <strong>Metaspace</strong>. Superclasses and interfaces are loaded as part of this.</p>
+<p><strong>Linking</strong> then <strong>verifies</strong> the bytecode, <strong>prepares</strong> static fields with default values, and <strong>resolves</strong> symbolic references, usually lazily when first executed. <strong>Initialisation</strong> runs <code>&lt;clinit&gt;</code>, the static initialisers and static field assignments in source order, once, under a lock so other threads wait.</p>
+<p>Two errors are commonly confused. <code>ClassNotFoundException</code> is a <strong>checked exception</strong> thrown when code loads a class <strong>by name</strong> (<code>Class.forName</code>, <code>loadClass</code>) and it cannot be found. <code>NoClassDefFoundError</code> is an <strong>Error</strong> thrown when a class that was present at <strong>compile time</strong> is missing at runtime, or when its static initialiser previously failed (the first failure shows as <code>ExceptionInInitializerError</code>).</p>
+
+<h2>How it works</h2>
+<ol>
+  <li>First active use triggers loading.</li>
+  <li>Delegation: Application → Platform → Bootstrap.</li>
+  <li>The responsible loader finds <code>.class</code> bytes and calls <code>defineClass</code>.</li>
+  <li>Verify, prepare, resolve.</li>
+  <li>Run static initialisers (initialisation).</li>
+  <li>On failure: <code>ClassNotFoundException</code>, <code>NoClassDefFoundError</code>, <code>ExceptionInInitializerError</code> or <code>UnsupportedClassVersionError</code>.</li>
+</ol>
+
+<h2>Example</h2>
+<pre><code class="language-java">class Config {
+    static final Map&lt;String,String&gt; VALUES = load();   // runs at initialisation
+    static { System.out.println(&quot;Config initialised&quot;); }
+}
+
+Class&lt;?&gt; c = Class.forName(&quot;com.acme.Config&quot;, false, loader); // loaded, not initialised
+String v = Config.VALUES.get(&quot;url&quot;);                          // triggers initialisation</code></pre>
+<pre><code class="language-bash">java -Xlog:class+load=info -cp app.jar:libs/* com.acme.Main | grep acme
+# [0.412s][info][class,load] com.acme.Order source: file:/opt/app/app.jar</code></pre>
+
+<h2>Comparison</h2>
+<table>
+<thead><tr><th></th><th>ClassNotFoundException</th><th>NoClassDefFoundError</th></tr></thead>
+<tbody>
+<tr><td>Type</td><td>Checked exception</td><td>Error (LinkageError)</td></tr>
+<tr><td>Cause</td><td>Loading by name failed</td><td>Class known at compile time missing at runtime, or failed init</td></tr>
+<tr><td>Typical fix</td><td>Correct name or add dependency</td><td>Fix classpath packaging, fix static init</td></tr>
+</tbody>
+</table>
+
+<h2>Common mistakes</h2>
+<ul>
+  <li>Thinking classes load at startup or on import.</li>
+  <li>Treating the two errors as the same thing.</li>
+  <li>Ignoring the earlier <code>ExceptionInInitializerError</code> that explains a later <code>NoClassDefFoundError</code>.</li>
+  <li>Not checking for duplicate or conflicting JAR versions with <code>-Xlog:class+load</code>.</li>
+</ul>
+
+<h2>How to answer in the interview</h2>
+<p>&quot;Loading happens lazily on first active use, like <code>new</code>, a static method call or reflection. The calling class's loader delegates up to Bootstrap; the loader that can handle it turns the name into a path such as <code>com/acme/Order.class</code>, searches its JARs and directories, and defines a <code>Class</code> object in Metaspace. The JVM then links it, verifying bytecode, preparing statics and resolving references, and initialises it by running static initialisers. If loading by name fails I get <code>ClassNotFoundException</code>; if a class present at compile time is missing at runtime, or its static init failed, I get <code>NoClassDefFoundError</code>.&quot;</p>
+
+<h2>Likely follow-up questions</h2>
+<ul>
+  <li><strong>ClassNotFoundException vs NoClassDefFoundError?</strong> Name-based lookup failure versus a compile-time class missing at runtime or failed initialisation.</li>
+  <li><strong>How do you see which JAR a class came from?</strong> <code>-Xlog:class+load</code> or <code>Order.class.getProtectionDomain().getCodeSource()</code>.</li>
+  <li><strong>Does referencing a static final constant trigger loading?</strong> Compile-time constants are inlined, so no.</li>
+</ul>
+</article>
+</body>
+</html>
